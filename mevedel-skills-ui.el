@@ -27,7 +27,8 @@
 (defvar gptel-model)
 
 ;; `mevedel-chat'
-(declare-function mevedel--dispatch-request "mevedel-chat" (model-input local-send))
+(defvar mevedel--dispatching)
+(declare-function mevedel--dispatch-request "mevedel-chat" (model-input local-send &optional native-input))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 (autoload 'mevedel--dispatch-request "mevedel-chat")
 (autoload 'mevedel--run-session-start-hooks "mevedel-chat")
@@ -111,7 +112,7 @@
 
 ;; `mevedel-engine'
 (declare-function mevedel-engine-assert-local-history
-                  "mevedel-engine" (session operation &optional backend))
+                  "mevedel-engine" (session operation &optional backend root-only))
 (autoload 'mevedel-engine-assert-local-history "mevedel-engine")
 
 ;; `mevedel-execution'
@@ -965,10 +966,12 @@ drain it."
     (mevedel-engine-assert-local-history nil "Steering" gptel-backend))
   (if (or (eq (car args) 0) ;Steering does not submit the buffer prompt.
           (equal (car args) '(4)) ;The menu does not submit either.
-          (not (bound-and-true-p mevedel--session)))
+          (not (bound-and-true-p mevedel--session))
+          ;; An engine dispatch already owns this send and its model input.
+          (bound-and-true-p mevedel--dispatching))
       (apply orig-fn args)
     (cl-labels
-	((continue ()
+        ((continue ()
            (unwind-protect
                (progn
                  (when (mevedel-turn-busy-p)
@@ -980,9 +983,9 @@ drain it."
       (if (and (boundp 'mevedel--view-buffer)
                (buffer-live-p mevedel--view-buffer))
           (continue)
-	(when-let* ((region (mevedel-skills-input-current-prompt-region)))
+        (when-let* ((region (mevedel-skills-input-current-prompt-region)))
           (let* ((text (buffer-substring (car region) (cdr region)))
-		 (prepared
+                 (prepared
                   (mevedel-mentions-prepare-user-input
                    (mevedel-skills-input-prepare-user-input
                     text mevedel--session)
@@ -992,7 +995,7 @@ drain it."
                (+ (car region) (plist-get range :start))
                (+ (car region) (plist-get range :end))
                (plist-get range :binding)))))
-	(pcase (mevedel-skills--dispatch-slash-command)
+        (pcase (mevedel-skills--dispatch-slash-command)
           ((or 'local 'unknown) nil)
           (_
            (pcase (mevedel-skills-input-dispatch-command #'continue)
@@ -1000,8 +1003,8 @@ drain it."
              (_
               (pcase (mevedel-skills-input-dispatch-inline-attachments
                       #'continue t)
-		((or 'unknown 'skill) nil)
-		(_ (continue)))))))))))
+                ((or 'unknown 'skill) nil)
+                (_ (continue)))))))))))
 
 
 ;;

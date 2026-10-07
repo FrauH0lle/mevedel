@@ -17,6 +17,9 @@
 (require 'mevedel-presets)
 (require 'mevedel-view-stream)
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-capture-request "mevedel-goal" (request))
+
 (defun mevedel-acp-turn--close-reasoning (request)
   "Close REQUEST's displayed reasoning block, if one is open."
   (let ((info (mevedel-engine-info request))
@@ -50,6 +53,29 @@ Tool notifications are observations; only the MCP endpoint executes tools."
             (mevedel-acp-turn--close-reasoning request)
             (gptel-curl--stream-insert-response text info)))))))
 
+(defun mevedel-acp-turn--run-tool-hooks (hook request call)
+  "Run the current buffer's tool-call HOOK for REQUEST's CALL, as gptel does.
+Views, collaboration rooms and agent activity observe native calls through
+the same hooks.  Tool repair already ran inside the MCP pipeline.  Return
+the first hook result that stops the turn or blocks the call."
+  (let ((info (mevedel-engine-info request))
+        verdict)
+    (setq call (append call (list :buffer (buffer-name)
+                                  :backend (plist-get info :backend)
+                                  :model (plist-get info :model))))
+    (run-hook-wrapped
+     hook
+     (lambda (function)
+       (unless (memq function '(mevedel-tool-repair-pre-tool-call
+                                mevedel-tool-repair-post-tool-call))
+         (let ((result (with-demoted-errors "Tool hook error: %S"
+                         (funcall function (copy-sequence call)))))
+           (when (and (not verdict)
+                      (or (plist-get result :stop) (plist-get result :block)))
+             (setq verdict result))))
+       nil))
+    verdict))
+
 (defun mevedel-acp-turn--tool-result (request tool args id outcome)
   "Publish TOOL's ARGS and OUTCOME with native ID in REQUEST's transcript."
   (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
@@ -71,9 +97,9 @@ Tool notifications are observations; only the MCP endpoint executes tools."
     (dolist (key '(:tracking-marker :tool-marker))
       (setq info (plist-put info key (plist-get render-info key))))
     (setf (mevedel-engine-info request) info)
-    (mevedel-view-stream-post-tool
-     (list :id id :name (mevedel-tool-name tool) :args args
-           :result (plist-get outcome :result)))))
+    (mevedel-acp-turn--run-tool-hooks
+     'gptel-post-tool-call-functions request
+     (list :id id :name (mevedel-tool-name tool) :args args :result result))))
 
 (defun mevedel-acp-turn-start (request launch content tools &optional ready terminal settle prepare)
   "Run admitted REQUEST through ACP with CONTENT and registered TOOLS.
@@ -84,8 +110,6 @@ and returns an ACP launch
 plist.  Its :tool-id-field selects the adapter's native call identity from
 MCP metadata.  Its optional :check-context callback validates REQUEST before
 tool execution and successful settlement; failures end the turn as errors.
-Its optional :admit-tool callback receives REQUEST, tool name and native ID
-before the pipeline; failed durable admission prevents the tool from running.
 Its optional :complete-prompt callback receives REQUEST and each normalized
 prompt outcome, returning that outcome with cumulative usage and optionally
 :next-prompt content.  A successful continuation keeps this admission open;
@@ -116,6 +140,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                           (not (mevedel-request-cancelled-p request)))
                    (and settle
                         (eq admission (buffer-local-value 'mevedel--current-request buffer))
+                        (not (mevedel-request-cancelled-p admission))
                         (eq request (buffer-local-value 'mevedel--agent-invocation buffer))
                         (not (mevedel-agent-invocation-runtime-settled-p request)))))
       (error "External turn requires the current admitted request"))
@@ -147,6 +172,11 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                         event-key dispatch-directory #'drain
                         (lambda () (finish '(:status interrupted))))
                  (kill-owner)))))
+         (enqueue-later (operation &optional terminal reject)
+           ;; MCP sockets are read synchronously while ACP frames read in the
+           ;; same pass wait for the library's drain timer.  Queue behind it.
+           (mevedel-transport-run-at-time
+            0 (lambda () (enqueue operation terminal reject))))
          (drain ()
            (unless draining
              (setq draining t)
@@ -174,11 +204,14 @@ for it; duplicate or late continuations cannot start a cancelled turn."
            (mevedel-acp-prompt
             connection input
             (lambda (event)
+              ;; Events describe native history that already happened, so
+              ;; they survive cancellation; only new work is rejected.
               (enqueue
                (lambda ()
                  (when-let* ((observe (plist-get configuration :observe)))
                    (funcall observe request event))
-                 (mevedel-acp-turn--event request event))))
+                 (mevedel-acp-turn--event request event))
+               t))
             (lambda (outcome)
               (setq terminal-pending t)
               (enqueue
@@ -282,7 +315,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
            (finish '(:status interrupted)))
          (dispatch (name args metadata complete)
            (let (cancel-call cancelled-call)
-             (enqueue
+             (enqueue-later
               (lambda ()
                 (unless cancelled-call
                   (condition-case err
@@ -316,21 +349,30 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                (error "Tool call lacks its admitted tool or native identity"))
              (when (gethash id calls) (error "Tool call identity was already admitted"))
              (puthash id t calls)
-             (when-let* ((admit (plist-get configuration :admit-tool)))
-               (condition-case err
-                   (with-current-buffer buffer (funcall admit request name id))
-                 (error
-                  (finish (list :status 'error :message (error-message-string err)))
-                  (signal (car err) (cdr err)))))
              (with-current-buffer buffer
-               (mevedel-view-stream-pre-tool (list :id id :name name :args args))
+               (let ((verdict (mevedel-acp-turn--run-tool-hooks
+                               'gptel-pre-tool-call-functions request
+                               (list :id id :name name :args args))))
+                 (when (plist-get verdict :stop)
+                   (finish (list :status 'error
+                                 :message (or (plist-get verdict :stop-reason)
+                                              (format "Tool %s stopped the turn" name))))
+                   (error "The owning turn no longer accepts tools"))
+                 (when-let* ((block (plist-get verdict :block)))
+                   (let ((reason (if (stringp block) block (format "Tool %s blocked" name))))
+                     ;; Observers that saw the call start also see it end.
+                     (mevedel-acp-turn--run-tool-hooks
+                      'gptel-post-tool-call-functions request
+                      (list :id id :name name :args args :result reason))
+                     (error "%s" reason))))
                (mevedel-mcp-tools-call
                 request buffer tool args id
                 (lambda (result outcome)
-                  (when (and (owned) (not finished))
-                    (with-current-buffer buffer
-                      (mevedel-acp-turn--tool-result request tool args id outcome)))
-                  (funcall complete result)))))))
+                  (unwind-protect
+                      (when (and (owned) (not finished))
+                        (with-current-buffer buffer
+                          (mevedel-acp-turn--tool-result request tool args id outcome)))
+                    (funcall complete result))))))))
       (when admission (mevedel-request-push-canceller admission #'cancel))
       (unless root-p
         (setf (mevedel-agent-invocation-runtime-cancel request)
@@ -353,34 +395,38 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                                  (mapcar #'mevedel-tool-gptel-tool tools)))
                                      #'dispatch
                                      (lambda (event complete)
-                                       (enqueue
-                                        (lambda ()
-                                          (condition-case err
-                                              (funcall complete
-                                                       (funcall (or (plist-get configuration :control)
-                                                                    (error "Agent has no native hook handler"))
-                                                                request event))
-                                            (error
-                                             (funcall complete nil (error-message-string err))
-                                             (finish (list :status 'error :message (error-message-string err))))))
-                                        nil
-                                        (lambda ()
-                                          ;; A native hook may block the peer
-                                          ;; that must acknowledge cancellation.
-                                          ;; Reject its authority without running
-                                          ;; the queued control transaction.
-                                          (funcall complete nil "The owning turn was cancelled"))))))
+                                       (let (abandoned)
+                                         (enqueue-later
+                                          (lambda ()
+                                            ;; A hook client that gave up never
+                                            ;; delivers what this control prepares.
+                                            (unless abandoned
+                                              (condition-case err
+                                                  (funcall complete
+                                                           (funcall (or (plist-get configuration :control)
+                                                                        (error "Agent has no native hook handler"))
+                                                                    request event))
+                                                (error
+                                                 (funcall complete nil (error-message-string err))
+                                                 (finish (list :status 'error :message (error-message-string err)))))))
+                                          nil
+                                          (lambda ()
+                                            ;; A native hook may block the peer
+                                            ;; that must acknowledge cancellation.
+                                            ;; Reject its authority without running
+                                            ;; the queued control transaction.
+                                            (funcall complete nil "The owning turn was cancelled")))
+                                         (lambda () (setq abandoned t))))))
                               (setq configuration
                                     (funcall launch (vector (mevedel-mcp-configuration server))
                                              (mevedel-mcp-hook-command server)))
-                              (when (or (not root-p) (not (mevedel-request-directive-uuid request)))
+                              (unless (plist-get (mevedel-engine-info request) :mevedel-native-isolated)
                                 (setq configuration (plist-put configuration :compaction t)))
                               (unless (or finished (not (owned)))
                                 (setq connection
                                       (mevedel-acp-open
                                        configuration
                                        (lambda (active)
-                                         (setq connection active)
                                          (condition-case err
                                              (unless
                                                  (mevedel-transport-run-when-idle
@@ -401,10 +447,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                                   (lambda () (finish '(:status interrupted))))
                                                (finish '(:status interrupted)))
                                            (error (finish (list :status 'error :message (error-message-string err))))))
-                                       (lambda (message) (finish (list :status 'error :message message))))))
-                              (when finished
-                                (when connection (mevedel-acp-close connection))
-                                (mevedel-mcp-stop server)))
+                                       (lambda (message) (finish (list :status 'error :message message)))))))
                           (error (finish (list :status 'error :message (error-message-string err))))
                           (quit (finish '(:status interrupted)) (signal (car err) (cdr err))))))))
         (condition-case err

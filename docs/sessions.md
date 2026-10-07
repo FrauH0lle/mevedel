@@ -128,8 +128,9 @@ Save As creates a new identity with the explicitly supplied display name.
 The closed sidecar schema is `v0.5.9`, including required naming-state and external-conversation metadata.
 Other schemas are rejected by the runtime loader. An explicitly invoked,
 one-off converter is available for `v0.5.6` sessions from before the Claude
-integration. It adds empty external-conversation metadata; it does not change
-transcripts, permissions, session identity or artifacts.
+integration. It adds empty external-conversation metadata and marks an
+existing Goal's token usage complete (`:tokens-incomplete-p nil`); it does not
+change transcripts, permissions, session identity or artifacts.
 
 Close the source session first, then run from the repository with Eask
 dependencies installed (the destination's parent must exist):
@@ -319,20 +320,23 @@ the adapter release and retains output in a compilation buffer. It refuses a
 second concurrent installation and a managed install while a custom adapter
 override is selected. Ordinary sends never download dependencies. Setup and
 dispatch both reject an outdated ACP client, Node/Python runtime, unsupported
-CLI/adapter version, missing packaged bridge, or non-subscription authentication.
+CLI/adapter version, or non-subscription authentication. Setup also rejects a
+missing packaged bridge, which dispatch needs only for its tool connection.
 Dispatch prepares these checks asynchronously before starting the adapter, so
 slow status commands leave the editor responsive. Each status command has a
 ten-second timeout and is cancelled with its owning request. Successful version
 checks are reused while the resolved executable and its enclosing package
 metadata stay unchanged. Every dispatch still checks the current subscription
-login with inherited API billing routes removed; authentication is never cached.
+login through `claude auth status --json` with inherited API billing routes
+removed; authentication is never cached. A logged-out status exits nonzero
+with valid JSON and still reports the login action.
 The explicit setup check waits for this same readiness result.
 See the [setup route](../README.md#claude-promax-subscriptions).
 
 The Claude Code provider routes root and directive submissions through ACP. The
 session's `:external-conversations` metadata maps conversation scopes to the
 engine, native conversation ID, local installation directory, machine name and
-last known state and admitted native tool identities. The installed Claude agent retains model history; mevedel
+last known state. The installed Claude agent retains model history; mevedel
 retains the canonical transcript and tool effects. No credentials or process
 handles are stored in the sidecar.
 
@@ -342,10 +346,15 @@ list from the adapter's `configOptions`, before any prompt is sent. Additional
 reported models appear in the normal picker. The selected model's effort menu
 uses the reported levels. Before connection, Sonnet, Opus and Fable offer
 `low`, `medium`, `high`, `xhigh` and `max` from Claude's documented alias
-capabilities; Haiku has no effort control. Other configured model IDs accept
-staged effort symbols until discovery. Startup applies the selected level
-through `session/set_config_option` and waits for acknowledgement before
-prompt dispatch. Unsupported effort falls back to Claude's native `default`,
+capabilities; Haiku has no effort control. Other configured or persisted
+model IDs resolve with staged effort symbols without joining the catalog;
+dispatch rejects any ID the session's catalog omits. Collaborators can pick
+only offered model labels.
+Startup applies the selected level through `session/set_config_option` and
+waits for acknowledgement before prompt dispatch. The adapter reads the
+user's Claude settings for its initial permission mode regardless of the
+isolated setting sources; startup resets any other reported mode to `default`
+the same way first, since mevedel's own pipeline authorizes every tool call. Unsupported effort falls back to Claude's native `default`,
 with a visible notice and a reset of the still-matching session selection.
 Missing models, an adapter selecting a different model, or failure to apply
 the selected effort fail visibly before the prompt.
@@ -363,15 +372,9 @@ submission before dispatch.
 Selected text files and buffer regions use gptel's context collector and
 `gptel-context-string-function`, including its asynchronous callback form.
 `gptel-use-context` keeps its system/user placement meaning. System placement
-joins the native system baseline; user placement requires the exact SDK prompt
-echo and is restored through the acknowledged compaction hook. Restoration over
-the hook's size limit stops the native prompt and automatically sends the full
-update in a continuation prompt on the same conversation. Receipt is still
-required before further tool effects. The admitted turn, transcript, MCP
-endpoint and native call ledger remain the same; only final settlement advances
-the session turn count. Pause, boundary stop and cancellation prevent another
-prompt. A missing receipt or failed prompt ends the turn with its concrete error.
-The authored system prompt is evaluated before asynchronous formatting so later
+joins the native system baseline; user placement is delivered and restored as
+described in [native context delivery](#native-context-delivery). The authored
+system prompt is evaluated before asynchronous formatting so later
 editor configuration changes cannot alter that submitted prompt.
 
 The admitted ACP turn owns the preparation wait. Interruption during this wait
@@ -380,13 +383,12 @@ another process or change the next composer draft. A formatter returning a value
 other than text or nil fails the turn before launch.
 
 An admitted first root turn records native ownership as `unstarted` until the
-agent returns a real conversation ID. This state has no installed history or
-tool ledger. Aborted preparation or failed startup can therefore be retried,
+agent returns a real conversation ID. This state has no installed history.
+Aborted preparation or failed startup can therefore be retried,
 including after save/reopen, by starting a fresh native conversation.
 
-Attachment deduplication is committed only after the SDK echoes the complete
-submitted text and image bytes with matching MIME types. Missing or altered
-echoes block further tools and successful settlement. Canonical transcripts keep
+Attachment deduplication is committed only at the prompt receipt described in
+[native context delivery](#native-context-delivery). Canonical transcripts keep
 the submitted references and delivery reminders, without base64 blobs. Directive
 and child inputs expand independently of root mention history; a child follow-up
 can attach the image again without marking it as delivered to the root.
@@ -400,15 +402,15 @@ ID. Each directive request instead starts an isolated native conversation from
 its existing selected prompt: complete local discussion, selected attempt,
 planning feedback, or the implementation handoff. Resuming a previous hidden
 native history would reintroduce evidence that these prompts deliberately
-exclude. The latest directive identity is retained under that directive's scope
-for correlation, separately from root history.
+exclude. Directive identities are therefore never retained.
 
 An uncertain conversation receives the same current-state reconciliation guidance
-as an interrupted native request, plus an explicit no-replay instruction. Its
-complete uniquely marked notice must appear in the SDK's user-message echo
-before further tools or successful settlement. Receipt records it once in the
-recipient transcript. It establishes delivery of recovery guidance, not proof
-that every prior effect has been inspected or undone.
+as an interrupted native request, plus an explicit no-replay instruction, in its
+next prompt. For the root it is a shared pending event, so enabled configured
+reminders do not add a second copy. Like other prompt deliveries it must be
+acknowledged before further tools or successful settlement. It establishes
+delivery of recovery guidance, not proof that every prior effect has been
+inspected or undone.
 
 Editing earlier response or prompt text in a raw root or retained child
 transcript marks its native history as `diverged`. This state survives saving and
@@ -426,14 +428,19 @@ its private transcript body, with segment identity zero; native child compaction
 rebases it to the retained summary and tail. Root boundaries use the numbered
 root segment. Editing a child does not mark the root or another child divergent.
 
-Each tool's native ID and name are committed to the owning conversation's
-sidecar before the pipeline starts. Publication failure prevents execution;
-a previously admitted ID cannot execute again after a later turn or reopen.
-Admissions prove only that a call may have run, not completion or result receipt.
-The ledger persists for that native conversation's lifetime. New calls remain
+A native call identity is admitted once per turn; a repeated identity in the
+same turn is rejected before the pipeline. Call identities are not persisted.
+The conversation identity and `in-flight` state are durable before the prompt
+is sent, so a turn lost with its process restores as `uncertain`, and the next
+turn's acknowledged reconciliation notice precedes further tools. New calls remain
 subject to ordinary permissions and current-state reconciliation; matching tool
 arguments or text alone is not evidence that two calls are the same event.
 No pending approval or operating-system process is resurrected by these records.
+
+Native root and child turns offer the same Plan and Goal tool visibility as
+gptel requests. The roster is fixed for the native turn, so both Goal mutators
+stay offered while either is available: creating or completing a Goal can
+enable the other before the turn ends. Calls still face current authority.
 
 Public abort retains the existing settlement reservation until ACP acknowledges
 cancellation or its timeout ends the connection. This preserves the partial
@@ -441,8 +448,8 @@ transcript, terminal accounting and uncertain history marker before admission is
 released for another request.
 
 Before a directive transcript boundary opens, its complete prior transcript is
-published. The native identity then uses a strict sidecar-only commit; terminal
-settlement publishes the closed directive frame and durable activity together.
+published; terminal settlement publishes the closed directive frame and durable
+activity together.
 This works for both portable and PID-lock sessions. Root history guards consult
 root references and completed ordinary prompt entries, not the count of shared
 directive turns. A directive provider override does not switch the root engine.
@@ -459,21 +466,21 @@ Transcripts, tool effects and
 chronology remain intact. No native process or Goal continuation starts from
 this command. The next normal root send or child follow-up starts a new native
 conversation from labelled current-transcript evidence, never an exact resume.
+Until the replacement native identity is published, a failed startup keeps
+that excerpt continuation for the retry.
 Child recovery uses only that child's private conversation; directive prompts
 already reconstruct their selected context on every turn and need no recovery
 selection. Failed native startup retains the original diagnosis and names this
 command as an option when history is unavailable.
 
 Same-machine editor restart preserves the root provider and each retained
-child's native identity, frozen configuration, transcript and call-admission
-ledger. Opening the restored session starts no native process; root submission
+child's native identity, frozen configuration and transcript. Opening the restored session starts no native process; root submission
 and explicit child follow-up resume their respective histories. The ordinary
 Goal restore rule still applies: a saved active Goal becomes paused.
 Learned path-instruction scopes survive reopening for native conversations.
-Each resumed root or child prompt refreshes their complete current contents,
-including explicit withdrawals of removed files, before further tool work.
-Exact SDK acknowledgment records that refresh; opening the session itself does
-not acknowledge delivery.
+Each prompt re-sends only instructions whose current contents differ from their
+acknowledged hash, including explicit withdrawals of removed files; retained
+native history holds the rest. Opening the session acknowledges nothing.
 
 The ordinary model picker can change root engines. Selection alone keeps the
 native reference intact. Sending through gptel detaches and persists that
@@ -497,10 +504,11 @@ acknowledgements remain independent. Current guidance and memory use the normal
 gptel payload rule or Claude system/prompt receipt, not the previous engine's
 acknowledgements.
 
-External histories currently reject cooperative control transfer, Save As,
-Fork, Rewind, Redo and manual
-transcript compaction. The side-conversation
-command is also unavailable with the external provider. These commands cannot
+A session retaining a native identity in its root or any child conversation
+rejects cooperative control transfer, Save As, Fork, Rewind and Redo. Manual
+transcript compaction and the side-conversation command consider only the root
+conversation, and are also unavailable with the external provider selected.
+Unstarted and released markers hold no native history and restrict nothing. These commands cannot
 treat a copied transcript as an equivalent native model history. The adapter's
 native fork extension alone does not map mevedel's chronological checkpoints
 and independent conversation scopes to native message boundaries.
@@ -520,6 +528,69 @@ remain supported there. Temperature and output-limit controls in gptel's HTTP
 menu do not configure Claude's native loop. Mid-turn steering is unavailable;
 sending from a busy Claude composer visibly queues a separate turn in FIFO
 order. Explicit queued follow-ups and interruption remain available.
+
+### Native context delivery
+
+Each launched Claude turn puts the recipient's complete selected observations
+into the native system prompt and disables the SDK's first-prompt snapshot, so a
+resumed launch uses the newly composed baseline. Everything else reaches native
+history through one of two receipt boundaries. Transmission, ACP send
+completion, a hook preview or an offloaded file never counts as delivery.
+
+- **Prompt.** A submitted prompt carries the user's text and images, configured
+  reminders collected once with pending root hook context, the initial
+  direct-child roster, queued mail in full, recovery guidance for an uncertain
+  history, path instructions whose current contents differ from their
+  acknowledged hash, and user-placement selected context. User-placement text
+  and its selected images are sent once per native conversation and content
+  hash; a changed selection or new conversation sends them again. A block is
+  received only when the SDK's top-level user-message echo for that
+  conversation contains its exact text; images also need their complete bytes,
+  MIME types and order. Text receipts alone do not establish image delivery.
+- **Tool-batch hook.** After each native tool batch, a `PostToolBatch` hook
+  carries selected observations changed since the last accepted snapshot,
+  queued turn events, newly available direct children and mail. It is received
+  only by a successful SDK `hook_response` for that event whose output matches
+  exactly. A receipt can trail the next tool boundary; that boundary leaves its
+  updates queued.
+
+Receipt runs the captured commits, such as reminder firing marks, mention
+deduplication and roster marks, and consumes only the captured events and mail;
+items queued or replaced meanwhile stay pending. A unique correlation marker
+exists only on the wire. The recipient's transcript records the accepted batch
+once, as the shared [injection record](reminders.md#the-injection-record)
+followed by any delivered mail blocks. Receipt establishes SDK acceptance into
+conversation context, not model understanding or retention through later
+compaction. Unreceived mail stays unread; mailbox consumption keeps its deferred
+persistence, so process loss before saving can redeliver mail. Except for a
+mail-only hook batch, an unreceived delivery fails the next tool call and turns
+a successful terminal response into an error.
+
+Claude's inline hook output limit is 10,000 UTF-16 code units. A hook update
+beyond it, including a single mail message, stops the native prompt at that
+boundary. The same admitted turn then sends a continuation prompt containing the
+complete captured body and requires its exact echo before more tools. Native
+compaction's `SessionStart` hook cannot stop the prompt, so while a continuation
+is pending a `PreToolUse` hook denies any attempted call and stops the prompt; a
+stop alone does not prevent the call. The conversation, MCP endpoint, transcript and per-turn call identities stay the
+same; usage accumulates across prompts ([Goals](goals.md#token-budget)) and the
+turn settles once. Pause, a user boundary stop and cancellation take precedence:
+they discard the unsent continuation while its underlying events stay queued. A
+failed native prompt is not retried.
+
+Native compaction keeps the system baseline. A `SessionStart(compact)` hook
+restores, through the hook receipt, the observations that differ from that
+baseline (including updates acknowledged before compaction), user-placement
+selected text, the full direct-child roster, a child's current sample-limit
+guidance, active root Plan guidance, eligible accepted-plan references and the
+current contents of path instructions already learned by that conversation,
+broad to narrow with local overrides last. Removed files explicitly withdraw
+their guidance. Compaction clears the selected-context mark, so the next prompt
+re-sends selected images. Root, retained children and fresh directives keep
+separate path-instruction acknowledgements; a child never imports sibling or
+root scopes. An oversized restoration takes the continuation prompt above.
+Retained-agent sample accounting at these boundaries is described under
+[agent turn limits](agents.md).
 
 ## Session-owned local state
 

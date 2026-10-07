@@ -11,7 +11,6 @@
 (require 'cl-lib)
 (require 'button)
 (require 'json)
-(require 'map)
 (require 'subr-x)
 (require 'mevedel-claude-code-usage)
 (require 'mevedel-engine)
@@ -36,18 +35,25 @@
                   (launch prompt tools callback before-tool boundary))
 (autoload 'mevedel-acp-workload-request "mevedel-acp-workload")
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
+
 ;; `mevedel-claude-code-agent'
 (declare-function mevedel-claude-code-agent-next-sample
                   "mevedel-claude-code-agent" (invocation &optional boundary))
 
 ;; `mevedel-claude-code-context'
 (declare-function mevedel-claude-code-context-check "mevedel-claude-code-context" (owner))
+(declare-function mevedel-claude-code-context-hook-fits-p "mevedel-claude-code-context" (text))
+(declare-function mevedel-claude-code-context-next-prompt "mevedel-claude-code-context" (owner))
 (declare-function mevedel-claude-code-context-observe
                   "mevedel-claude-code-context" (owner notification))
 (declare-function mevedel-claude-code-context-prepare
                   "mevedel-claude-code-context" (owner &optional prompt-p instructions))
 (declare-function mevedel-claude-code-context-restore "mevedel-claude-code-context" (owner))
 (autoload 'mevedel-claude-code-context-check "mevedel-claude-code-context")
+(autoload 'mevedel-claude-code-context-hook-fits-p "mevedel-claude-code-context")
+(autoload 'mevedel-claude-code-context-next-prompt "mevedel-claude-code-context")
 (autoload 'mevedel-claude-code-context-observe "mevedel-claude-code-context")
 (autoload 'mevedel-claude-code-context-prepare "mevedel-claude-code-context")
 (autoload 'mevedel-claude-code-context-restore "mevedel-claude-code-context")
@@ -78,8 +84,7 @@ See https://code.claude.com/docs/en/model-config.")
 
 (cl-defstruct (mevedel-claude-code-backend
                (:include gptel-backend)
-               (:constructor mevedel-claude-code--make-backend))
-  models-discovered-p)
+               (:constructor mevedel-claude-code--make-backend)))
 
 (cl-defmethod gptel--request-data ((_backend mevedel-claude-code-backend) _prompts)
   "Refuse HTTP dispatch for a subscription-backed conversation."
@@ -99,7 +104,9 @@ See https://code.claude.com/docs/en/model-config.")
   ((_backend mevedel-claude-code-backend) prompt system tools callback before-tool boundary)
   (let ((model (gptel--model-name gptel-model)) (effort gptel-reasoning-effort))
     (mevedel-acp-workload-request
-     (lambda (mcp hook) (mevedel-claude-code-launch system mcp model effort nil hook))
+     (lambda (mcp hook)
+       (plist-put (mevedel-claude-code-launch system mcp model effort nil hook)
+                  :control #'mevedel-claude-code--workload-control))
      prompt tools callback before-tool boundary)))
 
 (defun mevedel-claude-code--model (name &optional existing)
@@ -117,15 +124,11 @@ Other model IDs accept configured symbols pending capability discovery."
                             (and (cdr alias) (cons 'member (cdr alias)))
                           'symbol)))))))
 
-(cl-defmethod mevedel-model--find-model ((backend mevedel-claude-code-backend) model-name)
-  (or (cl-call-next-method)
-      (if (mevedel-claude-code-backend-models-discovered-p backend)
-          (user-error "Claude model %s is unavailable; select a listed model and retry" model-name)
-        ;; Allow persisted/configured IDs before discovery, then validate the
-        ;; actual session's catalog before dispatch.  Never choose a fallback.
-        (let ((model (mevedel-claude-code--model model-name)))
-          (push model (gptel-backend-models backend))
-          model))))
+(cl-defmethod mevedel-model--find-model ((_backend mevedel-claude-code-backend) model-name)
+  ;; Accept persisted or configured IDs without growing
+  ;; the catalog.  Each session validates against its discovered catalog
+  ;; before dispatch and never chooses a fallback.
+  (or (cl-call-next-method) (mevedel-claude-code--model model-name)))
 
 (defun mevedel-claude-code--check-model (backend model session)
   "Cache BACKEND's SESSION catalog, validate MODEL and return its effort option."
@@ -154,8 +157,7 @@ Other model IDs accept configured symbols pending capability discovery."
                                                (intern value))))
                                       (alist-get 'options efforts)))))
         (put selected :reasoning-effort (and levels (cons 'member levels)))))
-    (setf (gptel-backend-models backend) catalog
-          (mevedel-claude-code-backend-models-discovered-p backend) t)
+    (setf (gptel-backend-models backend) catalog)
     (unless (cl-find model rows :key (lambda (row) (alist-get 'value row)) :test #'equal)
       (user-error "Claude model %s is unavailable; select a listed model and retry" model))
     (unless (equal model current)
@@ -166,14 +168,17 @@ Other model IDs accept configured symbols pending capability discovery."
   "Discover MODEL on BACKEND and apply EFFORT before CONNECTION is ready.
 SESSION contains the initial capabilities.  READY receives the acknowledged
 metadata.  An unsupported selection uses Claude's default and resets BUFFER's
-selection if it still matches this launch."
+selection if it still matches this launch.  A permission mode inherited from
+the user's Claude settings is reset to `default': mevedel owns permissions."
   (let* ((option (mevedel-claude-code--check-model backend model session))
+         (mode (cl-find "mode" (alist-get 'configOptions session)
+                        :key (lambda (row) (alist-get 'category row)) :test #'equal))
          (values (mapcar (lambda (row) (alist-get 'value row)) (alist-get 'options option)))
          (value (if (and effort (member (symbol-name effort) values))
                     (symbol-name effort) "default"))
          (fallback (and effort (equal value "default"))))
     (cl-labels
-        ((finish (metadata)
+        ((finish ()
            (when (eq (mevedel-acp-state connection) 'starting)
              (when fallback
                (when (buffer-live-p buffer)
@@ -186,24 +191,31 @@ selection if it still matches this launch."
                                 (eq buffer (mevedel-session-root-buffer mevedel--session)))
                        (mevedel-model-set-session-effort mevedel--session nil buffer)))))
                (message "mevedel: Claude %s does not support effort %s; using its default" model effort))
-             (funcall ready metadata))))
-      (if (not option)
-          (finish session)
-        (unless (and (stringp (alist-get 'id option)) (member value values))
-          (error "Claude did not report a usable default effort; update the adapter and retry"))
-        (mevedel-acp--send
-         connection
-         (acp-make-session-set-config-option-request
-          :session-id (alist-get 'sessionId session)
-          :config-id (alist-get 'id option) :value value)
-         (lambda (response)
-           (when (eq (mevedel-acp-state connection) 'starting)
-             (let ((actual (cl-find (alist-get 'id option) (alist-get 'configOptions response)
-                                    :key (lambda (row) (alist-get 'id row)) :test #'equal)))
-               (if (not (equal value (alist-get 'currentValue actual)))
-                   (mevedel-acp--fail connection "Claude did not acknowledge the selected effort")
-                 (setf (alist-get 'configOptions session) (alist-get 'configOptions response))
-                 (finish session))))))))))
+             (funcall ready session)))
+         (configure (row value failure next)
+           (mevedel-acp--send
+            connection
+            (acp-make-session-set-config-option-request
+             :session-id (alist-get 'sessionId session)
+             :config-id (alist-get 'id row) :value value)
+            (lambda (response)
+              (when (eq (mevedel-acp-state connection) 'starting)
+                (let ((actual (cl-find (alist-get 'id row) (alist-get 'configOptions response)
+                                       :key (lambda (row) (alist-get 'id row)) :test #'equal)))
+                  (if (not (equal value (alist-get 'currentValue actual)))
+                      (mevedel-acp--fail connection failure)
+                    (setf (alist-get 'configOptions session) (alist-get 'configOptions response))
+                    (funcall next)))))))
+         (apply-effort ()
+           (if (not option)
+               (finish)
+             (unless (and (stringp (alist-get 'id option)) (member value values))
+               (error "Claude did not report a usable default effort; update the adapter and retry"))
+             (configure option value "Claude did not acknowledge the selected effort" #'finish))))
+      (if (and mode (not (equal "default" (alist-get 'currentValue mode))))
+          (configure mode "default" "Claude did not acknowledge mevedel's permission mode"
+                     #'apply-effort)
+        (apply-effort)))))
 
 (defun mevedel-claude-code-register ()
   "Register Claude Code in the ordinary provider and workload selection."
@@ -243,10 +255,11 @@ Keep this location stable to resume the installed CLI's retained histories."
     "CLAUDE_CODE_USE_VERTEX" "CLAUDE_CODE_USE_FOUNDRY")
   "Inherited authentication routes excluded by explicit subscription selection.")
 
-(defun mevedel-claude-code--command-output-async (command args ready failure)
+(defun mevedel-claude-code--command-output-async (command args ready failure &optional any-exit)
   "Run status COMMAND with ARGS asynchronously; return its canceller.
-READY receives stdout on success. FAILURE receives a safe diagnostic.
-Cancel and timeout release the child and both private output buffers."
+READY receives stdout on success, or on every exit with ANY-EXIT.  FAILURE
+receives a safe diagnostic.  Cancel and timeout release the child and both
+private output buffers."
   (let ((check (mapconcat #'shell-quote-argument (cons (file-name-nondirectory command) args) " "))
         (stdout (generate-new-buffer " *claude-status*"))
         (stderr (generate-new-buffer " *claude-status-errors*"))
@@ -267,7 +280,7 @@ Cancel and timeout release the child and both private output buffers."
              (funcall failure message)))
          (exited (child _event)
            (when (and (not finished) (memq (process-status child) '(exit signal)))
-             (if (not (zerop (process-exit-status child)))
+             (if (not (or any-exit (zerop (process-exit-status child))))
                  (fail (format "Setup check failed: %s; run it in a terminal" check))
                (let ((output (with-current-buffer stdout (string-trim (buffer-string)))))
                  (setq finished t)
@@ -331,9 +344,8 @@ FAILURE receives a safe diagnostic. Return a cancellation function."
                                   (lambda (output)
                                     (unless finished
                                       (condition-case err
-                                          (let ((version (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
-                                                              (match-string 0 output))))
-                                            (if (not (and version (version<= minimum version)))
+                                          (let ((version (mevedel-claude-code--version output minimum)))
+                                            (if (not version)
                                                 (fail (format "%s %s or newer is required" label minimum))
                                               (when (equal key (mevedel-claude-code--version-key command))
                                                 (puthash key version mevedel-claude-code--version-cache))
@@ -341,12 +353,13 @@ FAILURE receives a safe diagnostic. Return a cancellation function."
                                         (error (fail (error-message-string err)))))) #'fail))))
                      (setq cancel-command
                            (mevedel-claude-code--command-output-async
-                            cli '("auth" "status")
+                            ;; Logged-out status exits 1 with valid JSON.
+                            cli '("auth" "status" "--json")
                             (lambda (output)
                               (unless finished
                                 (let ((status (condition-case nil
                                                   (json-parse-string output :object-type 'plist :false-object :json-false)
-                                                (error (fail "Claude returned an invalid authentication status") nil))))
+                                                (error (fail "Claude returned an invalid authentication status; run `claude auth status --json' in a terminal") nil))))
                                   (unless finished
                                       (if (and (eq t (plist-get status :loggedIn))
                                                (equal "claude.ai" (plist-get status :authMethod))
@@ -354,38 +367,30 @@ FAILURE receives a safe diagnostic. Return a cancellation function."
                                                (member (plist-get status :subscriptionType) '("pro" "max" "team" "enterprise")))
                                           (progn (setq finished t) (funcall ready))
                                         (fail "Claude subscription login required; run `claude auth login' and select your Claude account"))))))
-                            #'fail))))
+                            #'fail t))))
                (error (fail (error-message-string err)))))))
       (next)
       #'cancel)))
 
-(defun mevedel-claude-code--check-launch (launch)
-  "Synchronously check LAUNCH for the explicit setup command only."
-  (let (done failure)
-    (let ((cancel (funcall (plist-get launch :prepare-launch)
-                           (lambda () (setq done t))
+(defun mevedel-claude-code--version (output minimum)
+  "Return the version reported in OUTPUT when it is at least MINIMUM."
+  (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
+       (version<= minimum (match-string 0 output))
+       (match-string 0 output)))
+
+(defun mevedel-claude-code--wait (start)
+  "Synchronously wait for an explicit setup command's asynchronous check.
+START receives success and failure callbacks and returns a canceller.
+Return the success value; signal the failure diagnostic as a `user-error'."
+  (let (done value failure)
+    (let ((cancel (funcall start
+                           (lambda (&optional result) (setq value result done t))
                            (lambda (message) (setq failure message done t)))))
       (unwind-protect
           (progn
             (while (not done) (accept-process-output nil 0.02))
-            (when failure (user-error "%s" failure)))
-        (funcall cancel)))))
-
-(defun mevedel-claude-code--check-version (command minimum label)
-  "Require COMMAND version MINIMUM for the explicit installer command.
-LABEL identifies the prerequisite in its safe diagnostic."
-  (let (done output failure)
-    (let ((cancel (mevedel-claude-code--command-output-async
-                   command '("--version")
-                   (lambda (text) (setq output text done t))
-                   (lambda (message) (setq failure message done t)))))
-      (unwind-protect
-          (progn
-            (while (not done) (accept-process-output nil 0.02))
             (when failure (user-error "%s" failure))
-            (unless (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
-                         (version<= minimum (match-string 0 output)))
-              (user-error "%s %s or newer is required" label minimum)))
+            value)
         (funcall cancel)))))
 
 ;;;###autoload
@@ -396,8 +401,10 @@ Return the setup buffer."
   (interactive)
   (let ((status (condition-case err
                     (progn
-                      (mevedel-claude-code--check-launch
-                       (mevedel-claude-code-launch "Setup check" [] "sonnet" nil))
+                      (mevedel-mcp-bridge-file)
+                      (mevedel-claude-code--wait
+                       (plist-get (mevedel-claude-code-launch "Setup check" [] "sonnet" nil)
+                                  :prepare-launch))
                       "Ready for Claude Code subscription sessions.")
                   (error (error-message-string err))))
         (buffer (get-buffer-create "*mevedel Claude Code setup*")))
@@ -451,8 +458,13 @@ installation process, or nil when the user declines.  Never install on send."
          (directory (expand-file-name mevedel-claude-code-directory))
          (package (concat "@agentclientprotocol/claude-agent-acp@" mevedel-claude-code--adapter-version))
          (npm (or (executable-find "npm") (user-error "Install Node.js 22 or newer with npm first"))))
-    (mevedel-claude-code--check-version
-     (or (executable-find "node") (user-error "Install Node.js 22 or newer first")) "22.0.0" "Node.js")
+    (let ((node (or (executable-find "node") (user-error "Install Node.js 22 or newer first"))))
+      (unless (mevedel-claude-code--version
+               (mevedel-claude-code--wait
+                (lambda (ready failure)
+                  (mevedel-claude-code--command-output-async node '("--version") ready failure)))
+               "22.0.0")
+        (user-error "Node.js 22.0.0 or newer is required")))
     (when (yes-or-no-p (format "Install %s and its dependencies with npm in %s? " package directory))
       (let ((buffer (get-buffer-create "*mevedel Claude adapter installation*"))
             (process-environment (copy-sequence process-environment)))
@@ -485,72 +497,81 @@ installation process, or nil when the user declines.  Never install on send."
     (mevedel-goal-charge-agent-progress owner))
   (mevedel-claude-code-context-observe owner notification))
 
+(defun mevedel-claude-code--hook-event (event)
+  "Return EVENT's hook name, rejecting hooks mevedel did not configure."
+  (let ((name (plist-get event :hook_event_name)))
+    (unless (or (member name '("PostToolBatch" "PreToolUse"))
+                (and (equal "SessionStart" name) (equal "compact" (plist-get event :source))))
+      (error "Unsupported Claude hook event"))
+    name))
+
+(defun mevedel-claude-code--workload-control (boundary event)
+  "Return the native hook decision for an isolated workload's EVENT.
+BOUNDARY returns reminder text, or nil, after each completed tool batch."
+  (let ((context (when (equal "PostToolBatch" (mevedel-claude-code--hook-event event))
+                   (funcall boundary))))
+    (when (and context (not (and (stringp context) (mevedel-claude-code-context-hook-fits-p context))))
+      (error "Claude hook context exceeds its supported size"))
+    (if context
+        (list :hookSpecificOutput (list :hookEventName "PostToolBatch" :additionalContext context))
+      '(:continue t))))
+
 (defun mevedel-claude-code--control (request event)
-  "Return the native hook decision for REQUEST and Claude EVENT."
-  (unless (or (member (plist-get event :hook_event_name) '("PostToolBatch" "PreToolUse"))
-              (and (equal "SessionStart" (plist-get event :hook_event_name))
-                   (equal "compact" (plist-get event :source))))
-    (error "Unsupported Claude hook event"))
-  (let ((decision
-         (if (functionp request)
-             (let ((context (when (equal "PostToolBatch" (plist-get event :hook_event_name))
-                              (funcall request))))
-               (when (and context (not (and (stringp context) (<= (length context) 10000))))
-                 (error "Claude hook context exceeds its supported size"))
-               (if context
-                   (list :hookSpecificOutput (list :hookEventName "PostToolBatch" :additionalContext context))
-                 '(:continue t)))
-           (when (equal "PostToolBatch" (plist-get event :hook_event_name))
-             (let* ((info (mevedel-engine-info request))
-                    (buffer (plist-get info :buffer))
-                    (warnings
-                     (if (mevedel-request-p request)
-                         (mevedel-goal-tool-result-budget-warnings (mevedel-request-session request) request)
-                       (when-let* ((notice (mevedel-goal-agent-budget-notice request)))
-                         (list (plist-put notice :key 'goal-budget))))))
-               (dolist (warning warnings)
-                 (mevedel-reminders-queue-turn-event
-                  buffer (plist-get warning :key) (plist-get warning :body) (plist-get warning :commit)))))
-           (when (and (mevedel-agent-invocation-p request)
-                      (equal "PostToolBatch" (plist-get event :hook_event_name))
-                      (not (plist-get (mevedel-engine-info request) :mevedel-end-turn))
-                      (not (plist-get (mevedel-engine-info request) :mevedel-cancelled)))
-             (mevedel-claude-code-agent-next-sample request t))
-           (let ((reason (plist-get (mevedel-engine-info request) :mevedel-end-turn)))
-             (if (or reason (if (mevedel-request-p request)
-                                (mevedel-request-cancelled-p request)
-                              (plist-get (mevedel-engine-info request) :mevedel-cancelled)))
-                 (list :continue :json-false
-                       :stopReason (format "Mevedel ended this turn: %s" (or reason 'interrupted)))
-               (if-let* ((context
-                          (pcase (plist-get event :hook_event_name)
-                            ("SessionStart" (mevedel-claude-code-context-restore request))
-                            ("PostToolBatch" (mevedel-claude-code-context-prepare request))
-                            ("PreToolUse"
-                             ;; SessionStart(compact) does not reliably honor a stop.
-                             ;; Stop again before tool dispatch until the full context
-                             ;; can be delivered through the next native prompt.
-                             (cl-loop for key in '(:mevedel-claude-context-pending
-                                                   :mevedel-claude-restoration-pending)
-                                      for pending = (plist-get (mevedel-engine-info request) key)
-                                      when (eq 'continuation (plist-get pending :route))
-                                      return (plist-get pending :body))))))
-                   (if (> (/ (string-bytes (encode-coding-string context 'utf-16-le)) 2) 10000)
-                       (progn
-                         (when (and (mevedel-agent-invocation-p request)
-                                    (member (plist-get event :hook_event_name)
-                                            '("SessionStart" "PreToolUse")))
-                           ;; SessionStart cannot stop the next sample; a denied
-                           ;; tool also spent its sample.  Reserve another only
-                           ;; after successful settlement, even for text alone.
-                           (setf (mevedel-engine-info request)
-                                 (plist-put (mevedel-engine-info request)
-                                            :mevedel-claude-continuation-sample-spent t)))
-                         (list :continue :json-false :stopReason "Mevedel will deliver the full context in a continuation prompt before further work."))
-                     (list :hookSpecificOutput
-                           (list :hookEventName (plist-get event :hook_event_name) :additionalContext context)))
-                 '(:continue t)))))))
-    (when (and (equal "PreToolUse" (plist-get event :hook_event_name))
+  "Return the native hook decision for admitted REQUEST and Claude EVENT."
+  (let* ((name (mevedel-claude-code--hook-event event))
+         (decision
+          (progn
+            (when (equal "PostToolBatch" name)
+              (let* ((info (mevedel-engine-info request))
+                     (buffer (plist-get info :buffer))
+                     (warnings
+                      (if (mevedel-request-p request)
+                          (mevedel-goal-tool-result-budget-warnings (mevedel-request-session request) request)
+                        (when-let* ((notice (mevedel-goal-agent-budget-notice request)))
+                          (list (plist-put notice :key 'goal-budget))))))
+                (dolist (warning warnings)
+                  (mevedel-reminders-queue-turn-event
+                   buffer (plist-get warning :key) (plist-get warning :body) (plist-get warning :commit)))))
+            (when (and (mevedel-agent-invocation-p request)
+                       (equal "PostToolBatch" name)
+                       (not (plist-get (mevedel-engine-info request) :mevedel-end-turn))
+                       (not (plist-get (mevedel-engine-info request) :mevedel-cancelled)))
+              (mevedel-claude-code-agent-next-sample request t))
+            (let ((reason (plist-get (mevedel-engine-info request) :mevedel-end-turn)))
+              (if (or reason (if (mevedel-request-p request)
+                                 (mevedel-request-cancelled-p request)
+                               (plist-get (mevedel-engine-info request) :mevedel-cancelled)))
+                  (list :continue :json-false
+                        :stopReason (format "Mevedel ended this turn: %s" (or reason 'interrupted)))
+                (if-let* ((context
+                           (pcase name
+                             ("SessionStart" (mevedel-claude-code-context-restore request))
+                             ("PostToolBatch" (mevedel-claude-code-context-prepare request))
+                             ("PreToolUse"
+                              ;; SessionStart(compact) does not reliably honor a stop.
+                              ;; Stop again before tool dispatch until the full context
+                              ;; can be delivered through the next native prompt.
+                              (cl-loop for key in '(:mevedel-claude-context-pending
+                                                    :mevedel-claude-restoration-pending)
+                                       for pending = (plist-get (mevedel-engine-info request) key)
+                                       when (eq 'continuation (plist-get pending :route))
+                                       return (plist-get pending :body))))))
+                    (if (not (mevedel-claude-code-context-hook-fits-p context))
+                        (progn
+                          (when (and (mevedel-agent-invocation-p request)
+                                     (member name
+                                             '("SessionStart" "PreToolUse")))
+                            ;; SessionStart cannot stop the next sample; a denied
+                            ;; tool also spent its sample.  Reserve another only
+                            ;; after successful settlement, even for text alone.
+                            (setf (mevedel-engine-info request)
+                                  (plist-put (mevedel-engine-info request)
+                                             :mevedel-claude-continuation-sample-spent t)))
+                          (list :continue :json-false :stopReason "Mevedel will deliver the full context in a continuation prompt before further work."))
+                      (list :hookSpecificOutput
+                            (list :hookEventName name :additionalContext context)))
+                  '(:continue t)))))))
+    (when (and (equal "PreToolUse" name)
                (eq :json-false (plist-get decision :continue)))
       (setq decision
             (plist-put decision :hookSpecificOutput
@@ -595,23 +616,13 @@ rows include internal work and are not another copy of these prompt totals."
          (output (alist-get 'outputTokens usage))
          (cached (alist-get 'cachedReadTokens usage))
          (cache (alist-get 'cachedWriteTokens usage))
-         (failure (map-nested-elt response '(_meta jetbrains air sessionFailure)))
          tokens)
     (when (and (natnump input) (natnump cache))
       (setq tokens (list :input (+ input cache))))
     (when (natnump output) (setq tokens (append tokens (list :output output))))
     (when (natnump cached) (setq tokens (append tokens (list :cached cached))))
     (when (natnump cache) (setq tokens (append tokens (list :cache cache))))
-    (setq outcome (plist-put outcome :tokens tokens))
-    (when (and (not (eq 'interrupted (plist-get outcome :status)))
-               (equal "error" (alist-get 'severity failure)))
-      (setq outcome (plist-put outcome :status 'error))
-      (setq outcome
-            (plist-put outcome :message
-                       (let ((title (alist-get 'title failure)))
-                         (if (and (stringp title) (not (string-empty-p title)))
-                             title "Claude reported a terminal failure")))))
-    outcome))
+    (plist-put outcome :tokens tokens)))
 
 (defun mevedel-claude-code-launch (system mcp model effort &optional session-id hook-command)
   "Prepare an authenticated Claude ACP launch for SYSTEM and MCP servers.
@@ -647,7 +658,6 @@ Return the generic ACP launch plist; no model request is made here."
     (setenv "CLAUDE_CODE_EFFORT_LEVEL" nil)
     (unless (version<= "0.15.2" acp-package-version)
       (user-error "Upgrade the Emacs acp package to 0.15.2 or newer"))
-    (mevedel-mcp-bridge-file)
     (let* ((checks (list
                     (list (or (executable-find "node") (user-error "Install Node.js 22 or newer on the Emacs host"))
                           "22.0.0" "Node.js")
@@ -667,21 +677,12 @@ Return the generic ACP launch plist; no model request is made here."
                       (allowedTools . ["mcp__mevedel__*"])
                       (extraArgs . ((disable-slash-commands . ""))))))
       (when hook-command
-        (setq settings
-              (append settings
-                      `((hooks . ((PreToolUse .
-                                              [((hooks . [((type . "command")
-                                                           (command . ,hook-command)
-                                                           (timeout . 35))]))])
-                                  (PostToolBatch .
-                                                 [((hooks . [((type . "command")
-                                                              (command . ,hook-command)
-                                                              (timeout . 35))]))])
-                                  (SessionStart .
-                                                [((matcher . "compact")
-                                                  (hooks . [((type . "command")
-                                                             (command . ,hook-command)
-                                                             (timeout . 35))]))])))))))
+        (let ((hooks `[((type . "command") (command . ,hook-command) (timeout . 35))]))
+          (setq settings
+                (append settings
+                        `((hooks . ((PreToolUse . [((hooks . ,hooks))])
+                                    (PostToolBatch . [((hooks . ,hooks))])
+                                    (SessionStart . [((matcher . "compact") (hooks . ,hooks))]))))))))
       (make-directory cwd t)
       (set-file-modes cwd #o700)
       (list :command adapter :cwd cwd :environment process-environment

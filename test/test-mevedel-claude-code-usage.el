@@ -11,10 +11,6 @@
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name)) "mevedel-engine-test-support"))
 
-(defconst mevedel-claude-code-usage-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel--send-request/claude-continuation-unknown-usage (:quiet t)
   (mevedel-engine-test--with-session
     (let* ((gptel--known-backends nil)
@@ -26,17 +22,14 @@
       (mevedel-model-set-session-provider session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Continuation usage fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (lambda (_system mcp _model _effort &optional id _hook)
-                   (list :command (executable-find "python3")
-                         :args (list mevedel-claude-code-usage-test--peer)
-                         :cwd root :mcp mcp :session-id id
-                         :complete-prompt (lambda (owner outcome)
-                                            (push (copy-tree outcome) outcomes)
-                                            (mevedel-claude-code--complete-prompt owner outcome))
-                         :normalize-outcome #'mevedel-claude-code--outcome
-                         :meta '((promptResponse . ((stopReason . "end_turn")
-                                                    (usage . ((inputTokens . 10) (cachedWriteTokens . 0) (outputTokens . 5)))))
-                                 (continuationPrompts . [((promptResponse . ((stopReason . "end_turn"))))])))))
+                 (mevedel-engine-test--claude-launch
+                  (lambda (_system mcp _model _effort &optional id _hook)
+                    (list :complete-prompt (lambda (owner outcome)
+                                             (push (copy-tree outcome) outcomes)
+                                             (mevedel-claude-code--complete-prompt owner outcome))
+                          :meta '((promptResponse . ((stopReason . "end_turn")
+                                                     (usage . ((inputTokens . 10) (cachedWriteTokens . 0) (outputTokens . 5)))))
+                                  (continuationPrompts . [((promptResponse . ((stopReason . "end_turn"))))]))))))
                 ((symbol-function 'mevedel-claude-code-context-next-prompt)
                  (lambda (_owner) (when next (setq next nil) [((type . "text") (text . "Continue"))])))
                 ((symbol-function 'mevedel-goal--schedule-continuation) #'ignore))

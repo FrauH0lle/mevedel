@@ -12,6 +12,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-engine-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-engine-test-support"))
 
 (mevedel-deftest mevedel-deftest
   (:doc "isolates tool registration and lookup caches even when a case fails")
@@ -81,6 +86,22 @@
                    (macroexpand
                     '(mevedel-test--template (list ,value) (value)
                        1 :doc "second" 2))))))
+
+(mevedel-deftest mevedel-engine-test--with-session
+  (:doc "cancels timers it owns and fails on, then cancels, any other new timer")
+  (let (owned stray)
+    (mevedel-engine-test--with-session
+      (push (run-at-time 0 nil #'mevedel-goal--scheduled-continuation session buffer nil)
+            owned)
+      (push (run-at-time 0 nil #'mevedel-view--run-follow-up-drain buffer) owned)
+      (push (run-at-time 60 nil #'ignore session) owned))
+    (should-not (cl-intersection owned timer-list))
+    (should (string-prefix-p
+             "Fixture left timers"
+             (cadr (should-error
+                    (mevedel-engine-test--with-session
+                      (setq stray (run-at-time 60 nil #'ignore)))))))
+    (should-not (memq stray timer-list))))
 
 (provide 'test-mevedel-test-helpers)
 ;;; test-mevedel-test-helpers.el ends here

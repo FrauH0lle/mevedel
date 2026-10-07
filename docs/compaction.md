@@ -26,7 +26,7 @@ The boundary follows gptel's insertion marker when compaction starts. Output
 received after that boundary is preserved as a tail after the summary, so a
 mid-turn compaction loses neither intervening output nor subsequent tools.
 Stream markers are reset after publication; the admitted turn keeps its native
-identity, tool ledger and once-only settlement. Archived managed-command rows
+identity, per-turn call identities and once-only settlement. Archived managed-command rows
 use the same durable execution records as ordinary compaction. Queued, running
 and stopping commands remain live archive records even without an open view;
 their terminal events replace those records when the commands finish. The
@@ -37,8 +37,11 @@ updates cannot publish another segment. Failed or cancelled compaction leaves
 the transcript intact; completion without a usable summary fails the turn
 visibly. The summary is labelled as Claude-authored and may refer to context
 delivered through hooks. Publication does not itself acknowledge delivery of
-instructions: native context restoration still requires the exact hook receipt
-before further relevant work.
+instructions: [native context restoration](sessions.md#native-context-delivery)
+has its own receipt. As after local root compaction, a published segment stops
+earlier Reads from counting as duplicates; if touched-file contents were
+omitted, the re-read reminder is enqueued on the pending FIFO for the next
+prompt, since no gptel request exists to stage it on.
 
 The ACP runner processes native events, hooks and tool admission in order when
 the execution target's transport is idle. Cancellation fences queued work;

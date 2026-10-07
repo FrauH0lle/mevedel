@@ -13,7 +13,6 @@
 ;; The durable-transaction macro must expand for interpreted loads too,
 ;; so this is a load-time dependency rather than a compile-time one.
 (require 'mevedel-session-durability)
-(require 'mevedel-claude-code)
 (require 'mevedel-mention-bindings)
 (require 'mevedel-overlay-ui)
 (require 'mevedel-pending-inputs)
@@ -42,7 +41,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
-(declare-function mevedel--dispatch-request "mevedel-chat" (model-input local-send))
+(declare-function mevedel--dispatch-request "mevedel-chat" (model-input local-send &optional native-input))
 (autoload 'mevedel--dispatch-request "mevedel-chat")
 (defvar mevedel--pending-model-input)
 
@@ -2853,7 +2852,7 @@ asynchronous preparation ran is left alone instead of cleared."
              (push (lambda (fsm) (unless startup-fsm (setq startup-fsm fsm)))
                    (cdr wait)))
            (condition-case err
-               (mevedel--dispatch-request (or model-input input) #'gptel-send)
+               (mevedel--dispatch-request model-input #'gptel-send input)
              ((error quit)
               (let ((request (and startup-fsm
                                   (plist-get (gptel-fsm-info startup-fsm)

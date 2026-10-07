@@ -256,7 +256,7 @@ context remains current. Fresh directive requests own separate hashes. Each
 mevedel `SessionStart` context epoch resets local-history `/root`;
 resume resets local-history owners, and retained-agent compaction resets that
 agent. Native-history owners keep their learned scopes across reopening and
-refresh their current instruction contents in the next acknowledged prompt.
+re-send only changed instruction contents in later prompts.
 
 `M-x mevedel-inspect-effective-prompt` and `/prompt` open the same read-only
 report of the live preset, profile, prompt components, exact final prompt,
@@ -614,35 +614,12 @@ requirement. Named workspace configuration, environment, memory indexes, skill
 catalogs, resource availability, the main journal map and root Goal context are
 delivered after current input through the existing reminder transaction.
 
-The Claude engine supplies selected observations as a complete system-prompt
-baseline for each launched turn. It explicitly disables the SDK's first-prompt
-snapshot so resume can apply the newly composed baseline. PostToolBatch hooks
-deliver changed selected observations and queued turn events, including
-path-scoped instructions discovered by Read. Exact successful SDK receipts
-acknowledge the captured context before subsequent tool effects or successful
-settlement. Later queued events survive an earlier receipt. Unchanged sections
-are omitted; a change back to the baseline is still an update.
-
-Root and child turns collect configured reminders at prompt submission through
-the same reminder owner as gptel. Receipt commits their firing marks, pending
-events and pending root hook context. Direct-child rosters use a shared producer:
-the prompt carries the initial roster and tool-batch hooks carry newly available
-children. These deliveries require acknowledgment before more tools can run.
-
-Native compaction retains the system input. A SessionStart(compact) hook
-re-renders the recipient's selected observations and restores differences from
-that baseline, including updates acknowledged before compaction. It also
-restores the direct-child roster, active root Plan guidance, eligible accepted-plan
-references and current contents of path instructions already learned by that
-conversation. Missing files
-explicitly withdraw old guidance. Root, retained children and fresh directives
-use separate instruction acknowledgments. Oversized changes automatically
-continue the same admitted turn with their full captured body in a new native
-prompt. Exact SDK user receipt is required before further tool effects. A
-pre-tool hook denies and stops any call attempted while oversized restoration
-awaits that prompt: SessionStart(compact) itself has no reliable stop control.
-The conversation and effect ledger remain owned by the admitted turn, which
-settles once. User stops and child sample limits still apply.
+The Claude engine puts the complete selected observations into the native
+system prompt and delivers changes, queued turn events, configured reminders,
+rosters and compaction restoration through SDK receipts rather than a realized
+gptel payload; see [native context delivery](sessions.md#native-context-delivery).
+Unchanged sections are omitted; a change back to the baseline is still an
+update.
 
 Environment context identifies the execution target as `local` or a TRAMP
 method and destination, such as `ssh:alice@build` or `podman:dev`, before the

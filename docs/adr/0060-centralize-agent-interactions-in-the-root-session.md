@@ -10,13 +10,6 @@ request cancellers and permission-queue sweep. Their invocation owns native
 history and terminal publication; a gptel state machine is unnecessary.
 The MCP pipeline validates that the invocation still owns its admitted request.
 Neither finishing nor interrupting a child advances the root turn count.
-
-## Decision history
-
-The initial ACP child path relied on invocation ownership alone. A workflow
-test with the parent in WaitAgent showed that approval and denial worked, but
-interrupting the child left its permission card queued after terminal
-publication. Reusing ordinary request admission restores the existing cleanup
-contract without another interaction registry. Tests exercise approval, denial
-and interruption for direct and nested children while ancestors wait, reject
-late approval, and prove capacity can be reused after settlement.
+Invocation ownership alone left an interrupted child's permission card queued
+after terminal publication; reusing ordinary request admission keeps the
+existing cleanup contract without another interaction registry.

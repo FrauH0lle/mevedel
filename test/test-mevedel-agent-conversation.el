@@ -389,6 +389,10 @@
                            (mapcar (lambda (item) (plist-get item :type))
                                    (mevedel-agent-invocation-activity next))))
             (should (equal (list next next next) refreshed))
+            (run-hook-with-args 'gptel-post-tool-call-functions
+                                '(:name "FixtureNoop" :args nil :result "Error: failed"))
+            (should (eq 'tool-error
+                        (plist-get (car (last (mevedel-agent-invocation-activity next))) :type)))
             (setf (mevedel-agent-invocation-runtime-settled-p next) t)
             (should (plist-get
                      (run-hook-with-args-until-success

@@ -68,10 +68,12 @@
                          &optional host-only audience))
 
 ;; `mevedel-models'
+(declare-function mevedel-model-candidates "mevedel-models" ())
 (declare-function mevedel-model-resolve-provider
                   "mevedel-models" (spec &optional noerror))
 (declare-function mevedel-model-set-session-provider
                   "mevedel-models" (session provider &optional buffer))
+(autoload 'mevedel-model-candidates "mevedel-models")
 (autoload 'mevedel-model-resolve-provider "mevedel-models")
 (autoload 'mevedel-model-set-session-provider "mevedel-models")
 
@@ -346,7 +348,8 @@ its first prompt like one started in Emacs without a name."
              (< (- now (cdr last))
                 mevedel-collaboration--duplicate-prompt-window))
         nil)
-       ((and model (not (mevedel-model-resolve-provider model t)))
+       ;; Only offered labels: probing an arbitrary name could register it.
+       ((and model (not (assoc model (mevedel-model-candidates))))
         (mevedel-collaboration--new-session-reply
          room peer request-id name :ok :json-false
          :message (format "Unknown model %s" model)))

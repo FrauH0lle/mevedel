@@ -908,9 +908,10 @@
       (should ran)
       (should-not (mevedel-session-pending-follow-ups session)))))
 
-(mevedel-deftest mevedel-view--refuse-guest-follow-up
-  (:doc "drops a guest entry whose turn would ask in Emacs and tells the guest"
-   :quiet t)
+(mevedel-deftest mevedel-view--refuse-guest-follow-up (:quiet t)
+  ,test
+  (test)
+  :doc "drops a guest entry whose turn would ask in Emacs and tells the guest"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "refuse"))
            (attachment (make-temp-file "mevedel-guest-attachment-"))
@@ -942,7 +943,62 @@
       (should (string-search "Happy Hare" warned))
       ;; Only the host sees the question, which can name hosts and paths.
       (should (string-search ": Take over the lease? (y or n)" warned))
-      (should-not (string-search "lease" (cadr notified))))))
+      (should-not (string-search "lease" (cadr notified)))))
+  :doc "drops a refused guest entry instead of blocking the queue behind it"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "refuse"))
+           notified warned)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-session-enqueue-pending-input
+       session 'follow-up (list :input "/compact" :guest-name "Happy Hare" :guest-id "g1"))
+      (mevedel-session-enqueue-pending-input
+       session 'follow-up (list :input "Later" :guest-name "Happy Hare" :guest-id "g1"))
+      (cl-letf (((symbol-function
+                  'mevedel-session-artifacts-assert-new-mutation-authority)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-view--dispatch-follow-up-entry)
+                 (lambda (_kind _entry input &rest _)
+                   (user-error "Manual compaction is unavailable for %s" input)))
+                ((symbol-function 'mevedel-collaboration-notify-guest)
+                 (lambda (_session guest-id message)
+                   (setq notified (list guest-id message))))
+                ((symbol-function 'display-warning)
+                 (lambda (_type message &rest _) (setq warned message))))
+        (mevedel-view--drain-follow-up data-buf))
+      (should (equal '("Later") (mapcar (lambda (entry) (plist-get entry :input))
+                                        (mevedel-session-pending-follow-ups session))))
+      (should (equal "g1" (car notified)))
+      ;; Errors can name hosts and paths: only the host sees the reason.
+      (should (string-search "not sent" (cadr notified)))
+      (should-not (string-search "compaction" (cadr notified)))
+      (should (string-search "Manual compaction is unavailable" warned))
+      (should (string-search "Happy Hare" warned))))
+
+  :doc "keeps a guest entry queued while a turn settles or compaction runs"
+  (dolist (busy '(settling compacting))
+    (mevedel-view-test--with-buffers
+      (let ((session (mevedel-session--create :name "busy"))
+            notified)
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session)
+          (if (eq busy 'settling)
+              (setq-local mevedel--turn-settlements-pending (list 'fsm))
+            (setq-local mevedel-compact-run-in-flight t)))
+        (with-current-buffer view-buf
+          (setq-local mevedel--session session))
+        (mevedel-session-enqueue-pending-input
+         session 'follow-up (list :input "Hello" :guest-name "Happy Hare" :guest-id "g1"))
+        (cl-letf (((symbol-function
+                    'mevedel-session-artifacts-assert-new-mutation-authority)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'mevedel-collaboration-notify-guest)
+                   (lambda (&rest args) (setq notified args))))
+          (mevedel-view--drain-follow-up data-buf))
+        (should (mevedel-session-pending-follow-ups session))
+        (should-not notified)))))
 
 (mevedel-deftest mevedel-collaboration--refuse-unseen-question
 		 (:doc "refuses a question on a daemon's invisible frame while sharing, and only then")
@@ -1172,10 +1228,10 @@
   (:doc "finishes core teardown when share presentation cleanup signals")
   (with-temp-buffer
     (let* ((guests (make-hash-table :test #'eql))
-           (cancelled nil)
            (sent nil)
            (transport-stopped nil)
            (session (mevedel-session--create :name "stopping"))
+           (publish-timer (run-at-time 60 nil #'ignore))
            (room (list :transport 'transport
                        :session session
                        :session-observer
@@ -1183,14 +1239,12 @@
                         session #'ignore)
                        :data-buffer (current-buffer)
                        :guests guests
-                       :publish-timer 'publish-timer)))
+                       :publish-timer publish-timer)))
       (puthash 1 (list :name "g") guests)
       (let ((mevedel-collaboration--rooms
              (mevedel-test-room-registry room)))
         (cl-letf
-            (((symbol-function 'cancel-timer)
-              (lambda (timer) (push timer cancelled)))
-             ((symbol-function 'mevedel-collaboration-share-dismiss)
+            (((symbol-function 'mevedel-collaboration-share-dismiss)
               (lambda (_room) (error "Injected share cleanup failure")))
              ((symbol-function 'mevedel-collaboration--transport-send)
               (lambda (_transport peer frame)
@@ -1200,7 +1254,7 @@
               (lambda (_transport) (setq transport-stopped t))))
           (mevedel-collaboration--stop-internal room 'user-stop))
         (should-not (mevedel-collaboration--room-list)))
-      (should (equal '(publish-timer) cancelled))
+      (should-not (memq publish-timer timer-list))
       (should (equal "bye" (plist-get (cdr (car sent)) :t)))
       (should transport-stopped)
       ;; The stopped room no longer follows its session.

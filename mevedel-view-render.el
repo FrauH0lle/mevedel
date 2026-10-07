@@ -196,7 +196,6 @@
 		  "mevedel-transcript" (start end))
 (declare-function mevedel-transcript-segments "mevedel-transcript"
 		  (start end))
-(defvar mevedel-transcript--native-delivery-regexp)
 (defvar mevedel-transcript--tool-block-index)
 (defvar mevedel-view--path-link-memo)
 
@@ -1382,19 +1381,11 @@ without NEXT returns the complete turns."
         (cond
          (review-action-p
           nil)
-         ((and (eq type 'ignored) seg-text
-               (string-match-p
-                (concat "\\`\\(?:" mevedel-transcript--native-delivery-regexp "\\)\\'")
-                (string-trim seg-text)))
-          nil)
          (system-reminder-p
           (unless current-role
             (setq current-role 'assistant
                   turn-start seg-start))
-          (if (and (eq (caar current-segs) 'system-reminder)
-                   (= seg-start (caddr (car current-segs))))
-              (setf (caddr (car current-segs)) (caddr seg))
-            (push (list 'system-reminder seg-start (caddr seg)) current-segs)))
+          (push (list 'system-reminder seg-start (caddr seg)) current-segs))
          (request-summary-p
           (unless current-role
             (setq current-role 'assistant
@@ -3220,28 +3211,21 @@ Completed blocks are cached globally; see
   (with-current-buffer data-buf
     (mevedel-transcript-audit-buffer-only-p seg-start seg-end)))
 
-(defun mevedel-view--system-reminder-bodies-from-text (text)
-  "Return ordered bodies when TEXT contains only complete system reminders.
-Allow whitespace between blocks, but reject embedded prose or partial blocks.
-Nested literal reminders remain part of their outer reminder body."
+(defun mevedel-view--system-reminder-body-from-text (text)
+  "Return generated system reminder body from TEXT, or nil.
+TEXT must contain only one complete `<system-reminder>' block plus
+surrounding whitespace.  Embedded literal examples are not treated
+as generated control markup."
   (when (stringp text)
     (with-temp-buffer
       (insert (string-trim text))
       (goto-char (point-min))
-      (let (bodies)
-        (while-let ((range (mevedel-transcript--system-reminder-range-at-point
-                           (point-max))))
-          (push (string-trim
-                 (buffer-substring-no-properties (nth 1 range) (nth 2 range)))
-                bodies)
-          (goto-char (nth 3 range))
-          (skip-chars-forward " \t\r\n"))
-        (when (eobp) (nreverse bodies))))))
-
-(defun mevedel-view--system-reminder-body-from-text (text)
-  "Return the joined bodies of the complete system reminders in TEXT."
-  (when-let* ((bodies (mevedel-view--system-reminder-bodies-from-text text)))
-    (mapconcat #'identity bodies "\n\n")))
+      (when-let* ((range
+                   (mevedel-transcript--system-reminder-range-at-point
+                    (point-max)))
+                  ((= (nth 3 range) (point-max))))
+        (string-trim
+         (buffer-substring-no-properties (nth 1 range) (nth 2 range)))))))
 
 (defun mevedel-view--strip-system-reminder-blocks (text)
   "Return TEXT without generated `<system-reminder>' blocks."
@@ -3276,16 +3260,14 @@ Nested literal reminders remain part of their outer reminder body."
     ;; the properties are stripped only for the generic reminder path.
     (let ((text (buffer-substring seg-start seg-end)))
       (or (mevedel-view--inline-skill-attachments-summary text)
-          (let* ((bodies (mevedel-view--system-reminder-bodies-from-text
-                          (substring-no-properties text)))
+          (let* ((body (mevedel-view--system-reminder-body-from-text
+                        (substring-no-properties text)))
                  (lines (max 1 (mevedel-view--system-reminder-line-count
-                                (car bodies)))))
+                                body))))
             (propertize
-             (if (cdr bodies)
-                 (format "  \u25c7 %d system reminders" (length bodies))
-               (format "  \u25c7 System reminder (%d %s)"
-                       lines
-                       (if (= lines 1) "line" "lines")))
+             (format "  \u25c7 System reminder (%d %s)"
+                     lines
+                     (if (= lines 1) "line" "lines"))
              'font-lock-face 'mevedel-view-system-reminder))))))
 
 (defun mevedel-view--attached-skills-summary (names count)

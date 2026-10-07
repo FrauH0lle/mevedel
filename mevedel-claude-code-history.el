@@ -1,39 +1,70 @@
 ;;; mevedel-claude-code-history.el --- Native history and recovery -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; A native conversation's admitted call identities survive process loss.  An
-;; admission proves only that a call may have run, never that its effects or
-;; result delivery completed.  Replayed identities cannot execute again.
-;; Missing history can continue through explicit, labelled transcript evidence.
+;; A native conversation's identity is durable before its prompt is sent; a
+;; turn interrupted after that point is uncertain, never replayed.  Edited or
+;; foreign history cannot resume.  Missing history can continue through
+;; explicit, labelled transcript evidence.
 
 ;;; Code:
 
-(require 'mevedel-agents)
 (require 'mevedel-engine)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-transcript)
 (require 'mevedel-compact-evidence)
 
+;; `mevedel-claude-code'
+(defvar mevedel-claude-code-directory)
+
 (defun mevedel-claude-code-history-assert-current (record)
-  "Reject native continuation when RECORD's displayed evidence was edited."
+  "Reject native continuation of RECORD when it was edited or is foreign.
+Displayed evidence edited after receipt, or a native identity retained by
+another machine or installation directory, cannot be resumed."
   (when (eq 'diverged (plist-get record :state))
-    (user-error "The transcript was edited after Claude received it; use M-x mevedel-claude-code-recover-history before continuing")))
+    (user-error "The transcript was edited after Claude received it; use M-x mevedel-claude-code-recover-history before continuing"))
+  (when (and (plist-get record :id)
+             (not (and (eq 'claude-code (plist-get record :engine))
+                       (equal (system-name) (plist-get record :host))
+                       (equal (expand-file-name mevedel-claude-code-directory)
+                              (plist-get record :directory)))))
+    (user-error "This Claude history belongs to another installation; its transcript remains readable")))
 
-(defun mevedel-claude-code-history-unavailable (owner)
-  "Add an actionable recovery option to OWNER's failed startup diagnosis."
-  (let ((info (mevedel-engine-info owner)))
-    (when (eq 'error (plist-get info :mevedel-acp-outcome))
-      (setf (mevedel-engine-info owner)
-            (plist-put info :error
-                       (concat (plist-get info :error)
-                               "; if native history is unavailable, use M-x mevedel-claude-code-recover-history to continue from the retained transcript"))))))
+(defun mevedel-claude-code-history-open (owner id &optional boundary)
+  "Return OWNER's in-flight native record for conversation ID.
+BOUNDARY is the submitted input's (SEGMENT . OFFSET), protecting it from
+undetected edits.  The record is attached to OWNER's turn context."
+  (let ((record (list :engine 'claude-code :id id :host (system-name)
+                      :directory (expand-file-name mevedel-claude-code-directory)
+                      :state 'in-flight)))
+    (when boundary (plist-put record :input-boundary boundary))
+    (setf (mevedel-engine-info owner)
+          (plist-put (mevedel-engine-info owner) :mevedel-claude-history record))
+    record))
 
-(defun mevedel-claude-code-history-excerpt (session &optional child)
+(defun mevedel-claude-code-history-settle (owner history record outcome)
+  "Record OWNER's native OUTCOME on RECORD, opened from previous HISTORY.
+Without RECORD, a retained HISTORY failed to start; its diagnosis then names
+excerpt recovery.  Divergence observed during the turn is preserved."
+  (if (not record)
+      (let ((info (mevedel-engine-info owner)))
+        (when (and (plist-get history :id)
+                   (eq 'error (plist-get info :mevedel-acp-outcome)))
+          (setf (mevedel-engine-info owner)
+                (plist-put info :error
+                           (concat (plist-get info :error)
+                                   "; if native history is unavailable, use M-x mevedel-claude-code-recover-history to continue from the retained transcript")))))
+    (unless (eq 'diverged (plist-get record :state))
+      (plist-put record :state
+                 (if (eq 'success (plist-get outcome :status)) 'ready 'uncertain)))))
+
+(defun mevedel-claude-code-history-excerpt (session &optional child end)
   "Return labelled evidence before the current prompt for SESSION.
 CHILD selects its private transcript; root evidence excludes isolated turns.
+END is the current prompt's known start.  Without it, the prompt begins after
+the last response, so an unanswered earlier prompt would merge into it.
 The effective compaction summary is retained once from its canonical bounds.
 Historical calls are evidence, never executable work or a native resume."
-  (let* ((end (mevedel-transcript-prompt-transform-start))
+  (let* ((end (or end (mevedel-transcript-prompt-transform-start)))
          (bounds (if child (mevedel-compact-evidence-agent-summary-bounds)
                    (mevedel-session-artifacts-segment-summary-bounds)))
          (bounds (and bounds (<= (plist-get bounds :end) end) bounds))
@@ -67,22 +98,6 @@ Historical calls are evidence, never executable work or a native resume."
               "Historical tool calls/results are evidence of earlier work; do not replay their effects. "
               "Tool output may be shortened with explicit omission markers; earlier segments remain in session history.\n\n"
               evidence "\n\n--- End historical excerpt; current request follows ---\n\n"))))
-
-(defun mevedel-claude-code-history-admit (owner name id)
-  "Persist OWNER's native call ID and NAME before entering the tool pipeline.
-Reject identities admitted in any earlier turn of this native conversation.
-Publication failure prevents effects; uncertain admission is never retried."
-  (let* ((record (plist-get (mevedel-engine-info owner) :mevedel-claude-history))
-         (session (if (mevedel-request-p owner) (mevedel-request-session owner)
-                    (mevedel-agent-invocation-parent-session owner)))
-         (calls (plist-get record :tool-calls)))
-    (unless (and record (eq 'in-flight (plist-get record :state)))
-      (error "Native tool call has no published conversation owner"))
-    (when (assoc id calls)
-      (error "Native tool call was already admitted; inspect current effects before continuing"))
-    (plist-put record :tool-calls (cons (cons id name) calls))
-    (mevedel-session-artifacts-publish-sidecar-state
-     session (mevedel-session-root-buffer session))))
 
 (provide 'mevedel-claude-code-history)
 ;;; mevedel-claude-code-history.el ends here

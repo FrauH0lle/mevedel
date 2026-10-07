@@ -254,6 +254,11 @@ signals instead:
 Either way the host's warning quotes the question; guests see only the notice,
 since prompts can name hosts and paths.
 
+A queued message the host refuses for another reason, such as `/compact` in a
+Claude session, is dropped the same way rather than blocking the queue. Its
+sender is told it was not sent, with the reason when it is a user-facing
+refusal, and the host sees the error.
+
 Later steps of a turn run from timers and process callbacks, outside any
 binding. An Emacs daemon without a client frame reads the minibuffer on its
 invisible initial terminal, where a question waits forever while guests keep
@@ -859,6 +864,8 @@ Shared-item questions retain item and comment correlation in the canonical
 transcript's guest attribution. The editor panel reuses those records and the
 existing pending-input queue. Each item has separate model context, selected
 from the live transcript and archived segments without a second transcript store.
+In a Claude session each item question starts an isolated native conversation
+with that context, so it neither resumes nor enters the room's native history.
 Room chat can retrieve those turns through the same history resources.
 Canonical provider-failure summaries also appear in browser conversations.
 See [shared editing](shared-editing.md#questions-and-comments).

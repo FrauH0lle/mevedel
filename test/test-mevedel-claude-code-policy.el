@@ -49,13 +49,12 @@
 	     (mevedel-chat-install-request-hooks)
 	     (mevedel-view--setup view buffer)
 	     (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-			(lambda (system mcp model effort &optional id _hook)
-			  (should (string-search (if skill-p "Policy fixture opus/xhigh"
-						   "Policy fixture sonnet/high") system))
-			  (setq launch (list model effort))
-			  (list :command (executable-find "python3")
-				:args (list mevedel-claude-code-policy-test--peer)
-				:cwd root :mcp mcp :session-id id))))
+			(mevedel-engine-test--claude-launch
+                         (lambda (system mcp model effort &optional id _hook)
+			   (should (string-search (if skill-p "Policy fixture opus/xhigh"
+						    "Policy fixture sonnet/high") system))
+			   (setq launch (list model effort))
+			   nil))))
 	       (with-current-buffer view
 		 (goto-char (mevedel-view--input-start))
 		 (insert (if skill-p "$inspect this change" "Plan this change"))
@@ -182,11 +181,10 @@
                   (should (string-search "select a listed model and retry" error))
                   (when (eq route 'directive) (should (equal error directive-error))))
                 (should-not mevedel--current-request)
-                ;; Discovery also rejects a configured ID at selection time
-                ;; once the same backend has a current catalog.
-                (should-error (mevedel-model-resolve-provider
-                               "Claude Code:claude-unavailable-fixture")
-                              :type 'user-error)))
+                ;; Selection-time lookups accept the ID without adding it to
+                ;; the discovered catalog; each dispatch rejects it as above.
+                (should-not (cl-find "claude-unavailable-fixture" (gptel-backend-models backend)
+                                     :key #'gptel--model-name :test #'equal))))
           (when (buffer-live-p view) (kill-buffer view))
           (when (buffer-live-p source) (kill-buffer source)))))))
 

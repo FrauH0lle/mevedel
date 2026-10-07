@@ -13,10 +13,6 @@
 (require 'mevedel-side-conversation)
 (require 'gptel-transient)
 
-(defconst mevedel-claude-code-capabilities-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-menu/claude-history (:quiet t)
   (mevedel-engine-test--with-session
     (let ((gptel--known-backends nil)
@@ -29,10 +25,9 @@
              session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq-local gptel-system-prompt "History control fixture" gptel-tools nil)
             (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                       (lambda (_system mcp _model _effort &optional id _hook)
-                         (list :command (executable-find "python3")
-                               :args (list mevedel-claude-code-capabilities-test--peer)
-                               :cwd root :mcp mcp :session-id id))))
+                       (mevedel-engine-test--claude-launch
+                        (lambda (_system mcp _model _effort &optional id _hook)
+                          nil))))
               (mevedel--insert-user-turn "history evidence")
               (mevedel--send-request)
               (with-timeout (5 (ert-fail "History fixture did not settle"))

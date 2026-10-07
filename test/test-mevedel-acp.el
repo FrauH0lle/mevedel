@@ -133,6 +133,24 @@
         (funcall (timer--function watchdog))
         (should (eq 'idle (mevedel-acp-state connection)))))))
 
+(mevedel-deftest mevedel-acp--live-p
+  (:doc "a dead but unreaped agent fails the connection instead of restarting")
+  (mevedel-acp-test--with-connection nil
+    (let (outcome)
+      (mevedel-acp-prompt connection [((type . "text") (text . "wait-silent"))]
+                          #'ignore (lambda (result) (setq outcome result)))
+      (let ((process (alist-get :process (mevedel-acp-client connection))))
+        (signal-process process 'KILL)
+        ;; Busy Emacs: the exit is recorded before any sentinel runs.
+        (let ((end (+ (float-time) 3)))
+          (while (and (process-live-p process) (< (float-time) end))))
+        (should-not (process-live-p process))
+        (let ((before (process-list)))
+          (mevedel-acp-cancel connection)
+          (should-not (cl-set-difference (process-list) before)))
+        (should (eq 'closed (mevedel-acp-state connection)))
+        (should (eq 'error (plist-get outcome :status)))))))
+
 (mevedel-deftest mevedel-acp-open ()
   ,test
   (test)

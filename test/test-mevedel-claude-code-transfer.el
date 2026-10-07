@@ -10,10 +10,6 @@
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
 
-(defconst mevedel-claude-code-transfer-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel--send-request/transfer-to-claude (:quiet t)
   (mevedel-engine-test--with-session
     (let ((gptel--known-backends nil)
@@ -30,11 +26,10 @@
        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Transfer fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (lambda (_system mcp _model _effort &optional id _hook)
-                   (push id ids)
-                   (list :command (executable-find "python3")
-                         :args (list mevedel-claude-code-transfer-test--peer)
-                         :cwd root :mcp mcp :session-id id))))
+                 (mevedel-engine-test--claude-launch
+                  (lambda (_system mcp _model _effort &optional id _hook)
+                    (push id ids)
+                    nil))))
         (mevedel--insert-user-turn "Continue using Claude")
         (mevedel--send-request "Continue using Claude")
         (with-timeout (5 (ert-fail "Excerpt continuation did not settle"))
@@ -68,21 +63,18 @@
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read")))
                   gptel-prompt-transform-functions nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (lambda (_system mcp _model _effort &optional id _hook)
-                   (list :command (executable-find "python3")
-                         :args (list mevedel-claude-code-transfer-test--peer)
-                         :cwd root :mcp mcp :session-id id
-                         :tool-id-field :claudecode/toolUseId
-                         :meta `((toolBatches . [[((name . "Read") (id . "transfer-read")
-                                                  (args . ((file_path . ,source))))]])
-                                 (compactionEvents .
-                                  [((sessionUpdate . "agent_message_chunk")
-                                    (content . ((type . "text") (text . "ARCHIVE ONLY\n"))))
-                                   ((sessionUpdate . "compaction_update") (compactionId . "switch")
-                                    (status . "completed")
-                                    (summary . [((type . "text") (text . "EFFECTIVE SUMMARY"))]))
-                                   ((sessionUpdate . "agent_thought_chunk")
-                                    (content . ((type . "text") (text . "UNSIGNED THOUGHT"))))]))))))
+                 (mevedel-engine-test--claude-launch
+                  (lambda (_system mcp _model _effort &optional id _hook)
+                    (list :meta `((toolBatches . [[((name . "Read") (id . "transfer-read")
+                                                    (args . ((file_path . ,source))))]])
+                                  (compactionEvents .
+                                                    [((sessionUpdate . "agent_message_chunk")
+                                                      (content . ((type . "text") (text . "ARCHIVE ONLY\n"))))
+                                                     ((sessionUpdate . "compaction_update") (compactionId . "switch")
+                                                      (status . "completed")
+                                                      (summary . [((type . "text") (text . "EFFECTIVE SUMMARY"))]))
+                                                     ((sessionUpdate . "agent_thought_chunk")
+                                                      (content . ((type . "text") (text . "UNSIGNED THOUGHT"))))])))))))
         (mevedel--insert-user-turn "Native task")
         (mevedel--send-request "Native task")
         (with-timeout (5 (ert-fail "Native source turn did not settle"))
@@ -138,12 +130,10 @@
        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (let (ids)
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                   (lambda (_system mcp _model _effort &optional id _hook)
-                     (push id ids)
-                     (list :command (executable-find "python3")
-                           :args (list mevedel-claude-code-transfer-test--peer)
-                           :cwd root :mcp mcp :session-id id
-                           :meta '((fixtureSessionId . "replacement-session"))))))
+                   (mevedel-engine-test--claude-launch
+                    (lambda (_system mcp _model _effort &optional id _hook)
+                      (push id ids)
+                      (list :meta '((fixtureSessionId . "replacement-session")))))))
           (setq-local gptel-tools nil)
           (goto-char (point-max))
           (mevedel--insert-user-turn "Return to Claude")

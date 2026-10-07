@@ -1173,16 +1173,5 @@
             (should (eq (car history) (cadr history)))))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
-(mevedel-deftest mevedel-session-codec-validate-current-sidecar/native-admissions ()
-  (let* ((calls (cl-loop for i below 10000 collect (cons (format "tool-%d" i) "Read")))
-         (sidecar (test-mevedel-session-persistence--complete-sidecar nil))
-         (record (list "root" :engine 'claude-code :state 'ready :id "native"
-                       :host "test" :directory "/tmp/" :tool-calls calls)))
-    (setq sidecar (plist-put sidecar :external-conversations (list record)))
-    (should (eq sidecar (mevedel-session-codec-validate-current-sidecar sidecar)))
-    ;; Equal strings from distinct objects still identify the same admission.
-    (setcdr (last calls) (list (cons (copy-sequence "tool-0") "Write")))
-    (should-error (mevedel-session-codec-validate-current-sidecar sidecar))))
-
 (provide 'test-mevedel-session-codec)
 ;;; test-mevedel-session-codec.el ends here

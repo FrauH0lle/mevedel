@@ -291,26 +291,20 @@ restored on exit as though the cancel never happened."
   "Timers requested inside a TRAMP handler, newest first, not yet armed.")
 
 (defun mevedel-transport-call-with-retained-timers (thunk)
-  "Call THUNK without losing its newly scheduled timers during remote waits.
+  "Call THUNK without losing the timers it schedules inside a remote operation.
 Use this around a process filter whose library schedules ordinary one-shot
-continuations with `run-at-time'.  Its timer callbacks inherit the same scope,
-so a callback's successor is retained too.  Remote operations hold these timers
-until their outer handler returns; outside one, they are armed normally."
-  (let (scheduled)
-    (unwind-protect
-        (let (timer-list)
-          (unwind-protect (funcall thunk)
-            (setq scheduled timer-list)))
-      (dolist (timer scheduled)
-        (let ((function (timer--function timer))
-              (args (timer--args timer)))
-          (timer-set-function
-           timer (lambda ()
-                   (mevedel-transport-call-with-retained-timers
-                    (lambda () (apply function args))))))
-        (if (mevedel-transport-nested-p)
-            (push timer mevedel-transport--held-timers)
-          (timer-activate timer))))))
+continuations with `run-at-time'.  Inside a TRAMP handler frame those timers can
+land on a temporarily bound `timer-list' and vanish with it; they are held and
+armed once the outermost frame returns.  Outside one THUNK runs unchanged, so
+its `cancel-timer' calls still reach the real timer list."
+  (if (not (mevedel-transport-nested-p))
+      (funcall thunk)
+    (let ((before (copy-sequence timer-list)))
+      (unwind-protect (funcall thunk)
+        (dolist (timer timer-list)
+          (unless (memq timer before)
+            (cancel-timer timer)
+            (push timer mevedel-transport--held-timers)))))))
 
 (defun mevedel-transport-run-at-time (seconds function &rest args)
   "Call FUNCTION with ARGS once, SECONDS from now, even from inside TRAMP.

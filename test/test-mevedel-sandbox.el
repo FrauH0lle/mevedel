@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-mcp)
 (require 'mevedel-permission-rules)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
@@ -860,7 +861,32 @@ a disabled transport cleans immediately instead of dropping work"
                       (should (string-match-p
                                (concat "visible contents\n" (symbol-name access)) (buffer-string))))
                   (mevedel-sandbox-cleanup prepared)))))
-        (delete-directory parent t)))))
+        (delete-directory parent t))))
+  :doc "confined children cannot reach a live MCP server socket"
+  (let* ((mevedel-sandbox--probe-cache nil)
+         (availability (mevedel-sandbox-probe)))
+    (unless (plist-get availability :available)
+      (ert-skip (plist-get availability :reason)))
+    (let* ((runtime (make-temp-file "mevedel-sandbox-mcp-" t))
+           (process-environment (cons (concat "XDG_RUNTIME_DIR=" runtime)
+                                      process-environment))
+           (server (mevedel-mcp-start (lambda () []) #'ignore))
+           (socket (file-name-concat (mevedel-mcp-directory server) "socket"))
+           prepared)
+      (unwind-protect
+          (progn
+            (setq prepared
+                  (mevedel-sandbox--confined-preparation
+                   (list "sh" "-c" "test ! -e \"$1\"" "probe" socket)
+                   runtime (list runtime) (plist-get availability :executable)
+                   (plist-get availability :mount-proc) nil))
+            (should (file-exists-p socket))
+            (should (zerop (apply #'call-process
+                                  (car (plist-get prepared :command)) nil nil nil
+                                  (cdr (plist-get prepared :command))))))
+        (when prepared (mevedel-sandbox-cleanup prepared))
+        (mevedel-mcp-stop server)
+        (delete-directory runtime t)))))
 
 (mevedel-deftest mevedel-sandbox-prepare ()
   ,test

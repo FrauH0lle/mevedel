@@ -12,10 +12,6 @@
 (require 'mevedel-claude-code-agent)
 (require 'mevedel-init)
 
-(defconst mevedel-claude-code-input-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-view-send/claude-busy (:quiet t)
   (mevedel-engine-test--with-session
     (let ((gptel--known-backends nil) view)
@@ -63,12 +59,9 @@
               (cl-letf (((symbol-function 'gptel-request)
                          (lambda (&rest _) (ert-fail "Subscription send reached the API")))
                         ((symbol-function 'mevedel-claude-code-launch)
-                         (lambda (_system mcp _model _effort &optional id _hook)
-                           (list :command (executable-find "python3")
-                                 :args (list mevedel-claude-code-input-test--peer)
-                                 :cwd root :mcp mcp :session-id id
-                                 :observe #'mevedel-claude-code-context-observe
-                                 :check-context #'mevedel-claude-code-context-check))))
+                         (mevedel-engine-test--claude-launch
+                          (lambda (_system mcp _model _effort &optional id _hook)
+                            nil))))
                 (if (eq route 'init)
                     (mevedel-init "raw-init-evidence")
                   (mevedel--insert-user-turn "raw-send-evidence")
@@ -148,14 +141,10 @@
 			    (mevedel-chat-install-request-hooks)
 			    (mevedel-view--setup view buffer)
 			    (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-				       (lambda (_system mcp _model _effort &optional id _hook)
-					 (list :command (executable-find "python3")
-					       :args (list mevedel-claude-code-input-test--peer)
-					       :cwd root :mcp mcp :session-id id
-					       :observe #'mevedel-claude-code-context-observe
-					       :check-context #'mevedel-claude-code-context-check
-					       :meta `((expectedImage . ,data)
-						       (promptAcknowledgement . ,acknowledgement))))))
+				       (mevedel-engine-test--claude-launch
+                                        (lambda (_system mcp _model _effort &optional id _hook)
+					  (list :meta `((expectedImage . ,data)
+						        (promptAcknowledgement . ,acknowledgement)))))))
 			      (with-current-buffer view
 				(mevedel-view--forward-input-now
 				 (if (eq attachment 'context) "Describe the attached image"
@@ -168,7 +157,7 @@
 			    (should (eq (if (eq acknowledgement t) 'ready 'uncertain)
 					(plist-get (alist-get "root" (mevedel-session-external-conversations session)
 							      nil nil #'equal) :state)))
-			    (should (= (if (and (eq acknowledgement t) (not (eq attachment 'context))) 1 0)
+			    (should (= (if (eq acknowledgement t) (if (eq attachment 'both) 2 1) 0)
 				       (hash-table-count (mevedel-session-mentions-shown session))))
 			    (should (= 1 (mevedel-session-turn-count session)))
 			    (should-not (string-search data (buffer-string)))
@@ -193,13 +182,9 @@
 		     session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
 		    (unwind-protect
 			(cl-letf (((symbol-function 'mevedel-claude-code-launch)
-				   (lambda (_system mcp _model _effort &optional id _hook)
-				     (list :command (executable-find "python3")
-					   :args (list mevedel-claude-code-input-test--peer)
-					   :cwd root :mcp mcp :session-id id
-					   :observe #'mevedel-claude-code-context-observe
-					   :check-context #'mevedel-claude-code-context-check
-					   :meta `((expectedImage . ,data))))))
+				   (mevedel-engine-test--claude-launch
+                                    (lambda (_system mcp _model _effort &optional id _hook)
+				      (list :meta `((expectedImage . ,data)))))))
 			  (dotimes (phase 2)
 			    (let ((prompt (format "Describe @file:{%s}" file)))
 			      (if (= phase 0)
@@ -255,14 +240,10 @@
 				  record (mevedel--directive-record directive))
 			    (setf (mevedel-directive-session-id record) (mevedel-session-session-id session)))
 			  (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-				     (lambda (_system mcp _model _effort &optional id _hook)
-				       (should-not id)
-				       (list :command (executable-find "python3")
-					     :args (list mevedel-claude-code-input-test--peer)
-					     :cwd root :mcp mcp
-					     :observe #'mevedel-claude-code-context-observe
-					     :check-context #'mevedel-claude-code-context-check
-					     :meta `((expectedImage . ,data))))))
+				     (mevedel-engine-test--claude-launch
+                                      (lambda (_system mcp _model _effort &optional id _hook)
+				        (should-not id)
+				        (list :meta `((expectedImage . ,data)))))))
 			    (with-current-buffer source
 			      (mevedel--start-directive-discussion
 			       directive (lambda (err _owner) (should-not err) (setq done t))))

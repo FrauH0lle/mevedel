@@ -42,12 +42,3 @@ during reviewer follow-up startup. The old result remained attached to the
 save to fail with `Invalid live agent registry entry`. Clearing it at startup,
 with rollback on dispatch failure, replaces that transient invalid state. A
 regression delivers execution mail through registry serialization during setup.
-
-On 2026-10-06, a two-process Claude restart test restored the root but dropped
-its retained child because the frozen roster referenced an unloaded `ToolCall`.
-The in-process tests had already populated the global gptel registry and missed
-this dependency. Cold decoding now initializes missing mevedel built-ins through
-the existing registrar owner. Separate-editor deterministic and live tests resume
-both native histories, preserve each call ledger and transcript, and retain the
-child's frozen model after the parent's selection changes. Opening the session
-starts no model work; the saved active Goal restores paused.

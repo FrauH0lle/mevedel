@@ -10,10 +10,6 @@
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
 
-(defconst mevedel-acp-compaction-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel--send-request/native-compaction (:quiet t)
   (mevedel-engine-test--with-session
     (let ((gptel--known-backends nil)
@@ -34,11 +30,9 @@
        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Compaction fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (lambda (_system mcp _model _effort &optional id _hook)
-                   (list :command (executable-find "python3")
-                         :args (list mevedel-acp-compaction-test--peer)
-                         :cwd root :mcp mcp :session-id id
-                         :meta `((compactionEvents . ,events))))))
+                 (mevedel-engine-test--claude-launch
+                  (lambda (_system mcp _model _effort &optional id _hook)
+                    (list :meta `((compactionEvents . ,events)))))))
         (mevedel--insert-user-turn "Submitted before compaction")
         (mevedel--send-request "Submitted before compaction")
         (with-timeout (5 (ert-fail "Compacted turn did not settle"))
@@ -67,20 +61,18 @@
          session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt "Compaction fixture" gptel-tools nil)
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                   (lambda (_system mcp _model _effort &optional id _hook)
-                     (list :command (executable-find "python3")
-                           :args (list mevedel-acp-compaction-test--peer)
-                           :cwd root :mcp mcp :session-id id
-                           :meta `((compactionEvents .
-                                    [((sessionUpdate . "compaction_update") (compactionId . "terminal")
-                                      (status . "in_progress"))
-                                     ((sessionUpdate . "compaction_summary_chunk") (compactionId . "terminal")
-                                      (content . ((type . "text") (text . ,(if (equal status "empty") "" "STREAMED SUMMARY")))))
-                                     ((sessionUpdate . "compaction_update") (compactionId . "terminal")
-                                      (status . ,(if (equal status "empty") "completed" status)))
-                                     ((sessionUpdate . "compaction_update") (compactionId . "terminal")
-                                      (status . "completed")
-                                      (summary . [((type . "text") (text . "LATE SUMMARY"))]))]))))))
+                   (mevedel-engine-test--claude-launch
+                    (lambda (_system mcp _model _effort &optional id _hook)
+                      (list :meta `((compactionEvents .
+                                                      [((sessionUpdate . "compaction_update") (compactionId . "terminal")
+                                                        (status . "in_progress"))
+                                                       ((sessionUpdate . "compaction_summary_chunk") (compactionId . "terminal")
+                                                        (content . ((type . "text") (text . ,(if (equal status "empty") "" "STREAMED SUMMARY")))))
+                                                       ((sessionUpdate . "compaction_update") (compactionId . "terminal")
+                                                        (status . ,(if (equal status "empty") "completed" status)))
+                                                       ((sessionUpdate . "compaction_update") (compactionId . "terminal")
+                                                        (status . "completed")
+                                                        (summary . [((type . "text") (text . "LATE SUMMARY"))]))])))))))
           (mevedel--insert-user-turn "Original prompt")
           (mevedel--send-request "Original prompt")
           (with-timeout (5 (ert-fail "Terminal compaction did not settle"))
@@ -112,12 +104,10 @@
             (mevedel-chat-install-request-hooks)
             (mevedel-view--setup view buffer)
             (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                       (lambda (_system mcp _model _effort &optional id _hook)
-                         (push id ids)
-                         (list :command (executable-find "python3")
-                               :args (list mevedel-acp-compaction-test--peer)
-                               :cwd root :mcp mcp :session-id id
-                               :meta `((compactionEvents . ,events))))))
+                       (mevedel-engine-test--claude-launch
+                        (lambda (_system mcp _model _effort &optional id _hook)
+                          (push id ids)
+                          (list :meta `((compactionEvents . ,events)))))))
               (with-current-buffer view
                 (goto-char (mevedel-view--input-start))
                 (insert "Compact this turn")
@@ -164,24 +154,18 @@
       (setq-local gptel-system-prompt "Tool compaction fixture"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (lambda (_system mcp _model _effort &optional id hook)
-                   (list :command (executable-find "python3")
-                         :args (list mevedel-acp-compaction-test--peer)
-                         :cwd root :mcp mcp :session-id id
-                         :tool-id-field :claudecode/toolUseId
-                         :control #'mevedel-claude-code--control
-                         :observe #'mevedel-claude-code-context-observe
-                         :check-context #'mevedel-claude-code-context-check
-                         :meta `((hookCommand . ,hook) (compactBeforeBatch . 1)
-                                 (compactionBeforeBatch . 1)
-                                 (compactionEvents .
-                                  [((sessionUpdate . "compaction_update") (compactionId . "tools")
-                                    (status . "completed")
-                                    (summary . [((type . "text") (text . "Read evidence before compaction."))]))])
-                                 (toolBatches . [[((name . "Read") (id . "before-compact")
-                                                  (args . ((file_path . ,file))))]
-                                                [((name . "Read") (id . "after-compact")
-                                                  (args . ((file_path . ,file))))]]))))))
+                 (mevedel-engine-test--claude-launch
+                  (lambda (_system mcp _model _effort &optional id hook)
+                    (list :meta `((hookCommand . ,hook) (compactBeforeBatch . 1)
+                                  (compactionBeforeBatch . 1)
+                                  (compactionEvents .
+                                                    [((sessionUpdate . "compaction_update") (compactionId . "tools")
+                                                      (status . "completed")
+                                                      (summary . [((type . "text") (text . "Read evidence before compaction."))]))])
+                                  (toolBatches . [[((name . "Read") (id . "before-compact")
+                                                    (args . ((file_path . ,file))))]
+                                                  [((name . "Read") (id . "after-compact")
+                                                    (args . ((file_path . ,file))))]])))))))
         (mevedel--insert-user-turn "Read before and after compaction")
         (mevedel--send-request "Read before and after compaction")
         (with-timeout (5 (ert-fail "Tool compaction did not settle"))
@@ -191,6 +175,12 @@
       (should (= 1 (how-many "^#\\+begin_tool" (point-min) (point-max))))
       (should (string-search "after-compact" (buffer-string)))
       (should-not (string-search "before-compact" (buffer-string)))
+      ;; The summary replaced the first Read, so the second returns contents.
+      (should (string-search "Tool evidence" (buffer-string)))
+      (should-not (string-search "unchanged since last read" (buffer-string)))
+      (should (or (cl-some (lambda (body) (string-search "Compaction omitted older transcript" body))
+                           (mevedel-session-pending-reminders session))
+                  (< 0 (mevedel-engine-test--count-evidence "Compaction omitted older transcript"))))
       (let ((archive (mevedel-session-artifacts-read-segment session 1)))
         (unwind-protect
             (with-current-buffer archive
@@ -210,16 +200,14 @@
       (setq-local gptel-system-prompt "Root fixture" gptel-tools nil)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                     (lambda (_system mcp _model _effort &optional id _hook)
-                       (list :command (executable-find "python3")
-                             :args (list mevedel-acp-compaction-test--peer)
-                             :cwd root :mcp mcp :session-id id
-                             :meta '((compactionEvents .
-                                      [((sessionUpdate . "agent_message_chunk")
-                                        (content . ((type . "text") (text . "CHILD OLD RESPONSE\n"))))
-                                       ((sessionUpdate . "compaction_update") (compactionId . "child")
-                                        (status . "completed")
-                                        (summary . [((type . "text") (text . "CHILD RETAINED SUMMARY"))]))]))))))
+                     (mevedel-engine-test--claude-launch
+                      (lambda (_system mcp _model _effort &optional id _hook)
+                        (list :meta '((compactionEvents .
+                                                        [((sessionUpdate . "agent_message_chunk")
+                                                          (content . ((type . "text") (text . "CHILD OLD RESPONSE\n"))))
+                                                         ((sessionUpdate . "compaction_update") (compactionId . "child")
+                                                          (status . "completed")
+                                                          (summary . [((type . "text") (text . "CHILD RETAINED SUMMARY"))]))])))))))
             (mevedel-agent-control-spawn
              session "compact_child" "Remember the child task."
              (lambda (value) (setq record (plist-get value :record)))
@@ -255,45 +243,41 @@
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _path) busy))
                     ((symbol-function 'mevedel-claude-code-launch)
-                     (lambda (_system mcp _model _effort &optional id hook)
-                       (list :command (executable-find "python3")
-                             :args (list mevedel-acp-compaction-test--peer)
-                             :cwd root :mcp mcp :session-id id
-                             :tool-id-field :claudecode/toolUseId
-                             :control #'mevedel-claude-code--control
-                             :check-context #'mevedel-claude-code-context-check
-                             :observe
-                             (lambda (owner notification)
-                               (mevedel-claude-code-context-observe owner notification)
-                               (let ((params (alist-get 'params notification)))
-                                 (when (equal "hook_response" (alist-get 'subtype (alist-get 'message params)))
-                                   (setq hook-seen t))
-                                 (when (equal "in_progress" (alist-get 'status (alist-get 'update params)))
-                                   (setq busy t
-                                         timer (run-at-time
-                                                .15 nil
-                                                (lambda ()
-                                                  (setq snapshot (list (mevedel-session-current-segment session)
-                                                                       hook-seen))
-                                                  (when abort (mevedel-abort buffer))
-                                                  (setq busy nil)))))))
-                             :meta `((hookCommand . ,hook) (compactBeforeBatch . 0)
-                                     (compactionEvents .
-                                      [((sessionUpdate . "compaction_update") (compactionId . "busy") (status . "in_progress"))
-                                       ((sessionUpdate . "compaction_update") (compactionId . "busy") (status . "completed")
-                                        (summary . [((type . "text") (text . "SUMMARY AFTER TARGET IDLE"))]))])
-                                     (toolBatches . [[((name . "Read") (id . "after-busy")
-                                                      (args . ((file_path . ,file))))]]))))))
+                     (mevedel-engine-test--claude-launch
+                      (lambda (_system mcp _model _effort &optional id hook)
+                        (list :observe (lambda (owner notification)
+                                         (mevedel-claude-code-context-observe owner notification)
+                                         (let ((params (alist-get 'params notification)))
+                                           (when (equal "hook_response" (alist-get 'subtype (alist-get 'message params)))
+                                             (setq hook-seen t))
+                                           (when (equal "in_progress" (alist-get 'status (alist-get 'update params)))
+                                             (setq busy t
+                                                   timer (run-at-time
+                                                          .15 nil
+                                                          (lambda ()
+                                                            (setq snapshot (list (mevedel-session-current-segment session)
+                                                                                 hook-seen))
+                                                            (when abort (mevedel-abort buffer))
+                                                            (setq busy nil)))))))
+                              :meta `((hookCommand . ,hook) (compactBeforeBatch . 0)
+                                      (compactionEvents .
+                                                        [((sessionUpdate . "compaction_update") (compactionId . "busy") (status . "in_progress"))
+                                                         ((sessionUpdate . "compaction_update") (compactionId . "busy") (status . "completed")
+                                                          (summary . [((type . "text") (text . "SUMMARY AFTER TARGET IDLE"))]))])
+                                      (toolBatches . [[((name . "Read") (id . "after-busy")
+                                                        (args . ((file_path . ,file))))]])))))))
             (mevedel--insert-user-turn "Wait for the target")
             (mevedel--send-request "Wait for the target")
             (with-timeout (5 (ert-fail "Deferred compaction did not settle"))
               (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
             (should (equal '(1 nil) snapshot))
-            (should (eq (not abort) hook-seen))
+            (should hook-seen)
             (should (eq (if abort 'aborted 'success)
                         (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
-            (should (= (if abort 1 2) (mevedel-session-current-segment session)))
-            (should (eq (not abort) (not (null (string-search "SUMMARY AFTER TARGET IDLE" (buffer-string))))))
+            ;; Completed native compaction is history even when the turn aborts.
+            (should (= 2 (mevedel-session-current-segment session)))
+            (should (string-search "SUMMARY AFTER TARGET IDLE" (buffer-string)))
+            ;; Cancellation still rejects new tool work.
             (should (eq (not abort) (not (null (string-search "after-busy" (buffer-string)))))))
         (when timer (cancel-timer timer)))))))
 
@@ -311,21 +295,18 @@
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Bash"))))
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                     (lambda (_system mcp _model _effort &optional id _hook)
-                       (list :command (executable-find "python3")
-                             :args (list mevedel-acp-compaction-test--peer)
-                             :cwd root :mcp mcp :session-id id
-                             :tool-id-field :claudecode/toolUseId
-                             :meta `((compactionBeforeBatch . 1)
-                                     (compactionEvents .
-                                      [((sessionUpdate . "compaction_update") (compactionId . "running")
-                                        (status . "completed")
-                                        (summary . [((type . "text") (text . "Bash is still running."))]))])
-                                     (toolBatches .
-                                      [[((name . "Bash") (id . "running-bash")
-                                         (args . ((command . ,(format "while test ! -e %s; do sleep .01; done; printf 'COMPLETED ONCE'"
-                                                                     (shell-quote-argument unlock)))
-                                                  (yield_time_ms . 250))))] []]))))))
+                     (mevedel-engine-test--claude-launch
+                      (lambda (_system mcp _model _effort &optional id _hook)
+                        (list :meta `((compactionBeforeBatch . 1)
+                                      (compactionEvents .
+                                                        [((sessionUpdate . "compaction_update") (compactionId . "running")
+                                                          (status . "completed")
+                                                          (summary . [((type . "text") (text . "Bash is still running."))]))])
+                                      (toolBatches .
+                                                   [[((name . "Bash") (id . "running-bash")
+                                                      (args . ((command . ,(format "while test ! -e %s; do sleep .01; done; printf 'COMPLETED ONCE'"
+                                                                                   (shell-quote-argument unlock)))
+                                                               (yield_time_ms . 250))))] []])))))))
             (mevedel--insert-user-turn "Start a command and compact")
             (mevedel--send-request "Start a command and compact")
             (with-timeout (5 (ert-fail "Running command turn did not settle"))

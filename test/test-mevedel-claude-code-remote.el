@@ -13,6 +13,7 @@
                            "mevedel-execution-test-helpers"))
 (require 'mevedel-claude-code-session)
 (require 'tramp-container)
+(require 'tramp-sh)
 
 (defconst mevedel-claude-code-remote-test--peer
   (file-name-concat (file-name-directory (or load-file-name buffer-file-name))

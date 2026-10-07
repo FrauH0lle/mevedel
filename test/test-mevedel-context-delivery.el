@@ -389,6 +389,31 @@
               (dolist (excluded '("## Active Goal\n" "ROOT-ONLY-OBJECTIVE"
                                   "## Skills\n" "## Memory\n" "## Resources\n"))
                 (should-not (string-search excluded body))))))
+      (delete-directory root t)))
+
+  :doc "unacknowledged root path instructions reach the root, never a directive"
+  (let* ((root (make-temp-file "mevedel-root-instructions-" t))
+         (workspace (mevedel-workspace--create :root (file-name-as-directory root)
+                                               :id root :type 'project :name "scope"))
+         (session (mevedel-session-create "scope" workspace))
+         (file (file-name-concat root "lib" "AGENTS.md")))
+    (unwind-protect
+        (with-temp-buffer
+          (make-directory (file-name-directory file))
+          (write-region "ROOT-PATH-6631" nil file nil 'silent)
+          (setf (mevedel-session-workspace-instruction-hashes session)
+                (list (cons (list "/root" file) nil)))
+          (setq-local mevedel--session session)
+          (dolist (directive '("directive-uuid" nil))
+            (setq-local mevedel--current-directive-uuid directive)
+            (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+              (mevedel-context-delivery-stage fsm)
+              (should (eq (null directive)
+                          (and (seq-find (lambda (entry)
+                                           (equal (cons 'workspace-instructions file)
+                                                  (plist-get entry :type)))
+                                         (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
+                               t))))))
       (delete-directory root t))))
 
 (provide 'test-mevedel-context-delivery)

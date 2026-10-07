@@ -8,9 +8,11 @@
 (require 'mevedel-session-test-support
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-session-test-support"))
+;; Name the source: stale bytecode beside the script would otherwise shadow the
+;; converter under test.
 (require 'mevedel-migrate-session
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                           "../scripts/migrate-session-v0.5.6"))
+                           ".." "scripts" "migrate-session-v0.5.6.el"))
 
 (defmacro mevedel-migration-test--with-source (&rest body)
   "Run BODY with a two-head old session and a separate destination."

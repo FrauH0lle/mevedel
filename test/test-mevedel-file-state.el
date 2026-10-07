@@ -585,6 +585,31 @@
 ;;
 ;;; Read deduplication
 
+(mevedel-deftest mevedel-session-forget-read-ranges
+  (:doc "a compacted read is no longer a duplicate but keeps its read turn")
+  (let* ((tmp (make-temp-file "mevedel-dedup-" nil ".txt" "hello"))
+         (ws (mevedel-workspace--create
+              :type 'file :id "dedup-compacted"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-test-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (mevedel-session-record-file-access session tmp 'read nil nil)
+          (should (mevedel-session-read-is-duplicate-p session tmp nil nil))
+          (mevedel-session-forget-read-ranges session)
+          (should-not (mevedel-session-read-is-duplicate-p session tmp nil nil))
+          (should (mevedel-file-interaction-read-turn
+                   (gethash (expand-file-name tmp) (mevedel-session-touched-files session))))
+          ;; The next Read is recorded normally again.
+          (mevedel-session-record-file-access session tmp 'read nil nil)
+          (should (mevedel-session-read-is-duplicate-p session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
 (mevedel-deftest mevedel-session-read-is-duplicate-p
   ()
   ,test

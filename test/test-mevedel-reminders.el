@@ -1287,6 +1287,27 @@ this collapses both shapes to the delivered text."
     (should (eq 'one-shot (mevedel-reminder-interval r)))))
 
 
+(mevedel-deftest mevedel-reminders-agent-turn-warnings
+  (:doc "collects only the due max-turns warning from the invocation's reminders"
+   :before-each (mevedel-test--capture-agent-registry)
+   :after-each (mevedel-test--restore-agent-registry))
+  (let* ((_ (mevedel-define-agent mt-agent
+              :description "d"
+              :tools nil
+              :max-turns 10))
+         (inv (mevedel-agent-invocation-create (mevedel-agent-get "mt-agent"))))
+    (setf (mevedel-agent-invocation-reminders inv)
+          (list (mevedel-reminders-make-max-turns-warning)
+                (mevedel-reminders-make-pending-events)))
+    (setf (mevedel-agent-invocation-turn-count inv) 5)
+    (should-not (plist-get (mevedel-reminders-agent-turn-warnings inv 5) :entries))
+    (setf (mevedel-agent-invocation-turn-count inv) 8)
+    (let ((batch (mevedel-reminders-agent-turn-warnings inv 8)))
+      (should (equal '(max-turns-warning)
+                     (mapcar (lambda (entry) (plist-get entry :type)) (plist-get batch :entries))))
+      (should (plist-get batch :commits)))))
+
+
 (mevedel-deftest mevedel-reminders-make-verification-suggestion
   (:after-each (mevedel-workspace-clear-registry))
   ,test

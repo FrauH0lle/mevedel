@@ -262,6 +262,11 @@
 (declare-function mevedel-transcript-enable-gptel-mode
                   "mevedel-transcript-restore" ())
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-when-idle "mevedel-transport"
+                  (key path thunk &optional on-cancel delay))
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+
 ;; `mevedel-turn'
 (declare-function mevedel-request-cancel "mevedel-turn"
                   (request &optional abort-plan-approval))
@@ -1181,7 +1186,14 @@ BUF defaults to the current buffer if not specified."
 		(when (bound-and-true-p mevedel--session)
 		  (setf (mevedel-session-agent-root-activity mevedel--session)
 			'idle)))))
-        (mevedel-session-persistence-autosave-buffer chat-buffer)))))
+        ;; An abort can arrive from a process filter inside a remote
+        ;; operation, where a target write would nest; checkpoint once idle.
+        ;; Without transport integration nothing can nest: save now.
+        (unless (mevedel-transport-run-when-idle
+                 (list 'abort-checkpoint chat-buffer)
+                 (buffer-local-value 'default-directory chat-buffer)
+                 (lambda () (mevedel-session-persistence-autosave-buffer chat-buffer)))
+          (mevedel-session-persistence-autosave-buffer chat-buffer))))))
 
 
 ;;
@@ -1280,21 +1292,27 @@ skill-expanded model input and transcript render data."
     (mevedel--send-request
      (or model-input (and hook-context stored-prompt)))))
 
-(defun mevedel--dispatch-request (model-input local-send)
+(defvar mevedel--dispatching nil
+  "Non-nil while `mevedel--dispatch-request' runs its local gptel send.
+The `gptel-send' advice then passes through instead of dispatching again.")
+
+(defun mevedel--dispatch-request (model-input local-send &optional native-input)
   "Dispatch MODEL-INPUT using the resolved root request policy.
 LOCAL-SEND starts the caller's native gptel send when that engine is selected.
+NATIVE-INPUT replaces a missing MODEL-INPUT only for an external engine, which
+reads no prompt transforms; gptel keeps its stored transcript prompt.
 The effective model and effort apply only to this request, not saved selection."
   (let* ((policy (mevedel-skills-request-model-policy))
          (gptel-backend (plist-get policy :backend))
          (gptel-model (plist-get policy :model))
          (gptel-reasoning-effort (plist-get policy :effort)))
     (if (mevedel-claude-code-backend-p gptel-backend)
-        (mevedel-claude-code-send model-input)
-      (when (and mevedel--session (not mevedel--current-directive-uuid)
+        (mevedel-claude-code-send (or model-input native-input))
+      (when (and mevedel--session (not (bound-and-true-p mevedel--current-directive-uuid))
                  (assoc "root" (mevedel-session-external-conversations mevedel--session)))
         (mevedel-claude-code-release-history mevedel--session))
       (setq-local mevedel--pending-model-input model-input)
-      (unwind-protect (funcall local-send)
+      (unwind-protect (let ((mevedel--dispatching t)) (funcall local-send))
         (setq-local mevedel--pending-model-input nil)))))
 
 (defun mevedel--send-request (&optional model-input)

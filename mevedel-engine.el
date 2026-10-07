@@ -67,9 +67,20 @@ An external root identity also counts, including interrupted native history."
                        (cdr segment)))
             (mevedel-session-prompt-index session)))))
 
-(defun mevedel-engine-assert-local-history (session operation &optional backend)
-  "Reject OPERATION when SESSION or BACKEND has external model history."
-  (when (or (and session (mevedel-session-external-conversations session))
+(defun mevedel-engine-external-history-p (session &optional root-only)
+  "Return whether SESSION retains a native external conversation identity.
+Unstarted and released markers hold no native history.  ROOT-ONLY ignores
+child conversations, whose native histories are independent of the root."
+  (and session
+       (cl-some (lambda (entry)
+                  (and (or (not root-only) (equal "root" (car entry)))
+                       (plist-get (cdr entry) :id)))
+                (mevedel-session-external-conversations session))))
+
+(defun mevedel-engine-assert-local-history (session operation &optional backend root-only)
+  "Reject OPERATION when SESSION or BACKEND has external model history.
+ROOT-ONLY considers only SESSION's root conversation."
+  (when (or (mevedel-engine-external-history-p session root-only)
             (mevedel-engine-external-p backend))
     (user-error "%s is unavailable for external conversations; their transcript remains readable"
                 operation)))

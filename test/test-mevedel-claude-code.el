@@ -81,42 +81,45 @@
   :doc "asynchronous readiness receives complete output from fast status commands"
   (mevedel-claude-code-test--with-cli
     (should-not
-     (mevedel-claude-code--check-launch
-      (mevedel-claude-code-launch "system" [] "sonnet" 'high))))
+     (mevedel-claude-code--wait
+      (plist-get (mevedel-claude-code-launch "system" [] "sonnet" 'high) :prepare-launch))))
 
   :doc "API authentication cannot silently substitute for a subscription"
   (mevedel-claude-code-test--with-cli
     (setenv "MEVEDEL_TEST_AUTH_METHOD" "api-key")
-    (should-error (mevedel-claude-code--check-launch
-                    (mevedel-claude-code-launch "system" [] "sonnet" 'low))
+    (should-error (mevedel-claude-code--wait
+                    (plist-get (mevedel-claude-code-launch "system" [] "sonnet" 'low) :prepare-launch))
                   :type 'user-error))
 
   :doc "rejects an unsupported Node runtime before adapter startup"
   (mevedel-claude-code-test--with-cli
     (setenv "MEVEDEL_TEST_NODE_VERSION" "v20.0.0")
-    (should-error (mevedel-claude-code--check-launch
-                    (mevedel-claude-code-launch "system" [] "sonnet" 'low))
+    (should-error (mevedel-claude-code--wait
+                    (plist-get (mevedel-claude-code-launch "system" [] "sonnet" 'low) :prepare-launch))
                   :type 'user-error))
 
   :doc "rejects an outdated Emacs ACP client before adapter startup"
   (mevedel-claude-code-test--with-cli
     (let ((acp-package-version "0.14.0"))
-      (should-error (mevedel-claude-code--check-launch
-                    (mevedel-claude-code-launch "system" [] "sonnet" 'low))
+      (should-error (mevedel-claude-code--wait
+                    (plist-get (mevedel-claude-code-launch "system" [] "sonnet" 'low) :prepare-launch))
                     :type 'user-error)))
 
-  :doc "an incomplete package cannot report readiness without its bridge"
+  :doc "a logged-out status exits nonzero yet still names the login action"
   (mevedel-claude-code-test--with-cli
-    (let ((mevedel-mcp--source-directory directory))
-      (should-error (mevedel-claude-code--check-launch
-                    (mevedel-claude-code-launch "system" [] "sonnet" 'low))
-                    :type 'user-error)))
+    (setenv "MEVEDEL_TEST_LOGGED_OUT" "1")
+    (should (string-search
+             "Claude subscription login required"
+             (error-message-string
+              (should-error (mevedel-claude-code--wait
+                             (plist-get (mevedel-claude-code-launch "system" [] "sonnet" 'low) :prepare-launch))
+                            :type 'user-error)))))
 
   :doc "a failing prerequisite identifies the actual check without raw diagnostics"
   (mevedel-claude-code-test--with-cli
     (setenv "MEVEDEL_TEST_NODE_FAILURE" "1")
-    (let ((failure (should-error (mevedel-claude-code--check-launch
-                    (mevedel-claude-code-launch "system" [] "sonnet" 'low))
+    (let ((failure (should-error (mevedel-claude-code--wait
+                    (plist-get (mevedel-claude-code-launch "system" [] "sonnet" 'low) :prepare-launch))
                                  :type 'user-error)))
       (should (string-search "node --version" (error-message-string failure)))
       (should-not (string-search "PRIVATE-DIAGNOSTIC" (error-message-string failure))))))
@@ -149,6 +152,15 @@
               (should (string-search "Claude subscription login required" (buffer-string)))
               (should (string-search "claude auth login" (buffer-string)))
               (should-not (string-search "Ready for Claude Code subscription sessions" (buffer-string)))))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+  :doc "an incomplete package cannot report readiness without its bridge"
+  (mevedel-claude-code-test--with-cli
+    (let ((mevedel-mcp--source-directory directory) buffer)
+      (unwind-protect
+          (with-current-buffer (setq buffer (mevedel-claude-code-setup))
+            (should (string-search "mevedel-mcp-stdio.py" (buffer-string)))
+            (should-not (string-search "Ready for Claude Code subscription sessions" (buffer-string))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (mevedel-deftest mevedel-claude-code-install-adapter (:quiet t)
@@ -239,7 +251,12 @@
               (should (equal '(low max) (mevedel-model-supported-efforts model)))
               (should-error (mevedel-model-validate-effort model 'high) :type 'user-error))
             (should (eq backend (plist-get (mevedel-model-resolve-provider "Claude Code:claude-fixture-5") :backend)))
-            (should-error (mevedel-model-resolve-provider "Claude Code:missing") :type 'user-error))
+            ;; Validation-only lookups neither grow the catalog nor depend on
+            ;; discovery order; dispatch rejects an unavailable model.
+            (let ((models (copy-sequence (gptel-backend-models backend))))
+              (should (equal "missing" (gptel--model-name
+                                        (plist-get (mevedel-model-resolve-provider "Claude Code:missing") :model))))
+              (should (equal models (gptel-backend-models backend)))))
         (when connection (mevedel-acp-close connection))))))
 
 (mevedel-deftest mevedel-acp-text-request/claude-model-validation (:quiet t)
@@ -249,11 +266,13 @@
     (mevedel-claude-code-test--with-cli
       (let* ((gptel--known-backends nil)
              (backend (mevedel-claude-code-register))
+             (models (copy-sequence (gptel-backend-models backend)))
              (provisional (mevedel-model-resolve-provider (concat "Claude Code:" model)))
              (launch (mevedel-claude-code-launch "Validation fixture" [] model effort))
              (peer (expand-file-name "test/fixtures/acp-agent.py" default-directory))
              done response info cancel)
         (should (eq backend (plist-get provisional :backend)))
+        (should (equal models (gptel-backend-models backend)))
         (plist-put launch :command (executable-find "python3"))
         (plist-put launch :args (list peer))
         (plist-put launch :meta
@@ -279,8 +298,9 @@
           (when cancel (funcall cancel)))))))
 
 (mevedel-deftest mevedel-claude-code--prepare-session (:quiet t)
-  (pcase-dolist (`(,effort ,levels ,behavior ,expected)
-                '((high ["default" "low" "high"] nil "high")
+  (pcase-dolist (`(,effort ,levels ,behavior ,expected ,mode)
+                '((high ["default" "low" "high"] nil "high mode:default" "plan")
+                  (high ["default" "low" "high"] nil "high")
                   (high ["default" "low"] nil "default")
                   (nil ["default" "low" "high"] nil "default")
                   (high nil nil "unset")
@@ -309,6 +329,11 @@
                           ,(vconcat
                             [((id . "model") (category . "model") (type . "select")
                               (currentValue . "opus") (options . [((value . "opus"))]))]
+                            ;; User Claude settings can choose the initial mode.
+                            (when mode
+                              (vector `((id . "mode") (category . "mode") (type . "select")
+                                        (currentValue . ,mode)
+                                        (options . [((value . "default")) ((value . "plan"))]))))
                             (when levels
                               (vector `((id . "effort") (category . "thought_level") (type . "select")
                                         (currentValue . "low")
@@ -338,7 +363,7 @@
                   (should (eq (mevedel-session-reasoning-effort mevedel--session)
                               gptel-reasoning-effort))
                   (should (eq gptel-reasoning-effort
-                              (and (equal expected "high") 'high))))))
+                              (and (string-prefix-p "high" expected) 'high))))))
             (when cancel (funcall cancel))))))))
 
 (mevedel-deftest mevedel-claude-code--command-output-async ()
@@ -349,7 +374,7 @@
     (setenv "MEVEDEL_TEST_STATUS_DELAY" "0.2")
     (let* ((start (float-time)) output failure tick
            (cancel (mevedel-claude-code--command-output-async
-                    mevedel-claude-code-executable '("auth" "status")
+                    mevedel-claude-code-executable '("auth" "status" "--json")
                     (lambda (text) (setq output text)) (lambda (text) (setq failure text))))
            (timer (run-at-time 0.02 nil (lambda () (setq tick t)))))
       (unwind-protect
@@ -371,7 +396,7 @@
     (setenv "MEVEDEL_TEST_STATUS_DELAY" "0.2")
     (let* ((before (buffer-list)) (calls 0)
            (cancel (mevedel-claude-code--command-output-async
-                    mevedel-claude-code-executable '("auth" "status")
+                    mevedel-claude-code-executable '("auth" "status" "--json")
                     (lambda (_) (cl-incf calls)) (lambda (_) (cl-incf calls)))))
       (funcall cancel)
       (accept-process-output nil 0.3)
@@ -395,7 +420,7 @@
                        (lambda (_seconds function &rest args)
                          (apply #'run-at-time 0.03 nil function args))))
               (setq cancel (mevedel-claude-code--command-output-async
-                            mevedel-claude-code-executable '("auth" "status")
+                            mevedel-claude-code-executable '("auth" "status" "--json")
                             (lambda (text) (setq output text)) (lambda (text) (setq failure text)))))
             (with-timeout (2 (ert-fail "Readiness timeout did not run"))
               (while (not failure) (accept-process-output nil 0.01)))
@@ -439,35 +464,35 @@
   (mevedel-claude-code-test--with-cli
     (let ((log (file-name-concat directory "checks.log")))
       (setenv "MEVEDEL_TEST_STATUS_LOG" log)
-      (mevedel-claude-code--check-launch (mevedel-claude-code-launch "system" [] "sonnet" nil))
-      (mevedel-claude-code--check-launch (mevedel-claude-code-launch "system" [] "sonnet" nil))
+      (mevedel-claude-code--wait (plist-get (mevedel-claude-code-launch "system" [] "sonnet" nil) :prepare-launch))
+      (mevedel-claude-code--wait (plist-get (mevedel-claude-code-launch "system" [] "sonnet" nil) :prepare-launch))
       (with-temp-buffer
         (insert-file-contents log)
         (should (= 1 (how-many "^node --version$")))
         (should (= 1 (how-many "^claude --version$")))
-        (should (= 2 (how-many "^claude auth status$"))))
+        (should (= 2 (how-many "^claude auth status --json$"))))
       (setenv "MEVEDEL_TEST_AUTH_PROVIDER" "bedrock")
-      (should-error (mevedel-claude-code--check-launch
-                     (mevedel-claude-code-launch "system" [] "sonnet" nil))
+      (should-error (mevedel-claude-code--wait
+                     (plist-get (mevedel-claude-code-launch "system" [] "sonnet" nil) :prepare-launch))
                     :type 'user-error)
       (with-temp-buffer
         (insert-file-contents log)
         (should (= 1 (how-many "^node --version$")))
-        (should (= 3 (how-many "^claude auth status$"))))))
+        (should (= 3 (how-many "^claude auth status --json$"))))))
 
   :doc "a changed executable is version-checked again before login or model startup"
   (mevedel-claude-code-test--with-cli
-    (mevedel-claude-code--check-launch (mevedel-claude-code-launch "system" [] "sonnet" nil))
+    (mevedel-claude-code--wait (plist-get (mevedel-claude-code-launch "system" [] "sonnet" nil) :prepare-launch))
     (setenv "MEVEDEL_TEST_NODE_VERSION" "v20.0.0")
     (write-region "\n# changed runtime\n" nil (file-name-concat directory "node") t 'silent)
     (let ((error (should-error
-                  (mevedel-claude-code--check-launch
-                   (mevedel-claude-code-launch "system" [] "sonnet" nil)) :type 'user-error)))
+                  (mevedel-claude-code--wait
+                   (plist-get (mevedel-claude-code-launch "system" [] "sonnet" nil) :prepare-launch)) :type 'user-error)))
       (should (string-search "Node.js 22.0.0 or newer" (error-message-string error)))))
 
   :doc "fresh authentication failure prevents the adapter from starting without a fallback"
   (mevedel-claude-code-test--with-cli
-    (mevedel-claude-code--check-launch (mevedel-claude-code-launch "system" [] "sonnet" nil))
+    (mevedel-claude-code--wait (plist-get (mevedel-claude-code-launch "system" [] "sonnet" nil) :prepare-launch))
     (setenv "MEVEDEL_TEST_AUTH_METHOD" "api-key")
     (let* ((launch (mevedel-claude-code-launch "system" [] "sonnet" nil))
            (send (symbol-function 'acp-send-request)) connection failure started ready)
@@ -505,6 +530,29 @@
                                         (string-prefix-p "mevedel-claude-status" (process-name process))))
                                  (process-list))))
         (when connection (mevedel-acp-close connection))))))
+
+(mevedel-deftest mevedel-claude-code--workload-control ()
+  (progn
+    (should (equal '(:continue t)
+                   (mevedel-claude-code--workload-control
+                    (lambda () (ert-fail "Only tool batches run the boundary"))
+                    '(:hook_event_name "PreToolUse"))))
+    (should (equal '(:hookSpecificOutput (:hookEventName "PostToolBatch" :additionalContext "Reminder"))
+                   (mevedel-claude-code--workload-control
+                    (lambda () "Reminder") '(:hook_event_name "PostToolBatch"))))
+    (should (equal '(:continue t)
+                   (mevedel-claude-code--workload-control #'ignore '(:hook_event_name "PostToolBatch"))))
+    (should-error (mevedel-claude-code--workload-control
+                   (lambda () (make-string 10001 ?x)) '(:hook_event_name "PostToolBatch")))
+    (should-error (mevedel-claude-code--workload-control
+                   #'ignore '(:hook_event_name "SessionStart" :source "startup")))))
+
+(mevedel-deftest mevedel-claude-code--version ()
+  (progn
+    (should (equal "22.4.0" (mevedel-claude-code--version "v22.4.0" "22.0.0")))
+    (should (equal "2.1.290" (mevedel-claude-code--version "2.1.290 (Claude Code)" "2.1.290")))
+    (should-not (mevedel-claude-code--version "v20.0.0" "22.0.0"))
+    (should-not (mevedel-claude-code--version "unknown" "22.0.0"))))
 
 (provide 'test-mevedel-claude-code)
 ;;; test-mevedel-claude-code.el ends here

@@ -57,11 +57,12 @@ Return a canceller; killing the current buffer also retires this scope."
                             (when (live)
                               (with-current-buffer buffer
                                 (let ((text (gptel--to-string value)))
-                                  (receive (list 'tool-result (list tool args text))
-                                           (list :buffer buffer :stream t))
+                                  ;; Answer first: a failing display must not strand the call.
                                   (funcall complete
                                            (list :isError (if errorp t :json-false)
-                                                 :content (vector (list :type "text" :text text)))))))))
+                                                 :content (vector (list :type "text" :text text))))
+                                  (receive (list 'tool-result (list tool args text))
+                                           (list :buffer buffer :stream t)))))))
                         (cancel-call ()
                           (setq done t)
                           (when (functionp cancel-tool) (funcall cancel-tool))))

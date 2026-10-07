@@ -59,9 +59,9 @@ Interruption drains that request's cancellers and queued prompts, including
 while its parent is waiting. Final prompt usage is attached to the RESULT and charged to the
 owning Goal once. Adapter failures settle as errors; interrupted/failed native
 histories retain an uncertain marker. Follow-up recovery guidance requires the
-native user-message echo before tools continue. Each child's admitted native
-call IDs persist in its own conversation reference; replayed IDs are rejected
-without borrowing the root turn or executing the tool again.
+native user-message echo before tools continue. Each child's conversation
+identity is durable before its prompt; a lost turn restores as uncertain and
+requires acknowledged reconciliation before more tools.
 
 When a child's native history is unavailable, the user can select its canonical
 path with `M-x mevedel-claude-code-recover-history` in the session. Recovery
@@ -70,41 +70,15 @@ retained agent record, frozen configuration and private transcript, and marks
 the next follow-up for an explicitly labelled excerpt continuation into a new
 native conversation. Root and sibling history are not included or detached.
 
-External root and child turns attach queued mail immediately before prompting,
-after their native identity is persisted. The full mail block must appear in the
-SDK's user-message echo before it is consumed. Mail arriving during a turn uses
-bounded batches after native tool batches, acknowledged by an exact successful
-SDK hook receipt. Duplicate or failed receipts cannot consume mail, and new mail
-arriving during delivery stays queued. Each accepted batch is recorded once in
-its recipient's transcript. Messages too large for the inline hook limit stay
-queued for the next prompt, which carries them in full. Submission alone and
-previews do not count as delivery.
-
-The native system prompt includes the complete selected observation baseline,
-including large instructions, and opts out of the SDK's first-prompt snapshot.
-A native compaction hook refreshes selected observations that changed since
-launch. Exact successful SDK receipt records the update once; missing receipt
-prevents further tool effects and successful settlement. An update exceeding
-the hook limit stops the native prompt before further tool effects and automatically
-continues the same admitted turn with the full update in a new prompt. Its
-exact SDK user receipt is required before more tools can run.
-The child uses its frozen component selection for both baseline and restoration.
-
-Ordinary tool boundaries deliver changed selected observations and new direct
-children. The initial prompt supplies the direct-child roster and collects the
-invocation's configured reminders, without consuming the parent's reminders or
-hook context. Exact receipt commits these deliveries. Native compaction also
-restores the direct-child roster and current path instructions learned by that
-child, without importing sibling or root path scopes. Oversized restoration
-uses the same automatic prompt continuation. This preserves the native ID,
-frozen configuration, current invocation and accumulated usage. The Claude
-engine counts samples at initial submission and completed tool-batch boundaries.
-After compaction, a pre-tool hook denies and stops work awaiting an oversized
-restoration. That denied attempt, or a text-only response after compaction,
-already consumed a model sample, so continuation reserves another sample and
-delivers its applicable limit warning. A spent cap
-ends the invocation without another prompt. The same configured cap and
-incomplete-result disclosure apply throughout.
+Native children use the [native context delivery](sessions.md#native-context-delivery)
+contract. Queued mail is attached to the prompt after the native identity is
+persisted; mail arriving during a turn follows native tool batches, and duplicate
+or failed receipts cannot consume it. The child's frozen component selection
+defines both its system baseline and its compaction restoration. Its prompt
+collects the invocation's configured reminders without consuming the parent's
+reminders or hook context, and native compaction restores only that child's
+direct-child roster and learned path instructions. Continuation prompts keep the
+native ID, frozen configuration, current invocation and accumulated usage.
 
 The root session retains every child's storage identity, path, activity, and
 transcript location after the turn settles. `ListAgents` returns the full
@@ -206,12 +180,17 @@ agent still called tools, the call settles with its latest response followed by
 a `[Stopped before a final answer: ...]` note, so the caller can tell the report
 is incomplete. Retained follow-ups start a fresh count.
 
-For Claude, the initial prompt prepares sample one. Each PostToolBatch hook
+For Claude, the initial prompt prepares sample one. Each `PostToolBatch` hook
 either prepares the next sample or stops after the capped sample's tools have
-settled. Warning commits wait for exact SDK receipt; native compaction restores
-current limit guidance. Final text-only responses count as a sample too. This
-uses mevedel's existing sample definition rather than mapping the value to the
-SDK's tool-use-only `maxTurns`. Internal provider retries are not separately
+settled; a final text-only response is the sample its last boundary prepared.
+Warnings are turn events whose firing marks wait for exact SDK receipt; native
+compaction restores current limit guidance, including the final-sample notice,
+through the producer shared with gptel. A compaction that must wait for a
+continuation prompt has already spent a sample on the denied tool attempt or
+text-only response, so continuation reserves another within the same cap and
+delivers its warning; a spent cap ends the invocation without another prompt.
+This uses mevedel's existing sample definition rather than mapping the value to
+the SDK's tool-use-only `maxTurns`. Internal provider retries are not separately
 counted. A normal answer before the cap has no incomplete-result note.
 
 The built-in agents set no cap, as in Claude Code, whose built-in agents also

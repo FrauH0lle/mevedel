@@ -181,6 +181,10 @@
                   "mevedel-transport" (key path thunk))
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
+;; `mevedel-turn'
+(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
+(autoload 'mevedel-turn-busy-p "mevedel-turn")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text
                   "mevedel-utilities" (text))
@@ -777,9 +781,12 @@ removed only when the resulting prompt reaches its transcript commit boundary."
     (mevedel-session-durability-with-transaction
      (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
             (session (buffer-local-value 'mevedel--session data-buffer)))
+       ;; A settling turn or a running compaction refuses dispatch only for
+       ;; now; the entry waits for the drain that follows it.
        (when (and session
                   (buffer-live-p view-buffer)
-                  (not (buffer-local-value 'mevedel--current-request
+                  (not (mevedel-turn-busy-p data-buffer))
+                  (not (buffer-local-value 'mevedel-compact-run-in-flight
                                            data-buffer)))
          (with-current-buffer view-buffer
            (when (and (not mevedel-view--agent-transcript-p)
@@ -878,7 +885,11 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (mevedel-view--refuse-guest-follow-up entry session err))
                      ((error quit)
                       (funcall release)
-                      (signal (car err) (cdr err))))))))))))))
+                      ;; A refused guest entry left at the head would block
+                      ;; every later message; drop it and tell its sender.
+                      (if (and (plist-get entry :guest-id) (not (eq 'quit (car err))))
+                          (mevedel-view--refuse-guest-follow-up entry session err)
+                        (signal (car err) (cdr err)))))))))))))))
 
 (defun mevedel-view--refused-question (err)
   "Return \": QUESTION\" for an `inhibited-interaction' ERR naming one, else \"\"."
@@ -888,28 +899,34 @@ removed only when the resulting prompt reaches its transcript commit boundary."
       "")))
 
 (defun mevedel-view--refuse-guest-follow-up (entry session &optional err)
-  "Drop guest ENTRY of SESSION, whose turn would have asked in Emacs.
-ERR is the `inhibited-interaction' signal, which may carry the question.
-Its attachment files leave with it, as on a retraction; the host is
-warned with the question and the guest told, rather than the queue
-retrying it forever.  Prompts can name hosts and paths, so only the
-host sees the question."
+  "Drop guest ENTRY of SESSION, whose turn could not run.
+ERR is the `inhibited-interaction' signal, which may carry the question, or
+the error that refused the turn.  Its attachment files leave with it, as on
+a retraction; the host is warned and the guest told, rather than the queue
+retrying it forever.  Prompts and errors can name hosts and paths, so only
+the host sees the question or the error."
   (mevedel-pending-inputs--set-queues
    session 'follow-up (delq entry (mevedel-view--pending-follow-ups session)))
   (dolist (path (plist-get entry :guest-paths))
     (when (file-exists-p path)
       (ignore-errors (delete-file path))))
   (mevedel-view--interaction-rebuild)
-  (display-warning
-   'mevedel
-   (format "A message from %s was not sent: its turn needed a decision in Emacs%s"
-           (or (plist-get entry :guest-name) "a guest")
-           (mevedel-view--refused-question err)))
-  (when (fboundp 'mevedel-collaboration-notify-guest)
-    (mevedel-collaboration-notify-guest
-     session (plist-get entry :guest-id)
-     (concat mevedel-collaboration-needs-host-message
-             "; your message was not sent"))))
+  (let ((inhibited (or (null err) (eq 'inhibited-interaction (car err)))))
+    (display-warning
+     'mevedel
+     (format "A message from %s was not sent: %s"
+             (or (plist-get entry :guest-name) "a guest")
+             (if inhibited
+                 (concat "its turn needed a decision in Emacs"
+                         (mevedel-view--refused-question err))
+               (error-message-string err))))
+    (when (fboundp 'mevedel-collaboration-notify-guest)
+      (mevedel-collaboration-notify-guest
+       session (plist-get entry :guest-id)
+       (if inhibited
+           (concat mevedel-collaboration-needs-host-message
+                   "; your message was not sent")
+         "The host could not run your message; it was not sent")))))
 
 (defun mevedel-view--run-follow-up-drain (data-buffer)
   "Drain one pending follow-up for DATA-BUFFER if it is live.
