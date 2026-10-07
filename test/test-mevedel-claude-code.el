@@ -469,40 +469,46 @@
                    (plist-get (mevedel-claude-code-launch "system" [] "sonnet" nil) :prepare-launch)) :type 'user-error)))
       (should (string-search "Node.js 22.0.0 or newer" (error-message-string error)))))
 
-  :doc "fresh authentication failure prevents the adapter from starting without a fallback"
+  :doc "fresh authentication failure closes the starting adapter before any prompt"
   (mevedel-claude-code-test--with-cli
     (mevedel-claude-code--wait (plist-get (mevedel-claude-code-launch "system" [] "sonnet" nil) :prepare-launch))
     (setenv "MEVEDEL_TEST_AUTH_METHOD" "api-key")
     (let* ((launch (mevedel-claude-code-launch "system" [] "sonnet" nil))
-           (send (symbol-function 'acp-send-request)) connection failure started ready)
+           (send (symbol-function 'acp-send-request)) connection failure methods ready)
       (unwind-protect
           (progn
             (cl-letf (((symbol-function 'acp-send-request)
-                       (lambda (&rest args) (setq started t) (apply send args))))
+                       (lambda (&rest args)
+                         (push (alist-get :method (plist-get args :request)) methods)
+                         (apply send args))))
               (setq connection (mevedel-acp-open launch (lambda (_) (setq ready t))
                                                   (lambda (text) (setq failure text))))
               (mevedel-test--await 2 "Authentication failure did not settle" failure))
             (should-not ready)
-            (should-not started)
+            (should-not (member "session/prompt" methods))
             (should (eq 'closed (mevedel-acp-state connection)))
+            (should-not (process-live-p (alist-get :process (mevedel-acp-client connection))))
             (should (string-search "Claude subscription login required" failure)))
         (when connection (mevedel-acp-close connection)))))
 
-  :doc "interrupting readiness cancels its subprocess before any adapter request"
+  :doc "interrupting readiness cancels its subprocess and the starting adapter"
   (mevedel-claude-code-test--with-cli
     (setenv "MEVEDEL_TEST_STATUS_DELAY" "0.2")
     (let* ((launch (mevedel-claude-code-launch "system" [] "sonnet" nil))
-           (send (symbol-function 'acp-send-request)) connection started (failures 0))
+           (send (symbol-function 'acp-send-request)) connection methods (failures 0))
       (unwind-protect
           (cl-letf (((symbol-function 'acp-send-request)
-                     (lambda (&rest args) (setq started t) (apply send args))))
+                     (lambda (&rest args)
+                       (push (alist-get :method (plist-get args :request)) methods)
+                       (apply send args))))
             (setq connection (mevedel-acp-open launch (lambda (_) (ert-fail "Cancelled readiness started"))
                                                 (lambda (_) (cl-incf failures))))
             (mevedel-acp-close connection)
             (accept-process-output nil 0.3)
             (should (eq 'closed (mevedel-acp-state connection)))
             (should (= failures 1))
-            (should-not started)
+            (should-not (member "session/prompt" methods))
+            (should-not (process-live-p (alist-get :process (mevedel-acp-client connection))))
             (should-not (seq-some (lambda (process)
                                    (and (process-live-p process)
                                         (string-prefix-p "mevedel-claude-status" (process-name process))))

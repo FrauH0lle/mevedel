@@ -299,7 +299,9 @@ provider/model/effort metadata, not the generated summary text.
 ## External conversation references
 
 Every Claude launch checks the ACP client, Node.js, Python, CLI and adapter
-versions and the subscription login before the adapter starts;
+versions and the subscription login while the adapter starts; the connection is
+admitted, and its prompt sent, only after both succeed (overlapping them took a
+warm launch from about 500 to 380 ms);
 `M-x mevedel-claude-code-setup` runs the same check, plus the packaged MCP
 bridge, without a model request. Installation, maintenance and user steps are
 in the [README](../README.md#claude-promax-subscriptions). Status commands run
