@@ -220,10 +220,15 @@ on CLIENT before each line is handled.  Each input chunk is scanned once."
 
 (defun mevedel-mcp-socket-root (&optional noerror)
   "Return the owner-only local directory holding every MCP server socket.
-One stable parent lets confinement mask all live servers at once.  The first
-success fixes the directory for this Emacs; ownership is checked every call.
-With NOERROR, return the directory last established, or nil, instead of
-signalling: no server can exist in a directory that was never established."
+One stable parent lets confinement mask all live servers at once.  A success
+fixes the directory for this Emacs while it exists; ownership is checked every
+call.  A vanished directory (for example a removed runtime directory) holds no
+live server, so it is resolved again.  With NOERROR, return the existing
+directory last established, or nil, instead of signalling: no server can exist
+in a directory that was never established."
+  (when (and mevedel-mcp--socket-root
+             (not (file-directory-p mevedel-mcp--socket-root)))
+    (setq mevedel-mcp--socket-root nil))
   (condition-case err
       (let* ((runtime (getenv "XDG_RUNTIME_DIR"))
              (root (or mevedel-mcp--socket-root

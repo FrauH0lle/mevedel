@@ -287,6 +287,7 @@
 (declare-function mevedel-skills-dispatch-prepared-fork
 		  "mevedel-skills-invoke" t t)
 (declare-function mevedel-skills-request-model-policy "mevedel-skills-invoke" ())
+(autoload 'mevedel-skills-request-model-policy "mevedel-skills-invoke")
 
 ;; `mevedel-skills-plan'
 (declare-function mevedel-skill-invocation-plan-fork-p

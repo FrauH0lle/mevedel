@@ -3,11 +3,12 @@
 ;;; Commentary:
 ;; Readiness runs before a prompt leaves the composer, so a provider that
 ;; cannot run refuses while the input is still retained.  Codex credentials
-;; are checked directly.  Claude readiness is learned from root turn startup:
-;; unknown readiness never refuses, because the turn's own launch is the
-;; probe.  A failed startup or check refuses with its cause and checks again;
-;; a configuration, login or runtime change forgets the result.  No model
-;; request is retried here.
+;; are checked directly.  Claude readiness is learned from root turn startup
+;; and never refuses a send: the turn's own launch is the probe, and the next
+;; send is the retry.  A failed startup leaves its cause as an informational
+;; issue; an explicit check (browser retry) reports when Claude is ready
+;; again.  A configuration, login or runtime change forgets the result.  No
+;; model request is retried here.
 
 ;;; Code:
 
@@ -52,25 +53,27 @@ A plist with :key, :state (`ready', `failed' or `checking'), the failure
       (with-current-buffer mevedel--view-buffer
         (mevedel-view--schedule-late-follow-up-drain)))))
 
-(defun mevedel-readiness-record (ready &optional failure)
+(defun mevedel-readiness-record (ready &optional failure checked)
   "Record the current root buffer's Claude readiness.
 READY is non-nil after a startup reached its prompt; otherwise FAILURE is
-the startup's cause, shown in the echo area and the recovery issue."
-  (let ((session (bound-and-true-p mevedel--session))
-        (previous (plist-get mevedel-readiness--claude :state)))
+the startup's cause, shown in the echo area.  CHECKED marks the result of an
+explicit check, which also reports to the recovery panel; a failed turn
+already left its own request issue."
+  (let ((session (bound-and-true-p mevedel--session)))
     (mevedel-readiness-stop)
     (setq mevedel-readiness--claude
           (list :key (mevedel-readiness--key) :state (if ready 'ready 'failed)
                 :message failure))
     (if ready
         (progn
-          (when (memq previous '(failed checking))
-            (message "mevedel: Claude is ready; send your retained input again"))
+          (when checked (message "mevedel: Claude is ready"))
           (when session (mevedel-readiness--resume session "authentication")))
       (message "mevedel: Claude is not ready: %s" failure)
-      (when (and session
+      ;; Informational: blocking would also wedge Goal, plan and directive
+      ;; sends, which never pass the composer's readiness check.
+      (when (and session checked
                  (mevedel-recovery-report
-                  session "authentication" (mevedel-recovery-category failure) failure t))
+                  session "authentication" (mevedel-recovery-category failure) failure nil))
         (mevedel-recovery-save session)))))
 
 (defun mevedel-readiness-record-turn (info outcome message)
@@ -97,7 +100,7 @@ turn startup's; a check already in flight is kept."
                     (with-current-buffer buffer
                       (when (eq operation mevedel-readiness--claude)
                         (plist-put operation :cancel nil)
-                        (mevedel-readiness-record (not failure) failure))))))
+                        (mevedel-readiness-record (not failure) failure t))))))
         (condition-case err
             (let ((connection
                    (mevedel-acp-open
@@ -122,15 +125,9 @@ uncommitted; blocking recovery issues still refuse afterwards."
        (mevedel-recovery-report session "authentication" 'authentication
                                 "Codex login needs renewal" t)
        (signal (car err) (cdr err))))
-    (when (mevedel-claude-code-backend-p backend)
-      (unless (equal (mevedel-readiness--key) (plist-get mevedel-readiness--claude :key))
-        (mevedel-readiness-stop))
-      (pcase (plist-get mevedel-readiness--claude :state)
-        ('checking (user-error "Checking Claude readiness; your input is retained"))
-        ('failed
-         (let ((failure (plist-get mevedel-readiness--claude :message)))
-           (mevedel-readiness-check)
-           (user-error "%s; checking Claude again, your input is retained" failure)))))
+    (when (and (mevedel-claude-code-backend-p backend)
+               (not (equal (mevedel-readiness--key) (plist-get mevedel-readiness--claude :key))))
+      (mevedel-readiness-stop))
     (mevedel-recovery-clear session "authentication")
     (mevedel-recovery-assert-ready session)))
 
@@ -161,9 +158,11 @@ uncommitted; blocking recovery issues still refuse afterwards."
               (mevedel-readiness-stop)
               (setq mevedel-readiness--claude
                     (list :key (mevedel-readiness--key) :state 'failed :message message)))
+            ;; Only Codex login gates every send; a Claude login failure is
+            ;; retried by the next send's own launch.
             (when (mevedel-recovery-report session "authentication"
                                            (or (plist-get state :category) 'authentication)
-                                           message t)
+                                           message (not (mevedel-claude-code-backend-p backend)))
               (mevedel-recovery-save session))))))))
 
 (defun mevedel-readiness-runtime-changed (state)

@@ -12,6 +12,7 @@
 (require 'mevedel-workspace-identity)
 (require 'mevedel-directive-request)
 (require 'mevedel-tools)
+(require 'mevedel-agent-exec)
 (require 'mevedel-compact)
 (require 'helpers
          (file-name-concat

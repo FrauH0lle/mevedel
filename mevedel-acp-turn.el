@@ -199,13 +199,9 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                              (funcall reject))))
                      (error (finish (list :status 'error :message (error-message-string err))))))
                (setq draining nil))
+             ;; The loop leaves work behind only for a turn it no longer owns.
              (when (and pending (not finished))
-               (if (not (owned))
-                   (finish '(:status interrupted))
-                 (unless (mevedel-transport-run-when-idle
-                          event-key dispatch-target #'drain
-                          (lambda () (finish '(:status interrupted))))
-                   (kill-owner))))))
+               (finish '(:status interrupted)))))
          (prompt (input)
            (setf (mevedel-engine-info request)
                  (plist-put (mevedel-engine-info request) :mevedel-acp-prompted t))

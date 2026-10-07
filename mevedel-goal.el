@@ -979,8 +979,9 @@ The entry holds `:body' and a delivery `:commit'."
 (defun mevedel-goal--transient-failure-p (reason)
   "Return non-nil when REASON describes a retryable transport failure.
 Sign-in, runtime, configuration and history failures need the user; a
-model reported unavailable is often a transient overload and is retried."
-  (and (memq (mevedel-recovery-category reason) '(request model))
+model reported unavailable in free text is often a transient overload and
+classifies as an ordinary request failure, so it is retried."
+  (and (eq (mevedel-recovery-category reason) 'request)
        (string-match-p
         (rx (or "timeout" "timed out" "temporar" "connection"
                 "network" "unavailable" "502" "503" "504"

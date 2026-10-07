@@ -313,12 +313,12 @@ exits nonzero with valid JSON and still reports the login action.
 
 Composer sends check provider readiness before the prompt enters the transcript.
 Codex credentials are checked directly. Claude readiness is learned from root
-turn startup: while it is unknown, the send proceeds and its own launch is the
-check. A startup that failed before its prompt refuses later sends with the
-failure's cause in the echo area and as a recovery issue, keeps the composer
-draft, and starts one check without a prompt; when it succeeds the user sends
-again. Changing the executable, adapter, directory, model or
-`CLAUDE_CONFIG_DIR`, and login or runtime changes, forget the result.
+turn startup and never refuses a send: its own launch is the check, and the
+next send is the retry. A startup that failed before its prompt shows the
+cause in the echo area and as an informational recovery issue; a browser retry
+checks without a prompt and reports when Claude is ready. Changing the
+executable, adapter, directory, model or `CLAUDE_CONFIG_DIR`, and login or
+runtime changes, forget the result.
 
 The Claude Code provider routes root and directive submissions through ACP. The
 session's `:external-conversations` metadata maps conversation scopes to the
@@ -1370,7 +1370,7 @@ with a notice; without either, history stays readable while requests wait for a
 model choice.
 
 Recovery issues are informational unless an owner that re-checks them reports
-them as blocking: provider readiness, a missing preset (cleared by applying any
+them as blocking: Codex login, a missing preset (cleared by applying any
 preset) and a saved model with no available fallback (cleared by selecting a
 model). Blocking issues refuse root requests. Provider failures, failed agents,
 naming, effort and fallback notices are informational; the next root request

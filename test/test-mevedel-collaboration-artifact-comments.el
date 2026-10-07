@@ -141,7 +141,9 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
        (mevedel-session-set-pending-input-paused session t)
        (unwind-protect
            (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-                      (lambda (_transport peer frame) (push (cons peer frame) sent) t)))
+                      (lambda (_transport peer frame) (push (cons peer frame) sent) t))
+                     ;; The fake save path has no committed sidecar to update.
+                     ((symbol-function 'mevedel-recovery-save-now) #'ignore))
              ,@body)
          (delete-directory directory t)))))
 

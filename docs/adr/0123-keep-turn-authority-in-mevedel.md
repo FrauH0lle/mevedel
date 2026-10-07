@@ -102,29 +102,32 @@ gptel discovery, chat creation, and readiness do not need them.
 
 Provider readiness belongs to the harness, before root input is committed.
 Claude readiness is learned from root turn startup rather than a separate
-probe: unknown readiness admits the send, whose own launch is the check; a
-failed startup refuses later sends with its cause and checks again; configuration,
-login and runtime changes forget it. Saved provider selections may fall back to
+probe: every send's own launch is the check, and the next send is the retry. A
+failed startup leaves its cause as an informational issue, because a blocking
+one would also wedge Goal, plan and directive sends; an explicit browser retry
+checks again. Configuration, login and runtime changes forget the result. Saved provider selections may fall back to
 one configured provider or the host default, with a visible notice; explicit
 invalid selections remain errors. A live provider failure moves the session only
 on a structured model-not-found signal. Missing presets require owner selection,
 without changing permission or sandbox authority.
 
-Only owners that re-check an issue report it as blocking: readiness, preset
+Only owners that re-check an issue report it as blocking: Codex login, preset
 restore and saved-model restore, each clearing only its own issue. Request,
 agent and other failures are informational and cleared by the next root
 request, which is the user's retry; retained agents never touch root recovery.
 Authentication recovery uses asynchronous Codex refresh/device login and the
 Claude CLI's subscription login/status interfaces. Credentials remain local;
-owner peers receive ephemeral URL/code challenges. Unsent input is durable and
-may resume after repair, while submitted failure or interruption requires explicit
-continuation. Native history recovery still requires an idle conversation and
+owner peers receive ephemeral URL/code challenges. Unsent input survives a clean
+exit and may resume after repair, while submitted failure or interruption requires
+explicit continuation. Native history recovery still requires an idle conversation and
 preserves the transcript and effects.
 
 Queued input records one durable delivery intent, a sidecar-only `dispatching`
 mark, before dispatch; delivery writes nothing further, so a committed prompt
 cannot return to the runnable queue. Other queue and pause changes use the
-coalesced sidecar save. On restart, interrupted delivery and uncertain native
+coalesced sidecar save, so a crash can lose queue changes from its debounce
+interval, and a session without a committed sidecar keeps its queue only in
+memory; the intent write then has nothing to update. On restart, interrupted delivery and uncertain native
 turns require explicit review before continuation. A failed turn pauses delivery
 only for input it left undelivered or uncertain. Refused guest input is dropped
 with a notice rather than held. OAuth readiness also runs at each gptel sampling boundary,

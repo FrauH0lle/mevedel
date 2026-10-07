@@ -287,6 +287,18 @@
                                      process-environment)))
       (should (equal root (mevedel-mcp-socket-root)))))
 
+  :doc "a vanished directory is resolved again instead of reused"
+  (mevedel-mcp-test--with-runtime
+    (let* ((root (mevedel-mcp-socket-root))
+           (other (make-temp-file "mevedel-mcp-runtime-" t))
+           (process-environment (cons (concat "XDG_RUNTIME_DIR=" other)
+                                      process-environment)))
+      (unwind-protect
+          (progn
+            (delete-directory root t)
+            (should (file-in-directory-p (mevedel-mcp-socket-root) other)))
+        (delete-directory other t))))
+
   :doc "a planted symlink in place of the directory is refused"
   (mevedel-mcp-test--with-runtime
     (make-symbolic-link runtime (file-name-concat
