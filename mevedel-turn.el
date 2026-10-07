@@ -111,6 +111,7 @@
 ;; `mevedel-permission-mode'
 (declare-function mevedel--implementation-permission-mode-restore
                   "mevedel-permission-mode" ())
+(autoload 'mevedel--implementation-permission-mode-restore "mevedel-permission-mode")
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-request
@@ -190,6 +191,7 @@
 
 ;; `mevedel-readiness'
 (declare-function mevedel-readiness-record-turn "mevedel-readiness" (info outcome message))
+(autoload 'mevedel-readiness-record-turn "mevedel-readiness")
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
@@ -213,6 +215,7 @@
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
                   "mevedel-view-interaction" ())
+(autoload 'mevedel-view--interaction-rebuild "mevedel-view-interaction")
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--append-request-summary

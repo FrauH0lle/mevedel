@@ -142,6 +142,7 @@
 (declare-function mevedel-tool-patch-prepare-resources
                   "mevedel-tool-patch" (proposal))
 (defvar mevedel-tool-patch-prepared-proposal)
+(autoload 'mevedel-tool-patch-prepare-resources "mevedel-tool-patch")
 
 ;; `mevedel-tool-permission'
 (declare-function mevedel-tool-permission-deny

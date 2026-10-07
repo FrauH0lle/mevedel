@@ -51,10 +51,12 @@
                   "mevedel-chat" (workspace request callback))
 (declare-function mevedel--replace-patch-buffer
                   "mevedel-chat" (patch-content))
-(defvar mevedel--current-directive-uuid)
+(autoload 'mevedel--directive-capture "mevedel-chat")
+(autoload 'mevedel--generate-final-patch "mevedel-chat")
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-handle-wait "mevedel-compact" (fsm))
+(autoload 'mevedel--compact-handle-wait "mevedel-compact")
 
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-record-token-baseline
@@ -84,9 +86,11 @@
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--drain-pending-context
                   "mevedel-skills-invoke" (request))
+(autoload 'mevedel-skills--drain-pending-context "mevedel-skills-invoke")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -811,7 +815,7 @@ alist with mevedel-specific handlers added:
                               (unless mevedel--current-request
                                 (mevedel-request-begin
                                  mevedel--session
-                                 (bound-and-true-p mevedel--current-directive-uuid)))
+                                 mevedel--current-directive-uuid))
                               (when (and mevedel--current-request
                                          (fboundp 'mevedel-request-id))
                                 (setf (mevedel-request-fsm

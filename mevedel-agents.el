@@ -428,8 +428,7 @@ and render-data markers are runtime-only caches for cheap live updates."
   (or (and (boundp 'mevedel--current-request)
            mevedel--current-request
            (mevedel-request-plan-read-only mevedel--current-request))
-      (and (boundp 'mevedel--agent-invocation)
-           mevedel--agent-invocation
+      (and mevedel--agent-invocation
            (mevedel-agent-invocation-plan-read-only
             mevedel--agent-invocation))))
 

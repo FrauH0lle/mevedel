@@ -42,14 +42,17 @@
 ;; `mevedel-collaboration-agent'
 (declare-function mevedel-collaboration--publish-agents
                   "mevedel-collaboration-agent" (room))
+(autoload 'mevedel-collaboration--publish-agents "mevedel-collaboration-agent")
 
 ;; `mevedel-collaboration-artifact-projection'
 (declare-function mevedel-collaboration--artifact-stat-invalidate
                   "mevedel-collaboration-artifact-projection" ())
+(autoload 'mevedel-collaboration--artifact-stat-invalidate "mevedel-collaboration-artifact-projection")
 
 ;; `mevedel-collaboration-editing'
 (declare-function mevedel-collaboration-editing-depart
                   "mevedel-collaboration-editing" (room peer))
+(autoload 'mevedel-collaboration-editing-depart "mevedel-collaboration-editing")
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--on-control
@@ -62,6 +65,11 @@
                   "mevedel-collaboration-guest" (overlay))
 (declare-function mevedel-collaboration--on-state
                   "mevedel-collaboration-guest" (data-buffer state))
+(autoload 'mevedel-collaboration--on-control "mevedel-collaboration-guest")
+(autoload 'mevedel-collaboration--on-frame "mevedel-collaboration-guest")
+(autoload 'mevedel-collaboration--on-prompt-created "mevedel-collaboration-guest")
+(autoload 'mevedel-collaboration--on-prompt-settled "mevedel-collaboration-guest")
+(autoload 'mevedel-collaboration--on-state "mevedel-collaboration-guest")
 
 ;; `mevedel-collaboration-history'
 (declare-function mevedel-collaboration--publish-history "mevedel-collaboration-history" (room &optional peer))
@@ -100,6 +108,19 @@
                   "mevedel-collaboration-projection" (records))
 (declare-function mevedel-collaboration--tool-result-fields
                   "mevedel-collaboration-projection" (result))
+(autoload 'mevedel-collaboration--canonical-records "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--json-record "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--pending-tool-match "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--project-records "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--record "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--record-without-revision "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--reuse-record-ids "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--routine-poll-p "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--stable-record-id "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--tool-call-key "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--tool-extras "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--tool-records "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--tool-result-fields "mevedel-collaboration-projection")
 
 ;; `mevedel-collaboration-share'
 (declare-function mevedel-collaboration-share-dismiss
@@ -110,6 +131,7 @@
 ;; `mevedel-collaboration-task'
 (declare-function mevedel-collaboration--publish-tasks
                   "mevedel-collaboration-task" (room))
+(autoload 'mevedel-collaboration--publish-tasks "mevedel-collaboration-task")
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-control
@@ -122,6 +144,11 @@
                   "mevedel-collaboration-transport" (transport peer frame))
 (declare-function mevedel-collaboration--transport-stop
                   "mevedel-collaboration-transport" (transport))
+(autoload 'mevedel-collaboration--transport-control "mevedel-collaboration-transport")
+(autoload 'mevedel-collaboration--transport-open "mevedel-collaboration-transport")
+(autoload 'mevedel-collaboration--transport-open-p "mevedel-collaboration-transport")
+(autoload 'mevedel-collaboration--transport-send "mevedel-collaboration-transport")
+(autoload 'mevedel-collaboration--transport-stop "mevedel-collaboration-transport")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective

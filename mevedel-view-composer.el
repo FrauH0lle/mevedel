@@ -80,6 +80,9 @@
                   "mevedel-directive-request" (directive feedback &optional callback))
 (declare-function mevedel--retry-directive
                   "mevedel-directive-request" (directive guidance &optional callback))
+(autoload 'mevedel--discuss-directive-turn "mevedel-directive-request")
+(autoload 'mevedel--request-directive-changes "mevedel-directive-request")
+(autoload 'mevedel--retry-directive "mevedel-directive-request")
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--directive-record
@@ -299,6 +302,8 @@
 (declare-function mevedel-skills-plan-user-input "mevedel-skills-plan"
 		  (text session &optional selected-skills))
 (autoload 'mevedel-skills-plan-user-input "mevedel-skills-plan")
+(autoload 'mevedel-skills-plan-prepare "mevedel-skills-plan")
+(autoload 'mevedel-skills-plan-render-data "mevedel-skills-plan")
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-install-font-lock "mevedel-skills-ui"
@@ -352,7 +357,7 @@
 		  t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
-(defvar mevedel--agent-invocation nil)
+(defvar mevedel--agent-invocation)
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -1900,8 +1905,7 @@ starts the fork after insertion."
         (setq request
               (mevedel-request-begin
                mevedel--session
-               (and (boundp 'mevedel--current-directive-uuid)
-                    mevedel--current-directive-uuid))))
+               mevedel--current-directive-uuid)))
       (goto-char (point-max))
       (mevedel--insert-user-turn input)
       (let ((data-turn-start (copy-marker (point) nil)))
@@ -2919,7 +2923,7 @@ asynchronous preparation ran is left alone instead of cleared."
             (plist-get info :mevedel-agent-invocation)))
       (and (buffer-live-p data-buffer)
            (with-current-buffer data-buffer
-             (bound-and-true-p mevedel--agent-invocation)))))
+             mevedel--agent-invocation))))
 
 (defun mevedel-view-abort ()
   "Abort the active request from the view buffer."

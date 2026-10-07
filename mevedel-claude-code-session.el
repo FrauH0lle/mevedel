@@ -119,7 +119,7 @@ When omitted, read the latest submitted prompt from the canonical transcript."
     (user-error "Select Claude Code in a mevedel session first"))
   (let* ((session mevedel--session)
          (buffer (current-buffer))
-         (directive (bound-and-true-p mevedel--current-directive-uuid))
+         (directive mevedel--current-directive-uuid)
          ;; A shared-item question keeps its own context, apart from the room.
          (shared (and (not directive) (mevedel-shared-conversation-current)))
          ;; Directive and item prompts carry their precisely selected durable

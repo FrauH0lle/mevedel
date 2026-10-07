@@ -72,6 +72,7 @@
 (declare-function mevedel-mentions-expand-user-input
                   "mevedel-mentions" (text session &optional fresh-p))
 (autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
+(autoload 'mevedel-mentions-commit-expansion "mevedel-mentions")
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-stage-entry
@@ -86,6 +87,7 @@
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-commit-invoked-records
                   "mevedel-skills-invoke" (session records))
+(autoload 'mevedel-skills-commit-invoked-records "mevedel-skills-invoke")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-blocking-p

@@ -16,9 +16,10 @@
   (require 'mevedel-structs))
 
 ;; `mevedel-plan-mode'
+;; Only plan mode records a pending approval, so it is loaded whenever one
+;; exists.  An autoload would make the `fboundp' probes elsewhere load it.
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
-(autoload 'mevedel-plan-approval-abort "mevedel-plan-mode")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt-sequence
