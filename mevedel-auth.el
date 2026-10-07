@@ -33,6 +33,10 @@
 (autoload 'mevedel-readiness-changed "mevedel-readiness")
 (add-hook 'mevedel-auth-changed-hook #'mevedel-readiness-changed)
 
+(defun mevedel-auth-supported-p (backend)
+  "Return non-nil when BACKEND has a browser login."
+  (or (gptel-openai-oauth-p backend) (mevedel-claude-code-backend-p backend)))
+
 (defun mevedel-auth--key (backend)
   "Return the credential-store identity for BACKEND."
   (cond ((gptel-openai-oauth-p backend) (expand-file-name gptel--openai-oauth-token-file))

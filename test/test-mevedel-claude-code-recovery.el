@@ -32,6 +32,20 @@
               (should (string-search "M-x mevedel-claude-code-recover-history" message)))))
       (delete-directory mevedel-claude-code-directory t))))
 
+(mevedel-deftest mevedel-claude-code-history-unresumable-p
+  (:doc "flags edited, foreign and failed native histories, not resumable ones")
+  (let* ((mevedel-claude-code-directory "/tmp/mevedel-history-unresumable")
+         (record (list :engine 'claude-code :id "native" :host (system-name)
+                       :directory (expand-file-name mevedel-claude-code-directory)
+                       :state 'ready)))
+    (should-not (mevedel-claude-code-history-unresumable-p nil))
+    (should-not (mevedel-claude-code-history-unresumable-p
+                 '(:engine claude-code :state unstarted)))
+    (should-not (mevedel-claude-code-history-unresumable-p record))
+    (dolist (change '((:state diverged) (:host "other-machine") (:start-failed t)))
+      (should (mevedel-claude-code-history-unresumable-p
+               (plist-put (copy-sequence record) (car change) (cadr change)))))))
+
 (mevedel-deftest mevedel-claude-code-history-open ()
   (let* ((mevedel-claude-code-directory "/tmp/mevedel-history-open")
          (owner (mevedel-request--create))
@@ -54,8 +68,11 @@
       (should (eq 'diverged (plist-get record :state))))
     ;; A retained identity that failed to start names excerpt recovery.
     (setf (mevedel-engine-info owner) (list :mevedel-acp-outcome 'error :error "Missing history"))
-    (mevedel-claude-code-history-settle owner '(:id "native") nil '(:status error))
-    (should (string-search "recover-history" (plist-get (mevedel-engine-info owner) :error)))
+    (let ((history (list :id "native")))
+      (mevedel-claude-code-history-settle owner history nil '(:status error))
+      (should (string-search "recover-history" (plist-get (mevedel-engine-info owner) :error)))
+      ;; It is marked so the browser can offer recovery.
+      (should (plist-get history :start-failed)))
     (setf (mevedel-engine-info owner) (list :mevedel-acp-outcome 'error :error "Startup failed"))
     (mevedel-claude-code-history-settle owner nil nil '(:status error))
     (should (equal "Startup failed" (plist-get (mevedel-engine-info owner) :error)))))

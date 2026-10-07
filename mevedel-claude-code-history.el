@@ -14,18 +14,30 @@
 (require 'mevedel-transcript)
 (require 'mevedel-compact-evidence)
 
+(defun mevedel-claude-code-history--foreign-p (record)
+  "Return non-nil when another machine or installation retained RECORD."
+  (and (plist-get record :id)
+       (not (and (eq 'claude-code (plist-get record :engine))
+                 (equal (system-name) (plist-get record :host))
+                 (equal (expand-file-name mevedel-claude-code-directory)
+                        (plist-get record :directory))))))
+
 (defun mevedel-claude-code-history-assert-current (record)
   "Reject native continuation of RECORD when it was edited or is foreign.
 Displayed evidence edited after receipt, or a native identity retained by
 another machine or installation directory, cannot be resumed."
   (when (eq 'diverged (plist-get record :state))
     (user-error "The transcript was edited after Claude received it; use M-x mevedel-claude-code-recover-history before continuing"))
-  (when (and (plist-get record :id)
-             (not (and (eq 'claude-code (plist-get record :engine))
-                       (equal (system-name) (plist-get record :host))
-                       (equal (expand-file-name mevedel-claude-code-directory)
-                              (plist-get record :directory)))))
+  (when (mevedel-claude-code-history--foreign-p record)
     (user-error "This Claude history belongs to another installation; its transcript remains readable.  Use M-x mevedel-claude-code-recover-history to continue from it")))
+
+(defun mevedel-claude-code-history-unresumable-p (record)
+  "Return non-nil when RECORD's native history needs transcript recovery.
+That is when it was refused as edited or foreign, or failed to start."
+  (and (plist-get record :id)
+       (or (eq 'diverged (plist-get record :state))
+           (mevedel-claude-code-history--foreign-p record)
+           (plist-get record :start-failed))))
 
 (defun mevedel-claude-code-history-open (owner id &optional boundary)
   "Return OWNER's in-flight native record for conversation ID.
@@ -41,12 +53,14 @@ undetected edits.  The record is attached to OWNER's turn context."
 
 (defun mevedel-claude-code-history-settle (owner history record outcome)
   "Record OWNER's native OUTCOME on RECORD, opened from previous HISTORY.
-Without RECORD, a retained HISTORY failed to start; its diagnosis then names
-excerpt recovery.  Divergence observed during the turn is preserved."
+Without RECORD, a retained HISTORY failed to start; it is marked so recovery
+can be offered, and its diagnosis names excerpt recovery.  Divergence
+observed during the turn is preserved."
   (if (not record)
       (let ((info (mevedel-engine-info owner)))
         (when (and (plist-get history :id)
                    (eq 'error (plist-get info :mevedel-acp-outcome)))
+          (plist-put history :start-failed t)
           (setf (mevedel-engine-info owner)
                 (plist-put info :error
                            (concat (if (listp (plist-get info :error))

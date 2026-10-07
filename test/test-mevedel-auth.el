@@ -35,6 +35,13 @@
        (delete-process server)
        (delete-directory directory t))))
 
+(mevedel-deftest mevedel-auth-supported-p
+  (:doc "offers browser login only for Codex and Claude Code")
+  (let ((gptel--known-backends nil))
+    (should (mevedel-auth-supported-p (gptel-make-openai-oauth "Test Codex")))
+    (should (mevedel-auth-supported-p (mevedel-claude-code-register)))
+    (should-not (mevedel-auth-supported-p (gptel-make-openai "Test Key" :key "test")))))
+
 (mevedel-deftest mevedel-auth-refresh (:quiet t)
   ,test
   (test)

@@ -104,9 +104,13 @@
     history.connection(className === 'connected');
     if (className !== 'connected') {
       state.connected = false;
+      recoveryFrame = null;
       recoverySignature = '';
       recoveryAuthSignature = '';
       recoveryProvider = '';
+      // Settings act through the host; they wait for the next connection.
+      const settings = document.getElementById('settings');
+      if (settings?.open) settings.close();
       const recoveryAuth = document.getElementById('recovery-auth');
       if (recoveryAuth) recoveryAuth.replaceChildren();
       state.busy = null;
@@ -271,14 +275,32 @@
     if (next !== folded) document.body.toggleAttribute('data-reading', next);
   }
 
-  // Recovery never replaces the composer or its draft. Auth challenges remain
-  // in memory only and arrive exclusively on the host's owner projection.
-  // The login block renders separately so other updates keep a typed code.
+  // Session settings: one sheet for an owner's session choices and what
+  // needs attention.  Recovery never replaces the composer or its draft.
+  // Auth challenges remain in memory only and arrive exclusively on the
+  // host's owner projection.  The login block renders separately so other
+  // updates keep a typed code.  Every control explains itself in a title
+  // and, since phones have no hover, in visible help text.
+  const MODES = [
+    ['ask', 'Ask', 'Review every file change; commands that might change something ask first.'],
+    ['edits', 'Edits', 'Edit workspace files and run sandboxed commands without asking; anything more asks.'],
+    ['full-auto', 'Full auto', 'No sandbox and no questions: acts with the full access of the host account.'],
+  ];
+  let recoveryFrame = null;
   let recoverySignature = '';
   let recoveryAuthSignature = '';
   let recoveryProvider = '';
   function recoveryAction(action, value, extra = {}) {
     send({t: 'recovery', action, value, ...extra});
+  }
+  function settingsButton(parent, text, title, action) {
+    const node = el('button', 'btn quiet', text);
+    node.type = 'button'; node.title = title; node.addEventListener('click', action); parent.append(node);
+    return node;
+  }
+  function needsAttention(frame) {
+    return Boolean(frame && (frame.paused === true || frame.issues?.length
+                             || frame.steering?.length || frame.histories?.length));
   }
   function renderRecoveryIssues(issues) {
     const node = document.getElementById('recovery-issues');
@@ -289,74 +311,167 @@
     }
     node.hidden = !node.children.length;
   }
-  function renderRecovery(frame) {
-    if (!state.owner) return;
-    const controls = document.getElementById('recovery-controls');
+  function openSettings() {
+    const dialog = document.getElementById('settings');
+    if (!dialog || !recoveryFrame) return;
+    renderModeChoices();
+    if (!dialog.open) dialog.showModal();
+  }
+  function renderModeChoices() {
+    const group = document.getElementById('settings-mode');
+    const help = document.getElementById('settings-mode-help');
+    if (!group || !help) return;
+    group.replaceChildren(...MODES.map(([mode, label, text]) => {
+      const node = el('button', 'btn quiet option', label);
+      node.type = 'button'; node.title = text;
+      node.setAttribute('aria-pressed', String(mode === state.mode));
+      // The host answers with a status frame; until it does the sheet
+      // keeps reporting the mode the session is actually in.
+      node.addEventListener('click', () => { if (mode !== state.mode) send({t: 'set-mode', mode}); });
+      return node;
+    }));
+    help.textContent = MODES.find(([mode]) => mode === state.mode)?.[2]
+      || 'What the assistant may do without asking first.';
+  }
+  function renderAttention(frame) {
+    const section = document.getElementById('settings-attention');
+    const issues = document.getElementById('settings-issues');
     const actions = document.getElementById('recovery-actions');
-    const auth = document.getElementById('recovery-auth');
-    if (!controls || !actions || !auth) return;
-    controls.hidden = false;
-    const {auth: login, ...rest} = frame;
-    const signature = JSON.stringify(rest);
-    const authSignature = JSON.stringify([frame.provider, login]);
-    const button = (parent, text, action) => {
-      const node = el('button', 'btn quiet', text);
-      node.type = 'button'; node.addEventListener('click', action); parent.append(node);
-    };
-    const picker = (label, values, action) => {
-      const wrapper = el('label', '', label);
-      const select = document.createElement('select');
-      select.setAttribute('aria-label', label);
-      for (const value of values || []) {
-        const option = el('option', '', value); option.value = value; option.selected = action === 'model' && value === frame.model; select.append(option);
-      }
-      wrapper.append(select); actions.append(wrapper);
-      button(actions, `Apply ${label.toLowerCase()}`, () => recoveryAction(action, select.value));
-    };
-    if (authSignature !== recoveryAuthSignature) {
-      recoveryAuthSignature = authSignature;
-      renderRecoveryAuth(auth, frame, button);
-    }
-    if (signature === recoverySignature) return;
-    recoverySignature = signature;
+    if (!section || !issues || !actions) return;
+    issues.replaceChildren();
     actions.replaceChildren();
-    // Owners see the host's details in place of the status frame's
-    // category-only list; other readers only the category.
-    renderRecoveryIssues(frame.issues);
-    picker('Model', frame.models, 'model');
-    picker('Preset', frame.presets, 'preset');
-    button(actions, 'Retry retained input', () => recoveryAction('retry'));
+    for (const issue of frame.issues || []) {
+      if (typeof issue.message === 'string') issues.append(el('p', 'settings-issue', issue.message));
+    }
+    if (frame.paused === true) {
+      settingsButton(actions, 'Resume queue',
+        'Check the provider again and send the messages that waited after the failed turn.',
+        () => recoveryAction('retry'));
+    }
     for (const scope of frame.histories || []) {
-      button(actions, `Recover Claude history: ${scope}`, () => {
-        if (window.confirm(`Continue ${scope} from a transcript excerpt in a new Claude conversation?`)) recoveryAction('history', scope);
-      });
+      const what = scope === 'root' ? 'this session' : scope;
+      settingsButton(actions, scope === 'root' ? 'Continue from transcript' : `Continue ${scope} from transcript`,
+        'Claude cannot resume its own conversation. Start a new one from an excerpt of the transcript; what the excerpt leaves out is lost to Claude.',
+        () => {
+          if (window.confirm(`Continue ${what} from a transcript excerpt in a new Claude conversation?`)) recoveryAction('history', scope);
+        });
     }
     for (const entry of frame.steering || []) {
-      actions.append(el('p', '', `Input requiring review: ${entry.text}`));
-      button(actions, 'Queue as new message', () => recoveryAction('input-requeue', entry.id));
-      button(actions, 'Discard reviewed input', () => {
+      actions.append(el('p', 'settings-input', `Waiting for review: ${entry.text}`));
+      settingsButton(actions, 'Queue again', 'Send this message again, as a new message.',
+        () => recoveryAction('input-requeue', entry.id));
+      settingsButton(actions, 'Discard', 'Drop this message without sending it.', () => {
         if (window.confirm('Discard this retained input?')) recoveryAction('input-discard', entry.id);
       });
     }
-    if (frame.runtime) {
-      button(actions, 'Check updates', () => recoveryAction('update'));
-      if (frame.runtime.message) actions.append(el('p', '', frame.runtime.message));
-    }
-    const provider = document.createElement('select');
-    provider.setAttribute('aria-label', 'Login provider');
-    for (const name of frame.providers || []) {
-      const option = el('option', '', name); option.value = name; provider.append(option);
-    }
-    // The owner's choice survives re-renders; otherwise follow the host.
-    const chosen = (frame.providers || []).includes(recoveryProvider) ? recoveryProvider : frame.provider;
-    if (chosen) provider.value = chosen;
-    provider.addEventListener('change', () => { recoveryProvider = provider.value; });
-    actions.append(provider);
-    button(actions, 'Sign in', () => recoveryAction('login', null, {provider: provider.value}));
+    section.hidden = !issues.children.length && !actions.children.length;
   }
-  function renderRecoveryAuth(auth, frame, button) {
+  function renderModelChoices(frame) {
+    const select = document.getElementById('settings-model');
+    if (!select) return;
+    const models = (frame.models || []).filter(model => typeof model === 'string');
+    const options = models.map(model => {
+      const option = el('option', '', model); option.value = model; return option;
+    });
+    // A current model the host no longer offers is shown, never replaced
+    // by whichever option happens to come first.
+    if (typeof frame.model === 'string' && !models.includes(frame.model)) {
+      const current = el('option', '', `${frame.model} (unavailable)`);
+      current.value = frame.model; current.disabled = true; options.unshift(current);
+    }
+    select.replaceChildren(...options);
+    select.value = typeof frame.model === 'string' ? frame.model : '';
+  }
+  function renderPresetChoices(frame) {
+    const select = document.getElementById('settings-preset');
+    if (!select) return;
+    const wanted = select.value;
+    const placeholder = el('option', '', 'Choose a preset…'); placeholder.value = '';
+    select.replaceChildren(placeholder, ...(frame.presets || []).map(name => {
+      const option = el('option', '', name); option.value = name; return option;
+    }));
+    select.value = (frame.presets || []).includes(wanted) ? wanted : '';
+  }
+  function renderAccount(frame) {
+    const section = document.getElementById('settings-account');
+    const title = document.getElementById('settings-account-title');
+    const actions = document.getElementById('settings-account-actions');
+    if (!section || !title || !actions) return;
+    actions.replaceChildren();
+    section.hidden = !frame.provider && !frame.runtime;
+    if (section.hidden) return;
+    title.textContent = frame.provider ? `Account · ${frame.provider}` : 'Account';
+    const providers = frame.providers || [];
+    // The owner's choice survives re-renders; otherwise follow the host.
+    const chosen = providers.includes(recoveryProvider) ? recoveryProvider : frame.provider;
+    let provider = null;
+    if (providers.length > 1) {
+      provider = document.createElement('select');
+      provider.className = 'sheet-input';
+      provider.title = 'Provider to sign in to';
+      provider.setAttribute('aria-label', 'Login provider');
+      for (const name of providers) {
+        const option = el('option', '', name); option.value = name; provider.append(option);
+      }
+      if (chosen) provider.value = chosen;
+      provider.addEventListener('change', () => { recoveryProvider = provider.value; });
+      actions.append(provider);
+    }
+    if (frame.provider || provider) {
+      settingsButton(actions, 'Sign in',
+        'Sign this Emacs host in to the provider, for example after its login expired.',
+        () => recoveryAction('login', null, {provider: provider ? provider.value : frame.provider}));
+    }
+    if (frame.runtime) {
+      settingsButton(actions, 'Check updates', 'Check whether a newer Claude Code runtime is available.',
+        () => recoveryAction('update'));
+      if (frame.runtime.message) actions.append(el('p', 'settings-help', frame.runtime.message));
+    }
+  }
+  function renderRecovery(frame) {
+    if (!state.owner) return;
+    recoveryFrame = frame;
+    const {auth: login, ...rest} = frame;
+    const authSignature = JSON.stringify([frame.provider, login]);
+    if (authSignature !== recoveryAuthSignature) {
+      recoveryAuthSignature = authSignature;
+      renderRecoveryAuth(frame);
+    }
+    renderModeline();
+    const signature = JSON.stringify(rest);
+    if (signature === recoverySignature) return;
+    recoverySignature = signature;
+    // Owners see the host's details in place of the status frame's
+    // category-only list; other readers only the category.
+    renderRecoveryIssues(frame.issues);
+    renderAttention(frame);
+    renderModelChoices(frame);
+    renderPresetChoices(frame);
+    renderAccount(frame);
+  }
+  function initSettings() {
+    const model = document.getElementById('settings-model');
+    const preset = document.getElementById('settings-preset');
+    const apply = document.getElementById('settings-preset-apply');
+    // Like the mode, the model applies on pick and the sheet keeps showing
+    // the current one until the host's recovery frame confirms the change.
+    model?.addEventListener('change', () => {
+      const wanted = model.value;
+      model.value = recoveryFrame?.model || '';
+      if (wanted && wanted !== recoveryFrame?.model) recoveryAction('model', wanted);
+    });
+    apply?.addEventListener('click', () => {
+      const name = preset.value;
+      if (name && window.confirm(`Apply preset ${name}? It replaces the model, tools and agents; permissions stay.`)) {
+        recoveryAction('preset', name);
+      }
+    });
+  }
+  function renderRecoveryAuth(frame) {
+    const auth = document.getElementById('recovery-auth');
+    if (!auth) return;
+    const button = (parent, text, action) => settingsButton(parent, text, text, action);
     auth.replaceChildren();
-    auth.append(el('p', '', 'Signing in changes the credentials used by this Emacs host.'));
     if (frame.auth) {
       auth.append(el('p', '', frame.auth.message || ''));
       if (frame.auth.url && /^https:\/\/(auth\.openai\.com|claude\.ai|platform\.claude\.com)\//.test(frame.auth.url)) {
@@ -379,6 +494,7 @@
     }
   }
 
+
   /* -- Status strip -------------------------------------------------- */
   // One home for session state, the way the Emacs mode line reports it,
   // instead of the same facts scattered across three corners.
@@ -388,12 +504,17 @@
     if (!modeline) return;
     modeline.replaceChildren();
     modeline.append(connection);
-    const add = (text, className) => {
-      if (text) modeline.append(el('span', className || 'ml', text));
+    const add = (text, className, title) => {
+      if (!text) return;
+      // An owner's model and mode open the settings that change them.
+      const link = Boolean(state.owner && recoveryFrame && title);
+      const node = el(link ? 'button' : 'span', link ? 'ml ml-link' : className || 'ml', text);
+      if (link) { node.type = 'button'; node.addEventListener('click', openSettings); }
+      if (title) node.title = title;
+      modeline.append(node);
     };
-    add(state.model);
-    if (state.owner && state.mode) modeline.append(sessions.modePicker());
-    else add(state.mode);
+    add(state.model, 'ml', 'Model this session uses');
+    add(state.mode, 'ml', MODES.find(([mode]) => mode === state.mode)?.[2] || 'Permission mode');
     // Plan is a mode a guest can enter from a chip, so it has to be
     // visible afterwards -- otherwise the session silently behaves
     // differently than the transcript suggests.
@@ -405,7 +526,19 @@
       bits.push(`${state.pending} queued${state.paused ? ' · paused' : ''}`);
     }
     tail.textContent = bits.join(' · ');
+    if (state.owner && recoveryFrame) {
+      const attention = needsAttention(recoveryFrame);
+      const settings = el('button', `ml settings-button${attention ? ' attention' : ''}`,
+                          attention ? 'Needs attention' : 'Settings');
+      settings.type = 'button';
+      settings.title = attention
+        ? 'Something needs your decision before the session can go on'
+        : 'Model, permissions, preset and sign-in for this session';
+      settings.addEventListener('click', openSettings);
+      modeline.append(settings);
+    }
     modeline.append(tail);
+    renderModeChoices();
   }
 
   function updateRecordElement(record, previous) {
@@ -1350,6 +1483,7 @@
   sessionBox.open = desktopSidebar.matches;
   desktopSidebar.addEventListener('change', event => { sessionBox.open = event.matches; });
   skillSearch.addEventListener('input', renderSkillChips);
+  initSettings();
   skillsButton.addEventListener('click', () => {
     sessionBox.open = commandsBox.open = true;
     skillSearch.focus();

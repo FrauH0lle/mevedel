@@ -81,8 +81,7 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .name-field { display:flex; align-items:center; gap:8px; margin-right:6px; }
 .name-field label { font-size:11px; white-space:nowrap; }
 .composer-name { width:90px; min-height:34px; background:transparent; border-color:transparent; border-bottom-color:var(--line); border-radius:0; padding:4px 6px; }
-.modeline { margin:0; font-size:11px; gap:12px; width:100%; }
-.modeline .mode-picker { border-color:transparent; background:none; padding:3px; }
+.modeline { margin:0; font-size:13px; gap:14px; width:100%; }
 .disclosure { padding:0; font-size:10px; }
 #session-box { border:0; border-radius:0; box-shadow:none; background:none; scrollbar-color:var(--rule-strong) transparent; }
 :root[data-accents="selective"] #session-box { scrollbar-color:var(--accent) transparent; }
@@ -192,7 +191,7 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
   .sheet-form { padding:20px; }
   .invite-tier { flex-wrap:wrap; }
   .invite-tier .invite-what { flex-basis:60%; }
-  .modeline { font-size:10px; gap:6px; }
+  .modeline { font-size:12px; gap:8px; }
 }
 
 /* Keep each invitation's action aligned, including when descriptions wrap. */

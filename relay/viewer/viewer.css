@@ -901,9 +901,6 @@ code, pre { font-family: var(--font-mono); }
 .empty-state p { max-width: 48ch; color: var(--muted); margin: 0; }
 .ledger:empty { padding-block: 0; }
 
-/* Operational recovery stays outside the editable composer. */
-#recovery-issues, #recovery-controls { padding: .6rem 1rem; border-top: 1px solid var(--border); }
-#recovery-issues p, #recovery-auth p { margin: .4rem 0; }
-#recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding-top: .5rem; }
-#recovery-actions label { display: flex; align-items: center; gap: .4rem; }
-#recovery-auth input { max-width: 100%; }
+/* Operational issues stay outside the editable composer. */
+#recovery-issues { padding: .6rem 1rem; border-top: 1px solid var(--border); }
+#recovery-issues p { margin: .4rem 0; }
