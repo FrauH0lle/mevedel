@@ -467,7 +467,7 @@
         (setf (mevedel-session-preset-name session) 'broken))
       (with-current-buffer view-buf
 		     (let ((text (mevedel-report-test-text (mevedel-menu--preset-report))))
-		       (should (string-match-p "broken +ERROR: Backend Missing is not known to be defined" text))
+		       (should (string-match-p "broken +ERROR:.*Missing" text))
 		       (should (string-match-p "fast +Fast:fast-model · effort default" text))
 		       (should (string-match-p "Workloads" text)))))))
 

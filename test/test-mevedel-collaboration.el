@@ -680,7 +680,7 @@
                 ((symbol-function 'display-warning) (lambda (&rest _) nil)))
         (should-not (mevedel-collaboration--safe-accepted-prompt
                      (current-buffer)))
-        (should (eq 'observer-failure stopped))))))
+		       (should-not stopped)))))
 
 (mevedel-deftest mevedel-collaboration--accepted-prompt-insertion-seams
   (:doc "publishes ordinary composer and generated turns at insertion")
@@ -696,6 +696,7 @@
               (cl-letf (((symbol-function 'mevedel-view--ensure-interactive-chat-view)
                          (lambda () nil))
                         ((symbol-function 'mevedel-session-naming-consider) #'ignore)
+				       ((symbol-function 'mevedel-readiness-assert) #'ignore)
                         ((symbol-function 'mevedel-view--session)
                          (lambda () 'session))
                         ((symbol-function 'mevedel-request-assert-target-ready)
@@ -911,7 +912,7 @@
 (mevedel-deftest mevedel-view--refuse-guest-follow-up (:quiet t)
   ,test
   (test)
-  :doc "drops a guest entry whose turn would ask in Emacs and tells the guest"
+		 :doc "retains a guest entry and attachments when the host needs recovery"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "refuse"))
            (attachment (make-temp-file "mevedel-guest-attachment-"))
@@ -936,15 +937,16 @@
                 ((symbol-function 'display-warning)
                  (lambda (_type message &rest _) (setq warned message))))
         (mevedel-view--drain-follow-up data-buf))
-      (should-not (mevedel-session-pending-follow-ups session))
-      (should-not (file-exists-p attachment))
+		    (should (mevedel-session-pending-follow-ups session))
+		    (should (file-exists-p attachment))
+		    (delete-file attachment)
       (should (equal "g1" (car notified)))
-      (should (string-search "your message was not sent" (cadr notified)))
-      (should (string-search "Happy Hare" warned))
+		    (should (string-search "your message is retained" (cadr notified)))
+		    (should-not warned)
       ;; Only the host sees the question, which can name hosts and paths.
-      (should (string-search ": Take over the lease? (y or n)" warned))
+		    (should (mevedel-recovery-blocker session))
       (should-not (string-search "lease" (cadr notified)))))
-  :doc "drops a refused guest entry instead of blocking the queue behind it"
+		 :doc "retains refused input and holds later queue entries"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "refuse"))
            notified warned)
@@ -968,14 +970,14 @@
                 ((symbol-function 'display-warning)
                  (lambda (_type message &rest _) (setq warned message))))
         (mevedel-view--drain-follow-up data-buf))
-      (should (equal '("Later") (mapcar (lambda (entry) (plist-get entry :input))
+		    (should (equal '("/compact" "Later") (mapcar (lambda (entry) (plist-get entry :input))
                                         (mevedel-session-pending-follow-ups session))))
       (should (equal "g1" (car notified)))
       ;; Errors can name hosts and paths: only the host sees the reason.
-      (should (string-search "not sent" (cadr notified)))
-      (should-not (string-search "compaction" (cadr notified)))
-      (should (string-search "Manual compaction is unavailable" warned))
-      (should (string-search "Happy Hare" warned))))
+		    (should (string-search "retained" (cadr notified)))
+		    (should-not (string-search "compaction" (cadr notified)))
+		    (should (mevedel-recovery-blocker session))
+		    (should-not warned)))
 
   :doc "keeps a guest entry queued while a turn settles or compaction runs"
   (dolist (busy '(settling compacting))

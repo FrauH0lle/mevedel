@@ -7,6 +7,9 @@
 
 ;;; Code:
 
+(autoload 'mevedel-readiness-assert "mevedel-readiness")
+(declare-function mevedel-readiness-assert "mevedel-readiness" (session))
+
 (eval-when-compile
   (require 'cl-lib))
 
@@ -38,6 +41,10 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+
+;; `mevedel-auth'
+(declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(autoload 'mevedel-auth-assert-ready "mevedel-auth")
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
@@ -2776,6 +2783,10 @@ asynchronous preparation ran is left alone instead of cleared."
           (_admission
            (progn
              (mevedel-request-assert-target-ready session)
+             (with-current-buffer mevedel--data-buffer
+               (when session (mevedel-readiness-assert session))
+               (mevedel-auth-assert-ready
+                (plist-get (mevedel-skills-request-model-policy) :backend)))
              (when (mevedel-turn-busy-p mevedel--data-buffer)
                (user-error "The session became busy before dispatch"))))
           (dropped-file-grants

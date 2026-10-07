@@ -375,6 +375,8 @@
           (with-current-buffer chat-buf
             (setq-local mevedel--session session))
           (mevedel--turn-record-lost-settlement fsm)
+          (should (eq 'lost (mevedel-session-last-outcome session)))
+          (should (equal "request" (plist-get (car (mevedel-session-recovery-issues session)) :id)))
           (let ((entry (car (mevedel-session-telemetry-pending session))))
             (should (eq 'request-settled (plist-get entry :event)))
             (should (equal "lost-1" (plist-get entry :request-id)))
@@ -443,6 +445,7 @@
             (let ((deadline (+ (float-time) 5)))
               (while (and (mevedel-turn-busy-p chat-buf) (< (float-time) deadline)) (sleep-for .002))))
           (should (mevedel-session-save-path session))
+			 (should (mevedel-session-pending-input-failure-paused session))
           (should (mevedel-session-artifacts-artifact-present-p
                        session (format "segment-%04d.chat.org"
                                        (mevedel-session-current-segment session)) t))
@@ -799,7 +802,7 @@
            `(turn (plan ,(car case)) baseline goal-failure)
            (and (eq (car case) 'error)
                 '(failure-record))
-           `(save (StopFailure ,(car case))
+			  `(pending-input-failure save (StopFailure ,(car case))
              restore pending-input-failure
              request-end goal-save goal-retry)))))
     (should-not drained)))
@@ -975,7 +978,7 @@
       (kill-buffer chat-buf)
       (kill-buffer view-buf)))
 
-  :doc "abort with no undelivered matching steering does not pause"
+		 :doc "abort pauses delivery even without undelivered matching steering"
   (let* ((chat-buf (generate-new-buffer " *mevedel-turn-input-clean*"))
          (session (mevedel-session--create))
          (request (mevedel-request--create :id "finished" :session session))
@@ -992,7 +995,7 @@
            (gptel-make-fsm :info (list :buffer chat-buf)))
           (should (equal (list other)
                          (mevedel-session-pending-steering session)))
-          (should-not
+			 (should
            (mevedel-session-pending-input-failure-paused session)))
       (kill-buffer chat-buf))))
 

@@ -319,7 +319,8 @@
                         :model 'digest-model :effort 'high
                         :max-tokens (unless (eq limit 'codex) limit)))
           result request-buffer)
-      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+		     (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
+			       ((symbol-function 'mevedel-model-resolve-workload)
                  (lambda (&rest _) (ert-fail "Frozen policy was re-resolved")))
                 ((symbol-function 'mevedel-model-usable-input-tokens)
                  (lambda (resolved)

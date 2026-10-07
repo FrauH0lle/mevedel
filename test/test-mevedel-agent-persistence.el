@@ -205,10 +205,9 @@
                 (mevedel-agent-persistence--decode-local
                  'gptel-model 'read))))
   :doc "classifies unknown registered values as invalid persisted data"
-  (should-error
-   (mevedel-agent-persistence--decode-local
-    'gptel-backend "Missing Backend")
-   :type 'mevedel-agent-persistence-invalid-data)
+		 (should (equal "Missing Backend"
+				(gptel-backend-name (mevedel-agent-persistence--decode-local
+						     'gptel-backend "Missing Backend"))))
   (dolist (path '(("unknown-category" "Read") ("mevedel" "MissingBuiltinTool")))
     (should-error (mevedel-agent-persistence--decode-local 'gptel-tools (list path))
                   :type 'mevedel-agent-persistence-invalid-data)))
@@ -515,7 +514,7 @@
               (mapcar #'mevedel-reminder-type
                       (mevedel-agent-reminders restored-agent))))))
 
-  :doc "drops identities whose frozen backend or tool is no longer known"
+		 :doc "preserves missing provider identities while rejecting missing tools"
   (let* ((source (mevedel-agent-persistence-test--session))
          (record
           (mevedel-agent-record--create
@@ -532,7 +531,7 @@
                        :request-locals)))
       (setcdr (assq 'gptel-backend locals) "Missing Backend")
       (mevedel-test--with-captured-diagnostics nil
-        (should-not
+							      (should
          (mevedel-agent-persistence-deserialize-registry raw))))
     (let* ((raw (mevedel-agent-persistence-serialize-registry source))
            (locals

@@ -69,7 +69,10 @@ Fail when BODY leaves a timer the fixture does not own."
                (setf (mevedel-session-permission-mode session) 'full-auto)
                (mevedel-session-set-root-buffer session buffer)
                (mevedel-session-artifacts-ensure-files session buffer)
-               (let ((request (mevedel-request-begin session))) ,@body))
+               (let ((request (mevedel-request-begin session)))
+                 ;; These fixtures exercise turn engines; provider readiness has
+                 ;; its own real HTTP/CLI and pre-commit lifecycle tests.
+                 (cl-letf (((symbol-function 'mevedel-readiness-assert) #'ignore)) ,@body)))
            (setq done t))
        (let ((leaked (mevedel-engine-test--release session buffer timers)))
          (delete-directory root t)

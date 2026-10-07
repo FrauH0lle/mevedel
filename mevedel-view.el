@@ -1734,6 +1734,11 @@ the editable composer signal instead of settling queued interactions."
 (defun mevedel-view--status-fragments (model)
   "Return status fragments for MODEL."
   (let (fragments)
+    (when-let* ((session (plist-get model :session))
+                (issues (mevedel-session-recovery-issues session)))
+      (push (list :namespace 'status :id 'recovery :priority 120
+                  :body (mapconcat (lambda (issue) (plist-get issue :message)) issues "\n"))
+            fragments))
     (when-let* ((body (plist-get model :task-body)))
       (let ((fragment (list :namespace 'status
                             :id 'tasks

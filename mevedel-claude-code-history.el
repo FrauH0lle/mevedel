@@ -51,7 +51,9 @@ excerpt recovery.  Divergence observed during the turn is preserved."
                    (eq 'error (plist-get info :mevedel-acp-outcome)))
           (setf (mevedel-engine-info owner)
                 (plist-put info :error
-                           (concat (plist-get info :error)
+                           (concat (if (listp (plist-get info :error))
+                                       (plist-get (plist-get info :error) :message)
+                                     (plist-get info :error))
                                    "; if native history is unavailable, use M-x mevedel-claude-code-recover-history to continue from the retained transcript")))))
     (unless (eq 'diverged (plist-get record :state))
       (plist-put record :state

@@ -346,6 +346,8 @@ publication."
                :permission-rules nil
                :resource-grants nil
                :preset-name nil
+               :recovery-issues nil :pending-follow-ups nil :pending-steering nil
+               :pending-input-next-id 0 :pending-input-paused nil :pending-input-failure-paused nil
                :model-provider nil
                :external-conversations nil
                :reasoning-effort nil

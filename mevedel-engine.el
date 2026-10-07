@@ -15,6 +15,10 @@
 (declare-function mevedel-agent-invocation-require-path "mevedel-agents" (invocation))
 (defvar mevedel--agent-invocation)
 
+;; `mevedel-auth'
+(declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(autoload 'mevedel-auth-assert-ready "mevedel-auth")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
 (autoload 'mevedel-session-artifacts-content-start "mevedel-session-artifacts")
@@ -140,11 +144,12 @@ events and normalized terminal info.  BEFORE-TOOL checks each admitted call;
 BOUNDARY checks each completed tool batch and may return reminder text.")
 
 (cl-defmethod mevedel-engine-request-text
-    ((_backend gptel-backend) prompt system callback &optional stream context)
+  ((_backend gptel-backend) prompt system callback &optional stream context)
   (when gptel-tools (error "Isolated text requests cannot use tools"))
   (let ((buffer (current-buffer)))
+    (mevedel-auth-assert-ready gptel-backend)
     (gptel-request prompt :buffer buffer :system system :stream stream
-                   :transforms nil :context context :callback callback)
+		   :transforms nil :context context :callback callback)
     (lambda () (when (buffer-live-p buffer) (gptel-abort buffer)))))
 
 (provide 'mevedel-engine)

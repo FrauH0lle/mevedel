@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-recovery)
+
 ;; `setf' on a slot of a struct defined elsewhere needs that
 ;; `cl-defstruct' at compile time: `declare-function' supplies the
 ;; accessor but not the setter, and without the expander the form
@@ -518,6 +520,13 @@
                      ;; the publication, local target included: a direct
                      ;; write would leave resume unable to see it.
                      (mevedel-session-codec-portable-authority-p session)))
+          (when (eq status 'error)
+            (let ((detail (plist-get event :error-details)))
+              (mevedel-recovery-report
+               session (concat "agent:" (mevedel-agent-invocation-agent-id invocation))
+               (mevedel-recovery-category (and (stringp detail) detail))
+               (format "Agent %s failed; inspect its transcript before continuing"
+                       (mevedel-agent-invocation-agent-id invocation)) nil)))
           (let ((mevedel-agent-runtime--defer-terminal-publication-p
                  terminal-publication-p))
             (mevedel-agent-runtime--finalize invocation status))

@@ -44,14 +44,15 @@
        (with-current-buffer view-buf
          (setq-local mevedel--session session))
        (unwind-protect
-           (progn ,@body)
+          (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)) ,@body)
          (when-let* ((cockpit
                       (get-buffer mevedel-pending-inputs-buffer-name)))
            ;; Killing the cockpit resumes delivery, and a real drain
            ;; would leave a timer behind after the case has ended.
            (cl-letf (((symbol-function
                        'mevedel-view--schedule-late-follow-up-drain)
-                      #'ignore))
+                     #'ignore)
+                    ((symbol-function 'mevedel-recovery-save) #'ignore))
              (kill-buffer cockpit)))))))
 
 (defun mevedel-pending-inputs-test--replace-composer (view text)

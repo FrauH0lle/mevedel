@@ -3,9 +3,14 @@
 ;;; Commentary:
 ;; Owns Claude-specific login checks, local launch isolation, and ACP metadata.
 ;; Subscription credentials remain entirely inside the installed Claude CLI.
-;; This module never reads credential files or chooses an API fallback.
+;; Credentials stay in the native CLI; shared policy owns explicit fallbacks.
 
 ;;; Code:
+
+(autoload 'mevedel-claude-code-maintenance-check "mevedel-claude-code-maintenance")
+(autoload 'mevedel-claude-code-maintenance-state "mevedel-claude-code-maintenance")
+(declare-function mevedel-claude-code-maintenance-check "mevedel-claude-code-maintenance" (&optional force))
+(declare-function mevedel-claude-code-maintenance-state "mevedel-claude-code-maintenance" ())
 
 (require 'acp)
 (require 'cl-lib)
@@ -164,12 +169,49 @@ Other model IDs accept configured symbols pending capability discovery."
       (user-error "Claude selected %s instead of %s; select an available model and retry" current model))
     efforts))
 
-(defun mevedel-claude-code--prepare-session (backend model effort buffer connection session ready)
+(cl-defun mevedel-claude-code--prepare-session (backend model effort buffer connection session ready)
   "Discover MODEL on BACKEND and apply EFFORT before CONNECTION is ready.
 SESSION contains the initial capabilities.  READY receives the acknowledged
-metadata.  An unsupported selection uses Claude's default and resets BUFFER's
-selection if it still matches this launch.  A permission mode inherited from
+metadata.  An unavailable selection uses the configured fallback and updates
+BUFFER when it owns the root session.  A permission mode inherited from
 the user's Claude settings is reset to `default': mevedel owns permissions."
+  (let* ((row (cl-find "model" (alist-get 'configOptions session)
+                       :key (lambda (item) (alist-get 'category item)) :test #'equal))
+         (available (mapcar (lambda (item) (alist-get 'value item)) (alist-get 'options row)))
+         recovered)
+    (unless (and available (cl-every #'stringp available)
+                 (stringp (alist-get 'currentValue row)))
+      (user-error "Claude did not report model capabilities; update the connection adapter and retry"))
+    (unless (member model available)
+      (let* ((owner (and (buffer-live-p buffer) (buffer-local-value 'mevedel--session buffer)))
+             (provider (mevedel-model-recover-provider
+                        (format "%s:%s" (gptel-backend-name backend) model) owner t))
+             (replacement (and provider (gptel--model-name (plist-get provider :model)))))
+        (unless (and provider (eq backend (plist-get provider :backend)) (member replacement available))
+          (when (and owner provider (eq buffer (mevedel-session-root-buffer owner)))
+            (mevedel-model-set-session-provider owner provider buffer))
+          (user-error "Claude model is unavailable; select an available provider before continuing"))
+        (setq model replacement recovered t)
+        (when (and owner (eq buffer (mevedel-session-root-buffer owner)))
+          (mevedel-model-set-session-provider owner provider buffer))))
+    (unless (equal model (alist-get 'currentValue row))
+      (unless recovered
+        (user-error "Claude selected %s instead of %s; select an available model and retry"
+                    (alist-get 'currentValue row) model))
+      (mevedel-acp--send
+       connection
+       (acp-make-session-set-config-option-request
+        :session-id (alist-get 'sessionId session) :config-id (alist-get 'id row) :value model)
+       (lambda (response)
+         (if (equal model
+                    (alist-get 'currentValue
+                               (cl-find "model" (alist-get 'configOptions response)
+                                        :key (lambda (item) (alist-get 'category item)) :test #'equal)))
+             (progn
+               (setf (alist-get 'configOptions session) (alist-get 'configOptions response))
+               (mevedel-claude-code--prepare-session backend model effort buffer connection session ready))
+           (mevedel-acp--fail connection "Claude did not acknowledge the fallback model"))))
+      (cl-return-from mevedel-claude-code--prepare-session nil)))
   (let* ((option (mevedel-claude-code--check-model backend model session))
          (mode (cl-find "mode" (alist-get 'configOptions session)
                         :key (lambda (row) (alist-get 'category row)) :test #'equal))
@@ -189,6 +231,8 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
                      (setq-local gptel-reasoning-effort nil)
                      (when (and (bound-and-true-p mevedel--session)
                                 (eq buffer (mevedel-session-root-buffer mevedel--session)))
+                       (mevedel-recovery-report mevedel--session "effort" 'configuration
+                                                "Claude reset unsupported reasoning effort to its default" nil)
                        (mevedel-model-set-session-effort mevedel--session nil buffer)))))
                (message "mevedel: Claude %s does not support effort %s; using its default" model effort))
              (funcall ready session)))
@@ -443,52 +487,9 @@ Return the setup buffer."
 
 ;;;###autoload
 (defun mevedel-claude-code-install-adapter ()
-  "Offer to install the pinned ACP adapter in the configured local directory.
-Run npm asynchronously with output in a compilation buffer.  Return the
-installation process, or nil when the user declines.  Never install on send."
+  "Check and install stable Claude runtime updates asynchronously."
   (interactive)
-  (when-let* ((process (get-process "mevedel-claude-install"))
-              ((process-live-p process)))
-    (user-error "An adapter installation is already running"))
-  (when mevedel-claude-code-adapter-executable
-    (user-error "Clear mevedel-claude-code-adapter-executable to use the managed installation"))
-  (when (file-remote-p mevedel-claude-code-directory)
-    (user-error "Claude Code state must be on the local machine"))
-  (let* ((default-directory temporary-file-directory)
-         (directory (expand-file-name mevedel-claude-code-directory))
-         (package (concat "@agentclientprotocol/claude-agent-acp@" mevedel-claude-code--adapter-version))
-         (npm (or (executable-find "npm") (user-error "Install Node.js 22 or newer with npm first"))))
-    (let ((node (or (executable-find "node") (user-error "Install Node.js 22 or newer first"))))
-      (unless (mevedel-claude-code--version
-               (mevedel-claude-code--wait
-                (lambda (ready failure)
-                  (mevedel-claude-code--command-output-async node '("--version") ready failure)))
-               "22.0.0")
-        (user-error "Node.js 22.0.0 or newer is required")))
-    (when (yes-or-no-p (format "Install %s and its dependencies with npm in %s? " package directory))
-      (let ((buffer (get-buffer-create "*mevedel Claude adapter installation*"))
-            (process-environment (copy-sequence process-environment)))
-        (dolist (name mevedel-claude-code--api-environment) (setenv name nil))
-        (make-directory directory t)
-        (with-current-buffer buffer
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (insert (format "Installing %s in %s\n\n" package directory))
-            (compilation-mode)))
-        (display-buffer buffer)
-        (make-process
-         :name "mevedel-claude-install" :buffer buffer :connection-type 'pipe
-         :command (list npm "install" "--prefix" directory "--save-exact" "--no-audit" "--no-fund" package)
-         :sentinel
-         (lambda (process _event)
-           (when (memq (process-status process) '(exit signal))
-             (when (buffer-live-p (process-buffer process))
-               (with-current-buffer (process-buffer process)
-                 (let ((inhibit-read-only t))
-                   (goto-char (point-max))
-                   (insert (if (and (eq 'exit (process-status process)) (zerop (process-exit-status process)))
-                               "\nInstallation complete. Run M-x mevedel-claude-code-setup to refresh readiness.\n"
-                             "\nInstallation failed. Review this output, fix the reported problem, and retry setup.\n"))))))))))))
+  (mevedel-claude-code-maintenance-check t))
 
 (defun mevedel-claude-code--observe (owner notification)
   "Observe native usage and context receipts for admitted OWNER."
@@ -636,15 +637,21 @@ Return the generic ACP launch plist; no model request is made here."
     (user-error "Claude Code does not support reasoning effort %S" effort))
   (when (file-remote-p mevedel-claude-code-directory)
     (user-error "Claude Code state must be on the local machine"))
-  (let* ((directory (expand-file-name mevedel-claude-code-directory))
+  (mevedel-claude-code-maintenance-check)
+  (let* ((runtime (mevedel-claude-code-maintenance-state))
+         (directory (expand-file-name mevedel-claude-code-directory))
          (managed (file-name-concat directory "node_modules" ".bin" "claude-agent-acp"))
-         (cli (or (executable-find mevedel-claude-code-executable)
+         (cli (or (and (plist-get runtime :cli) (file-executable-p (plist-get runtime :cli))
+                       (plist-get runtime :cli))
+                  (executable-find mevedel-claude-code-executable)
                   (user-error "Install Claude Code and run `claude auth login'")))
          (adapter
           (or (and mevedel-claude-code-adapter-executable
                    (executable-find mevedel-claude-code-adapter-executable))
               (and (not mevedel-claude-code-adapter-executable)
-                   (or (and (file-executable-p managed) managed)
+                   (or (and (plist-get runtime :adapter) (file-executable-p (plist-get runtime :adapter))
+                            (plist-get runtime :adapter))
+                       (and (file-executable-p managed) managed)
                        (executable-find "claude-agent-acp")))
               (user-error "Run M-x mevedel-claude-code-setup to install the Claude connection adapter")))
          (process-environment (copy-sequence process-environment))

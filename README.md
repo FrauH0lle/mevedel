@@ -145,11 +145,13 @@ and acp.el 0.15.2+. Install the unmodified Claude CLI using its
 [official instructions](https://code.claude.com/docs/en/setup), then run
 `claude auth login` in a terminal with your Claude Pro or Max account.
 
-Choose **Install/update adapter** in the setup screen to install the pinned
-connection adapter and its dependencies. Mevedel asks before running npm, shows
-installation output in Emacs, and keeps the editor responsive. Refresh the
-setup check afterward. Installing dependencies requires npm and network access;
-ordinary chat turns never install packages.
+Mevedel maintains the stable native CLI and managed ACP adapter automatically.
+It checks at first Claude use and periodically afterward, stages adapter releases,
+and validates versions and the ACP handshake before selecting the new runtime.
+Active invocations keep their selected executable paths; failed checks retain the
+previous working runtime. **Install/update adapter** requests an immediate check.
+Set `mevedel-claude-code-auto-update` to nil to disable automatic checks.
+Externally managed CLI binaries and custom adapters remain host-managed.
 
 Start a mevedel session and select `Claude Code:sonnet`, `Claude Code:opus`,
 `Claude Code:fable`, or `Claude Code:haiku` in the ordinary model menu. The
@@ -162,8 +164,9 @@ Session startup adds Claude's reported models to the picker and refreshes the
 selected model's effort choices. Sonnet, Opus and Fable offer documented effort
 choices before connection; Haiku has no effort control. Startup applies the
 selected level before the first prompt, falling back to Claude's default if
-unsupported. The four aliases stay available; unavailable configured models
-fail before prompt dispatch instead of silently falling back.
+unsupported. Disappeared saved selections use `mevedel-model-fallback-provider`,
+or the host default when that option is nil, and show a notice. If that fallback
+is unavailable, history stays readable while execution waits for a model choice.
 
 Use mevedel's model menu for model and effort, and its tools menu for tool
 selection. The gptel HTTP request-controls menu is unavailable in Claude Code
@@ -188,6 +191,15 @@ neutral conversation directory used for resume. Set
 `mevedel-claude-code-adapter-executable` only to use an independently installed
 adapter; setup then directs you to that setting instead of installing an unused
 managed copy. Claude runs on the Emacs host, including for remote project tools.
+In the collaboration browser, an owner can use **Recovery** to select a model or
+replacement preset, sign in, recover native history, and request an update check.
+Codex tokens refresh asynchronously; rejected renewal requires device login.
+Claude login uses the CLI's URL and full authorization code and verifies the
+subscription afterward. Credentials stay on the host; signing in affects all
+sessions using that credential store. Unsent input and attachments remain queued.
+Failed submitted turns require explicit continuation and are never replayed.
+Interrupted queued delivery requires review before discarding it or explicitly
+queuing it as a new message.
 See [session lifecycle and current restrictions](docs/sessions.md) before using
 history operations such as Fork or Rewind with this provider.
 

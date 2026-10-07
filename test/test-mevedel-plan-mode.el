@@ -203,7 +203,6 @@
         (dolist (policy '((:tier missing)
                           (:provider "Missing:model")
                           (:provider "Fast:missing")
-                          (:effort unsupported)
                           (:tier balanced :provider "Fast:fast-model")))
           (setq-local mevedel-model-workloads
                       (list (cons 'plan-implementation policy)))

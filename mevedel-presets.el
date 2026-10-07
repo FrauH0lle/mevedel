@@ -13,6 +13,8 @@
 
 ;;; Code:
 
+(require 'mevedel-recovery)
+
 (require 'cl-lib)
 (require 'mevedel-structs)
 (require 'mevedel-turn)
@@ -375,10 +377,15 @@ without a cycle check of its own."
      name (lambda (symbol value)
             (set (make-local-variable symbol) value)))))
 
+
 (defun mevedel-preset-restore-session (session &optional buffer)
   "Reapply SESSION's selected preset in BUFFER."
   (when-let* ((name (mevedel-session-preset-name session)))
-    (mevedel-preset-apply name buffer)))
+    (if (assq name mevedel-preset--registry)
+        (progn (mevedel-preset-apply name buffer)
+               (mevedel-recovery-clear session "preset"))
+      (mevedel-recovery-report session "preset" 'configuration
+                               (format "Preset %s is unavailable; select a replacement" name) t))))
 
 (defmacro mevedel-with-preset (name &rest body)
   "Run BODY with mevedel preset NAME applied for this request only."

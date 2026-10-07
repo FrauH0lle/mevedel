@@ -38,6 +38,10 @@
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
 
+;; `mevedel-auth'
+(declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(autoload 'mevedel-auth-assert-ready "mevedel-auth")
+
 ;; `mevedel-buddy-note'
 (declare-function mevedel-buddy-note-capture-markers "mevedel-buddy-note" (buffer-names))
 (declare-function mevedel-buddy-note-release-markers "mevedel-buddy-note" ())
@@ -733,25 +737,26 @@ started by the idle timer, which an explicit request may preempt."
                        (finish nil)
                        (error "Buddy tool-round limit exceeded"))
                      nil))
-                (gptel-request
-                 (concat payload (mevedel-buddy-note-serialize))
-                 :buffer request-buffer
-                 :fsm (mevedel-buddy--request-fsm #'finish)
-                 ;; Follow the user's streaming setting rather than forcing it
-                 ;; off.  Buddy has no use for streamed prose, but some
-                 ;; providers reject a request with `stream' false outright.
-                 :stream stream
-                 :transforms nil
-                 :system system
-                 :callback
-                 (lambda (response _info)
-                   (when (eq (mevedel-buddy--response-action response)
-                             'tool-round)
-                     (setq rounds (1+ rounds))
-                     (when (> rounds mevedel-buddy-max-iterations)
-                       ;; Aborting reaches the machine's ABRT state, which
-                       ;; settles the review without retiring its changes.
-                       (ignore-errors (gptel-abort request-buffer)))))))))
+                (progn (mevedel-auth-assert-ready gptel-backend)
+                       (gptel-request
+			(concat payload (mevedel-buddy-note-serialize))
+			:buffer request-buffer
+			:fsm (mevedel-buddy--request-fsm #'finish)
+			;; Follow the user's streaming setting rather than forcing it
+			;; off.  Buddy has no use for streamed prose, but some
+			;; providers reject a request with `stream' false outright.
+			:stream stream
+			:transforms nil
+			:system system
+			:callback
+			(lambda (response _info)
+			  (when (eq (mevedel-buddy--response-action response)
+				    'tool-round)
+			    (setq rounds (1+ rounds))
+			    (when (> rounds mevedel-buddy-max-iterations)
+			      ;; Aborting reaches the machine's ABRT state, which
+			      ;; settles the review without retiring its changes.
+			      (ignore-errors (gptel-abort request-buffer))))))))))
         (error (finish nil))))))
 
 (defun mevedel-buddy--workspace ()

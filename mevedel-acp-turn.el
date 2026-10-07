@@ -265,7 +265,10 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                          (setq known (plist-put known (pop tokens) (pop tokens))))
                        (setq info (plist-put info :tokens-full known))))
                    (when-let* ((message (plist-get outcome :message)))
-                     (setq info (plist-put info :error message)))
+                     (setq info (plist-put info :error
+                                           (if (plist-get outcome :code)
+                                               (list :message message :code (plist-get outcome :code))
+                                             message))))
                    (setf (mevedel-engine-info request) info)
                    (when terminal
                      (condition-case err

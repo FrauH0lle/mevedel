@@ -685,6 +685,11 @@ room, and follows a rename, including an automatic title."
     (list :t "status"
           :name (when-let* ((session (plist-get room :session)))
                   (mevedel-session-name session))
+          :issues (vconcat (when-let* ((session (plist-get room :session)))
+                             (mevedel-session-recovery-issues session)))
+          :outcome (when-let* ((session (plist-get room :session))
+                               (outcome (mevedel-session-last-outcome session)))
+                     (symbol-name outcome))
           :busy (if busy t :json-false)
           :mode (when-let* ((mode (ignore-errors
                                     (mevedel-permission-mode-effective
@@ -1149,15 +1154,13 @@ Runs from a buffer-local hook, so the current buffer names the room."
   nil)
 
 (defun mevedel-collaboration--observer-failure (room)
-  "Stop ROOM after an observer failure without affecting the request."
+  "Keep ROOM and its last good snapshot after a projection failure."
   (when room
     (condition-case nil
-        (mevedel-collaboration--stop-internal room 'observer-failure)
-      (error nil)))
-  (condition-case nil
-      (display-warning
-       'mevedel "Live collaboration stopped after an observer failure" :warning)
-    (error nil)))
+        (mevedel-collaboration--broadcast
+         room (list :t "notice" :message
+                    "Live updates failed. Reconnect to resynchronize; the host request is still running."))
+      (error nil))))
 
 (defun mevedel-collaboration--safe-post-response (&rest _positions)
   "Schedule response publication without signaling into gptel.

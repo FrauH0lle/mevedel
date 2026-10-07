@@ -89,6 +89,7 @@
   (dolist (route '(session preset workload directive))
     (mevedel-engine-test--with-session
       (mevedel-request-end)
+		    (setq-local mevedel-model-workloads nil)
       (let* ((gptel--known-backends nil)
              (gptel--known-presets (copy-tree gptel--known-presets))
              (mevedel-preset--registry (copy-tree mevedel-preset--registry))
@@ -178,7 +179,7 @@
                 (should-not (string-search "FORBIDDEN MODEL PROMPT" (buffer-string)))
                 (let ((error (plist-get (mevedel-engine-info owner) :error)))
                   (should (string-search "unavailable" error))
-                  (should (string-search "select a listed model and retry" error))
+					(should (string-search "select an available provider before continuing" error))
                   (when (eq route 'directive) (should (equal error directive-error))))
                 (should-not mevedel--current-request)
                 ;; Selection-time lookups accept the ID without adding it to

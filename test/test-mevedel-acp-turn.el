@@ -222,7 +222,7 @@
       (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
     (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
     (should (string-search "process"
-                           (plist-get (mevedel-engine-info request) :error)))
+					 (plist-get (plist-get (mevedel-engine-info request) :error) :message)))
     (should-not mevedel--current-request))
 
   :doc "Goal pause reaches the native batch hook and settles as a successful turn"

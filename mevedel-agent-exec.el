@@ -30,6 +30,10 @@
 (require 'mevedel-compact-estimation)
 (require 'mevedel-models)
 
+;; `mevedel-auth'
+(declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(autoload 'mevedel-auth-assert-ready "mevedel-auth")
+
 ;; `mevedel-claude-code-agent'
 (declare-function mevedel-claude-code-agent-run
                   "mevedel-claude-code-agent" (invocation callback))
@@ -417,7 +421,7 @@ MODEL-POLICY may supply a tuple already validated before spawn admission."
 ;;; Task runner
 
 (cl-defun mevedel-agent-exec-run (main-cb agent-type description
-                                        invocation agent-buffer)
+                                          invocation agent-buffer)
   "Dispatch a sub-agent task and route its final response to MAIN-CB.
 
 AGENT-TYPE is the registry key (e.g. `\"explorer\"', `\"verifier\"').
@@ -450,6 +454,24 @@ Returns the native FSM or external invocation handle."
          (mevedel-agent-invocation-frozen-configuration invocation)))
     (unless (mevedel-agent-configuration-p frozen)
       (error "Agent request configuration is not frozen"))
+    (setq frozen (copy-mevedel-agent-configuration frozen))
+    (setf (mevedel-agent-invocation-frozen-configuration invocation) frozen)
+    (when (alist-get 'gptel-backend (mevedel-agent-configuration-request-locals frozen))
+      (let* ((locals (copy-tree (mevedel-agent-configuration-request-locals frozen)))
+             (backend (alist-get 'gptel-backend locals))
+             (model (alist-get 'gptel-model locals))
+             (selector (format "%s:%s" (gptel-backend-name backend)
+                               (gptel--model-name model)))
+             (provider (mevedel-model-recover-provider
+			selector (mevedel-agent-invocation-parent-session invocation))))
+	(unless provider (user-error "Agent provider is unavailable; select a fallback"))
+	(setf (alist-get 'gptel-backend locals) (plist-get provider :backend)
+              (alist-get 'gptel-model locals) (plist-get provider :model))
+	(condition-case nil
+            (mevedel-model-validate-effort (plist-get provider :model)
+                                           (alist-get 'gptel-reasoning-effort locals))
+          (user-error (setf (alist-get 'gptel-reasoning-effort locals) nil)))
+	(setf (mevedel-agent-configuration-request-locals frozen) locals)))
     (when (mevedel-engine-external-p
            (alist-get 'gptel-backend (mevedel-agent-configuration-request-locals frozen)))
       (cl-return-from mevedel-agent-exec-run
@@ -486,14 +508,15 @@ Returns the native FSM or external invocation handle."
       (mevedel-agent-conversation-configure invocation agent-buffer)
       (with-current-buffer agent-buffer
         (goto-char (point-max))
+        (mevedel-auth-assert-ready gptel-backend)
         (gptel-request nil
-          :buffer agent-buffer
-          :fsm fsm
-          :stream gptel-stream
-          :callback wrapped
-          :system gptel-system-prompt
-          :transforms (list #'gptel--transform-add-context
-                            #'mevedel-reminders--agent-transform)))
+                       :buffer agent-buffer
+                       :fsm fsm
+                       :stream gptel-stream
+                       :callback wrapped
+                       :system gptel-system-prompt
+                       :transforms (list #'gptel--transform-add-context
+					 #'mevedel-reminders--agent-transform)))
       (let ((req-info (gptel-fsm-info fsm)))
         ;; `gptel-request' replaces the FSM info plist wholesale, so
         ;; every mevedel key must be installed on the plist it built.

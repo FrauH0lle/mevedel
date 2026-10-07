@@ -303,8 +303,7 @@ succeed after silently losing an addressable agent."
     (condition-case nil
         (gptel-get-backend encoded)
       (user-error
-       (mevedel-agent-persistence--invalid
-        "Unknown persisted agent backend: %s" encoded))))
+       (gptel--make-backend :name encoded))))
    ((eq symbol 'gptel-tools)
     (unless (proper-list-p encoded)
       (mevedel-agent-persistence--invalid "Invalid persisted agent tools"))

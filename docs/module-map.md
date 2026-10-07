@@ -199,6 +199,11 @@ Prompt / presets / agents
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Turn engines (Claude Code through ACP and MCP)
+  mevedel-recovery.el         durable operational issues and unsubmitted input DTOs
+  mevedel-auth.el             asynchronous credential renewal and owner login challenges
+  mevedel-readiness.el        pre-commit provider checks and recovery wakeups
+  mevedel-collaboration-recovery.el owner-only browser recovery actions and state
+  mevedel-claude-code-maintenance.el staged stable updates, validation, retention and rollback
   mevedel-engine.el           shared turn-context access for requests and native gptel FSMs
   mevedel-acp.el              ACP conversation startup, prompt, cancellation and process lifecycle
   mevedel-acp-text.el         isolated streamed background requests with buffer-owned teardown

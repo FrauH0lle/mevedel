@@ -702,14 +702,14 @@
               (should (= 42 (plist-get outcome :usage)))))
         (kill-buffer data))))
 
-  :doc "rejects invalid Goal review policy without dispatch or verifier fallback"
+  :doc "rejects missing Goal review provider when the configured fallback is also missing"
   (with-temp-buffer
     (setq-local mevedel--session (mevedel-session--create :name "goal")
                 mevedel--current-request
                 (mevedel-request--create :session mevedel--session)
                 mevedel-model-workloads
                 '((goal-review :provider "Missing:model")))
-    (let (outcome)
+    (let ((mevedel-model-fallback-provider "Missing:fallback") outcome)
       (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
                  (lambda (&rest _args) (ert-fail "Unexpected verifier dispatch"))))
         (mevedel-review-verify "Check completion"

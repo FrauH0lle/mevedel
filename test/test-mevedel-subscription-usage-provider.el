@@ -98,7 +98,8 @@
     (should (string-match-p "Select one" (cadr result))))
   :doc "authentication failures are actionable and never echo credentials"
   (let (result)
-    (cl-letf (((symbol-function 'gptel--openai-oauth-header)
+		   (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
+			     ((symbol-function 'gptel--openai-oauth-header)
                (lambda (_) (error "Bearer SECRET"))))
       (funcall (mevedel-subscription-usage-provider-fetch
                 (gptel--make-openai-oauth :name "Other name")
@@ -123,7 +124,8 @@
          (url (format "http://127.0.0.1:%s/usage" (process-contact server :service)))
          timer response cancel results)
     (unwind-protect
-        (cl-letf (((symbol-function 'gptel--openai-oauth-header)
+		       (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
+				 ((symbol-function 'gptel--openai-oauth-header)
                    (lambda (_) (should (eq backend gptel-backend))
                      '(("Authorization" . "Bearer test") ("ChatGPT-Account-Id" . "chosen"))))
                   ((symbol-function 'url-retrieve)

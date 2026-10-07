@@ -47,7 +47,7 @@ secret's length alone tells the viewer which one it holds.
 
 The owner link exists for the case the other two do not cover: the host is
 not at the keyboard and something needs granting. It is full control plus
-exactly two authorities, both delivered as their own typed frames rather
+the following authorities, delivered as typed frames rather
 than through the command allowlist:
 
 - `set-mode` changes the session permission mode, including to `full-auto`.
@@ -65,6 +65,14 @@ than through the command allowlist:
   room's owner-link guests. Approving someone else's request is no new
   authority for an owner, who can create a session outright. The sheet
   says which of the two it is doing before the guest presses anything.
+
+- `recovery` exposes model and registered preset selection, native-history
+  recovery, retained-input retry, reviewed input requeue/discard, provider login and
+  runtime update checks. Login challenges go only to owner peers. Tokens and
+  subprocess output never enter shared transcript or recovery state. Signing in
+  changes host-wide provider credentials; cancelling discards the challenge.
+  Model/preset/history/input changes require idle turns and current session
+  mutation authority. Preset replacement preserves permission and sandbox modes.
 
 Owner authority is never granted alone: the owner link contains the write
 token, so a peer claiming the owner token without it is a forgery and is
@@ -185,7 +193,8 @@ session gets the default chat preset first and the picked model second, because
 a preset may name a model of its own that would otherwise replace the guest's
 choice. Only the lead model changes: the preset's model tiers and workloads,
 and so its agents, stay as configured. The choice is stored like `/model`'s and
-survives resume. Picking a preset stays host-only, because a preset carries
+survives resume. The owner Recovery panel also permits registered preset replacement; it preserves
+permission and sandbox modes because a preset carries
 tools, agents and arbitrary settings, not just a model. An approval prompt
 shows the requested model, or `default`.
 
@@ -248,16 +257,18 @@ signals instead:
 
 - a frame is refused to its sender with a notice, "This needs a decision in
   Emacs on the host first", and the room stays up;
-- a queued message is dropped with its attachments, as on a retraction; its
-  sender gets the same notice, and the host a warning naming the guest.
+- an unsent queued message and its attachments are retained, with a blocking
+  issue and a notice to the sender. Repairing its blocker resumes eligible input.
 
-Either way the host's warning quotes the question; guests see only the notice,
-since prompts can name hosts and paths.
-
-A queued message the host refuses for another reason, such as `/compact` in a
-Claude session, is dropped the same way rather than blocking the queue. Its
-sender is told it was not sent, with the reason when it is a user-facing
-refusal, and the host sees the error.
+Host-only questions expose a generic notice; user-facing refusals retain their
+safe explanation. Operational issues are visible to every conversation reader.
+Owners can choose a replacement provider or preset, complete provider login,
+recover a root or child native history, or explicitly retry retained input.
+Submitted failures and interruptions pause delivery until the owner continues;
+undelivered steering must be reviewed first. Recovery never resends a submitted
+prompt. Queue acceptance, removal and pause state are persisted with the session.
+Projection failures preserve the room and last good snapshot, showing a reconnect
+notice instead of stopping the host request.
 
 Later steps of a turn run from timers and process callbacks, outside any
 binding. An Emacs daemon without a client frame reads the minibuffer on its

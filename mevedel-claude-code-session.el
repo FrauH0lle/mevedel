@@ -106,7 +106,10 @@ This command does not start a model request or resume a paused Goal."
                    (or (equal scope "root")
                        (assoc scope (mevedel-session-agent-registry session))))
         (user-error "No retained Claude conversation at %s" scope))
-      (mevedel-claude-code-release-history session scope))))
+      (mevedel-claude-code-release-history session scope)
+      (mevedel-recovery-clear session "request")
+      (mevedel-recovery-clear session "input")
+      (mevedel-recovery-save session))))
 
 ;;;###autoload
 (defun mevedel-claude-code-send (&optional model-input)
