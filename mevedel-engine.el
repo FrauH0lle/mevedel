@@ -11,6 +11,10 @@
 (require 'gptel-request)
 (require 'mevedel-structs)
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-require-path "mevedel-agents" (invocation))
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
 (autoload 'mevedel-session-artifacts-content-start "mevedel-session-artifacts")
@@ -77,32 +81,36 @@ publication and restoration bind `inhibit-read-only' for owned changes.
 Continuation must reconcile divergence instead of resuming hidden history."
   (when (and (not inhibit-read-only)
              (bound-and-true-p mevedel--session)
-             (assoc "root" (mevedel-session-external-conversations mevedel--session)))
-    (save-match-data
-      (save-restriction
-        (widen)
-        (let* ((record (cdr (assoc "root" (mevedel-session-external-conversations mevedel--session))))
-               (boundary (plist-get record :input-boundary))
-               (content-start (mevedel-session-artifacts-content-start (current-buffer)))
-               (submitted-end
-                (when boundary
-                  (if (= (car boundary) (mevedel-session-current-segment mevedel--session))
-                      (+ content-start (cdr boundary))
-                    ;; Compaction replaced the submitted prefix with a summary.
-                    (mevedel-transcript--skip-leading-summary-block content-start))))
-               ;; Metadata belongs to the editor, not native model history.
-               (body-change (or (>= begin content-start) (> end content-start)))
-               (position (if body-change (point-max) begin))
-               (found (and body-change submitted-end (< begin submitted-end))))
-          (while (and (> position begin) (not found))
-            (let ((property (get-text-property (1- position) 'gptel)))
-              (if (memq (if (consp property) (car property) property)
-                        '(response reasoning tool))
-                  (setq found t)
-                (setq position (previous-single-property-change
-                                position 'gptel nil (point-min))))))
-          (when (and found (plist-get record :id))
-            (plist-put record :state 'diverged)))))))
+             (mevedel-session-external-conversations mevedel--session))
+    (let* ((child (bound-and-true-p mevedel--agent-invocation))
+           (scope (if child (mevedel-agent-invocation-require-path child) "root"))
+           (record (alist-get scope (mevedel-session-external-conversations mevedel--session)
+                              nil nil #'equal)))
+      (when (plist-get record :id)
+        (save-match-data
+          (save-restriction
+            (widen)
+            (let* ((boundary (plist-get record :input-boundary))
+                   (content-start (mevedel-session-artifacts-content-start (current-buffer)))
+                   (submitted-end
+                    (when boundary
+                      (if (or child
+                              (= (car boundary) (mevedel-session-current-segment mevedel--session)))
+                          (+ content-start (cdr boundary))
+                        ;; Root rotation replaced the submitted prefix with a summary.
+                        (mevedel-transcript--skip-leading-summary-block content-start))))
+                   ;; Metadata belongs to the editor, not native model history.
+                   (body-change (or (>= begin content-start) (> end content-start)))
+                   (position (if body-change (point-max) begin))
+                   (found (and body-change submitted-end (< begin submitted-end))))
+              (while (and (> position begin) (not found))
+                (let ((property (get-text-property (1- position) 'gptel)))
+                  (if (memq (if (consp property) (car property) property)
+                            '(response reasoning tool))
+                      (setq found t)
+                    (setq position (previous-single-property-change
+                                    position 'gptel nil (point-min))))))
+              (when found (plist-put record :state 'diverged)))))))))
 
 (cl-defgeneric mevedel-engine-request-text
     (backend prompt system callback &optional stream context)

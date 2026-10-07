@@ -320,6 +320,13 @@ second concurrent installation and a managed install while a custom adapter
 override is selected. Ordinary sends never download dependencies. Setup and
 dispatch both reject an outdated ACP client, Node/Python runtime, unsupported
 CLI/adapter version, missing packaged bridge, or non-subscription authentication.
+Dispatch prepares these checks asynchronously before starting the adapter, so
+slow status commands leave the editor responsive. Each status command has a
+ten-second timeout and is cancelled with its owning request. Successful version
+checks are reused while the resolved executable and its enclosing package
+metadata stay unchanged. Every dispatch still checks the current subscription
+login with inherited API billing routes removed; authentication is never cached.
+The explicit setup check waits for this same readiness result.
 See the [setup route](../README.md#claude-promax-subscriptions).
 
 The Claude Code provider routes root and directive submissions through ACP. The
@@ -403,14 +410,21 @@ before further tools or successful settlement. Receipt records it once in the
 recipient transcript. It establishes delivery of recovery guidance, not proof
 that every prior effect has been inspected or undone.
 
-Editing earlier response or prompt text in the raw root transcript marks its
-native history as `diverged`. This state survives saving and reopening; sending
-another Claude turn refuses before prompt dispatch and names
+Editing earlier response or prompt text in a raw root or retained child
+transcript marks its native history as `diverged`. This state survives saving and
+reopening; sending another Claude turn refuses before prompt dispatch and names
 `mevedel-claude-code-recover-history` as the next action. Explicit recovery
 detaches the native history and continues from the edited, labelled excerpt.
+Excerpt recovery includes the effective compaction summary once, read from its
+authoritative root or child bounds. Editing summary text cannot hide it behind
+the wrapper's incidental gptel properties; replaced older archives remain
+available for inspection rather than being replayed as current context.
 A persisted submitted-input boundary also protects prompts interrupted before
 any model output. Editing the unsent draft after that boundary and any later
-response does not mark divergence.
+response does not mark divergence. Each child stores this boundary relative to
+its private transcript body, with segment identity zero; native child compaction
+rebases it to the retained summary and tail. Root boundaries use the numbered
+root segment. Editing a child does not mark the root or another child divergent.
 
 Each tool's native ID and name are committed to the owning conversation's
 sidecar before the pipeline starts. Publication failure prevents execution;
@@ -1307,8 +1321,11 @@ boundary, and profiler procedure.
 
 The Goal remains in the session sidecar as a strict record: identity,
 objective, status/reason, token/time/turn accounting, optional budget, optional
-accepted-plan reference, and timestamps. Provider usage is authoritative when
-available; otherwise the request estimator supplies the charge.
+accepted-plan reference, and timestamps. Its `:tokens-incomplete-p` flag preserves
+missing native usage across save and reopen; the numeric count then records only
+a lower bound. Provider usage is authoritative when available. The request
+estimator supplies the fallback for gptel; native requests with missing counters
+follow the [incomplete-usage budget policy](goals.md#token-budget).
 
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree

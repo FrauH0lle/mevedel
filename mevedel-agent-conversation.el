@@ -35,6 +35,10 @@
 (defvar gptel-confirm-tool-calls)
 (defvar gptel-org-convert-response)
 
+;; `mevedel-engine'
+(declare-function mevedel-engine-record-history-edit "mevedel-engine" (begin end))
+(autoload 'mevedel-engine-record-history-edit "mevedel-engine")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts" (session logical &optional committed-only))
@@ -268,6 +272,7 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
       (when parent-specs
         (mevedel-agents-set-specs parent-specs))
       (setq-local mevedel--agent-invocation invocation)
+      (add-hook 'before-change-functions #'mevedel-engine-record-history-edit nil t)
       (when (require 'mevedel-skills-prompt nil t)
         (mevedel-skills-install-activation-hook))
       (add-hook 'gptel-pre-tool-call-functions

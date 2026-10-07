@@ -78,6 +78,121 @@
     (should (eq 'aborted (plist-get (mevedel-engine-info request)
                                   :mevedel-acp-outcome))))
 
+  :doc "cancellation accounts for acknowledged native terminal usage exactly once"
+  (mevedel-engine-test--with-session
+    (let (native-outcome (completed 0))
+      (mevedel-acp-turn-start
+       request
+       (lambda (mcp _hook)
+         (list :command (executable-find "python3")
+               :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp
+               :observe #'mevedel-claude-code-usage-observe
+               :complete-prompt (lambda (owner outcome)
+                                  (cl-incf completed)
+                                  (mevedel-claude-code--complete-prompt owner outcome))
+               :normalize-outcome (lambda (outcome)
+                                    (setq native-outcome (mevedel-claude-code--outcome outcome)))
+               :meta '((sdkWhileWaiting .
+                        [((type . "assistant")
+                          (message . ((id . "cancel-sample") (model . "sonnet")
+                                      (usage . ((input_tokens . 10) (output_tokens . 1)
+                                                (cache_creation_input_tokens . 0)
+                                                (cache_read_input_tokens . 0))))))])
+                       (cancelResponse . ((stopReason . "cancelled")
+                                          (usage . ((inputTokens . 40) (outputTokens . 20)
+                                                    (cachedReadTokens . 3) (cachedWriteTokens . 5))))))))
+       [((type . "text") (text . "wait"))] nil)
+      (with-timeout (5 (ert-fail "Waiting peer did not start"))
+        (while (not (string-search "waiting" (buffer-string)))
+          (accept-process-output nil .01)))
+      (should (= 10 (plist-get (plist-get (mevedel-engine-info request) :tokens-full) :input)))
+      (mevedel-abort buffer)
+      (with-timeout (5 (ert-fail "Cancelled turn did not settle"))
+        (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01)))
+      (should (eq 'interrupted (plist-get native-outcome :status)))
+      (should (equal (plist-get native-outcome :tokens)
+                     (plist-get (mevedel-engine-info request) :tokens-full)))
+      (should (= 45 (plist-get (plist-get native-outcome :tokens) :input)))
+      (should (= 20 (plist-get (plist-get native-outcome :tokens) :output)))
+      (should (= 1 completed))
+      (should (= 1 (mevedel-session-turn-count session)))
+      (should (eq 'aborted (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))))
+
+  :doc "child interruption retains final native usage until its asynchronous terminal settlement"
+  (mevedel-engine-test--with-session
+    (let* ((invocation
+            (mevedel-agent-invocation--create
+             :buffer buffer :path "/root/usage-child" :description "Usage child"
+             :runtime-context (list :buffer buffer :mevedel-request request)))
+           (settled 0) terminal-status)
+      (setq-local mevedel--agent-invocation invocation)
+      (mevedel-acp-turn-start
+       invocation
+       (lambda (mcp _hook)
+         (list :command (executable-find "python3")
+               :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp
+               :complete-prompt #'mevedel-claude-code--complete-prompt
+               :normalize-outcome #'mevedel-claude-code--outcome
+               :meta '((cancelResponse . ((stopReason . "cancelled")
+                                          (usage . ((inputTokens . 43) (outputTokens . 8)
+                                                    (cachedReadTokens . 0) (cachedWriteTokens . 0))))))))
+       [((type . "text") (text . "wait"))] nil nil nil
+       (lambda (status)
+         (cl-incf settled)
+         (setq terminal-status status)
+         (setf (mevedel-agent-invocation-runtime-settled-p invocation) t)))
+      (with-timeout (5 (ert-fail "Native child did not start"))
+        (while (not (string-search "waiting" (buffer-string)))
+          (accept-process-output nil .01)))
+      (mevedel-agent-runtime-interrupt invocation "stop child")
+      (mevedel-agent-runtime-interrupt invocation "stop child again")
+      (should (= 0 settled))
+      (should mevedel--turn-settlements-pending)
+      (with-timeout (5 (ert-fail "Native child interruption did not settle"))
+        (while (= 0 settled) (accept-process-output nil .01)))
+      (should (= 1 settled))
+      (should (eq 'aborted terminal-status))
+      (should (= 43 (plist-get (plist-get (mevedel-engine-info invocation) :tokens-full) :input)))
+      (should (= 8 (plist-get (plist-get (mevedel-engine-info invocation) :tokens-full) :output)))
+      (should-not mevedel--turn-settlements-pending)))
+
+  :doc "abort preserves a terminal acknowledgement already queued behind target transport"
+  (mevedel-engine-test--with-session
+    (let* (native-outcome
+           (connection
+            (mevedel-acp-turn-start
+             request
+             (lambda (mcp _hook)
+               (list :command (executable-find "python3")
+                     :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp
+                     :complete-prompt #'mevedel-claude-code--complete-prompt
+                     :normalize-outcome (lambda (outcome)
+                                          (setq native-outcome (mevedel-claude-code--outcome outcome)))
+                     :meta '((cancelResponse . ((stopReason . "cancelled")
+                                                (usage . ((inputTokens . 41) (outputTokens . 9)
+                                                          (cachedReadTokens . 0) (cachedWriteTokens . 0))))))))
+             [((type . "text") (text . "wait"))] nil)))
+      (with-timeout (5 (ert-fail "Waiting peer did not start"))
+        (while (not (string-search "waiting" (buffer-string)))
+          (accept-process-output nil .01)))
+      (mevedel-acp-cancel connection)
+      ;; Queue the native drain before a different target operation begins.
+      (should (accept-process-output
+               (alist-get :process (mevedel-acp-client connection)) 2 nil 0))
+      (mevedel-transport-call-as-remote-operation
+       (lambda ()
+         (with-timeout (5 (ert-fail "Native acknowledgement did not arrive"))
+           (while (not native-outcome) (accept-process-output nil .01)))
+         (should-not (mevedel-acp-active connection))
+         (should (mevedel-turn-busy-p buffer))
+         (mevedel-abort buffer)))
+      (with-timeout (5 (ert-fail "Queued interruption did not settle"))
+        (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01)))
+      (should (= 41 (plist-get (plist-get (mevedel-engine-info request) :tokens-full) :input)))
+      (should (= 9 (plist-get (plist-get (mevedel-engine-info request) :tokens-full) :output)))
+      (should (= 1 (mevedel-session-turn-count session)))
+      (should (eq 'aborted (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))))
+
   :doc "a failed post-response observer cannot strand successful settlement"
   (mevedel-engine-test--with-session
     (let ((gptel-post-response-functions (list (lambda (&rest _) (error "Observer broke"))))

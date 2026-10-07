@@ -80,6 +80,7 @@
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-time-used-seconds "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x))
+(declare-function mevedel-goal-tokens-incomplete-p "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-updated-at "mevedel-structs" (cl-x))
@@ -405,6 +406,7 @@ are mapped below the opened workspace root before containment is checked."
         :reason (mevedel-goal-reason goal)
         :token-budget (mevedel-goal-token-budget goal)
         :tokens-used (mevedel-goal-tokens-used goal)
+        :tokens-incomplete-p (mevedel-goal-tokens-incomplete-p goal)
         :time-used-seconds (mevedel-goal-time-used-seconds goal)
         :turns-run (mevedel-goal-turns-run goal)
         :plan-reference (mevedel-goal-plan-reference goal)
@@ -414,7 +416,7 @@ are mapped below the opened workspace root before containment is checked."
 (defun mevedel-session-codec--goal-from-plist (plist)
   "Reconstruct a `mevedel-goal' from PLIST, or nil."
   (when plist
-    (let ((keys '(:id :objective :status :reason :token-budget :tokens-used
+    (let ((keys '(:id :objective :status :reason :token-budget :tokens-used :tokens-incomplete-p
                   :time-used-seconds :turns-run :plan-reference
                   :created-at :updated-at)))
       (unless
@@ -441,6 +443,7 @@ are mapped below the opened workspace root before containment is checked."
                    (and (integerp (plist-get plist :token-budget))
                         (> (plist-get plist :token-budget) 0)))
                (natnump (plist-get plist :tokens-used))
+               (booleanp (plist-get plist :tokens-incomplete-p))
                (natnump (plist-get plist :time-used-seconds))
                (natnump (plist-get plist :turns-run))
                (or (null (plist-get plist :plan-reference))
@@ -463,6 +466,7 @@ are mapped below the opened workspace root before containment is checked."
      :reason (plist-get plist :reason)
      :token-budget (plist-get plist :token-budget)
      :tokens-used (plist-get plist :tokens-used)
+     :tokens-incomplete-p (plist-get plist :tokens-incomplete-p)
      :time-used-seconds (plist-get plist :time-used-seconds)
      :turns-run (plist-get plist :turns-run)
      :plan-reference (plist-get plist :plan-reference)
@@ -694,7 +698,8 @@ session's sidecar, rewritten by every save."
                       (not (file-remote-p (plist-get (cdr entry) :directory)))
                       (memq (plist-get (cdr entry) :state) '(ready in-flight uncertain diverged)))))
         (error "Invalid external conversation history: %S" entry))
-      (let ((calls (plist-get (cdr entry) :tool-calls)) ids)
+      (let ((calls (plist-get (cdr entry) :tool-calls))
+            (ids (make-hash-table :test #'equal)))
         (when-let* ((boundary (plist-get (cdr entry) :input-boundary)))
           (unless (and (consp boundary) (natnump (car boundary)) (natnump (cdr boundary)))
             (error "Invalid external submitted-input boundary")))
@@ -702,9 +707,9 @@ session's sidecar, rewritten by every save."
         (dolist (call calls)
           (unless (and (consp call) (stringp (car call)) (string-match-p "\\S-" (car call))
                        (stringp (cdr call)) (string-match-p "\\S-" (cdr call))
-                       (not (member (car call) ids)))
+                       (not (gethash (car call) ids)))
             (error "Invalid native tool admission"))
-          (push (car call) ids)))
+          (puthash (car call) t ids)))
       (push (car entry) scopes)))
   (mevedel-session-codec-validate-authority-mode
    (plist-get plist :authority-mode)

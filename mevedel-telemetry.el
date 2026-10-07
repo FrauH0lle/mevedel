@@ -69,6 +69,7 @@
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-p "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x))
+(declare-function mevedel-goal-tokens-incomplete-p "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x))
 (declare-function mevedel-session-audit-target "mevedel-structs" (session))
@@ -436,6 +437,7 @@ supplies them itself."
        (list :goal-id (mevedel-goal-id goal)
              :goal-status (mevedel-goal-status goal)
              :goal-tokens-used (mevedel-goal-tokens-used goal)
+             :goal-tokens-incomplete-p (mevedel-goal-tokens-incomplete-p goal)
              :goal-turns-run (mevedel-goal-turns-run goal)))
      safe
      (when dropped (list :dropped-keys dropped)))))

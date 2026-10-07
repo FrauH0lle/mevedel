@@ -405,6 +405,12 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
       (when execution-archive-text (insert execution-archive-text))
       (when pending-text (insert pending-text))
       (set-buffer-modified-p t))
+    ;; Native children reuse their canonical transcript.  Persist its rebased
+    ;; submitted-input boundary together with the rewritten summary and tail.
+    (when-let* ((record (plist-get target :native-history-record)))
+      (plist-put record :input-boundary
+                 (cons 0 (- (point-max)
+                            (mevedel-session-artifacts-content-start (current-buffer))))))
     (unless (mevedel-agent-conversation-save invocation)
       (error "Could not persist compacted agent transcript"))
     (setf (mevedel-session-workspace-instruction-hashes session)

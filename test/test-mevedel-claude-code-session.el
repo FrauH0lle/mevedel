@@ -885,6 +885,9 @@
                             (string-search "waiting" (buffer-string))))
                 (accept-process-output nil 0.01)))
             (mevedel-agent-control-interrupt session "/root/reader")
+            (with-timeout (5 (ert-fail "Claude child cancellation did not settle"))
+              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
+                (accept-process-output nil 0.01)))
             (should (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (eq 'idle (mevedel-agent-record-activity record)))
             (let ((mail (mevedel-agent-control-context-mailbox session)))
@@ -1362,6 +1365,57 @@
         (should-not (file-exists-p file))
         (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
         (should (string-search "Fixture durable admission write failed" (buffer-string)))))))
+
+(mevedel-deftest mevedel--send-request/claude-initial-reminder-after-fork-point (:quiet t)
+  (mevedel-engine-test--with-session
+    (let* ((gptel--known-backends nil)
+           (mevedel-claude-code-directory (file-name-concat root "claude"))
+           (nested (file-name-concat root "nested"))
+           (instructions (file-name-concat nested "AGENTS.md"))
+           (file (file-name-concat nested "source.txt"))
+           (turn 0))
+      (make-directory nested t)
+      (write-region "FIRST GUIDANCE" nil instructions nil 'silent)
+      (write-region "source contents" nil file nil 'silent)
+      (mevedel-claude-code-register)
+      (mevedel-model-set-session-provider session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+      (setq-local gptel-system-prompt "Root reminder reproduction"
+                  gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (lambda (_system mcp _model _effort &optional id hook)
+                   (cl-incf turn)
+                   (list :command (executable-find "python3") :args (list mevedel-claude-code-session-test--peer)
+                         :cwd root :mcp mcp :session-id id :tool-id-field :claudecode/toolUseId
+                         :observe #'mevedel-claude-code-context-observe
+                         :check-context #'mevedel-claude-code-context-check
+                         :control #'mevedel-claude-code--control
+                         :meta `((hookCommand . ,hook) (responseText . "Finished native turn")
+                                 (toolBatches . ,(if (= turn 1)
+                                                   `[[((name . "Read") (id . "first-read")
+                                                       (args . ((file_path . ,file))))]] [])))))))
+        (mevedel--insert-user-turn "Read my source and follow its guidance.")
+        (mevedel--send-request "Read my source and follow its guidance.")
+        (with-timeout (5 (ert-fail "First turn did not finish"))
+          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+        (should (= 1 (mevedel-engine-test--count-evidence "FIRST GUIDANCE")))
+        (write-region "SECOND GUIDANCE RESTORED" nil instructions nil 'silent)
+        (goto-char (point-max))
+        (mevedel--insert-user-turn "Continue using my changed guidance.")
+        (let ((second (mevedel--send-request "Continue using my changed guidance.")))
+          (with-timeout (5 (ert-fail "Second turn did not finish"))
+            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (should (eq 'success (plist-get (mevedel-engine-info second) :mevedel-acp-outcome))))
+        ;; Context was acknowledged by the native peer and is trusted audit data.
+        (should (equal (secure-hash 'sha256 "SECOND GUIDANCE RESTORED")
+                       (cdr (assoc (list "/root" instructions)
+                                   (mevedel-session-workspace-instruction-hashes session)))))
+        (should (cl-some (lambda (span)
+                           (string-search "SECOND GUIDANCE RESTORED"
+                                          (prin1-to-string (plist-get span :record))))
+                         (mevedel-transcript-audit-buffer-spans 'injected-reminders)))
+        ;; The canonical evidence and view/provider consumers must retain the body.
+        (ert-info ((mevedel-engine-test--evidence))
+          (should (= 1 (mevedel-engine-test--count-evidence "SECOND GUIDANCE RESTORED"))))))))
 
 (provide 'test-mevedel-claude-code-session)
 ;;; test-mevedel-claude-code-session.el ends here

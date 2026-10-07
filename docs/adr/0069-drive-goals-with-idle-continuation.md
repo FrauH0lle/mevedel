@@ -37,7 +37,11 @@ the engine merge cumulative deltas and duplicate assistant snapshots without
 double charging. Its final prompt totals replace reported counters, while
 missing fields preserve earlier known usage. Existing Goal accounting and
 acknowledged budget reminders consume those normalized counters. No separate
-native Goal controller or final-turn-only budget mode is needed.
+native Goal controller or final-turn-only budget mode is needed. Missing native
+input or output totals persist as incomplete accounting with the known lower
+bound. Unbudgeted continuation remains available; bounded continuation stops
+until the user removes the limit or starts a new Goal. Inspection exposes null
+total and remaining usage instead of presenting an unsupported count.
 
 ## Decision history
 
@@ -50,6 +54,13 @@ active Goal stalled, despite the README promising automatic continuation while
 idle, until the user typed something or ran `/goal resume`. Offering the work
 again where interactions close and where the draft empties fixes every
 interaction kind at once without per-kind scheduling calls.
+
+Review reproduced a 40,000-character native prompt with no reported usage
+being charged as one token: the generic fallback serialized absent gptel
+request data as `nil`. Native history also contains hidden input that cannot
+be reconstructed into a reliable estimate. Explicit durable incompleteness
+replaces that fallback for native requests and their attributed children.
+The existing gptel request estimate remains unchanged.
 
 The subscription integration initially had only final prompt totals, leaving
 within-turn budget reminders unproven. A bounded native probe observed three

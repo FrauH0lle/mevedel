@@ -109,7 +109,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
          (dispatch-directory (and (buffer-live-p buffer)
                                   (buffer-local-value 'default-directory buffer)))
          (event-key (list 'acp-events dispatch-key))
-         pending draining server connection configuration finished cancellation-held started)
+         pending draining server connection configuration finished cancellation-held started terminal-pending)
     (unless (and (buffer-live-p buffer)
                  (if root-p
                      (and (eq request (buffer-local-value 'mevedel--current-request buffer))
@@ -138,9 +138,10 @@ for it; duplicate or late continuations cannot start a cancelled turn."
            (if root-p (mevedel-request-cancelled-p request)
              (or (and admission (mevedel-request-cancelled-p admission))
                  (plist-get (mevedel-engine-info request) :mevedel-cancelled))))
-         (enqueue (operation)
-           (unless finished
-             (setq pending (nconc pending (list operation)))
+         (enqueue (operation &optional terminal reject)
+           (if (or finished (and (not terminal) (cancelled)))
+               (when reject (funcall reject))
+             (setq pending (nconc pending (list (list terminal operation reject))))
              (unless draining
                (unless (mevedel-transport-run-when-idle
                         event-key dispatch-directory #'drain
@@ -150,20 +151,26 @@ for it; duplicate or late continuations cannot start a cancelled turn."
            (unless draining
              (setq draining t)
              (unwind-protect
-                 (while (and pending (not finished) (owned) (not (cancelled))
+                 (while (and pending (not finished) (owned)
                              (not (mevedel-transport-busy-p dispatch-directory)))
                    (condition-case err
-                       (with-current-buffer buffer (funcall (pop pending)))
+                       (let ((operation (pop pending)))
+                         (if (or (car operation) (not (cancelled)))
+                             (with-current-buffer buffer (funcall (cadr operation)))
+                           (when-let* ((reject (caddr operation)))
+                             (funcall reject))))
                      (error (finish (list :status 'error :message (error-message-string err))))))
                (setq draining nil))
              (when (and pending (not finished))
-               (if (or (not (owned)) (cancelled))
+               (if (not (owned))
                    (finish '(:status interrupted))
                  (unless (mevedel-transport-run-when-idle
                           event-key dispatch-directory #'drain
                           (lambda () (finish '(:status interrupted))))
                    (kill-owner))))))
          (prompt (input)
+           (setf (mevedel-engine-info request)
+                 (plist-put (mevedel-engine-info request) :mevedel-acp-prompted t))
            (mevedel-acp-prompt
             connection input
             (lambda (event)
@@ -173,8 +180,12 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                    (funcall observe request event))
                  (mevedel-acp-turn--event request event))))
             (lambda (outcome)
+              (setq terminal-pending t)
               (enqueue
                (lambda ()
+                 (setq terminal-pending nil)
+                 (when (cancelled)
+                   (setq outcome (plist-put outcome :status 'interrupted)))
                  (when-let* ((complete (plist-get configuration :complete-prompt)))
                    (setq outcome (funcall complete request outcome)))
                  (if (and (eq 'success (plist-get outcome :status))
@@ -182,7 +193,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                           (not (cancelled))
                           (not (plist-get (mevedel-engine-info request) :mevedel-end-turn)))
                      (prompt (plist-get outcome :next-prompt))
-                   (finish outcome)))))))
+                   (finish outcome))) t))))
          (finish (outcome)
            (when (and (not finished) (eq 'success (plist-get outcome :status)))
              (when-let* ((check (plist-get configuration :check-context)))
@@ -195,7 +206,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
              (mevedel-transport-cancel-pending event-key)
              (when cancellation-held
                (setq cancellation-held nil)
-               (mevedel--turn-release request))
+               (mevedel--turn-release admission))
              (mevedel-transport-cancel-pending dispatch-key)
              (when (buffer-live-p buffer)
                (with-current-buffer buffer
@@ -252,13 +263,14 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                          owner (mevedel-request-cancelled-p owner) status)))))))))
          (cancel ()
            (unless finished
-             (if (and root-p connection (mevedel-acp-active connection))
+             (if (and connection
+                      (or (mevedel-acp-active connection) terminal-pending))
                  (progn
                    ;; Public abort may otherwise clear the request while its
                    ;; native cancellation reply is still in flight.
                    (unless cancellation-held
                      (setq cancellation-held t)
-                     (mevedel--turn-hold request))
+                     (mevedel--turn-hold admission))
                    (mevedel-acp-cancel connection))
                (finish '(:status interrupted)))))
          (kill-owner ()
@@ -278,7 +290,12 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                     (error
                      (funcall complete
                               (list :isError t :content
-                                    (vector (list :type "text" :text (error-message-string err))))))))))
+                                    (vector (list :type "text" :text (error-message-string err)))))))))
+              nil
+              (lambda ()
+                (funcall complete
+                         (list :isError t :content
+                               (vector (list :type "text" :text "The owning turn was cancelled"))))))
              (lambda ()
                (setq cancelled-call t)
                (when (functionp cancel-call) (funcall cancel-call)))))
@@ -316,7 +333,13 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                   (funcall complete result)))))))
       (when admission (mevedel-request-push-canceller admission #'cancel))
       (unless root-p
-        (setf (mevedel-agent-invocation-runtime-cancel request) #'kill-owner))
+        (setf (mevedel-agent-invocation-runtime-cancel request)
+              (lambda ()
+                (setf (mevedel-engine-info request)
+                      (plist-put (mevedel-engine-info request) :mevedel-cancelled t))
+                (when admission (mevedel-request-cancel admission))
+                (cancel)
+                (unless finished 'deferred))))
       (with-current-buffer buffer (add-hook 'kill-buffer-hook #'kill-owner nil t))
       (cl-labels ((start ()
                     (when (and (not started) (not finished) (owned) (not (cancelled)))
@@ -339,7 +362,14 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                                                 request event))
                                             (error
                                              (funcall complete nil (error-message-string err))
-                                             (finish (list :status 'error :message (error-message-string err))))))))))
+                                             (finish (list :status 'error :message (error-message-string err))))))
+                                        nil
+                                        (lambda ()
+                                          ;; A native hook may block the peer
+                                          ;; that must acknowledge cancellation.
+                                          ;; Reject its authority without running
+                                          ;; the queued control transaction.
+                                          (funcall complete nil "The owning turn was cancelled"))))))
                               (setq configuration
                                     (funcall launch (vector (mevedel-mcp-configuration server))
                                              (mevedel-mcp-hook-command server)))

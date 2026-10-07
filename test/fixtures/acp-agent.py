@@ -29,6 +29,8 @@ mcp_servers = []
 hook_command = None
 pre_tool_hook = False
 prompt_response = {"stopReason": "end_turn"}
+cancel_response = {"stopReason": "cancelled"}
+sdk_while_waiting = []
 response_text = None
 echo_all_text = False
 tool_batches = []
@@ -79,6 +81,8 @@ for line in sys.stdin:
             hook_command = params.get("_meta", {}).get("hookCommand")
             pre_tool_hook = params.get("_meta", {}).get("preToolHook", False)
             prompt_response = params.get("_meta", {}).get("promptResponse", {"stopReason": "end_turn"})
+            cancel_response = params.get("_meta", {}).get("cancelResponse", {"stopReason": "cancelled"})
+            sdk_while_waiting = params.get("_meta", {}).get("sdkWhileWaiting", [])
             response_text = params.get("_meta", {}).get("responseText")
             echo_all_text = params.get("_meta", {}).get("echoAllText", False)
             tool_batches = params.get("_meta", {}).get("toolBatches", [])
@@ -166,6 +170,7 @@ for line in sys.stdin:
             sys.exit(7)
         elif prompt == "wait":
             pending = request_id
+            sdk_messages([sdk_while_waiting], 0)
             chunk("waiting")
         elif prompt == "wait-silent":
             pending = request_id
@@ -298,5 +303,5 @@ for line in sys.stdin:
             reply(request_id, prompt_response)
             reply(request_id, prompt_response)
     elif method == "session/cancel" and pending is not None:
-        reply(pending, {"stopReason": "cancelled"})
+        reply(pending, cancel_response)
         pending = None

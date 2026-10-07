@@ -38,31 +38,40 @@ Cache creation contributes to normalized input; cached reads stay separate."
           (setq sample (alist-get 'message message))
           (unless (equal "<synthetic>" (alist-get 'model sample))
             (setq id (alist-get 'id sample) usage (alist-get 'usage sample)))))
-        (when (and (stringp id) (not (string-empty-p id)) usage
+        (when (and (stringp id) (not (string-empty-p id))
                    (not (member id (plist-get info :mevedel-claude-finished-samples))))
           (let ((row (alist-get id rows nil nil #'equal)))
             (dolist (key '(input_tokens output_tokens cache_creation_input_tokens cache_read_input_tokens))
               (when-let* ((value (alist-get key usage)) ((natnump value)))
                 (setf (alist-get key row) (max value (or (alist-get key row) 0)))))
             (setf (alist-get id rows nil nil #'equal) row))
-          (let (tokens)
+          (let (tokens complete)
             (dolist (mapping '((:input input_tokens cache_creation_input_tokens)
                                (:output output_tokens) (:cached cache_read_input_tokens)
                                (:cache cache_creation_input_tokens)))
-              (when (cl-every (lambda (row)
-                                (cl-every (lambda (key) (assq key (cdr row))) (cdr mapping)))
-                              rows)
-                (setq tokens
-                      (plist-put tokens (car mapping)
-                                 (cl-loop for row in rows sum
-                                          (cl-loop for key in (cdr mapping)
-                                                   sum (alist-get key (cdr row))))))))
+              (let ((known (cl-remove-if-not
+                            (lambda (row)
+                              (cl-some (lambda (key) (assq key (cdr row))) (cdr mapping)))
+                            rows)))
+                (when known
+                  (let ((count (cl-loop for row in known sum
+                                       (cl-loop for key in (cdr mapping)
+                                                sum (or (alist-get key (cdr row)) 0)))))
+                    (setq tokens (plist-put tokens (car mapping) count))
+                    (when (cl-every (lambda (row)
+                                      (cl-every (lambda (key) (assq key (cdr row))) (cdr mapping)))
+                                    rows)
+                      (setq complete (plist-put complete (car mapping) count)))))))
+            (setq info (plist-put info :mevedel-claude-prompt-usage complete))
+            (setq info (plist-put info :mevedel-usage-pending
+                                  (not (and (natnump (plist-get complete :input))
+                                            (natnump (plist-get complete :output))))))
             (when (plist-member info :mevedel-claude-usage-base)
-              (let ((base (plist-get info :mevedel-claude-usage-base)) accumulated)
+              (let* ((base (plist-get info :mevedel-claude-usage-base))
+                     (accumulated (copy-sequence base)))
                 (while tokens
                   (let ((key (pop tokens)) (value (pop tokens)))
-                    (when (plist-member base key)
-                      (setq accumulated (plist-put accumulated key (+ value (plist-get base key)))))))
+                    (setq accumulated (plist-put accumulated key (+ value (or (plist-get base key) 0))))))
                 (setq tokens accumulated)))
             (setq info (plist-put info :tokens-full tokens))))
         (setf (mevedel-engine-info owner)
@@ -72,16 +81,23 @@ Cache creation contributes to normalized input; cached reads stay separate."
 (defun mevedel-claude-code-usage-complete (owner outcome)
   "Merge native prompt totals from OUTCOME into OWNER's request usage.
 Reported totals replace sample counters for this prompt.  Prior context
-continuations contribute their frozen base exactly once."
+continuations contribute their frozen base exactly once.  Missing counters
+retain a request-level incomplete marker even after later complete prompts."
   (let* ((info (mevedel-engine-info owner))
          (base (plist-get info :mevedel-claude-usage-base))
          (known (copy-sequence (plist-get info :tokens-full)))
-         (tokens (plist-get outcome :tokens)))
+         (tokens (plist-get outcome :tokens))
+         (current (plist-get info :mevedel-claude-prompt-usage))
+         (complete (cl-every (lambda (key)
+                               (or (natnump (plist-get tokens key))
+                                   (natnump (plist-get current key))))
+                             '(:input :output))))
+    (setq info (plist-put info :mevedel-usage-pending (not complete)))
+    (unless complete
+      (setq info (plist-put info :mevedel-usage-incomplete t)))
     (while tokens
       (let ((key (pop tokens)) (value (pop tokens)))
-        (if (or (not (plist-member info :mevedel-claude-usage-base)) (plist-member base key))
-            (setq known (plist-put known key (+ value (or (plist-get base key) 0))))
-          (cl-remf known key))))
+        (setq known (plist-put known key (+ value (or (plist-get base key) 0))))))
     (setf (mevedel-engine-info owner) (plist-put info :tokens-full known))
     (plist-put outcome :tokens known)))
 

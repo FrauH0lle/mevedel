@@ -64,6 +64,10 @@
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
 (defconst mevedel-claude-code--aliases
   '(("sonnet" low medium high xhigh max)
     ("opus" low medium high xhigh max)
@@ -239,43 +243,150 @@ Keep this location stable to resume the installed CLI's retained histories."
     "CLAUDE_CODE_USE_VERTEX" "CLAUDE_CODE_USE_FOUNDRY")
   "Inherited authentication routes excluded by explicit subscription selection.")
 
-(defun mevedel-claude-code--command-output (command &rest args)
-  "Run supported status COMMAND with ARGS, returning its output.
-Limit the wait and never include raw command diagnostics in user errors."
+(defun mevedel-claude-code--command-output-async (command args ready failure)
+  "Run status COMMAND with ARGS asynchronously; return its canceller.
+READY receives stdout on success. FAILURE receives a safe diagnostic.
+Cancel and timeout release the child and both private output buffers."
   (let ((check (mapconcat #'shell-quote-argument (cons (file-name-nondirectory command) args) " "))
         (stdout (generate-new-buffer " *claude-status*"))
         (stderr (generate-new-buffer " *claude-status-errors*"))
-        process)
-    (unwind-protect
-        (progn
-          (setq process (make-process :name "mevedel-claude-status"
-                                      :command (cons command args)
-                                      :buffer stdout :stderr stderr
-                                      :connection-type 'pipe :noquery t
-                                      :coding 'utf-8-unix :sentinel #'ignore))
-          (let ((deadline (+ (float-time) 10)))
-            (while (and (process-live-p process) (< (float-time) deadline))
-              (accept-process-output process 0.02))
-            ;; Observing exit does not consume pending stdout.  Drain it
-            ;; afterwards, including when the child exited before any read.
-            (while (and (< (float-time) deadline)
-                        (accept-process-output process 0.02))))
-          (when (process-live-p process)
-            (user-error "Setup check timed out: %s; run it in a terminal" check))
-          (unless (zerop (process-exit-status process))
-            (user-error "Setup check failed: %s; run it in a terminal" check))
-          (with-current-buffer stdout (string-trim (buffer-string))))
-      (when (and process (process-live-p process)) (delete-process process))
-      (kill-buffer stdout)
-      (kill-buffer stderr))))
+        process timer finished)
+    (cl-labels
+        ((cleanup ()
+           (when timer (cancel-timer timer))
+           (when process
+             (set-process-sentinel process #'ignore)
+             (when (process-live-p process) (delete-process process)))
+           (when (buffer-live-p stdout) (kill-buffer stdout))
+           (when (buffer-live-p stderr) (kill-buffer stderr)))
+         (cancel () (setq finished t) (cleanup))
+         (fail (message)
+           (unless finished
+             (setq finished t)
+             (cleanup)
+             (funcall failure message)))
+         (exited (child _event)
+           (when (and (not finished) (memq (process-status child) '(exit signal)))
+             (if (not (zerop (process-exit-status child)))
+                 (fail (format "Setup check failed: %s; run it in a terminal" check))
+               (let ((output (with-current-buffer stdout (string-trim (buffer-string)))))
+                 (setq finished t)
+                 (cleanup)
+                 (funcall ready output))))))
+      (condition-case nil
+          (progn
+            (setq timer (mevedel-transport-run-at-time
+                         10 (lambda () (fail (format "Setup check timed out: %s; run it in a terminal" check)))))
+            (setq process (make-process :name "mevedel-claude-status"
+                                        :command (cons command args)
+                                        :buffer stdout :stderr stderr
+                                        :connection-type 'pipe :noquery t
+                                        :coding 'utf-8-unix :sentinel #'exited))
+            (when finished (cleanup)))
+        (error (fail (format "Setup check failed: %s; run it in a terminal" check))))
+      #'cancel)))
+
+(defvar mevedel-claude-code--version-cache (make-hash-table :test #'equal)
+  "Successful executable versions indexed by their resolved file identity.")
+
+(defun mevedel-claude-code--version-key (command)
+  "Return COMMAND's executable identity and enclosing package metadata.
+The package manifest detects npm updates whose launcher file is unchanged."
+  (let* ((file (file-truename command))
+         (package (locate-dominating-file (file-name-directory file) "package.json")))
+    (mapcar (lambda (path)
+              (when path
+                (let ((attributes (file-attributes path)))
+                  (list path (file-attribute-modification-time attributes)
+                        (file-attribute-status-change-time attributes)
+                        (file-attribute-size attributes) (file-attribute-inode-number attributes)))))
+            (list file (when package (file-name-concat package "package.json"))))))
+
+(defun mevedel-claude-code--prepare-launch (checks cli environment ready failure)
+  "Check executable CHECKS and current CLI login before READY.
+Each check is (COMMAND MINIMUM LABEL). Cache only successful stable versions;
+authentication always runs with the captured isolated ENVIRONMENT.
+FAILURE receives a safe diagnostic. Return a cancellation function."
+  (let (cancel-command finished)
+    (cl-labels
+        ((cancel ()
+           (setq finished t)
+           (when cancel-command (funcall cancel-command)))
+         (fail (message)
+           (unless finished (cancel) (funcall failure message)))
+         (next ()
+           (unless finished
+             (condition-case err
+                 (let ((process-environment environment)
+                       (default-directory temporary-file-directory))
+                   (if checks
+                       (pcase-let* ((`(,command ,minimum ,label) (pop checks))
+                                    (key (mevedel-claude-code--version-key command))
+                                    (cached (gethash key mevedel-claude-code--version-cache)))
+                         (if (and cached (version<= minimum cached))
+                             (next)
+                           (setq cancel-command
+                                 (mevedel-claude-code--command-output-async
+                                  command '("--version")
+                                  (lambda (output)
+                                    (unless finished
+                                      (condition-case err
+                                          (let ((version (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
+                                                              (match-string 0 output))))
+                                            (if (not (and version (version<= minimum version)))
+                                                (fail (format "%s %s or newer is required" label minimum))
+                                              (when (equal key (mevedel-claude-code--version-key command))
+                                                (puthash key version mevedel-claude-code--version-cache))
+                                              (next)))
+                                        (error (fail (error-message-string err)))))) #'fail))))
+                     (setq cancel-command
+                           (mevedel-claude-code--command-output-async
+                            cli '("auth" "status")
+                            (lambda (output)
+                              (unless finished
+                                (let ((status (condition-case nil
+                                                  (json-parse-string output :object-type 'plist :false-object :json-false)
+                                                (error (fail "Claude returned an invalid authentication status") nil))))
+                                  (unless finished
+                                      (if (and (eq t (plist-get status :loggedIn))
+                                               (equal "claude.ai" (plist-get status :authMethod))
+                                               (equal "firstParty" (plist-get status :apiProvider))
+                                               (member (plist-get status :subscriptionType) '("pro" "max" "team" "enterprise")))
+                                          (progn (setq finished t) (funcall ready))
+                                        (fail "Claude subscription login required; run `claude auth login' and select your Claude account"))))))
+                            #'fail))))
+               (error (fail (error-message-string err)))))))
+      (next)
+      #'cancel)))
+
+(defun mevedel-claude-code--check-launch (launch)
+  "Synchronously check LAUNCH for the explicit setup command only."
+  (let (done failure)
+    (let ((cancel (funcall (plist-get launch :prepare-launch)
+                           (lambda () (setq done t))
+                           (lambda (message) (setq failure message done t)))))
+      (unwind-protect
+          (progn
+            (while (not done) (accept-process-output nil 0.02))
+            (when failure (user-error "%s" failure)))
+        (funcall cancel)))))
 
 (defun mevedel-claude-code--check-version (command minimum label)
-  "Require COMMAND version MINIMUM, using LABEL in setup errors."
-  (let* ((output (mevedel-claude-code--command-output command "--version"))
-         (version (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
-                       (match-string 0 output))))
-    (unless (and version (version<= minimum version))
-      (user-error "%s %s or newer is required" label minimum))))
+  "Require COMMAND version MINIMUM for the explicit installer command.
+LABEL identifies the prerequisite in its safe diagnostic."
+  (let (done output failure)
+    (let ((cancel (mevedel-claude-code--command-output-async
+                   command '("--version")
+                   (lambda (text) (setq output text done t))
+                   (lambda (message) (setq failure message done t)))))
+      (unwind-protect
+          (progn
+            (while (not done) (accept-process-output nil 0.02))
+            (when failure (user-error "%s" failure))
+            (unless (and (string-match "[0-9]+\\.[0-9]+\\.[0-9]+" output)
+                         (version<= minimum (match-string 0 output)))
+              (user-error "%s %s or newer is required" label minimum)))
+        (funcall cancel)))))
 
 ;;;###autoload
 (defun mevedel-claude-code-setup ()
@@ -285,7 +396,8 @@ Return the setup buffer."
   (interactive)
   (let ((status (condition-case err
                     (progn
-                      (mevedel-claude-code-launch "Setup check" [] "sonnet" nil)
+                      (mevedel-claude-code--check-launch
+                       (mevedel-claude-code-launch "Setup check" [] "sonnet" nil))
                       "Ready for Claude Code subscription sessions.")
                   (error (error-message-string err))))
         (buffer (get-buffer-create "*mevedel Claude Code setup*")))
@@ -466,6 +578,8 @@ installation process, or nil when the user declines.  Never install on send."
                               (append (mapcar #'car (plist-get info :mevedel-claude-sample-usage))
                                       (plist-get info :mevedel-claude-finished-samples))))
         (setq info (plist-put info :mevedel-claude-sample-id nil))
+        (setq info (plist-put info :mevedel-claude-prompt-usage nil))
+        (setq info (plist-put info :mevedel-usage-pending t))
         (setf (mevedel-engine-info owner) (plist-put info :mevedel-claude-sample-usage nil)))
       (setq outcome (plist-put outcome :next-prompt content))))
   outcome)
@@ -534,26 +648,15 @@ Return the generic ACP launch plist; no model request is made here."
     (unless (version<= "0.15.2" acp-package-version)
       (user-error "Upgrade the Emacs acp package to 0.15.2 or newer"))
     (mevedel-mcp-bridge-file)
-    (mevedel-claude-code--check-version
-     (or (executable-find "node") (user-error "Install Node.js 22 or newer on the Emacs host"))
-     "22.0.0" "Node.js")
-    (mevedel-claude-code--check-version
-     (or (executable-find "python3") (user-error "Install Python 3.8 or newer on the Emacs host"))
-     "3.8.0" "Python")
-    (mevedel-claude-code--check-version cli "2.1.290" "Claude Code")
-    (mevedel-claude-code--check-version adapter mevedel-claude-code--adapter-version "Claude ACP adapter")
-    (let ((status (condition-case nil
-                      (json-parse-string
-                       (mevedel-claude-code--command-output cli "auth" "status")
-                       :object-type 'plist :false-object :json-false)
-                    (json-parse-error (user-error "Claude returned an invalid authentication status")))))
-      (unless (and (eq t (plist-get status :loggedIn))
-                   (equal "claude.ai" (plist-get status :authMethod))
-                   (equal "firstParty" (plist-get status :apiProvider))
-                   (member (plist-get status :subscriptionType)
-                           '("pro" "max" "team" "enterprise")))
-        (user-error "Claude subscription login required; run `claude auth login' and select your Claude account")))
-    (let* ((backend (mevedel-claude-code-register))
+    (let* ((checks (list
+                    (list (or (executable-find "node") (user-error "Install Node.js 22 or newer on the Emacs host"))
+                          "22.0.0" "Node.js")
+                    (list (or (executable-find "python3") (user-error "Install Python 3.8 or newer on the Emacs host"))
+                          "3.8.0" "Python")
+                    (list cli "2.1.290" "Claude Code")
+                    (list adapter mevedel-claude-code--adapter-version "Claude ACP adapter")))
+           (environment process-environment)
+           (backend (mevedel-claude-code-register))
            (buffer (current-buffer))
            (cwd (file-name-concat directory "conversations"))
            (settings '((autoMemoryEnabled . :false)))
@@ -583,6 +686,9 @@ Return the generic ACP launch plist; no model request is made here."
       (set-file-modes cwd #o700)
       (list :command adapter :cwd cwd :environment process-environment
             :mcp mcp :session-id session-id
+            :prepare-launch
+            (lambda (ready failure)
+              (mevedel-claude-code--prepare-launch checks cli environment ready failure))
             :prepare-session
             (lambda (connection session ready)
               (mevedel-claude-code--prepare-session backend model effort buffer connection session ready))

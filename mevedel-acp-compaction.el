@@ -48,6 +48,8 @@
       (let ((target (or (mevedel-compact-target-agent-target owner)
                         (error "The child transcript is not ready for compaction"))))
         (setq target (plist-put target :execution-archive-plan plan))
+        (setq target (plist-put target :native-history-record
+                                (plist-get info :mevedel-claude-history)))
         (mevedel-compact-target-call target :apply summary tail nil nil t 0)
         (mevedel-compact-target-call target :complete t)))
     ;; Rotation replaces the buffer and collapses old stream markers.  Resume

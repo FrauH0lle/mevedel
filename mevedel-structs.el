@@ -396,7 +396,8 @@ owner alongside the newly committed session state."
   status             ; active, paused, blocked, budget-limited, or complete
   reason             ; non-empty string for paused/blocked/budget-limited
   token-budget       ; positive integer or nil
-  tokens-used        ; non-negative integer
+  tokens-used        ; non-negative integer; lower bound when incomplete
+  tokens-incomplete-p ; missing native usage in an accounted request
   time-used-seconds  ; non-negative integer
   turns-run          ; non-negative integer
   plan-reference     ; normalized relative accepted-plan path or nil

@@ -187,5 +187,63 @@
       (should (eq mentions (mevedel-session-mentions-shown session)))
       (should (= 4 (mevedel-reminder-last-fired plan))))))
 
+(mevedel-deftest mevedel-claude-code-recover-history/root-summary (:quiet t)
+  (dolist (edited '(nil t))
+    (mevedel-engine-test--with-session
+      (let ((gptel--known-backends nil)
+            (mevedel-claude-code-directory (file-name-concat root "claude"))
+            (launches 0) ids)
+        (mevedel-claude-code-register)
+        (mevedel-model-set-session-provider
+         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+        (setq-local gptel-system-prompt "Summary recovery fixture" gptel-tools nil)
+        (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                   (lambda (_system mcp _model _effort &optional id _hook)
+                     (cl-incf launches)
+                     (push id ids)
+                     (list :command (executable-find "python3")
+                           :args (list mevedel-claude-code-recovery-test--peer)
+                           :cwd root :mcp mcp :session-id id
+                           :meta `((echoAllText . t)
+                                   (compactionEvents .
+                                    ,(if (= launches 1)
+                                         [((sessionUpdate . "agent_message_chunk")
+                                           (content . ((type . "text") (text . "ARCHIVED ORIGINAL RESPONSE\n"))))
+                                          ((sessionUpdate . "compaction_update") (compactionId . "recover")
+                                           (status . "completed")
+                                           (summary . [((type . "text") (text . "RETAINED SUMMARY EVIDENCE"))]))]
+                                       [])))))))
+          (mevedel--insert-user-turn "Compact this evidence")
+          (mevedel--send-request "Compact this evidence")
+          (with-timeout (5 (ert-fail "Root summary did not settle"))
+            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (should (= 2 (mevedel-session-current-segment session)))
+          (when edited
+            (gptel--save-state)
+            (gptel--save-state)
+            (goto-char (point-min))
+            (search-forward "RETAINED SUMMARY EVIDENCE")
+            (replace-match "USER EDITED SUMMARY" t t)
+            ;; Query-replace uses this same primitive.  The closing wrapper's
+            ;; sticky ignore property must not erase authoritative summary text.
+            (should (eq 'ignore (get-text-property (1- (point)) 'gptel)))
+            (should (eq 'diverged (plist-get (alist-get "root" (mevedel-session-external-conversations session) nil nil #'equal) :state))))
+          (mevedel-claude-code-recover-history)
+          (goto-char (point-max))
+          (mevedel--insert-user-turn "Use the retained summary")
+          (setq request (mevedel--send-request "Use the retained summary"))
+          (with-timeout (5 (ert-fail "Root summary recovery did not settle"))
+            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (should (equal '(nil nil) ids))
+          (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
+          (let ((answer (mevedel-agent-conversation-project-history buffer session)))
+            (ert-info ((format "edited=%S" edited))
+              (should (string-search "provenance: compaction-summary" answer))
+              (should (= 1 (with-temp-buffer
+                              (insert answer)
+                              (how-many (if edited "USER EDITED SUMMARY" "RETAINED SUMMARY EVIDENCE")
+                                        (point-min) (point-max))))))
+            (should-not (string-search "ARCHIVED ORIGINAL RESPONSE" answer))))))))
+
 (provide 'test-mevedel-claude-code-recovery)
 ;;; test-mevedel-claude-code-recovery.el ends here

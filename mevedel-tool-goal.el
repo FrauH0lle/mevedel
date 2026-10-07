@@ -109,6 +109,9 @@ Other tool names are unaffected.  Apply this to native and discovered tools."
                             (if in-flight
                                 (or (mevedel-goal--known-token-count info) 0)
                               0))))
+         (incomplete (and goal
+                          (or (mevedel-goal-tokens-incomplete-p goal)
+                              (and in-flight (mevedel-goal--native-usage-incomplete-p info)))))
          (budget (and goal (mevedel-goal-token-budget goal))))
     (list :result
           (json-serialize
@@ -118,8 +121,9 @@ Other tool names are unaffected.  Apply this to native and discovered tools."
                          :objective (mevedel-goal-objective goal)
                          :status (symbol-name (mevedel-goal-status goal))
                          :reason (mevedel-goal-reason goal)
-                         :token_budget budget :tokens_used used
-                         :remaining_tokens (and budget (max 0 (- budget used)))
+                         :token_budget budget :tokens_used (unless incomplete used)
+                         :known_tokens_used used
+                         :remaining_tokens (and budget (not incomplete) (max 0 (- budget used)))
                          :time_used_seconds
                          (+ (mevedel-goal-time-used-seconds goal)
                             (if in-flight

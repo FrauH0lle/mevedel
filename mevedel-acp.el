@@ -10,11 +10,12 @@
 
 (require 'acp)
 (require 'cl-lib)
+(require 'mevedel-transport)
 
 (cl-defstruct (mevedel-acp (:constructor mevedel-acp--create))
   "Runtime state for one external model conversation."
   client launch session-id capabilities session-info
-  (state 'starting) active timer ready failure)
+  (state 'starting) active timer prepare-cancel ready failure)
 
 (defconst mevedel-acp--control-timeout 30
   "Seconds allowed for startup and cancellation acknowledgement.")
@@ -48,6 +49,9 @@
     (let ((starting (eq (mevedel-acp-state connection) 'starting)))
       (setf (mevedel-acp-state connection) 'closed)
       (mevedel-acp--cancel-timer connection)
+      (when-let* ((cancel (mevedel-acp-prepare-cancel connection)))
+        (setf (mevedel-acp-prepare-cancel connection) nil)
+        (funcall cancel))
       (acp-shutdown :client (mevedel-acp-client connection))
       (cond
        (starting (funcall (mevedel-acp-failure connection)
@@ -70,6 +74,19 @@
        :on-success success
        :on-failure (lambda (failure) (mevedel-acp--fail connection failure)))
     (error (mevedel-acp--fail connection (error-message-string err)))))
+
+(defun mevedel-acp--request-sender (&rest args)
+  "Install timer ownership before sending ACP request ARGS."
+  (let* ((client (plist-get args :client))
+         (process (alist-get :process client)))
+    (unless (process-get process 'mevedel-acp-filter)
+      (let ((filter (process-filter process)))
+        (set-process-filter
+         process (lambda (process input)
+                   (mevedel-transport-call-with-retained-timers
+                    (lambda () (funcall filter process input))))))
+      (process-put process 'mevedel-acp-filter t)))
+  (apply #'acp--request-sender args))
 
 (defun mevedel-acp--new-session (connection response)
   "Create or resume CONNECTION after initialization RESPONSE."
@@ -121,6 +138,9 @@
   "Open an external conversation described by LAUNCH.
 LAUNCH has :command, :args, absolute local :cwd, optional full :environment,
 :mcp server vector, agent-specific :meta, and optional :session-id to resume.
+Optional :prepare-launch receives zero-argument READY and error-string FAILURE
+callbacks and returns a canceller.  It must complete before the agent process
+starts; cancellation and startup timeout retire it and any late callbacks.
 Optional :prepare-session receives the connection, metadata and a continuation
 accepting prepared metadata.  It must finish configuration before invoking the
 continuation; startup errors or timeout fail before any prompt is submitted.
@@ -135,7 +155,8 @@ string if startup fails.  Return the runtime connection immediately."
       (error "ACP requires an existing absolute local working directory"))
     (let* ((connection (mevedel-acp--create :launch launch :ready ready :failure failure))
            (client (acp-make-client :command (plist-get launch :command)
-                                    :command-params (plist-get launch :args)))
+                                    :command-params (plist-get launch :args)
+                                    :request-sender #'mevedel-acp--request-sender))
            (default-directory (file-name-as-directory cwd))
            (process-environment (or (plist-get launch :environment) process-environment)))
       (setf (mevedel-acp-client connection) client)
@@ -161,25 +182,63 @@ string if startup fails.  Return the runtime connection immediately."
             `((:request-id . ,(alist-get 'id request))
               (:error . ((code . -32601)
                          (message . "Use the admitted MCP tools for execution"))))))))
-      (setf (mevedel-acp-timer connection)
-            (run-at-time mevedel-acp--control-timeout nil
-                         (lambda () (mevedel-acp--fail connection "ACP startup timed out"))))
-      (let ((initialize (acp-make-initialize-request
-                         :protocol-version 1
-                         :client-info '((name . "mevedel") (version . "0.5.0")))))
-        (when (plist-get launch :compaction)
-          (setf (alist-get 'session (alist-get 'clientCapabilities (alist-get :params initialize)))
-                `((compaction . ,(make-hash-table :test #'equal)))))
-        (mevedel-acp--send
-         connection initialize
-         (lambda (response) (mevedel-acp--new-session connection response))))
-      (when-let* ((process (alist-get :process client)))
-        (let ((sentinel (process-sentinel process)))
-          (set-process-sentinel
-           process (lambda (process event)
-                     (funcall sentinel process event)
-                     (unless (process-live-p process)
-                       (mevedel-acp--fail connection "ACP agent process exited"))))))
+      (let (timer)
+        (setq timer
+              (mevedel-transport-run-at-time
+               mevedel-acp--control-timeout
+               (lambda ()
+                 (when (and (eq timer (mevedel-acp-timer connection))
+                            (eq (mevedel-acp-state connection) 'starting))
+                   (mevedel-acp--fail connection "ACP startup timed out")))))
+        (setf (mevedel-acp-timer connection) timer))
+      (cl-labels
+          ((start ()
+             (when (eq (mevedel-acp-state connection) 'starting)
+               (let ((default-directory (file-name-as-directory cwd))
+                     (process-environment (or (plist-get launch :environment) process-environment))
+                     (initialize (acp-make-initialize-request
+                                  :protocol-version 1
+                                  :client-info '((name . "mevedel") (version . "0.5.0")))))
+                 (when (plist-get launch :compaction)
+                   (setf (alist-get 'session (alist-get 'clientCapabilities (alist-get :params initialize)))
+                         `((compaction . ,(make-hash-table :test #'equal)))))
+                 (mevedel-acp--send
+                  connection initialize
+                  (lambda (response) (mevedel-acp--new-session connection response)))
+                 (when-let* ((process (alist-get :process client)))
+                   (let ((sentinel (process-sentinel process)))
+                     (set-process-sentinel
+                      process (lambda (process event)
+                                (funcall sentinel process event)
+                                (unless (process-live-p process)
+                                  (mevedel-acp--fail connection "ACP agent process exited"))))))))))
+        (if-let* ((prepare (plist-get launch :prepare-launch)))
+            (let (cancel pending-cancel done)
+              (setf (mevedel-acp-prepare-cancel connection)
+                    (lambda ()
+                      (setq done t pending-cancel t)
+                      (when cancel (funcall cancel))))
+              (condition-case err
+                  (progn
+                    (setq cancel
+                          (funcall
+                           prepare
+                           (lambda ()
+                             (unless done
+                               (setq done t)
+                               (setf (mevedel-acp-prepare-cancel connection) nil)
+                               (condition-case err
+                                   (start)
+                                 (error
+                                  (mevedel-acp--fail connection (error-message-string err))))))
+                           (lambda (message)
+                             (unless done
+                               (setq done t)
+                               (setf (mevedel-acp-prepare-cancel connection) nil)
+                               (mevedel-acp--fail connection message)))))
+                    (when (and pending-cancel cancel) (funcall cancel)))
+                (error (mevedel-acp--fail connection (error-message-string err)))))
+          (start)))
       connection)))
 
 (defun mevedel-acp-prompt (connection content event complete)
@@ -217,10 +276,15 @@ Wait for the terminal acknowledgement before accepting more input."
   (when-let* ((turn (mevedel-acp-active connection))
               ((not (plist-get turn :cancelled))))
     (setf (mevedel-acp-active connection) (plist-put turn :cancelled t))
-    (setf (mevedel-acp-timer connection)
-          (run-at-time mevedel-acp--control-timeout nil
-                       (lambda () (mevedel-acp--fail connection
-                                                   "ACP cancellation timed out"))))
+    (let (timer)
+      (setq timer
+            (mevedel-transport-run-at-time
+             mevedel-acp--control-timeout
+             (lambda ()
+               (when (and (eq timer (mevedel-acp-timer connection))
+                          (eq turn (mevedel-acp-active connection)))
+                 (mevedel-acp--fail connection "ACP cancellation timed out")))))
+      (setf (mevedel-acp-timer connection) timer))
     (condition-case err
         (acp-send-notification
          :client (mevedel-acp-client connection)

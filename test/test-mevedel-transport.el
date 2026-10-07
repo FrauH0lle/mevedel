@@ -101,6 +101,63 @@
           (should (memq timer timer-list)))
       (cancel-timer timer))))
 
+(mevedel-deftest mevedel-transport-call-with-retained-timers ()
+  ,test
+  (test)
+  :doc "preserves ordinary callback arguments and the thunk's return value"
+  (let (timer delivered)
+    (unwind-protect
+        (progn
+          (should (eq 'result
+                      (mevedel-transport-call-with-retained-timers
+                       (lambda ()
+                         (setq timer (run-at-time 0 nil (lambda (value) (setq delivered value)) 'argument))
+                         'result))))
+          (with-timeout (2 (ert-fail "Retained callback did not run"))
+            (while (not delivered) (accept-process-output nil .01)))
+          (should (eq 'argument delivered)))
+      (when timer (cancel-timer timer))))
+
+  :doc "holds a library's timer across TRAMP suspension, including callback successors"
+  (let (timer successor delivered)
+    (unwind-protect
+        (progn
+          (mevedel-transport-call-with-retained-timers
+           (lambda ()
+             (setq timer
+                   (run-at-time 60 nil
+                                (lambda ()
+                                  (setq successor (run-at-time 0 nil (lambda () (setq delivered t)))))))))
+          (mevedel-transport-call-as-remote-operation
+           (lambda ()
+             (with-tramp-suspended-timers
+               ;; A previously scheduled library callback runs during a wait.
+               (funcall (timer--function timer))
+               (should (mevedel-transport-held-timer-p successor))
+               (accept-process-output nil .03)
+               (should-not delivered))))
+          (with-timeout (2 (ert-fail "Callback successor was lost"))
+            (while (not delivered) (accept-process-output nil .01)))
+          (should-not (mevedel-transport-held-timer-p successor)))
+      (when timer (cancel-timer timer))
+      (when successor (cancel-timer successor))))
+
+  :doc "retains a timer even when the library callback signals"
+  (let (timer delivered)
+    (unwind-protect
+        (progn
+          (should-error
+           (mevedel-transport-call-as-remote-operation
+            (lambda ()
+              (with-tramp-suspended-timers
+                (mevedel-transport-call-with-retained-timers
+                 (lambda ()
+                   (setq timer (run-at-time 0 nil (lambda () (setq delivered t))))
+                   (error "Library callback failed")))))))
+          (with-timeout (2 (ert-fail "Signalling callback lost its timer"))
+            (while (not delivered) (accept-process-output nil .01))))
+      (when timer (cancel-timer timer)))))
+
 (mevedel-deftest mevedel-transport-call-as-remote-operation ()
   ,test
   (test)

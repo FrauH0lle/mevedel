@@ -333,9 +333,10 @@ never discloses session storage paths."
            (mevedel-view-interaction-pending-p mevedel--view-buffer))))
 
 (defun mevedel-goal--budget-exhausted-p (goal)
-  "Return non-nil when GOAL has reached its finite token budget."
+  "Return non-nil when GOAL has exhausted or cannot measure its budget."
   (when-let* ((budget (mevedel-goal-token-budget goal)))
-    (>= (mevedel-goal-tokens-used goal) budget)))
+    (or (mevedel-goal-tokens-incomplete-p goal)
+        (>= (mevedel-goal-tokens-used goal) budget))))
 
 (defun mevedel-goal-continue-if-idle
     (&optional session buffer prompt-submission)
@@ -504,7 +505,9 @@ Running tools finish and the turn settles; it is not aborted."
       (user-error "Completed Goal cannot be resumed"))
     (when (or (eq (mevedel-goal-status goal) 'budget-limited)
               (mevedel-goal--budget-exhausted-p goal))
-      (user-error "Raise or remove the Goal budget before resuming"))
+      (user-error "%s" (if (mevedel-goal-tokens-incomplete-p goal)
+                            "Native usage is incomplete; remove the budget or start a new Goal"
+                          "Raise or remove the Goal budget before resuming")))
     (setq mevedel-goal--transient-retries 0)
     (setf (mevedel-goal-status goal) 'active
           (mevedel-goal-reason goal) nil)
@@ -546,17 +549,19 @@ The string `none' removes the limit."
     (mevedel-goal--assert-mutation-authority mevedel--session)
     (setf (mevedel-goal-token-budget goal) budget)
     (cond
-     ((and budget (>= used budget)
+     ((and (mevedel-goal--budget-exhausted-p goal)
            (not (memq (mevedel-goal-status goal) '(blocked complete))))
       (setf (mevedel-goal-status goal) 'budget-limited
             (mevedel-goal-reason goal)
-            (format "Token budget reached: %d/%d tokens used" used budget))
+            (if (mevedel-goal-tokens-incomplete-p goal)
+                "Native token usage is incomplete; remove the budget or start a new Goal to continue"
+              (format "Token budget reached: %d/%d tokens used" used budget)))
       (mevedel-goal--end-running-turn
        goal 'goal-budget-limited
-       (format "The user lowered the Goal token budget to %d, which is reached. Stop here; this turn ends after the current tools."
+       (format "The Goal token budget is %d and further usage cannot be admitted. Stop here; this turn ends after the current tools."
                budget)))
      ((and (eq (mevedel-goal-status goal) 'budget-limited)
-           (or (null budget) (< used budget)))
+           (not (mevedel-goal--budget-exhausted-p goal)))
       (setq reactivated t)
       (setf (mevedel-goal-status goal) 'active
             (mevedel-goal-reason goal) nil)))
@@ -564,9 +569,11 @@ The string `none' removes the limit."
     (mevedel-session-enqueue-pending-reminder
      mevedel--session
      (format
-      "Goal token budget changed from %s to %s; tokens used: %d; remaining: %s; status: %s."
-      (or old "unbounded") (or budget "unbounded") used
-      (if budget (max 0 (- budget used)) "unbounded")
+      "Goal token budget changed from %s to %s; tokens used: %s; remaining: %s; status: %s."
+      (or old "unbounded") (or budget "unbounded")
+      (if (mevedel-goal-tokens-incomplete-p goal) (format "at least %d (incomplete)" used) used)
+      (cond ((mevedel-goal-tokens-incomplete-p goal) "unknown")
+            (budget (max 0 (- budget used))) (t "unbounded"))
       (mevedel-goal-status goal)))
     (mevedel-goal--persist mevedel--session (current-buffer))
     (when reactivated
@@ -661,10 +668,11 @@ A hook that stops the turn pauses the Goal through here as well."
             (plist-put info :mevedel-goal-accounting-id
                        (mevedel-goal-id goal))
             (plist-put info :mevedel-goal-started-at (float-time))
-            (plist-put info :mevedel-goal-estimated-tokens
-                       (max 1 (/ (+ (length (prin1-to-string
-                                             (plist-get info :data))) 3)
-                                 4)))
+            (unless (mevedel-engine-external-p (plist-get info :backend))
+              (plist-put info :mevedel-goal-estimated-tokens
+                         (max 1 (/ (+ (length (prin1-to-string
+                                               (plist-get info :data))) 3)
+                                   4))))
             ;; Also revoke a replaced Goal's plan grant.
             (when mevedel--current-request
               (setf (mevedel-request-goal-plan-read-path
@@ -683,10 +691,37 @@ A hook that stops the turn pauses the Goal through here as well."
         (max 0 (- count (or (plist-get info :mevedel-goal-token-baseline) 0)))))))
 
 (defun mevedel-goal--request-token-count (info)
-  "Return normalized input plus output tokens for request INFO."
+  "Return accounted tokens for INFO, preserving native unknown usage."
   (or (mevedel-goal--known-token-count info)
-      (plist-get info :mevedel-goal-estimated-tokens)
-      1))
+      (unless (mevedel-engine-external-p (plist-get info :backend))
+        (or (plist-get info :mevedel-goal-estimated-tokens) 1))
+      0))
+
+(defun mevedel-goal--native-usage-incomplete-p (info)
+  "Return non-nil when native INFO lacks complete request usage."
+  (and (mevedel-engine-external-p (plist-get info :backend))
+       (let ((tokens (plist-get info :tokens-full)))
+         (or (plist-get info :mevedel-usage-incomplete)
+             (plist-get info :mevedel-usage-pending)
+             (not (and (natnump (plist-get tokens :input))
+                       (natnump (plist-get tokens :output))))))))
+
+(defun mevedel-goal--record-incomplete-usage (fsm info)
+  "Record missing native usage from INFO in root owner FSM's Goal.
+Known counters remain a lower bound.  A finite budget cannot be enforced once
+any submitted native request lacks a complete input and output total."
+  (when (and (plist-get info :mevedel-acp-prompted)
+             (mevedel-goal--native-usage-incomplete-p info))
+    (let ((root (mevedel-engine-info fsm)))
+      (when-let* ((buffer (plist-get root :buffer))
+                  ((buffer-live-p buffer))
+                  (session (buffer-local-value 'mevedel--session buffer))
+                  (goal (mevedel-session-goal session))
+                  ((equal (plist-get root :mevedel-goal-accounting-id)
+                          (mevedel-goal-id goal))))
+        (setf (mevedel-goal-tokens-incomplete-p goal) t)
+        (mevedel-goal--touch goal)
+        goal))))
 
 (defun mevedel-goal--budget-threshold-crossed-p
     (before after budget percentage)
@@ -739,9 +774,11 @@ next root request."
              (mevedel-goal--budget-exhausted-p goal))
     (setf (mevedel-goal-status goal) 'budget-limited
           (mevedel-goal-reason goal)
-          (format "Token budget reached: %d/%d tokens used"
-                  (mevedel-goal-tokens-used goal)
-                  (mevedel-goal-token-budget goal)))
+          (if (mevedel-goal-tokens-incomplete-p goal)
+              "Native token usage is incomplete; remove the budget or start a new Goal to continue"
+            (format "Token budget reached: %d/%d tokens used"
+                    (mevedel-goal-tokens-used goal)
+                    (mevedel-goal-token-budget goal))))
     (mevedel-goal--touch goal)))
 
 (defun mevedel-goal-charge-tokens (fsm tokens)
@@ -816,18 +853,32 @@ is BUFFER's running root request when that request is charged to a Goal."
                               :mevedel-goal-accounting-id)))
         fsm))))
 
-(defun mevedel-goal-charge-agent-progress (fsm)
-  "Charge agent request FSM's usage since its last charge to its Goal.
-Runs after each tool batch and at the end of the request, so the Goal budget
-tracks agent work while it happens rather than once it returns."
+(defun mevedel-goal-charge-agent-progress (fsm &optional terminal)
+  "Charge agent FSM's usage since its last charge to its Goal.
+At TERMINAL settlement also retain missing native counters as unknown."
   (when-let* ((info (mevedel-engine-info fsm))
               (invocation (plist-get info :mevedel-agent-invocation))
-              (goal-owner (mevedel-agent-invocation-goal-owner invocation))
-              (known (mevedel-goal--known-token-count info))
-              (delta (- known (or (plist-get info :mevedel-goal-charged) 0)))
-              ((> delta 0)))
-    (setf (mevedel-engine-info fsm) (plist-put info :mevedel-goal-charged known))
-    (mevedel-goal-charge-tokens goal-owner delta)))
+              (goal-owner (mevedel-agent-invocation-goal-owner invocation)))
+    (when-let* ((known (mevedel-goal--known-token-count info))
+                (delta (- known (or (plist-get info :mevedel-goal-charged) 0)))
+                ((> delta 0)))
+      (setf (mevedel-engine-info fsm) (plist-put info :mevedel-goal-charged known))
+      (mevedel-goal-charge-tokens goal-owner delta))
+    (when-let* (((and terminal (mevedel-goal--record-incomplete-usage goal-owner info)))
+                (root (mevedel-engine-info goal-owner))
+                (buffer (plist-get root :buffer))
+                (session (buffer-local-value 'mevedel--session buffer))
+                (goal (mevedel-session-goal session))
+                ((eq 'active (mevedel-goal-status goal)))
+                ((mevedel-goal-token-budget goal)))
+      (let* ((current (mevedel-goal-accounting-owner buffer))
+             (running (and current (mevedel-engine-info current))))
+        (if (and (equal (plist-get running :mevedel-goal-accounting-id) (mevedel-goal-id goal))
+                 (not (plist-get running :mevedel-goal-accounted)))
+            (mevedel-reminders-queue-turn-event
+             buffer 'goal-usage-incomplete
+             "Native token usage for this Goal is incomplete, so its remaining budget is unknown. Stop new substantive work and wrap up this response; automatic continuation will stop at settlement.")
+          (mevedel-goal--settle-budget goal-owner session goal (mevedel-goal-tokens-used goal)))))))
 
 (defun mevedel-goal-agent-budget-notice (fsm)
   "Return a budget notice entry for agent request FSM, or nil.
@@ -887,6 +938,7 @@ The entry holds `:body' and a delivery `:commit'."
           (let ((before (mevedel-goal-tokens-used goal)))
             (cl-incf (mevedel-goal-tokens-used goal)
                      (mevedel-goal--request-token-count info))
+            (mevedel-goal--record-incomplete-usage fsm info)
             (cl-incf (mevedel-goal-time-used-seconds goal)
                      (max 0 (round (- (float-time)
                                       (or (plist-get

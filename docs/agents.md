@@ -326,6 +326,10 @@ the interruption reason, bounded useful partial work when available, and the
 saved transcript path when available. Request teardown cancels the active tool
 pipeline, terminates the target's child executions, and prevents its queued
 execution work from being admitted after the turn becomes terminal.
+Native ACP interruption waits for its bounded terminal acknowledgement before
+settling the retained turn, so its final usage remains accountable. The runtime
+canceller returns `deferred` while it owns that acknowledgement; killing the
+owning buffer still closes the connection immediately.
 
 Interruption never recurses. Descendant turns continue, and the target's path,
 conversation buffer, mailbox, and registry record remain retained. A later

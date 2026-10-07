@@ -177,6 +177,20 @@ and `verify-callback' delivers the verifier outcome."
         (should (eq 'paused (mevedel-goal-status goal)))))
     (should-not scheduled))
 
+  :doc "reports incomplete durable native usage as a lower bound"
+  (mevedel-tool-goal-test--with-request
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create :id "g" :objective "Ship" :status 'budget-limited
+                               :reason "Usage unavailable" :token-budget 100
+                               :tokens-used 12 :tokens-incomplete-p t
+                               :time-used-seconds 0 :turns-run 1))
+    (let ((value (plist-get (json-parse-string
+                             (plist-get (mevedel-tool-goal--handle-get nil) :result)
+                             :object-type 'plist :null-object nil) :goal)))
+      (should-not (plist-get value :tokens_used))
+      (should-not (plist-get value :remaining_tokens))
+      (should (= 12 (plist-get value :known_tokens_used)))))
+
   :doc "includes known live usage once, and never charges a different Goal"
   (mevedel-tool-goal-test--with-request
     (mevedel-tool-goal--handle-create '(:objective "Ship" :token_budget 100))

@@ -2019,9 +2019,9 @@ PID-lock sessions write their fixed sidecar after the same authority check."
                    session root-buffer)))
     (if (mevedel-session-codec-portable-authority-p session)
         (mevedel-session-publication-publish session (list artifact) t)
-      (mevedel-session-codec-write
-       (plist-get artifact :path)
-       (mevedel-session-artifacts-build-sidecar session root-buffer)))))
+      (mevedel-session-control-fs-write-file
+       (mevedel-session-control-fs-physical-path (plist-get artifact :path))
+       (plist-get artifact :content)))))
 
 (defun mevedel-session-artifacts-publish-transcript-state
     (session root-buffer transcript-path content &optional coding)
