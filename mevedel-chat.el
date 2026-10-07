@@ -173,6 +173,8 @@
 		  "mevedel-skills-core" nil)
 (declare-function mevedel-skills-install "mevedel-skills-core"
 		  (session &optional buffer))
+(autoload 'mevedel-skills--release-on-kill "mevedel-skills-core")
+(autoload 'mevedel-skills-install "mevedel-skills-core")
 (defvar mevedel-skills--pending-request-context)
 
 ;; `mevedel-skills-invoke'
