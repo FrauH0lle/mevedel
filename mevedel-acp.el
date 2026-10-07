@@ -15,7 +15,7 @@
 
 (cl-defstruct (mevedel-acp (:constructor mevedel-acp--create))
   "Runtime state for one external model conversation."
-  client launch session-id capabilities commands prepared
+  client launch session-id capabilities commands prepared checked
   (state 'starting) active timer prepare-cancel ready failure stderr)
 
 (defconst mevedel-acp--control-timeout 30
@@ -112,9 +112,10 @@ prompt starts, otherwise through the prompt's completion."
      (mevedel-acp--fail connection (error-message-string err)))))
 
 (defun mevedel-acp--ready (connection)
-  "Admit prepared CONNECTION once any required command is advertised."
+  "Admit prepared and checked CONNECTION once any required command is advertised."
   (when (and (eq (mevedel-acp-state connection) 'starting)
-             (mevedel-acp-prepared connection))
+             (mevedel-acp-prepared connection)
+             (mevedel-acp-checked connection))
     (let* ((required (plist-get (mevedel-acp-launch connection) :required-command))
            (advertisement (assoc (mevedel-acp-session-id connection)
                                  (mevedel-acp-commands connection))))
@@ -136,7 +137,8 @@ prompt starts, otherwise through the prompt's completion."
       (setf (mevedel-acp-capabilities connection)
             (alist-get 'agentCapabilities response))
       (when (plist-get (mevedel-acp-launch connection) :initialize-only)
-        (mevedel-acp--admit connection)
+        (setf (mevedel-acp-prepared connection) t)
+        (mevedel-acp--ready connection)
         (cl-return-from mevedel-acp--new-session nil))
       (let* ((launch (mevedel-acp-launch connection))
              (id (plist-get launch :session-id))
@@ -176,8 +178,10 @@ prompt starts, otherwise through the prompt's completion."
 LAUNCH has :command, :args, absolute local :cwd, optional full :environment,
 :mcp server vector, agent-specific :meta, and optional :session-id to resume.
 Optional :prepare-launch receives zero-argument READY and error-string FAILURE
-callbacks and returns a canceller.  It must complete before the agent process
-starts; cancellation and startup timeout retire it and any late callbacks.
+callbacks and returns a canceller.  It runs while the agent process starts,
+and READY waits for it, so no prompt is sent before it succeeds; its failure,
+cancellation or the startup timeout closes the connection and retires late
+callbacks.
 Optional :prepare-session receives the connection, session metadata and a
 continuation.  It must finish configuration before invoking the continuation;
 startup errors or timeout fail before any prompt is submitted.
@@ -274,6 +278,11 @@ string if startup fails.  Return the runtime connection immediately."
                                 (funcall sentinel process event)
                                 (unless (process-live-p process)
                                   (mevedel-acp--fail connection "ACP agent process exited"))))))))))
+        ;; Start at once: preparation (version and login checks) overlaps the
+        ;; agent's own startup, and admission waits for both.
+        (condition-case err
+            (start)
+          (error (mevedel-acp--fail connection (error-message-string err))))
         (if-let* ((prepare (plist-get launch :prepare-launch)))
             (let (cancel pending-cancel done)
               (setf (mevedel-acp-prepare-cancel connection)
@@ -288,11 +297,9 @@ string if startup fails.  Return the runtime connection immediately."
                            (lambda ()
                              (unless done
                                (setq done t)
-                               (setf (mevedel-acp-prepare-cancel connection) nil)
-                               (condition-case err
-                                   (start)
-                                 (error
-                                  (mevedel-acp--fail connection (error-message-string err))))))
+                               (setf (mevedel-acp-prepare-cancel connection) nil
+                                     (mevedel-acp-checked connection) t)
+                               (mevedel-acp--ready connection)))
                            (lambda (message)
                              (unless done
                                (setq done t)
@@ -300,7 +307,7 @@ string if startup fails.  Return the runtime connection immediately."
                                (mevedel-acp--fail connection message)))))
                     (when (and pending-cancel cancel) (funcall cancel)))
                 (error (mevedel-acp--fail connection (error-message-string err)))))
-          (start)))
+          (setf (mevedel-acp-checked connection) t)))
       connection)))
 
 (defun mevedel-acp-prompt (connection content event complete)

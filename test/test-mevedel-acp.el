@@ -222,7 +222,30 @@
               (should-not (alist-get :process (mevedel-acp-client connection))))))
       (when prep-timer (cancel-timer prep-timer))))
 
-  :doc "readiness timeout cancels preparation before any process starts"
+  :doc "admission waits for preparation that outlasts the agent's own startup"
+  (let* ((directory (make-temp-file "mevedel-acp-test-" t))
+         admit ready
+         (connection
+          (mevedel-acp-open
+           (list :command (executable-find "python3")
+                 :args (list mevedel-test--acp-peer) :cwd directory
+                 :prepare-launch (lambda (success _fail) (setq admit success) #'ignore))
+           (lambda (_connection) (setq ready t))
+           (lambda (message) (ert-fail message)))))
+    (unwind-protect
+        (progn
+          ;; The agent starts at once and finishes its session first.
+          (mevedel-test--await 5 "Agent session did not start"
+            (mevedel-acp-prepared connection))
+          (should-not ready)
+          (should (eq 'starting (mevedel-acp-state connection)))
+          (funcall admit)
+          (should ready)
+          (should (eq 'idle (mevedel-acp-state connection))))
+      (mevedel-acp-close connection)
+      (delete-directory directory t)))
+
+  :doc "readiness timeout cancels preparation and closes the starting agent"
   (let (admit reject (cancelled 0)
         (mevedel-acp--control-timeout .05))
     (let ((mevedel-acp-test--launch-options
