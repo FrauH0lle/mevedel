@@ -11,6 +11,10 @@
 (require 'mevedel-goal)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-goal)
+(require 'mevedel-tools)
+(require 'mevedel-pending-inputs)
+(require 'mevedel-plan)
+(require 'mevedel-view-composer)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -492,7 +496,8 @@
               (dolist (reason '("temporary network timeout"
                                 "Curl failed with exit code 6. See Curl manpage for details."
                                 "Curl failed with exit code 56."
-                                "temporary network timeout"
+                                ;; Overload text naming the model is transient.
+                                "HTTP/2 503: The model gpt-5 is currently unavailable"
                                 "temporary network timeout"))
                 (mevedel-goal-settle-failure
                  (gptel-make-fsm

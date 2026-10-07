@@ -43,7 +43,10 @@
 				    (gptel-oauth--write-token gptel--openai-oauth-token-file
 							      '(:access_token "old" :refresh_token "old-refresh" :expires_at 0))
 				    (should-not (mevedel-auth-codex-ready-p backend))
-				    (should-error (mevedel-auth-assert-ready backend) :type 'user-error)
+				    ;; The credential lock holds even when the user disables lock files.
+				    (let ((create-lockfiles nil))
+				      (should-error (mevedel-auth-assert-ready backend) :type 'user-error))
+				    (should (file-locked-p (concat gptel--openai-oauth-token-file ".mevedel-auth")))
 				    (let ((id (plist-get (mevedel-auth-state backend) :id)))
 				      (mevedel-auth-refresh backend)
 				      (should (equal id (plist-get (mevedel-auth-state backend) :id))))
@@ -119,6 +122,63 @@
     (delete-file gptel--openai-oauth-token-file)
     (make-directory gptel--openai-oauth-token-file)
     (should-not (mevedel-auth-codex-ready-p backend))))
+
+(mevedel-deftest mevedel-auth--http (:quiet t)
+  ,test
+  (test)
+  :doc "a rejected request leaves no response buffer behind"
+  ;; url-http answers a 401 by retrying in a second buffer.
+  (mevedel-test-http
+   (lambda (_request) '("401 Unauthorized" "" "SECRET"))
+   (lambda (url)
+     (let ((buffers (buffer-list)) result)
+       (mevedel-auth--http (concat url "/oauth/token") '(("grant_type" "refresh_token")) t
+                           (lambda (payload code) (setq result (list payload code))))
+       (with-timeout (5 (ert-fail "HTTP request did not settle"))
+         (while (not result) (accept-process-output nil 0.01)))
+       (should (equal 401 (cadr result)))
+       (should-not (seq-filter (lambda (buffer) (string-prefix-p " *http" (buffer-name buffer)))
+                               (seq-difference (buffer-list) buffers))))))
+  :doc "a GET sends caller headers and returns the caller's parse"
+  (let (request)
+    (mevedel-test-http
+     (lambda (line) (setq request line) '("200 OK" "" "{\"a\":1}"))
+     (lambda (url)
+       (let (result)
+         (mevedel-auth--http (concat url "/usage") nil nil
+                             (lambda (payload code) (setq result (list payload code)))
+                             '(("Authorization" . "Bearer test"))
+                             (lambda () (json-parse-buffer :object-type 'alist)))
+         (with-timeout (5 (ert-fail "HTTP request did not settle"))
+           (while (not result) (accept-process-output nil 0.01)))
+         (should (equal '(((a . 1)) 200) result))
+         (should (string-prefix-p "GET /usage" request)))))))
+
+(mevedel-deftest mevedel-auth--dispatch/pass-through (:quiet t)
+  ,test
+  (test)
+  :doc "an ordinary backend's request proceeds unchanged"
+  (with-temp-buffer
+    (setq-local mevedel-auth--managed t)
+    (let (sent)
+      (mevedel-auth--dispatch
+       (lambda (_) (setq sent t))
+       (gptel-make-fsm :state 'WAIT :info (list :buffer (current-buffer)
+                                                :backend (gptel--make-openai :name "Plain"))))
+      (should sent)))
+  :doc "a managed Codex request with a current loaded token skips the credential file"
+  (let ((gptel--openai-oauth-token-file (make-temp-name "/nonexistent/token-"))
+        (backend (gptel--make-openai-oauth :name "Current"))
+        sent)
+    (setf (gptel-openai-oauth-token backend)
+          (list :access_token "current" :expires_at (+ (float-time) 3600)))
+    (with-temp-buffer
+      (setq-local mevedel-auth--managed t)
+      (mevedel-auth--dispatch
+       (lambda (_) (setq sent t))
+       (gptel-make-fsm :state 'WAIT :info (list :buffer (current-buffer) :backend backend))))
+    (should sent)
+    (should (equal "current" (plist-get (gptel-openai-oauth-token backend) :access_token)))))
 
 (provide 'test-mevedel-auth)
 ;;; test-mevedel-auth.el ends here

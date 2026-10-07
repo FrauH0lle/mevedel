@@ -898,7 +898,9 @@ Changing backends clears that data. Refresh supersedes any pending retrieval;
 The composer, transcript, Goal state, and model accounting stay untouched.
 
 Codex OAuth uses gptel's token restoration, account selection and authentication
-header, including its synchronous renewal preflight. The quota HTTP request to
+header. A stale token starts mevedel's asynchronous renewal instead of a request;
+the report then asks for a refresh once renewal finishes, or for
+`gptel-openai-oauth-login` when no renewal is possible. The quota HTTP request to
 `https://chatgpt.com/backend-api/wham/usage` is asynchronous with a 30-second
 timeout. Primary, secondary and additional quota buckets use the HTTP schema's
 returned window durations, utilization and reset times; plan and credits appear
