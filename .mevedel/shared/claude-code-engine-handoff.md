@@ -2,11 +2,11 @@
 
 Latest whole-branch reviews, run independently and merged: [review c](claude-code-engine-review-2026-10-07c.md)
 and [review d](claude-code-engine-review-2026-10-07d.md).
-Fixes are on `review/claude-code-engine` in the sibling `claude-code-engine-review`
-worktree; the source feature worktree is unchanged. This report covers later
-loading, authentication and recovery commits as well as the engine integration.
+Both reviews' fixes are merged into `feature/claude-code-engine` and master. They
+cover the later loading, authentication and recovery commits as well as the
+engine integration.
 
-Status: implemented and verified on `feature/claude-code-engine`. See the
+Status: implemented, reviewed and merged. See the
 [acceptance index](claude-code-engine-acceptance.md) for A01–A21, final tests and
 review results, and the [evidence log](claude-code-engine-progress.md) for
 chronological run details. Start with `M-x mevedel-claude-code-setup`.
