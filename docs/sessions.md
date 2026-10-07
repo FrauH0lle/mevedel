@@ -1505,6 +1505,29 @@ An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
 
+### Explicit migration to v0.5.10
+
+The standalone [migration script](../scripts/migrate-session-v0.5.6.el) converts
+v0.5.6 and v0.5.9 sessions to v0.5.10. Close the source session first, then run
+from the repository root with a new destination outside the source directory:
+
+```bash
+npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-session-v0.5.6.el \
+  -f mevedel-migrate-session-main -- /path/to/old-session /path/to/converted-session
+```
+
+The source remains unchanged. The converter preserves session identity,
+transcripts, artifacts, native-history references and all retained publication
+heads, updating sidecar checksums. New recovery fields start empty because older
+formats did not persist queued input; previously unsaved queues cannot be recovered.
+Existing v0.5.10 sidecars retain their recovery state. Restoring an interrupted
+native conversation still requires explicit continuation through the current
+reader's recovery rules.
+
+Conversion refuses active locks or leases, pending recovery, invalid metadata,
+checksum mismatches and symlinks. A failed conversion removes only its new copy.
+The runtime loader continues to accept only the current schema.
+
 ### Incompatible session inspection
 
 Session discovery reuses control observations only within its current
