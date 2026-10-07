@@ -143,6 +143,10 @@ version. Version checks and an initialization-only ACP handshake gate
 activation. Current, previous, rejected and active runtimes survive cleanup. A rejected pair
 waits for a new version or an explicit check. External installations are not
 replaced. Authentication failure is separate from runtime compatibility.
+A successful runtime update invalidates cached readiness and clears dependency
+failures once per session; it does not mark provider authentication as repaired.
+Credential and installation locks remain mandatory when the host disables editor
+file locks, and contention never opens a lock-breaking prompt.
 
 ## Rationale and consequences
 
@@ -164,6 +168,13 @@ through later compaction.
 
 ## Decision history
 
+- **Tool hook decisions:** review found that native turns called post-tool
+  hooks but ignored their decisions, allowing a stopped turn to execute another
+  tool and sending results a hook intended to withhold. The bridge now applies
+  stop, block and replacement results before delivery and publication, and
+  passes pre-hook argument replacements through the existing pipeline checks.
+  Real MCP subprocess regressions verify both the outgoing payload and the
+  absence of a subsequent tool call after a stop.
 - **Transport ownership:** the initial callback queue protected work after ACP
   notifications were decoded. Deterministic subprocess tests then showed that an
   ordinary TRAMP wait could discard ACP's earlier drain timer, leaving its queue

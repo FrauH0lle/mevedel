@@ -85,8 +85,8 @@ unreserved bytes literal and use uppercase hexadecimal escapes. For
 path-oriented families, split on literal `/` before decoding each component
 once. Input may spell any component byte literally or escaped, with either hex
 case, and may end with one slash; preparation normalizes it to the canonical
-spelling. Reject malformed escapes, empty interior components, decoded
-separators, control characters, `.`, `..`, and absolute components. A display
+spelling. Reject malformed escapes, invalid UTF-8, empty interior components,
+decoded separators, control characters, `.`, `..`, and absolute components. A display
 name never replaces the authoritative identity.
 
 The address forms have these identity rules:
@@ -482,8 +482,9 @@ metadata. Remote backing roots are not enumerated during completion; their
 bare prefix remains usable until an explicit resource operation resolves it.
 
 Addresses in the transcript view are buttons (see [the view](view.md)).
-Rendering only recognizes their spelling; a click resolves the address through
-the same Read preparation, with the same validation and containment, and
+Rendering only recognizes their spelling; a click validates and normalizes
+the address before routing shared items or agent transcripts. File-backed
+addresses resolve through the same Read preparation and containment, and
 `mevedel-resource-visit-path` returns the backing file of a file-backed
 address. No attempt outlives the click.
 

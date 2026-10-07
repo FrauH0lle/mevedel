@@ -3,8 +3,8 @@
 ;;; Commentary:
 ;; Closed browser actions reuse host model, preset, login and history APIs.
 ;; Login challenges are ephemeral and sent only to authenticated owner peers
-;; of rooms whose session uses that provider or whose owner started the login.
-;; A room follows a browser-started login, in every frame, until it settles.
+;; viewing that provider's credential store; each owner keeps the provider it
+;; last selected.
 
 ;;; Code:
 
@@ -30,43 +30,52 @@
 ;; `mevedel-turn'
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 
-(defun mevedel-collaboration-recovery-send (room peer &optional backend)
-  "Send owner PEER current ROOM recovery choices and BACKEND login state.
-BACKEND defaults to the room's unsettled browser login, then the session's."
-  (when (mevedel-collaboration--owner room peer)
-    (when-let* ((buffer (mevedel-collaboration--room-data-buffer room)))
-      (with-current-buffer buffer
-        (let* ((session (plist-get room :session))
-               (backend (or backend (plist-get room :recovery-login) gptel-backend)))
-          (mevedel-collaboration--transport-send
-           (plist-get room :transport) peer
-           (list :t "recovery" :models (vconcat (mapcar #'car (mevedel-model-candidates)))
-                 :presets (vconcat (mapcar (lambda (row) (symbol-name (car row))) mevedel-preset--registry))
-                 :model (mevedel-model-current-label buffer)
-                 :provider (and backend (gptel-backend-name backend))
-                 :providers (vconcat (mapcar #'car gptel--known-backends))
-                 :auth (condition-case nil (mevedel-auth-state backend) (user-error nil))
-                 :issues (vconcat (mevedel-session-recovery-issues session))
-                 :steering (vconcat (mapcar (lambda (entry)
-                                              (list :id (plist-get entry :id) :text (plist-get entry :input)))
-                                            (cl-remove-if-not
-                                             (lambda (entry) (eq 'failed-turn (plist-get entry :state)))
-                                             (append (mevedel-session-pending-steering session)
-                                                     (mevedel-session-pending-follow-ups session)))))
-                 ;; Only histories `mevedel-claude-code-recover-history' accepts.
-                 :histories (vconcat (cl-loop for (scope . _) in (mevedel-session-external-conversations session)
-                                              when (or (equal scope "root")
-                                                       (assoc scope (mevedel-session-agent-registry session)))
-                                              collect scope))
-                 ;; Runtime maintenance and its update check exist only for Claude.
-                 :runtime (when (mevedel-claude-code-backend-p gptel-backend)
-                            (let ((state (mevedel-claude-code-maintenance-state)))
-                              (list :status (plist-get state :status)
-                                    :message (plist-get state :message)))))))))))
+;; Frames are sent only when they change; installation state is cached in
+;; the room and refreshed by maintenance events instead of read per frame.
+(defun mevedel-collaboration-recovery-send (room peer)
+  "Send owner PEER ROOM's recovery choices and its selected login state.
+The selected provider is the one this owner last chose, else the session's."
+  (when-let* ((guest (mevedel-collaboration--owner room peer))
+              (buffer (mevedel-collaboration--room-data-buffer room)))
+    (with-current-buffer buffer
+      (let* ((provider (or (plist-get guest :recovery-backend) gptel-backend))
+             (session (plist-get room :session))
+             (frame
+              (list
+               :t "recovery" :models (vconcat (mapcar #'car (mevedel-model-candidates)))
+               :presets (vconcat (mapcar (lambda (row) (symbol-name (car row))) mevedel-preset--registry))
+               :model (mevedel-model-current-label buffer)
+               :provider (and provider (gptel-backend-name provider))
+               :providers (vconcat (mapcar #'car gptel--known-backends))
+               :auth (condition-case nil (mevedel-auth-state provider) (user-error nil))
+               :issues (vconcat (mevedel-session-recovery-issues session))
+               :steering (vconcat (mapcar (lambda (entry)
+                                            (list :id (plist-get entry :id) :text (plist-get entry :input)))
+                                          (cl-remove-if-not
+                                           (lambda (entry) (eq 'failed-turn (plist-get entry :state)))
+                                           (append (mevedel-session-pending-steering session)
+                                                   (mevedel-session-pending-follow-ups session)))))
+               ;; Only histories `mevedel-claude-code-recover-history' accepts.
+               :histories (vconcat (cl-loop for (scope . _) in (mevedel-session-external-conversations session)
+                                            when (or (equal scope "root")
+                                                     (assoc scope (mevedel-session-agent-registry session)))
+                                            collect scope))
+               ;; Runtime maintenance and its update check exist only for Claude.
+               :runtime (when (mevedel-claude-code-backend-p gptel-backend)
+                          (let ((state (if (plist-member room :recovery-runtime)
+                                           (plist-get room :recovery-runtime)
+                                         (plist-get (plist-put room :recovery-runtime
+                                                               (mevedel-claude-code-maintenance-state))
+                                                    :recovery-runtime))))
+                            (list :status (plist-get state :status)
+                                  :message (plist-get state :message)))))))
+        (unless (equal frame (plist-get guest :recovery-state))
+          (when (mevedel-collaboration--transport-send (plist-get room :transport) peer frame)
+            (plist-put guest :recovery-state frame)))))))
 
-(defun mevedel-collaboration-recovery--send-owners (room &optional backend)
-  "Send every owner peer of ROOM its recovery frame with BACKEND login state."
-  (maphash (lambda (peer _guest) (mevedel-collaboration-recovery-send room peer backend))
+(defun mevedel-collaboration-recovery--send-owners (room)
+  "Send every owner peer of ROOM its changed recovery frame."
+  (maphash (lambda (peer _guest) (mevedel-collaboration-recovery-send room peer))
            (plist-get room :guests)))
 
 (defun mevedel-collaboration-recovery-refresh (buffer)
@@ -75,32 +84,32 @@ BACKEND defaults to the room's unsettled browser login, then the session's."
               (room (mevedel-collaboration--room-for-buffer buffer)))
     (mevedel-collaboration-recovery--send-owners room)))
 
-(defun mevedel-collaboration-recovery-auth-changed (backend state)
-  "Publish BACKEND's login state to owners of rooms that use it.
-A room uses BACKEND when its session does or its owner started that login.
-A browser login stops routing to its room once STATE settles."
+(defun mevedel-collaboration-recovery-auth-changed (backend _state)
+  "Publish BACKEND's login state to owners viewing its credential store.
+A nil BACKEND refreshes every owner."
   (when (boundp 'mevedel-collaboration--rooms)
     (maphash
-     (lambda (buffer room)
-       (let ((login (eq backend (plist-get room :recovery-login))))
-         (when (and (buffer-live-p buffer)
-                    (or login (with-current-buffer buffer
-                                (mevedel-readiness-uses-p backend))))
-           (mevedel-collaboration-recovery--send-owners room backend))
-         (when (and login (not (member (plist-get state :status) '("login" "refreshing"))))
-           (plist-put room :recovery-login nil))))
+     (lambda (_buffer room)
+       (when-let* ((buffer (mevedel-collaboration--room-data-buffer room)))
+         (maphash
+          (lambda (peer guest)
+            (let ((selected (or (plist-get guest :recovery-backend)
+                                (buffer-local-value 'gptel-backend buffer))))
+              (when (or (null backend)
+                        (condition-case nil
+                            (equal (mevedel-auth--key backend) (mevedel-auth--key selected))
+                          (user-error nil)))
+                (mevedel-collaboration-recovery-send room peer))))
+          (plist-get room :guests))))
      mevedel-collaboration--rooms)))
 (add-hook 'mevedel-auth-changed-hook #'mevedel-collaboration-recovery-auth-changed)
 
-(defun mevedel-collaboration-recovery-runtime-changed (_state)
-  "Publish current Claude installation status to owners of Claude rooms."
+(defun mevedel-collaboration-recovery-runtime-changed (state)
+  "Publish current installation STATE to live owners without reading storage."
   (when (boundp 'mevedel-collaboration--rooms)
-    (maphash
-     (lambda (buffer room)
-       (when (and (buffer-live-p buffer)
-                  (mevedel-claude-code-backend-p (buffer-local-value 'gptel-backend buffer)))
-         (mevedel-collaboration-recovery--send-owners room)))
-     mevedel-collaboration--rooms)))
+    (maphash (lambda (_buffer room) (plist-put room :recovery-runtime state))
+             mevedel-collaboration--rooms))
+  (mevedel-collaboration-recovery-auth-changed nil nil))
 (add-hook 'mevedel-claude-code-maintenance-changed-hook #'mevedel-collaboration-recovery-runtime-changed)
 
 (defun mevedel-collaboration-recovery--apply-preset (name buffer session)
@@ -139,6 +148,9 @@ bindings, including the absence of one."
           (when (or (mevedel-turn-busy-p buffer) (mevedel-agent-control-active-turn-p session))
             (user-error "Wait for or interrupt running turns before recovering the session"))
           (mevedel-session-artifacts-assert-new-mutation-authority session))
+        (when (and (plist-get frame :provider)
+                   (member action '("status" "login" "login-code" "cancel-login")))
+          (plist-put (mevedel-collaboration--owner room peer) :recovery-backend backend))
         (pcase action
           ("status" nil)
           ("model"
@@ -170,11 +182,7 @@ bindings, including the absence of one."
                 session 'steering (remq entry (mevedel-session-pending-steering session))
                 'follow-up (append (remq entry (mevedel-session-pending-follow-ups session))
                                    (and replacement (list replacement)))))))
-          ("login"
-           ;; Recorded only once started: starting first cancels the
-           ;; provider's settled operation, which would clear it again.
-           (when (member (plist-get (mevedel-auth-start backend) :status) '("login" "refreshing"))
-             (setq room (plist-put room :recovery-login backend))))
+          ("login" (mevedel-auth-start backend))
           ("login-code" (mevedel-auth-submit-code backend (plist-get frame :id) value))
           ("cancel-login" (mevedel-auth-cancel backend))
           ("update"

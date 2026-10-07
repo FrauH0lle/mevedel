@@ -900,7 +900,8 @@ The composer, transcript, Goal state, and model accounting stay untouched.
 Codex OAuth uses gptel's token restoration, account selection and authentication
 header. A stale token starts mevedel's asynchronous renewal instead of a request;
 the report then asks for a refresh once renewal finishes, or for
-`gptel-openai-oauth-login` when no renewal is possible. The quota HTTP request to
+`gptel-openai-oauth-login` when no renewal is possible. Quota retrieval never
+enters gptel's synchronous login flow. The quota HTTP request to
 `https://chatgpt.com/backend-api/wham/usage` is asynchronous with a 30-second
 timeout. Primary, secondary and additional quota buckets use the HTTP schema's
 returned window durations, utilization and reset times; plan and credits appear
@@ -1830,6 +1831,13 @@ releases the surface the previous one held. Queue and recovery actions recheck
 session mutation authority before
 restoring reserved submission context or changing session state, so stale,
 foreign, and quiescing surfaces fail closed.
+
+After a failed turn or an interrupted queued dispatch, entries marked
+`Needs review` require an explicit decision. Select `f` to convert failed
+steering or requeue a failed follow-up at the follow-up tail, preserving its
+attachments, guest attribution, and scope, or delete the entry. `R` clears the
+failure pause only after both categories contain no unresolved failed entries;
+closing the cockpit then resumes eligible delivery.
 
 Permission, Ask, Plan, and other user-input overlays do not disable either
 queue. An unresolved interaction merely postpones steering injection and

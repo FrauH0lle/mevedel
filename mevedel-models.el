@@ -268,8 +268,8 @@ NOERROR is non-nil, return nil instead of signaling `user-error'."
 (defun mevedel-model-set-session-provider (session provider &optional buffer)
   "Set SESSION's resolved PROVIDER in BUFFER.
 Keep the current reasoning effort when PROVIDER supports it; otherwise reset
-the effort to its default and report the reset.  The selection resolves any
-model recovery issue."
+the effort to its default and report the reset.  The selection resolves root
+model failures; other recovery holds remain."
   (let ((buffer (or buffer (current-buffer)))
         (backend (plist-get provider :backend))
         (model (plist-get provider :model)))
@@ -293,8 +293,10 @@ model recovery issue."
         (mevedel-session-set-model-provider
          session (mevedel-model--provider-label provider))
         (mevedel-session-set-reasoning-effort session effort)))
-    ;; An explicit selection resolves a missing saved model.
-    (mevedel-recovery-clear session "model")
+    (dolist (issue (mevedel-session-recovery-issues session))
+      (when (and (equal "model" (plist-get issue :category))
+                 (member (plist-get issue :id) '("model" "request" "authentication")))
+        (mevedel-recovery-clear session (plist-get issue :id))))
     provider))
 
 (defun mevedel-model-set-session-effort (session effort &optional buffer)

@@ -752,6 +752,35 @@
 (mevedel-deftest mevedel-pending-inputs-make-follow-up ()
   ,test
   (test)
+  :doc "requeues failed follow-up at the tail without losing guest or directive metadata"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((failed (mevedel-session-enqueue-pending-input
+                    session 'follow-up
+                    '(:input "retry me" :state failed-turn :blocked t
+                      :request-id "lost" :guest-id "guest" :guest-name "Guest"
+                      :guest-role full :guest-paths ("/tmp/attachment")
+                      :inert-skills t :guest-skills ("review")
+                      :scope (:directive-id "directive" :action discuss))))
+           (later (mevedel-session-enqueue-pending-input
+                   session 'follow-up '(:input "later"))))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (save-window-excursion
+        (let ((cockpit (with-current-buffer view-buf
+                         (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get failed :id))
+            (mevedel-pending-inputs-make-follow-up))))
+      (let ((replacement (cadr (mevedel-session-pending-follow-ups session))))
+        (should (eq later (car (mevedel-session-pending-follow-ups session))))
+        (should (= 2 (length (mevedel-session-pending-follow-ups session))))
+        (should (eq 'pending (plist-get replacement :state)))
+        (should-not (plist-member replacement :blocked))
+        (should-not (plist-member replacement :request-id))
+        (dolist (key '(:id :input :guest-id :guest-name :guest-role :guest-paths
+                        :inert-skills :guest-skills :scope))
+          (should (equal (plist-get failed key) (plist-get replacement key)))))
+      (should (mevedel-session-pending-input-failure-paused session))))
+
   :doc "drops steering preparation and appends a delayed follow-up"
   (mevedel-pending-inputs-test--with-session
     (let* ((context-entries '((:event SessionStart :body "restore me")))
@@ -1041,6 +1070,26 @@
 (mevedel-deftest mevedel-pending-inputs-resume-after-failure ()
   ,test
   (test)
+
+  :doc "failed follow-ups require explicit requeue before resuming"
+  (mevedel-pending-inputs-test--with-session
+    (let ((failed (mevedel-session-enqueue-pending-input
+                   session 'follow-up '(:input "review me" :state failed-turn))))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (save-window-excursion
+        (let ((cockpit (with-current-buffer view-buf
+                         (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get failed :id))
+            (should-error (mevedel-pending-inputs-resume-after-failure)
+                          :type 'user-error)
+            (should (mevedel-session-pending-input-failure-paused session))
+            (mevedel-pending-inputs-make-follow-up)
+            (mevedel-test--with-captured-messages nil
+              (mevedel-pending-inputs-resume-after-failure)))))
+      (should-not (mevedel-session-pending-input-failure-paused session))
+      (should (eq 'pending (plist-get (car (mevedel-session-pending-follow-ups session))
+                                     :state)))))
 
   :doc "rejects unresolved steering and accepts explicit conversion recovery"
   (mevedel-pending-inputs-test--with-session

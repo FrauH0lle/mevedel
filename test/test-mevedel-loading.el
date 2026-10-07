@@ -60,8 +60,10 @@ A child that outlives two minutes is killed and fails the test."
                 (should (equal 0 status))
                 (should (equal "" output))))
             (dolist (entry (list root compiled))
-              (dolist (scenario '(commands installation gptel chat tools renderers
-                                  claude lobby discuss implement preview))
+              (dolist (scenario '(commands installation gptel chat chat-in-directory
+                                  tools renderers claude lobby room discuss implement
+                                  directive-preview-implement directive-preview-discuss
+                                  directive-answer))
                 (run entry scenario))
               ;; The first send saves a session that a second Emacs resumes.
               (run entry 'send state)

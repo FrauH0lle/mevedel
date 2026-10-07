@@ -150,8 +150,15 @@ asynchronously. Event, hook and tool-admission ordering and cancellation follow
 the agent's last stderr output.
 Native tool calls run the data buffer's `gptel-pre-tool-call-functions` and
 `gptel-post-tool-call-functions` (tool repair already ran in the pipeline), so
-views, collaboration rooms and agent activity observe them as gptel calls; a
-hook's `:stop` ends the turn and `:block` refuses the call.
+views, collaboration rooms and agent activity observe them as gptel calls.
+Pre-hook argument replacements pass through normal validation and permissions;
+synthetic results skip execution. Post-hook replacements and blocks update both
+the MCP result and displayed transcript, dropping withheld media. A stop from
+either hook ends the turn before another call; a post-hook stop retains the
+completed call's evidence. Hook changes are passed to subsequent observers.
+ACP cannot apply gptel's separate `:confirm` UI or rename a native tool call;
+hooks requesting either stop before execution with an actionable error. Use
+mevedel's permission rules or the gptel engine for those controls.
 The Claude Code provider routes ordinary root submissions through
 this runner. Its usage accounting is described under
 [Goals](goals.md#request-context-and-authority); duplicate terminal replies

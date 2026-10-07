@@ -165,6 +165,32 @@
                        room "/root/worker-1")))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
+(mevedel-deftest mevedel-collaboration--queue-agent-load
+  (:doc "cold loading survives guest frames processed inside a TRAMP timer suspension")
+  (let* ((record (mevedel-agent-record--create :path "/root/cold"))
+         (session (mevedel-session--create
+                   :agent-registry (list (cons "/root/cold" record))))
+         (room (list :session session))
+         (mevedel-transport--held-timers nil)
+         loaded)
+    (require 'mevedel-transport)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-nested-p) (lambda () t))
+                  ((symbol-function 'mevedel-collaboration--load-agent)
+                   (lambda (seen-room path)
+                     (should (eq room seen-room))
+                     (should (equal path "/root/cold"))
+                     (setq loaded t))))
+          (let ((timer-list nil))
+            (should (mevedel-collaboration--queue-agent-load room "/root/cold"))
+            (should (mevedel-collaboration--queue-agent-load room "/root/cold"))
+            (should-not timer-list))
+          (should (= 1 (length mevedel-transport--held-timers)))
+          (let ((timer (car mevedel-transport--held-timers)))
+            (apply (timer--function timer) (timer--args timer)))
+          (should loaded))
+      (mapc #'cancel-timer mevedel-transport--held-timers))))
+
 (mevedel-deftest mevedel-collaboration--load-agent
   (:doc "loads a cold agent once off the frame handler and refuses a failed load")
   (let* ((data (generate-new-buffer " *agent-load-root*"))

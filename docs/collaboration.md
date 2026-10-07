@@ -69,18 +69,21 @@ than through the command allowlist:
 - `recovery` exposes selection among the offered models and registered presets,
   native-history recovery, retained-input retry, reviewed input requeue/discard,
   provider login and, in Claude Code sessions, runtime update checks. Login
-  challenges go only to owner peers of rooms whose session uses that provider or
-  whose owner started that login, until it settles. Codex uses device authorization (URL and
-  user code); Claude runs the CLI's login, shows its authorization URL, takes
-  the full returned code and then verifies the subscription. Codex tokens also
-  refresh asynchronously without a challenge. Tokens never enter shared transcript or
-  recovery state. Owners see each recovery issue once, with the host's details;
-  other readers see readiness and runtime issues only by category, since host
-  diagnostics can name local paths. Signing in changes host-wide provider
-  credentials; cancelling discards the challenge. Model/preset/history/input
-  changes require idle turns and current session mutation authority. Preset
-  replacement preserves the session's and data buffer's permission and sandbox
-  modes. Only histories that can still be recovered are offered.
+  challenges go only to owner peers viewing that provider's credential store;
+  each owner keeps the provider it last selected. Codex uses device authorization
+  (URL and user code); Claude runs the CLI's login, shows its authorization URL,
+  takes the full returned code and then verifies the subscription. Codex tokens
+  also refresh asynchronously without a challenge. Tokens and subprocess output
+  never enter shared transcript or recovery state. Owners see each recovery issue
+  once, with the host's details; other readers see readiness and runtime issues
+  only by category, since host diagnostics can name local paths. Signing in
+  changes host-wide provider credentials; cancelling discards the challenge.
+  Model/preset/history/input changes require idle turns and current session
+  mutation authority. Preset replacement preserves the session's and data
+  buffer's permission and sandbox modes. Only histories that can still be
+  recovered are offered. Choices refresh when session status or retained input
+  changes and are sent only when they changed; unchanged updates preserve an
+  in-progress login code and the composer draft.
 
 Owner authority is never granted alone: the owner link contains the write
 token, so a peer claiming the owner token without it is a forgery and is
@@ -343,8 +346,9 @@ startup has finished when it is installed from the init file, so the relay
 settings that follow it apply. The restarted lobby dials the same relay room,
 its links keep working, and browser tabs still within their reconnect window
 rejoin on their own. A lobby that cannot restart is reported as a warning and
-stays recorded for the next start; `/collab lobby stop` in that workspace
-removes the record. A recorded workspace whose directory no longer exists is
+stays recorded for the next start. Automatic restore never prompts, and a
+failed workspace probe does not prevent other lobbies from restarting.
+`/collab lobby stop` in that workspace removes the record. A recorded workspace whose directory no longer exists is
 forgotten with a warning.
 
 `/collab lobby stop` stops the lobby and removes the record, so it stays

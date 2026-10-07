@@ -1,5 +1,11 @@
 # Handoff: Claude subscription sessions through ACP (2026-10-06)
 
+Latest whole-branch reviews, run independently and merged: [review c](claude-code-engine-review-2026-10-07c.md)
+and [review d](claude-code-engine-review-2026-10-07d.md).
+Fixes are on `review/claude-code-engine` in the sibling `claude-code-engine-review`
+worktree; the source feature worktree is unchanged. This report covers later
+loading, authentication and recovery commits as well as the engine integration.
+
 Status: implemented and verified on `feature/claude-code-engine`. See the
 [acceptance index](claude-code-engine-acceptance.md) for A01–A21, final tests and
 review results, and the [evidence log](claude-code-engine-progress.md) for
@@ -12,10 +18,11 @@ records all resolved findings, follow-up reviews, performance measurements,
 and final evidence. Live subscription checks used
 the existing Enterprise login, not a separate Pro/Max account. Session sidecars
 now require v0.5.10; the runtime loader rejects older records without deleting
-them, and `scripts/migrate-session-v0.5.6.el` explicitly converts v0.5.6 and
-v0.5.9 copies. The strict Goal record additionally requires
-`:tokens-incomplete-p`; earlier development Goals missing it are dropped on
-normal restore. The converter preserves Goals by adding this field. No features were removed.
+them, and `scripts/migrate-session-v0.5.6.el` explicitly copies v0.5.6 and
+v0.5.9 records into the current format without changing originals. The strict
+Goal record additionally requires `:tokens-incomplete-p`; earlier development
+Goals missing it are dropped on normal restore. The converter preserves Goals
+by adding this field and validates them. No features were removed.
 
 A second independent review on 2026-10-07 found and fixed further transport,
 security, collaboration and gptel-path defects; see the

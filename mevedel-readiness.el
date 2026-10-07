@@ -174,8 +174,13 @@ uncommitted; blocking recovery issues still refuse afterwards."
                     ((eq buffer (mevedel-session-root-buffer session)))
                     ((mevedel-claude-code-backend-p gptel-backend)))
           (if ready
+              ;; An installed runtime proves nothing about login: clear only
+              ;; the runtime issue and dependency failures it repairs.
               (progn (mevedel-readiness-stop)
-                     (mevedel-readiness--resume session "runtime" "authentication"))
+                     (apply #'mevedel-readiness--resume session "runtime"
+                            (cl-loop for issue in (mevedel-session-recovery-issues session)
+                                     when (equal "dependency" (plist-get issue :category))
+                                     collect (plist-get issue :id))))
             (when (mevedel-recovery-report
                    session "runtime" 'dependency
                    (or (plist-get state :message) (mevedel-recovery-message 'dependency))

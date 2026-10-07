@@ -96,19 +96,24 @@ Never expose HTTP bodies in errors."
                          headers))
                 (url-show-status nil) (url-request-noninteractive t) (url-max-redirections 0))
             (setq timer (mevedel-transport-run-at-time 30 (lambda () (finish nil 0))))
-            (push (url-retrieve url
-                                (lambda (_status)
-                                  (push (current-buffer) buffers)
-                                  (let ((code url-http-response-status)
-                                        (payload (condition-case nil
-                                                     (progn (goto-char url-http-end-of-headers)
-                                                            (if parse (funcall parse)
-                                                              (json-parse-buffer :object-type 'plist :null-object nil
-                                                                                 :false-object nil)))
-                                                   (error nil))))
-                                    (finish payload code))) nil t t)
-                  buffers)
-            (when done (clean)))
+            (let ((request
+                   (url-retrieve url
+                                 (lambda (_status)
+                                   (push (current-buffer) buffers)
+                                   ;; A late response after cancellation is only cleaned up.
+                                   (if done (clean)
+                                     (let ((code url-http-response-status)
+                                           (payload (condition-case nil
+                                                        (progn (goto-char url-http-end-of-headers)
+                                                               (if parse (funcall parse)
+                                                                 (json-parse-buffer :object-type 'plist :null-object nil
+                                                                                    :false-object nil)))
+                                                      (error nil))))
+                                       (finish payload code)))) nil t t)))
+              (push request buffers)
+              (if done (clean)
+                ;; No connection buffer means the request never started.
+                (unless (buffer-live-p request) (finish nil 0)))))
         (error (finish nil 0))
         (quit (cancel) (signal 'quit nil)))
       #'cancel)))
@@ -155,16 +160,25 @@ Never expose HTTP bodies in errors."
 
 (defun mevedel-auth--lock (backend)
   "Acquire BACKEND's local credential lock for an asynchronous operation."
-  (let ((lock (concat (mevedel-auth--key backend) ".mevedel-auth")))
-    ;; Claude owns its own credential serialization inside its CLI.
-    (when (gptel-openai-oauth-p backend)
-      (make-directory (file-name-directory lock) t)
-      (when (file-locked-p lock)
-        (mevedel-auth--publish backend "failed" "Another host process is renewing Codex login; retry shortly")
-        (user-error "Another host process is renewing Codex login; retry shortly"))
-      ;; `lock-file' does nothing while `create-lockfiles' is nil.
-      (let ((create-lockfiles t)) (lock-file lock))
-      (plist-put (gethash (mevedel-auth--key backend) mevedel-auth--operations) :lock lock))))
+  ;; Claude owns its own credential serialization inside its CLI.
+  (when (gptel-openai-oauth-p backend)
+    (condition-case nil
+        (let ((lock (concat (mevedel-auth--key backend) ".mevedel-auth"))
+              (create-lockfiles t))
+          (make-directory (file-name-directory lock) t)
+          (when (file-locked-p lock)
+            (error "Credential store is locked"))
+          (cl-letf (((symbol-function 'ask-user-about-lock)
+                     (lambda (&rest _) (error "Credential store is locked"))))
+            (lock-file lock))
+          (unless (eq t (file-locked-p lock))
+            (error "Credential store could not be locked"))
+          (plist-put (gethash (mevedel-auth--key backend) mevedel-auth--operations)
+                     :lock lock))
+      (error
+       (mevedel-auth--publish backend "failed"
+                              "Codex credential store is unavailable or locked; check host access and retry")
+       (user-error "Codex credential store is unavailable or locked; check host access and retry")))))
 
 (defun mevedel-auth-assert-ready (backend)
   "Reject stale Codex BACKEND credentials before gptel can prompt or block.

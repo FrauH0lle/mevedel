@@ -59,12 +59,22 @@
                    ("memory://journal" . "memory://journal/")
                    ("memory://journal/" . "memory://journal/")
                    ("history://root/" . "history://root")
+                   ("history://%72oot" . "history://root")
+                   ("history://%73aved/session" . "history://saved/session")
+                   ("skill://local%2dmevedel/review"
+                    . "skill://local-mevedel/review")
                    ("mcp://server/" . "mcp://server")
                    ("shared://library/System Design/sheet.png"
                     . "shared://library/System%20Design/sheet.png")))
     (should (equal (cdr entry)
                    (plist-get (mevedel-resource-parse-address (car entry))
                               :canonical))))
+  :doc "rejects invalid UTF-8 bytes in names and JSON pointer fragments"
+  (dolist (bytes '("%FF" "%80" "%C0%AF" "%C3" "%ED%A0%80"
+                   "%F4%90%80%80"))
+    (dolist (prefix '("work://" "mcp://server/" "agent://root/review#/"))
+      (should-error (mevedel-resource-parse-address (concat prefix bytes))
+                    :type 'mevedel-resource-error)))
   :doc "rejects unknown scheme URLs instead of treating them as paths"
   (should-error (mevedel-resource-parse-address "https://example.test/a"))
   :doc "rejects an unknown scheme without interning its name"
