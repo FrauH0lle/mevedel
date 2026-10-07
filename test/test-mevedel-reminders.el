@@ -1341,7 +1341,10 @@ this collapses both shapes to the delivered text."
               (file-name-as-directory tmp) "vs"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
-    (should-not (funcall (mevedel-reminder-trigger r) session)))
+    (unwind-protect
+        (progn
+          (should-not (funcall (mevedel-reminder-trigger r) session)))
+      (delete-directory tmp t)))
 
   :doc "fires after the latest turn modified a file"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
@@ -1350,10 +1353,13 @@ this collapses both shapes to the delivered text."
               (file-name-as-directory tmp) "vs"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
-    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
-    (should (funcall (mevedel-reminder-trigger r) session))
-    (should (string-match-p "verifier"
-                            (funcall (mevedel-reminder-content r) session))))
+    (unwind-protect
+        (progn
+          (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
+          (should (funcall (mevedel-reminder-trigger r) session))
+          (should (string-match-p "verifier"
+                                  (funcall (mevedel-reminder-content r) session))))
+      (delete-directory tmp t)))
 
   :doc "keeps generic verification guidance for recent edits after plan verification"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
@@ -1362,13 +1368,16 @@ this collapses both shapes to the delivered text."
               (file-name-as-directory tmp) "vs"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
-    (setf (mevedel-session-plan-metadata session)
-          '(:status accepted :verification-pending nil))
-    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
-    (should (funcall (mevedel-reminder-trigger r) session))
-    (should-not (string-match-p
-                 "accepted plan"
-                 (funcall (mevedel-reminder-content r) session))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-plan-metadata session)
+                '(:status accepted :verification-pending nil))
+          (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
+          (should (funcall (mevedel-reminder-trigger r) session))
+          (should-not (string-match-p
+                       "accepted plan"
+                       (funcall (mevedel-reminder-content r) session))))
+      (delete-directory tmp t)))
 
   :doc "fires for rejected/cancelled/presented metadata without accepted wording"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
@@ -1377,14 +1386,17 @@ this collapses both shapes to the delivered text."
               (file-name-as-directory tmp) "vs"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
-    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
-    (dolist (status '(rejected cancelled presented))
-      (setf (mevedel-session-plan-metadata session)
-            (list :status status :verification-pending t))
-      (should (funcall (mevedel-reminder-trigger r) session))
-      (should-not (string-match-p
-                   "accepted plan"
-                   (funcall (mevedel-reminder-content r) session)))))
+    (unwind-protect
+        (progn
+          (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
+          (dolist (status '(rejected cancelled presented))
+            (setf (mevedel-session-plan-metadata session)
+                  (list :status status :verification-pending t))
+            (should (funcall (mevedel-reminder-trigger r) session))
+            (should-not (string-match-p
+                         "accepted plan"
+                         (funcall (mevedel-reminder-content r) session)))))
+      (delete-directory tmp t)))
 
   :doc "adds accepted-plan guidance after a recent modification"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
@@ -1393,12 +1405,15 @@ this collapses both shapes to the delivered text."
               (file-name-as-directory tmp) "vs"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
-    (setf (mevedel-session-plan-metadata session)
-          '(:status accepted :verification-pending t))
-    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
-    (should (funcall (mevedel-reminder-trigger r) session))
-    (should (string-match-p "plan"
-                            (funcall (mevedel-reminder-content r) session)))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-plan-metadata session)
+                '(:status accepted :verification-pending t))
+          (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
+          (should (funcall (mevedel-reminder-trigger r) session))
+          (should (string-match-p "plan"
+                                  (funcall (mevedel-reminder-content r) session))))
+      (delete-directory tmp t))))
 
 
 (mevedel-deftest mevedel-reminders-make-user-revised-patch
@@ -1440,36 +1455,39 @@ this collapses both shapes to the delivered text."
          (accepted-path
           (file-name-concat tmp "local" "plans"
                             "accepted-20260813-120000.md")))
-    (make-directory (file-name-directory plan-path) t)
-    (write-region "# Current draft" nil plan-path nil 'silent)
-    (write-region "# Accepted\n\nDo it." nil accepted-path nil 'silent)
-    (setf (mevedel-session-save-path session) tmp)
-    (setf (mevedel-session-turn-count session) 6)
-    (setf (mevedel-session-plan-metadata session)
-          '(:path "local/plans/current.md"
-            :accepted-path "local/plans/accepted-20260813-120000.md"
-            :status accepted :accepted-turn 5))
-    (should (funcall (mevedel-reminder-trigger r) session))
-    (let ((content (funcall (mevedel-reminder-content r) session)))
-      (should (string-match-p
-               "work://plans/accepted-20260813-120000.md"
-               content))
-      (should-not (string-match-p "local/plans/current.md" content))
-      (should-not (string-match-p "work://plans/current.md" content))
-      (should-not (string-match-p (regexp-quote tmp) content))
-      (should (string-match-p "# Accepted" content))
-      (should-not (string-match-p "# Current draft" content)))
-    ;; An active Goal suppresses this reminder only when it already carries
-    ;; the exact accepted plan reference.
-    (setf (mevedel-session-goal session)
-          (mevedel-goal--create :status 'active))
-    (should (funcall (mevedel-reminder-trigger r) session))
-    (setf (mevedel-goal-plan-reference (mevedel-session-goal session))
-          "local/plans/other.md")
-    (should (funcall (mevedel-reminder-trigger r) session))
-    (setf (mevedel-goal-plan-reference (mevedel-session-goal session))
-          "local/plans/accepted-20260813-120000.md")
-    (should-not (funcall (mevedel-reminder-trigger r) session)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory plan-path) t)
+          (write-region "# Current draft" nil plan-path nil 'silent)
+          (write-region "# Accepted\n\nDo it." nil accepted-path nil 'silent)
+          (setf (mevedel-session-save-path session) tmp)
+          (setf (mevedel-session-turn-count session) 6)
+          (setf (mevedel-session-plan-metadata session)
+                '(:path "local/plans/current.md"
+                  :accepted-path "local/plans/accepted-20260813-120000.md"
+                  :status accepted :accepted-turn 5))
+          (should (funcall (mevedel-reminder-trigger r) session))
+          (let ((content (funcall (mevedel-reminder-content r) session)))
+            (should (string-match-p
+                     "work://plans/accepted-20260813-120000.md"
+                     content))
+            (should-not (string-match-p "local/plans/current.md" content))
+            (should-not (string-match-p "work://plans/current.md" content))
+            (should-not (string-match-p (regexp-quote tmp) content))
+            (should (string-match-p "# Accepted" content))
+            (should-not (string-match-p "# Current draft" content)))
+          ;; An active Goal suppresses this reminder only when it already carries
+          ;; the exact accepted plan reference.
+          (setf (mevedel-session-goal session)
+                (mevedel-goal--create :status 'active))
+          (should (funcall (mevedel-reminder-trigger r) session))
+          (setf (mevedel-goal-plan-reference (mevedel-session-goal session))
+                "local/plans/other.md")
+          (should (funcall (mevedel-reminder-trigger r) session))
+          (setf (mevedel-goal-plan-reference (mevedel-session-goal session))
+                "local/plans/accepted-20260813-120000.md")
+          (should-not (funcall (mevedel-reminder-trigger r) session)))
+      (delete-directory tmp t)))
 
   :doc "waits until after the acceptance turn before firing"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
@@ -1482,26 +1500,29 @@ this collapses both shapes to the delivered text."
          (accepted-path
           (file-name-concat tmp "local" "plans"
                             "accepted-20260813-120000.md")))
-    (make-directory (file-name-directory plan-path) t)
-    (write-region "# Plan\n\nDo it." nil plan-path nil 'silent)
-    (write-region "# Accepted\n\nDo it." nil accepted-path nil 'silent)
-    (setf (mevedel-session-save-path session) tmp)
-    (setf (mevedel-session-turn-count session) 5)
-    (setf (mevedel-session-plan-metadata session)
-          '(:path "local/plans/current.md"
-            :accepted-path "local/plans/accepted-20260813-120000.md"
-            :status accepted :accepted-turn 5))
-    ;; A portable session reads its plan through the publication, never
-    ;; the fixed cache, so the artifact has to be served here.
-    (cl-letf (((symbol-function
-                'mevedel-session-artifacts-artifact-present-p)
-               (lambda (&rest _) t))
-              ((symbol-function 'mevedel-session-artifacts-read-artifact)
-               (lambda (&rest _)
-                 (encode-coding-string "# Plan\n\nDo it." 'utf-8-unix))))
-      (should-not (funcall (mevedel-reminder-trigger r) session))
-      (setf (mevedel-session-turn-count session) 6)
-      (should (funcall (mevedel-reminder-trigger r) session))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory plan-path) t)
+          (write-region "# Plan\n\nDo it." nil plan-path nil 'silent)
+          (write-region "# Accepted\n\nDo it." nil accepted-path nil 'silent)
+          (setf (mevedel-session-save-path session) tmp)
+          (setf (mevedel-session-turn-count session) 5)
+          (setf (mevedel-session-plan-metadata session)
+                '(:path "local/plans/current.md"
+                  :accepted-path "local/plans/accepted-20260813-120000.md"
+                  :status accepted :accepted-turn 5))
+          ;; A portable session reads its plan through the publication, never
+          ;; the fixed cache, so the artifact has to be served here.
+          (cl-letf (((symbol-function
+                      'mevedel-session-artifacts-artifact-present-p)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'mevedel-session-artifacts-read-artifact)
+                     (lambda (&rest _)
+                       (encode-coding-string "# Plan\n\nDo it." 'utf-8-unix))))
+            (should-not (funcall (mevedel-reminder-trigger r) session))
+            (setf (mevedel-session-turn-count session) 6)
+            (should (funcall (mevedel-reminder-trigger r) session))))
+      (delete-directory tmp t)))
 
   :doc "does not fire or read the mutable plan without an accepted artifact"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
@@ -1511,15 +1532,18 @@ this collapses both shapes to the delivered text."
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-plan-reference))
          (plan-path (file-name-concat tmp "local" "plans" "current.md")))
-    (make-directory (file-name-directory plan-path) t)
-    (write-region "# Mutable current plan" nil plan-path nil 'silent)
-    (setf (mevedel-session-save-path session) tmp)
-    (setf (mevedel-session-turn-count session) 6)
-    (setf (mevedel-session-plan-metadata session)
-          '(:path "local/plans/current.md"
-            :status accepted :accepted-turn 5))
-    (should-not (funcall (mevedel-reminder-trigger r) session))
-    (should-not (funcall (mevedel-reminder-content r) session)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory plan-path) t)
+          (write-region "# Mutable current plan" nil plan-path nil 'silent)
+          (setf (mevedel-session-save-path session) tmp)
+          (setf (mevedel-session-turn-count session) 6)
+          (setf (mevedel-session-plan-metadata session)
+                '(:path "local/plans/current.md"
+                  :status accepted :accepted-turn 5))
+          (should-not (funcall (mevedel-reminder-trigger r) session))
+          (should-not (funcall (mevedel-reminder-content r) session)))
+      (delete-directory tmp t)))
 
   :doc "stays suppressed during a standalone Plan conversation"
   (let ((session
@@ -1616,10 +1640,13 @@ this collapses both shapes to the delivered text."
               'project (file-name-as-directory tmp)
               (file-name-as-directory tmp) "ivs"))
          (session (mevedel-session-create "main" ws)))
-    (mevedel-reminders-install-defaults session)
-    (should (cl-some (lambda (r)
-                       (eq (mevedel-reminder-type r) 'verification-suggestion))
-                     (mevedel-session-reminders session)))))
+    (unwind-protect
+        (progn
+          (mevedel-reminders-install-defaults session)
+          (should (cl-some (lambda (r)
+                             (eq (mevedel-reminder-type r) 'verification-suggestion))
+                           (mevedel-session-reminders session))))
+      (delete-directory tmp t))))
 
 
 (mevedel-deftest mevedel-reminders-make-edited-file

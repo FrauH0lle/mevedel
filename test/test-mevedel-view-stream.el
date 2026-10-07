@@ -4026,19 +4026,18 @@
           (should (string-match-p "After" text))))))
 
   :doc "keeps historical proposed-plan protocol hidden after Goal planning"
-  (mevedel-view-stream-test--with-buffers
-    (let* ((tmp (make-temp-file "mevedel-view-plan-" t))
-           (plan-path (file-name-concat tmp "local" "plans" "current.md"))
-           (session (mevedel-session--create
-                     :name "test"
-                     :workspace nil
-                     :save-path tmp
-                     :permission-mode 'ask
-                     :plan-metadata
-                     (list :path "local/plans/current.md"
-                           :status 'accepted))))
-      (unwind-protect
-          (progn
+  (let ((tmp (make-temp-file "mevedel-view-plan-" t)))
+    (unwind-protect
+        (mevedel-view-stream-test--with-buffers
+          (let* ((plan-path (file-name-concat tmp "local" "plans" "current.md"))
+                 (session (mevedel-session--create
+                           :name "test"
+                           :workspace nil
+                           :save-path tmp
+                           :permission-mode 'ask
+                           :plan-metadata
+                           (list :path "local/plans/current.md"
+                                 :status 'accepted))))
             (make-directory (file-name-directory plan-path) t)
             (write-region "# Current plan\n" nil plan-path nil 'silent)
             (with-current-buffer data-buf
@@ -4057,8 +4056,10 @@
                 (should-not (string-match-p "<proposed_plan>" text))
                 (should-not (string-match-p "# Old plan" text))
                 (should (string-match-p "Normal" text))
-                (should (string-match-p "After" text)))))
-        (delete-directory tmp t))))
+                (should (string-match-p "After" text))))))
+      ;; Killing the view buffers records telemetry under the session's
+      ;; save path, so the directory goes only after them.
+      (delete-directory tmp t)))
 
   :doc "renders ignored directive PROMPT drawer as collapsed user section"
   (mevedel-view-stream-test--with-buffers

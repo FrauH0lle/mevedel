@@ -539,57 +539,59 @@
   ,test
   (test)
   :doc "renders the direct Source switch beside expanded and collapsed headers"
-  (mevedel-view-test--with-buffers
-    (let* ((root (file-name-as-directory
-                  (make-temp-file "mevedel-view-variants-" t)))
-           (session
-            (mevedel-session--create
-             :authority-mode 'pid-lock
-             :name "source"
-             :session-id "source-id"
-             :save-path (file-name-concat root "sessions/source/")
-             :current-segment 1))
-           (variants
-            `((:save-path ,(file-name-concat root "sessions/source/")
-               :variant-origin source
-               :summary (:session-id "source-id"))
-              (:save-path ,(file-name-concat root "sessions/child/")
-               :variant-origin conversation
-               :summary (:session-id "child-id")))))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (insert (propertize "Response line one.\nResponse line two.\n"
-                            'gptel 'response))
-        (insert
-         (mevedel--format-hook-audit-record
-          '(:type fork-point :fork-point-id "fork-point-1"
-            :segment 1 :turn 1 :file-turn 1 :cum-turn 1))))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (cl-letf
-            (((symbol-function
-               'mevedel-session-persistence-conversation-variants)
-              (lambda (_session _fork-point-id &optional _sessions)
-                variants)))
-          (mevedel-view--full-rerender)
-          (goto-char (point-min))
-          (should (search-forward
-                   "Assistant  [⇆ Source · 2 variants]" nil t))
-          (should (functionp
-                   (get-text-property
-                    (1- (point)) 'mevedel-view-zone-activate)))
-          (goto-char (point-min))
-          (search-forward "Assistant")
-          (mevedel-view--collapse-turn)
-          (goto-char (point-min))
-          (should (search-forward "[⇆ Source · 2 variants]" nil t))
-          (should (functionp
-                   (get-text-property
-                    (1- (point)) 'mevedel-view-zone-activate)))
-          (setq variants (list (car variants)))
-          (mevedel-view--full-rerender)
-          (goto-char (point-min))
-          (should-not (search-forward "variants]" nil t))))))
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-view-variants-" t))))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (let* ((session
+                  (mevedel-session--create
+                   :authority-mode 'pid-lock
+                   :name "source"
+                   :session-id "source-id"
+                   :save-path (file-name-concat root "sessions/source/")
+                   :current-segment 1))
+                 (variants
+                  `((:save-path ,(file-name-concat root "sessions/source/")
+                     :variant-origin source
+                     :summary (:session-id "source-id"))
+                    (:save-path ,(file-name-concat root "sessions/child/")
+                     :variant-origin conversation
+                     :summary (:session-id "child-id")))))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (insert (propertize "Response line one.\nResponse line two.\n"
+                                  'gptel 'response))
+              (insert
+               (mevedel--format-hook-audit-record
+                '(:type fork-point :fork-point-id "fork-point-1"
+                  :segment 1 :turn 1 :file-turn 1 :cum-turn 1))))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (cl-letf
+                  (((symbol-function
+                     'mevedel-session-persistence-conversation-variants)
+                    (lambda (_session _fork-point-id &optional _sessions)
+                      variants)))
+                (mevedel-view--full-rerender)
+                (goto-char (point-min))
+                (should (search-forward
+                         "Assistant  [⇆ Source · 2 variants]" nil t))
+                (should (functionp
+                         (get-text-property
+                          (1- (point)) 'mevedel-view-zone-activate)))
+                (goto-char (point-min))
+                (search-forward "Assistant")
+                (mevedel-view--collapse-turn)
+                (goto-char (point-min))
+                (should (search-forward "[⇆ Source · 2 variants]" nil t))
+                (should (functionp
+                         (get-text-property
+                          (1- (point)) 'mevedel-view-zone-activate)))
+                (setq variants (list (car variants)))
+                (mevedel-view--full-rerender)
+                (goto-char (point-min))
+                (should-not (search-forward "variants]" nil t))))))
+      (delete-directory root t)))
 
   :doc "uses explicit live session context for an archived transcript"
   (with-temp-buffer

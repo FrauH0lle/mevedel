@@ -27,6 +27,9 @@
         (setq-local kill-buffer-hook nil)
         (set-buffer-modified-p nil))
       (kill-buffer buffer)
+      ;; A change a hook rejects locks the file without modifying the
+      ;; buffer, so killing it leaves that lock behind.
+      (unlock-file file)
       (when (file-exists-p file)
         (delete-file file)))))
 

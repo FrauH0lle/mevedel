@@ -19,7 +19,7 @@
           "mevedel-engine-test-support"))
 
 (mevedel-deftest mevedel-deftest
-  (:doc "isolates tool registration and lookup caches even when a case fails")
+  (:doc "isolates tool registries and cleans up even when a case fails")
   (let ((registry mevedel-tool--registry)
         (cache mevedel-tool--resolve-cache)
         (gptel--known-tools (list (list "fixture" (cons "probe" 'original)))))
@@ -28,11 +28,16 @@
     (unwind-protect
         (dolist (fail '(nil t))
           (eval
-           `(mevedel-deftest mevedel-test--nested-registry-case ()
+           `(mevedel-deftest mevedel-test--nested-registry-case
+              (:after-each (put 'mevedel-test--nested-registry-case 'after-each t))
               (progn
                 (mevedel-tool-clear-registry)
                 (setcdr (car gptel--known-tools) nil)
                 (puthash 'fixture 'changed mevedel-tool--resolve-cache)
+                (let ((staged (make-temp-file "mevedel-test-staged-" t)))
+                  (put 'mevedel-test--nested-registry-case 'staged staged)
+                  (mevedel-test--record-staged-publication
+                   (list :directory staged)))
                 (when ,fail (error "Deliberate fixture failure"))))
            t)
           (let ((body (ert-test-body
@@ -44,7 +49,15 @@
           (should (eq 'original (gethash '("fixture" "probe") registry)))
           (should (equal gptel--known-tools '(("fixture" ("probe" . original)))))
           (should (eq 'original (gethash 'fixture cache)))
+          (should (get 'mevedel-test--nested-registry-case 'after-each))
+          (should-not (file-exists-p
+                       (get 'mevedel-test--nested-registry-case 'staged)))
+          (setplist 'mevedel-test--nested-registry-case nil)
           (ert-delete-test 'mevedel-test--nested-registry-case/test))
+      (let ((staged (get 'mevedel-test--nested-registry-case 'staged)))
+        (when (and staged (file-directory-p staged))
+          (delete-directory staged t)))
+      (setplist 'mevedel-test--nested-registry-case nil)
       (when (ert-test-boundp 'mevedel-test--nested-registry-case/test)
         (ert-delete-test 'mevedel-test--nested-registry-case/test)))))
 

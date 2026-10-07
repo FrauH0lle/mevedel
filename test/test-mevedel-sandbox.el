@@ -867,52 +867,54 @@ a disabled transport cleans immediately instead of dropping work"
          (availability (mevedel-sandbox-probe)))
     (unless (plist-get availability :available)
       (ert-skip (plist-get availability :reason)))
-    (let* ((runtime (make-temp-file "mevedel-sandbox-mcp-" t))
-           (mevedel-mcp--socket-root nil)
-           (process-environment (cons (concat "XDG_RUNTIME_DIR=" runtime)
-                                      process-environment))
-           (server (mevedel-mcp-start (lambda () []) #'ignore))
-           (socket (file-name-concat (mevedel-mcp-directory server) "socket"))
-           prepared)
+    (let ((runtime (make-temp-file "mevedel-sandbox-mcp-" t)))
       (unwind-protect
-          (progn
-            (setq prepared
-                  (mevedel-sandbox--confined-preparation
-                   (list "sh" "-c" "test ! -e \"$1\"" "probe" socket)
-                   runtime (list runtime) (plist-get availability :executable)
-                   (plist-get availability :mount-proc) nil))
-            (should (file-exists-p socket))
-            (should (zerop (apply #'call-process
-                                  (car (plist-get prepared :command)) nil nil nil
-                                  (cdr (plist-get prepared :command))))))
-        (when prepared (mevedel-sandbox-cleanup prepared))
-        (mevedel-mcp-stop server)
+          (let* ((mevedel-mcp--socket-root nil)
+                 (process-environment (cons (concat "XDG_RUNTIME_DIR=" runtime)
+                                            process-environment))
+                 (server (mevedel-mcp-start (lambda () []) #'ignore))
+                 (socket (file-name-concat (mevedel-mcp-directory server) "socket"))
+                 prepared)
+            (unwind-protect
+                (progn
+                  (setq prepared
+                        (mevedel-sandbox--confined-preparation
+                         (list "sh" "-c" "test ! -e \"$1\"" "probe" socket)
+                         runtime (list runtime) (plist-get availability :executable)
+                         (plist-get availability :mount-proc) nil))
+                  (should (file-exists-p socket))
+                  (should (zerop (apply #'call-process
+                                        (car (plist-get prepared :command)) nil nil nil
+                                        (cdr (plist-get prepared :command))))))
+              (when prepared (mevedel-sandbox-cleanup prepared))
+              (mevedel-mcp-stop server)))
         (delete-directory runtime t))))
   :doc "an unusable socket root leaves ordinary confined commands working"
   (let* ((mevedel-sandbox--probe-cache nil)
          (availability (mevedel-sandbox-probe)))
     (unless (plist-get availability :available)
       (ert-skip (plist-get availability :reason)))
-    (let* ((runtime (make-temp-file "mevedel-sandbox-mcp-" t))
-           (mevedel-mcp--socket-root nil)
-           (process-environment (cons (concat "XDG_RUNTIME_DIR=" runtime)
-                                      process-environment))
-           prepared)
-      ;; A squatted root: no MCP server can start, so nothing needs masking.
-      (make-symbolic-link runtime (file-name-concat
-                                   runtime (format "mevedel-mcp-%d" (user-uid))))
+    (let ((runtime (make-temp-file "mevedel-sandbox-mcp-" t)))
       (unwind-protect
-          (progn
-            (setq prepared
-                  (mevedel-sandbox--confined-preparation
-                   (list "true") runtime (list runtime)
-                   (plist-get availability :executable)
-                   (plist-get availability :mount-proc) nil))
-            (should-not (member "--tmpfs" (plist-get prepared :command)))
-            (should (zerop (apply #'call-process
-                                  (car (plist-get prepared :command)) nil nil nil
-                                  (cdr (plist-get prepared :command))))))
-        (when prepared (mevedel-sandbox-cleanup prepared))
+          (let* ((mevedel-mcp--socket-root nil)
+                 (process-environment (cons (concat "XDG_RUNTIME_DIR=" runtime)
+                                            process-environment))
+                 prepared)
+            ;; A squatted root: no MCP server can start, so nothing needs masking.
+            (make-symbolic-link runtime (file-name-concat
+                                         runtime (format "mevedel-mcp-%d" (user-uid))))
+            (unwind-protect
+                (progn
+                  (setq prepared
+                        (mevedel-sandbox--confined-preparation
+                         (list "true") runtime (list runtime)
+                         (plist-get availability :executable)
+                         (plist-get availability :mount-proc) nil))
+                  (should-not (member "--tmpfs" (plist-get prepared :command)))
+                  (should (zerop (apply #'call-process
+                                        (car (plist-get prepared :command)) nil nil nil
+                                        (cdr (plist-get prepared :command))))))
+              (when prepared (mevedel-sandbox-cleanup prepared))))
         (delete-directory runtime t)))))
 
 (mevedel-deftest mevedel-sandbox-prepare ()
