@@ -188,6 +188,9 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-readiness'
+(declare-function mevedel-readiness-record-turn "mevedel-readiness" (info outcome message))
+
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
@@ -360,9 +363,14 @@ caller for telemetry.  Return non-nil when this call made the request."
 If `mevedel--current-request' is already set, log a warning and replace
 it.  Signal instead if yielding checks or cancellation callbacks transfer
 ownership or start deferred settlement.  Optional DIRECTIVE-UUID sets the
-directive being processed.  Return the new request struct."
-  (mevedel-recovery-assert-ready session)
-  (mevedel-recovery-clear session "request")
+directive being processed.  Return the new request struct.
+
+A root request is the user's retry: blocking recovery issues refuse it, and
+it clears the previous attempt's informational issues and a failure pause no
+failed input still justifies.  A retained agent's admission leaves the root's
+recovery state alone."
+  (unless (bound-and-true-p mevedel--agent-invocation)
+    (mevedel-recovery-assert-ready session))
   (let ((entry-request mevedel--current-request))
     (when mevedel--turn-settlements-pending
       (user-error "Turn settlement is still pending"))
@@ -384,6 +392,13 @@ directive being processed.  Return the new request struct."
     (user-error "Turn settlement is still pending"))
   (when mevedel--current-request
     (user-error "Another request was admitted during cancellation"))
+  (unless (bound-and-true-p mevedel--agent-invocation)
+    (mevedel-recovery-clear-informational session)
+    (unless (cl-find 'failed-turn
+                     (append (mevedel-session-pending-steering session)
+                             (mevedel-session-pending-follow-ups session))
+                     :key (lambda (entry) (plist-get entry :state)))
+      (mevedel-session-set-pending-input-failure-paused session nil)))
   (let* ((origin (mevedel-current-origin))
          (id (format "request-%s-%s"
                      (format-time-string "%Y%m%dT%H%M%S")
@@ -512,6 +527,8 @@ is returned here."
     (with-current-buffer chat-buffer
       (when (bound-and-true-p mevedel--session)
         (setf (mevedel-session-last-outcome mevedel--session) outcome))
+      (when (featurep 'mevedel-readiness)
+        (mevedel-readiness-record-turn info outcome (mevedel--fsm-error-message fsm)))
       (when (and (bound-and-true-p mevedel--session)
                  (bound-and-true-p mevedel--current-request)
                  (fboundp 'mevedel-telemetry-record))
@@ -579,19 +596,29 @@ is returned here."
                        (gptel-backend-name backend)
                      (error nil)))))
         (when (bound-and-true-p mevedel--session)
-          (let* ((text (or (mevedel--fsm-error-message fsm) "Provider request failed"))
-                 (category (mevedel-recovery-category text
-						      (and (listp error-data) (plist-get error-data :code)))))
-            (mevedel-recovery-report mevedel--session "request" category text
-                                     (not (eq category 'request)))
-            (when (and (eq category 'model)
-                       (eq chat-buffer (mevedel-session-root-buffer mevedel--session)))
-              (when-let* ((provider (mevedel-model-recover-provider
-                                     (format "%s:%s" backend-name
-                                             (gptel--model-name (or (plist-get info :model) gptel-model)))
-                                     mevedel--session t)))
-                (mevedel-model-set-session-provider mevedel--session provider chat-buffer)
-                (mevedel-recovery-clear mevedel--session "request")))))
+          ;; Informational only: the next root request is the retry.  The
+          ;; provider's text stays in the transcript summary below.
+          (let ((category (mevedel-recovery-category
+                           (mevedel--fsm-error-message fsm)
+                           (and (listp error-data) (plist-get error-data :code))
+                           (plist-get info :http-status))))
+            (mevedel-recovery-report
+             mevedel--session "request" category
+             (concat (mevedel-recovery-message category) "; see the transcript")
+             nil)
+            ;; Only a structured "model not found" moves the session, and
+            ;; the move is announced.
+            (when-let* (((eq category 'model))
+                         ((eq chat-buffer (mevedel-session-root-buffer mevedel--session)))
+                         (selector (format "%s:%s" backend-name
+                                           (gptel--model-name
+                                            (or (plist-get info :model) gptel-model))))
+                         (provider (mevedel-model-recover-provider selector nil t)))
+              (mevedel-model-set-session-provider mevedel--session provider chat-buffer)
+              (let ((notice (format "%s is unavailable; using %s" selector
+                                    (mevedel-model--provider-label provider))))
+                (mevedel-recovery-report mevedel--session "model" 'model notice nil)
+                (message "mevedel: %s" notice)))))
         (mevedel-view--append-request-summary
          chat-buffer
          (plist-get info :position)
@@ -757,14 +784,13 @@ The terminal admission hold stays live between publication and this phase."
                (updated
                 (mapcar
                  (lambda (entry)
-                   (if (equal request-id (plist-get entry :request-id))
+                   (if (and request-id (equal request-id (plist-get entry :request-id)))
                        (progn
                          (setq failed t)
                          (plist-put (copy-sequence entry)
                                     :state 'failed-turn))
                      entry))
                  entries)))
-          (mevedel-session-set-pending-input-failure-paused mevedel--session t)
           (when failed
             (mevedel-session-set-pending-inputs
              mevedel--session 'steering updated)
@@ -1081,7 +1107,6 @@ also autosaves, and it reaches here from the same process sentinel."
     (mevedel--turn-stamp-settled fsm)
     (let ((admission-cleanup
            (list #'mevedel--turn-restore-permission-mode
-                 #'mevedel--turn-fail-pending-input
                  #'mevedel--turn-end-request)))
       (mevedel--defer-turn-steps
        fsm
@@ -1107,7 +1132,8 @@ also autosaves, and it reaches here from the same process sentinel."
                 (mevedel--turn-after-publication
                  #'mevedel-goal-dispatch-after-turn machine))))
        (lambda ()
-         (mevedel--run-turn-steps fsm admission-cleanup)))))))
+         (mevedel--run-turn-steps
+          fsm (cons #'mevedel--turn-fail-pending-input admission-cleanup))))))))
 
 
 (defun mevedel--handler-name (handler)

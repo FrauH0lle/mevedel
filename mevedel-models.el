@@ -268,7 +268,8 @@ NOERROR is non-nil, return nil instead of signaling `user-error'."
 (defun mevedel-model-set-session-provider (session provider &optional buffer)
   "Set SESSION's resolved PROVIDER in BUFFER.
 Keep the current reasoning effort when PROVIDER supports it; otherwise reset
-the effort to its default and report the reset."
+the effort to its default and report the reset.  The selection resolves any
+model recovery issue."
   (let ((buffer (or buffer (current-buffer)))
         (backend (plist-get provider :backend))
         (model (plist-get provider :model)))
@@ -292,6 +293,8 @@ the effort to its default and report the reset."
         (mevedel-session-set-model-provider
          session (mevedel-model--provider-label provider))
         (mevedel-session-set-reasoning-effort session effort)))
+    ;; An explicit selection resolves a missing saved model.
+    (mevedel-recovery-clear session "model")
     provider))
 
 (defun mevedel-model-set-session-effort (session effort &optional buffer)
@@ -310,14 +313,12 @@ Nil uses the host's default backend and model.  Never searches other providers."
 
 (defun mevedel-model-recover-provider (selector &optional session unavailable)
   "Resolve saved SELECTOR, using the configured fallback for SESSION.
-Return nil when neither selection is available.  Explicit user selections
-must use `mevedel-model-resolve-provider' instead.
+Return nil when neither selection is available; using the fallback leaves
+SESSION an informational notice.  Explicit user selections must use
+`mevedel-model-resolve-provider' instead.
 UNAVAILABLE means live provider capabilities already rejected SELECTOR."
-  (or (when-let* (((not unavailable))
-                  (provider (mevedel-model-resolve-provider selector t)))
-        (when (and session (plist-get (mevedel-recovery-blocker session) :blocking))
-          (mevedel-recovery-clear session "model"))
-        provider)
+  (or (and (not unavailable)
+           (mevedel-model-resolve-provider selector t))
       (let* ((fallback (or mevedel-model-fallback-provider
                            (when (and (default-value 'gptel-backend)
                                       (default-value 'gptel-model))
@@ -327,23 +328,29 @@ UNAVAILABLE means live provider capabilities already rejected SELECTOR."
              (provider (and fallback
                             (not (and unavailable (equal fallback selector)))
                             (mevedel-model-resolve-provider fallback t))))
-        (when session
+        (when (and session provider)
           (mevedel-recovery-report
            session "model" 'model
-           (if provider (format "%s is unavailable; using %s" selector fallback)
-             (format "%s is unavailable; select a model" selector))
-           (not provider)))
+           (format "%s is unavailable; using %s" selector fallback) nil))
         provider)))
 
 (defun mevedel-model-apply-session-policy (session &optional buffer)
-  "Restore SESSION into BUFFER without making unavailable history unreadable."
+  "Restore SESSION into BUFFER without making unavailable history unreadable.
+A saved model with no available fallback blocks requests until a model is
+selected; a model that resolves again clears that block."
   (with-current-buffer (or buffer (current-buffer))
     (let* ((selector (mevedel-session-model-provider session))
            (provider (and selector (mevedel-model-recover-provider selector session))))
-      (when provider
+      (cond
+       (provider
+        (when (equal selector (mevedel-model--provider-label provider))
+          (mevedel-recovery-clear session "model"))
         (setq-local gptel-backend (plist-get provider :backend)
                     gptel-model (plist-get provider :model))
         (mevedel-session-set-model-provider session (mevedel-model--provider-label provider)))
+       (selector
+        (mevedel-recovery-report session "model" 'model
+                                 (format "%s is unavailable; select a model" selector) t)))
       (let ((effort (mevedel-session-reasoning-effort session)))
         (condition-case nil
             (mevedel-model-validate-effort gptel-model effort)

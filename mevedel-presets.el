@@ -292,7 +292,9 @@ without a cycle check of its own."
             (set symbol value)
           (set (make-local-variable symbol) value))))
     (when (and (not mevedel-preset--temporary-p) mevedel--session)
-      (setf (mevedel-session-preset-name mevedel--session) name))))
+      (setf (mevedel-session-preset-name mevedel--session) name)
+      ;; Any applied session preset replaces a missing one.
+      (mevedel-recovery-clear mevedel--session "preset"))))
 
 (defun mevedel-preset--post (name user-post)
   "Run USER-POST and required mevedel setup for preset NAME."
@@ -377,13 +379,13 @@ without a cycle check of its own."
      name (lambda (symbol value)
             (set (make-local-variable symbol) value)))))
 
-
 (defun mevedel-preset-restore-session (session &optional buffer)
-  "Reapply SESSION's selected preset in BUFFER."
+  "Reapply SESSION's selected preset in BUFFER.
+A preset that is no longer registered blocks requests until a replacement
+preset is applied."
   (when-let* ((name (mevedel-session-preset-name session)))
     (if (assq name mevedel-preset--registry)
-        (progn (mevedel-preset-apply name buffer)
-               (mevedel-recovery-clear session "preset"))
+        (mevedel-preset-apply name buffer)
       (mevedel-recovery-report session "preset" 'configuration
                                (format "Preset %s is unavailable; select a replacement" name) t))))
 

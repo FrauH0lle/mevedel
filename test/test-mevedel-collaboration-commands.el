@@ -99,8 +99,10 @@
                      (lambda (&rest args) (push args warnings))))
             (run-hooks 'gptel-post-stream-hook)
             (run-hook-with-args 'gptel-post-response-functions 1 1)
-			  (should-not stopped)
-			  (should-not warnings))))
+            (should-not stopped)
+            ;; Both seams fail; the host is warned once, with the error.
+            (should (= 1 (length warnings)))
+            (should (string-search "Observer failure" (cadr (car warnings)))))))
       (with-current-buffer view-buf
         (should (equal draft (mevedel-view--input-text)))
         (should (= 4 (- (point) (mevedel-view--input-start))))))))
@@ -138,7 +140,7 @@
       (cl-letf (((symbol-function 'mevedel-collaboration--schedule-publish)
                  (lambda (_) (error "observer")))
                 ((symbol-function 'mevedel-collaboration--observer-failure)
-                 (lambda (failed) (push failed failures))))
+                 (lambda (failed &rest _) (push failed failures))))
         (mevedel-collaboration-notify-history-changed (current-buffer))
         (should (equal (list room) failures))))))
 

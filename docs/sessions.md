@@ -126,8 +126,9 @@ It updates the persisted name and buffer/view presentation, without moving files
 Save As creates a new identity with the explicitly supplied display name.
 
 The closed sidecar schema is `v0.5.10`, including recovery issues, retained input and pause state.
-Other schemas are rejected by the runtime loader; this change does not migrate
-older sessions. Recovery records contain safe issue messages, never credentials.
+Other schemas are rejected by the runtime loader; older sessions are converted
+only by the [explicit migration](#explicit-migration-to-v0510). Recovery records
+contain issue messages, never credentials.
 Queued follow-ups retain text, attribution, scope and attachment grants. Live
 submission objects are excluded. Undelivered steering reloads as requiring review,
 with automatic delivery paused; a restart never resurrects a submitted request.
@@ -315,6 +316,15 @@ removed; authentication is never cached. A logged-out status exits nonzero
 with valid JSON and still reports the login action.
 The explicit setup check waits for this same readiness result.
 See the [setup route](../README.md#claude-promax-subscriptions).
+
+Composer sends check provider readiness before the prompt enters the transcript.
+Codex credentials are checked directly. Claude readiness is learned from root
+turn startup: while it is unknown, the send proceeds and its own launch is the
+check. A startup that failed before its prompt refuses later sends with the
+failure's cause in the echo area and as a recovery issue, keeps the composer
+draft, and starts one check without a prompt; when it succeeds the user sends
+again. Changing the executable, adapter, directory, model or
+`CLAUDE_CONFIG_DIR`, and login or runtime changes, forget the result.
 
 The Claude Code provider routes root and directive submissions through ACP. The
 session's `:external-conversations` metadata maps conversation scopes to the
@@ -1349,12 +1359,29 @@ rolling it back. If the final staging-directory rename itself fails, session
 listing recognizes that hidden committed child by its verified publication;
 the live buffers and lease stay attached to that recoverable path.
 
-Pending input is live-session state, not sidecar state. Same-turn steering,
-queued follow-ups, their category order and edit state, session-local IDs,
-delivery pause, and failure pause are deliberately transient. Killing and
-resuming a session therefore restores accepted text only through the ordinary
-workspace input history; it does not recreate either pending-input category or
-any delivery state. There is no queue-size cap.
+Pending input, its delivery pause and failure pause, and recovery issues live in
+the sidecar. Queue and pause changes are written by the coalesced sidecar-only
+save, never a transcript save. Queued follow-up delivery writes one durable
+`dispatching` mark before dispatch and nothing after it; the turn's own saves
+record the delivered prompt. A restart reloads a `dispatching` entry as
+interrupted input requiring review, so a submitted prompt is never replayed.
+Live submission objects and edit state are not persisted. There is no
+queue-size cap.
+
+A failed or aborted root turn pauses follow-up delivery only when steering for
+that turn was left undelivered or a queued follow-up's dispatch may have reached
+the transcript; those entries need review in the Pending Inputs cockpit. The
+next root request clears a pause that no reviewable entry still justifies, and
+the pause banner shows only while entries remain.
+
+Recovery issues are informational unless an owner that re-checks them reports
+them as blocking: provider readiness, a missing preset (cleared by applying any
+preset) and a saved model with no available fallback (cleared by selecting a
+model). Blocking issues refuse root requests. Provider failures, failed agents,
+naming, effort and fallback notices are informational; the next root request
+clears them, because that request is the retry. Only a structured
+model-not-found signal (provider code or HTTP 404) moves a session to
+`mevedel-model-fallback-provider` or the host default, with a visible notice.
 
 Standalone Plan metadata and its implementation retry record live in the
 sidecar; draft and accepted artifacts live under `local/plans/`. The retry
@@ -1527,6 +1554,11 @@ reader's recovery rules.
 Conversion refuses active locks or leases, pending recovery, invalid metadata,
 checksum mismatches and symlinks. A failed conversion removes only its new copy.
 The runtime loader continues to accept only the current schema.
+
+The converter keeps the session ID, so never leave both copies in the sessions
+directory or open both as writable sessions. After checking the copy, move the
+original out of `.mevedel/sessions` as a backup and put the converted directory
+at the original path under the same directory name.
 
 ### Incompatible session inspection
 
@@ -1701,7 +1733,8 @@ session ownership boundary.
 It also requires aborting the current provider request, interrupting active
 agent turns, and pausing an active Goal before changing the source conversation.
 
-Rewind and `/clear` also refuse while either pending-input category is nonempty.
+Rewind, `/clear` and Save As also refuse while either pending-input category is
+nonempty, since a copied queue would be delivered from both sessions.
 The user must resolve the entries in the Pending Inputs cockpit or explicitly
 clear them with `C-c C-q` before a destructive transcript operation.
 

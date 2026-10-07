@@ -9,6 +9,10 @@
 (require 'mevedel-presets)
 (require 'mevedel-review)
 (require 'mevedel-view)
+(require 'mevedel-workspace-identity)
+(require 'mevedel-directive-request)
+(require 'mevedel-tools)
+(require 'mevedel-compact)
 (require 'helpers
          (file-name-concat
           (file-name-directory

@@ -253,7 +253,8 @@ only through PICKED-CUM-TURN.  Entries with non-integer
   '(name naming-state workspace execution-target authority-mode working-directory
     tasks task-status-notes last-task-write-turn touched-files
     permission-rules resource-grants permission-mode sandbox-mode plan-mode
-	 directive-planning preset-name model-provider external-conversations last-outcome recovery-issues
+    directive-planning preset-name model-provider external-conversations
+    last-outcome recovery-issues
     reasoning-effort turn-count reminders last-observed-date
     agent-types-snapshot pending-reminders
     tool-catalog

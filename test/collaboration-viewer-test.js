@@ -1749,6 +1749,23 @@ async function main() {
   signIn.dispatch('click');
   await waitFor(() => first.sent.length === recoveryBefore + 1, 'sealed recovery action');
   assert.equal((await unseal(key, first.sent.at(-1))).action, 'login');
+  // Runtime updates are offered only for sessions that report a runtime.
+  const hasButton = text => nodes['recovery-actions'].children.some(node => node.textContent === text);
+  assert.equal(hasButton('Check updates'), false);
+  // A partly typed authorization code survives unrelated recovery updates,
+  // and owners see the host's issue details.
+  const claudeLogin = {id: 'login-2', status: 'login', url: 'https://claude.ai/oauth/authorize'};
+  await deliver({t: 'recovery', models: [], presets: [], providers: ['Claude Code'], provider: 'Claude Code',
+                 auth: claudeLogin, runtime: {status: 'ready'}});
+  assert.equal(hasButton('Check updates'), true);
+  const codeInput = nodes['recovery-auth'].children.find(node => node.type === 'password');
+  codeInput.value = 'partial-code';
+  await deliver({t: 'recovery', models: [], presets: [], providers: ['Claude Code'], provider: 'Claude Code',
+                 auth: claudeLogin, runtime: {status: 'ready'},
+                 issues: [{id: 'authentication', message: 'Install Claude Code first'}]});
+  assert.equal(nodes['recovery-auth'].children.find(node => node.type === 'password'), codeInput);
+  assert.equal(codeInput.value, 'partial-code');
+  assert.match(textOf(nodes['recovery-actions']), /Install Claude Code first/);
   await deliver({t: 'recovery', models: [], presets: [], providers: [], auth: {status: 'ready', message: 'Login ready'}});
   assert.doesNotMatch(textOf(nodes['recovery-auth']), /ABCD-1234/);
 
