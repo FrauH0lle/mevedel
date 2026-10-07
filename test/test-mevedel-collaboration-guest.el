@@ -1091,14 +1091,26 @@
           (mevedel-collaboration--on-frame (current-buffer) 5
                                            (list :t "files"))
           (should (equal '(5 "/proj/") uploaded))))
-      (cl-letf (((symbol-function 'mevedel-collaboration--handle-prompt)
-                 (lambda (&rest _) (error "Handler fault")))
-                ((symbol-function 'mevedel-collaboration--stop-internal)
-                 (lambda (_room reason) (setq stopped reason)))
-                ((symbol-function 'display-warning) (lambda (&rest _) nil)))
-        (mevedel-collaboration--on-frame (current-buffer) 5
-                                         (list :t "prompt" :text "x"))
-		       (should-not stopped))
+      ;; A handler fault warns the host with the error and tells only its
+      ;; sender; other guests learn nothing about it.
+      (let (sent broadcast warned)
+        (cl-letf (((symbol-function 'mevedel-collaboration--handle-prompt)
+                   (lambda (&rest _) (error "Handler fault")))
+                  ((symbol-function 'mevedel-collaboration--stop-internal)
+                   (lambda (_room reason) (setq stopped reason)))
+                  ((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame) (push (cons peer frame) sent)))
+                  ((symbol-function 'mevedel-collaboration--broadcast)
+                   (lambda (&rest args) (push args broadcast)))
+                  ((symbol-function 'display-warning)
+                   (lambda (_type message &rest _) (setq warned message))))
+          (mevedel-collaboration--on-frame (current-buffer) 5
+                                           (list :t "prompt" :text "x")))
+        (should-not stopped)
+        (should (equal '(5) (mapcar #'car sent)))
+        (should-not broadcast)
+        (should (string-search "Handler fault" warned))
+        (should-not (string-search "Handler fault" (plist-get (cdar sent) :message))))
       ;; A handler that would ask in Emacs is refused to its sender, and
       ;; the room stays up.
       (let (sent (stopped nil))

@@ -680,7 +680,31 @@
                 ((symbol-function 'display-warning) (lambda (&rest _) nil)))
         (should-not (mevedel-collaboration--safe-accepted-prompt
                      (current-buffer)))
-		       (should-not stopped)))))
+        (should-not stopped)))))
+
+(mevedel-deftest mevedel-collaboration--observer-failure
+  (:doc "warns the host with the error and tells guests once until a publish succeeds")
+  (let ((room (list :data-buffer nil :records nil))
+        warnings notices)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &rest _) (push message warnings)))
+              ((symbol-function 'mevedel-collaboration--broadcast)
+               (lambda (_room frame) (push frame notices)))
+              ((symbol-function 'mevedel-collaboration--project-records) #'ignore)
+              ((symbol-function 'mevedel-collaboration--publish-queue) #'ignore)
+              ((symbol-function 'mevedel-collaboration--publish-status) #'ignore)
+              ((symbol-function 'mevedel-collaboration--publish-history) #'ignore)
+              ((symbol-function 'mevedel-collaboration--publish-agents) #'ignore)
+              ((symbol-function 'mevedel-collaboration--publish-tasks) #'ignore))
+      (mevedel-collaboration--observer-failure room '(error "Projection broke"))
+      (mevedel-collaboration--observer-failure room '(error "Projection broke"))
+      (should (= 1 (length warnings)))
+      (should (string-search "Projection broke" (car warnings)))
+      (should (= 1 (length notices)))
+      (should-not (string-search "still running" (plist-get (car notices) :message)))
+      (mevedel-collaboration--publish room)
+      (mevedel-collaboration--observer-failure room '(error "Projection broke"))
+      (should (= 2 (length warnings))))))
 
 (mevedel-deftest mevedel-collaboration--accepted-prompt-insertion-seams
   (:doc "publishes ordinary composer and generated turns at insertion")
@@ -912,7 +936,7 @@
 (mevedel-deftest mevedel-view--refuse-guest-follow-up (:quiet t)
   ,test
   (test)
-		 :doc "retains a guest entry and attachments when the host needs recovery"
+  :doc "drops a guest entry whose turn would ask in Emacs and tells the guest"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "refuse"))
            (attachment (make-temp-file "mevedel-guest-attachment-"))
@@ -937,16 +961,15 @@
                 ((symbol-function 'display-warning)
                  (lambda (_type message &rest _) (setq warned message))))
         (mevedel-view--drain-follow-up data-buf))
-		    (should (mevedel-session-pending-follow-ups session))
-		    (should (file-exists-p attachment))
-		    (delete-file attachment)
+      (should-not (mevedel-session-pending-follow-ups session))
+      (should-not (file-exists-p attachment))
       (should (equal "g1" (car notified)))
-		    (should (string-search "your message is retained" (cadr notified)))
-		    (should-not warned)
+      (should (string-search "your message was not sent" (cadr notified)))
+      (should (string-search "Happy Hare" warned))
       ;; Only the host sees the question, which can name hosts and paths.
-		    (should (mevedel-recovery-blocker session))
+      (should (string-search ": Take over the lease? (y or n)" warned))
       (should-not (string-search "lease" (cadr notified)))))
-		 :doc "retains refused input and holds later queue entries"
+  :doc "drops a refused guest entry instead of blocking the queue behind it"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "refuse"))
            notified warned)
@@ -970,14 +993,43 @@
                 ((symbol-function 'display-warning)
                  (lambda (_type message &rest _) (setq warned message))))
         (mevedel-view--drain-follow-up data-buf))
-		    (should (equal '("/compact" "Later") (mapcar (lambda (entry) (plist-get entry :input))
+      (should (equal '("Later") (mapcar (lambda (entry) (plist-get entry :input))
                                         (mevedel-session-pending-follow-ups session))))
       (should (equal "g1" (car notified)))
       ;; Errors can name hosts and paths: only the host sees the reason.
-		    (should (string-search "retained" (cadr notified)))
-		    (should-not (string-search "compaction" (cadr notified)))
-		    (should (mevedel-recovery-blocker session))
-		    (should-not warned)))
+      (should (string-search "not sent" (cadr notified)))
+      (should-not (string-search "compaction" (cadr notified)))
+      (should (string-search "Manual compaction is unavailable" warned))
+      (should (string-search "Happy Hare" warned))
+      ;; A refusal blocks nothing the host does.
+      (should-not (mevedel-recovery-blocker session))))
+
+  :doc "keeps an attempt that may have reached the transcript for review"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "refuse"))
+           notified)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-session-enqueue-pending-input
+       session 'follow-up (list :input "Hello" :guest-name "Happy Hare" :guest-id "g1"))
+      (cl-letf (((symbol-function
+                  'mevedel-session-artifacts-assert-new-mutation-authority)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-view--dispatch-follow-up-entry)
+                 (lambda (&rest _)
+                   (with-current-buffer data-buf (insert "Hello"))
+                   (error "Publication failed")))
+                ((symbol-function 'mevedel-collaboration-notify-guest)
+                 (lambda (_session guest-id message)
+                   (setq notified (list guest-id message))))
+                ((symbol-function 'display-warning) #'ignore))
+        (mevedel-view--drain-follow-up data-buf))
+      (should (eq 'failed-turn
+                  (plist-get (car (mevedel-session-pending-follow-ups session)) :state)))
+      (should (mevedel-session-pending-input-failure-paused session))
+      (should (string-search "review" (cadr notified)))))
 
   :doc "keeps a guest entry queued while a turn settles or compaction runs"
   (dolist (busy '(settling compacting))

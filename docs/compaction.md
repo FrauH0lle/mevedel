@@ -549,7 +549,7 @@ segment.
 
 Manual and automatic root compaction mutate transcript segments only. The live
 session retains pending steering, queued follow-ups, FIFO order, delivery
-pause, and failure pause unchanged. Compaction does not serialize that state.
+pause, and failure pause unchanged; the session sidecar persists them as usual.
 
 Old segment files remain on disk and stay available through
 `mevedel-rewind`. The live view skips the leading summary block when

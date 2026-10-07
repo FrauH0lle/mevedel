@@ -46,6 +46,9 @@
 (declare-function mevedel--chat-buffer-disable-org-element-cache "mevedel-chat" nil)
 (declare-function mevedel--chat-buffer-init-common "mevedel-chat" (buf workspace source &optional inspection-p))
 (declare-function mevedel--normalize-session-directory "mevedel-chat" (directory workspace))
+(autoload 'mevedel--chat-buffer-disable-org-element-cache "mevedel-chat")
+(autoload 'mevedel--chat-buffer-init-common "mevedel-chat")
+(autoload 'mevedel--normalize-session-directory "mevedel-chat")
 
 ;; `mevedel-engine'
 (declare-function mevedel-engine-assert-local-history
@@ -735,8 +738,9 @@ pending one entirely."
   "Sessions with a pending debounced agent-state save, mapped to timers.")
 
 (defun mevedel-session-persistence-save-agent-state-soon (session)
-  "Schedule one coalesced best-effort agent-state save for SESSION.
-Unlike `mevedel-session-persistence-save-agent-state', the deferred
+  "Schedule one coalesced best-effort sidecar save for SESSION.
+Agent state, queued input, pause and recovery changes use it.  Unlike
+`mevedel-session-persistence-save-agent-state', the deferred
 save is not an acknowledged agent commit: it rewrites only the session
 sidecar (the transcript segment is committed at settlement), may be
 queued behind an active publication, and is cancelled outright when a
@@ -2601,7 +2605,11 @@ To rename the current session in place, use `mevedel-rename-session'."
     (mevedel-session-artifacts-assert-mutation-authority session data-buf)
     (when arg
       (when (mevedel-agent-control-active-turn-p session)
-        (user-error "Interrupt active agent turns before save-as")))
+        (user-error "Interrupt active agent turns before save-as"))
+      ;; Queued input would otherwise be delivered from both copies.
+      (when (mevedel-session-pending-input-p session)
+        (user-error
+         "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q before save-as")))
     (cond
      (arg
       (mevedel-session-persistence--save-as session data-buf))

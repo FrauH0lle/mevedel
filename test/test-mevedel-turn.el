@@ -160,6 +160,47 @@
                       (match-beginning 0) (point-max))))))
               (should (equal message-text (plist-get data :error-data)))
               (should (equal message-text (plist-get data :message))))))
+      (kill-buffer chat-buf)))
+
+  :doc "reports provider failures as informational; only a structured model miss moves the session"
+  (let* ((gptel--known-backends nil)
+         (backend (gptel-make-openai "Failing" :key "test" :models '(gone)))
+         (fallback (gptel-make-openai "Fallback" :key "test" :models '(kept)))
+         (mevedel-model-fallback-provider "Fallback:kept")
+         (chat-buf (generate-new-buffer " *mevedel-turn-model-failure*"))
+         (session (mevedel-session--create :name "turn-model-failure"
+                                           :root-buffer chat-buf
+                                           :model-provider "Failing:gone")))
+    (ignore fallback)
+    (unwind-protect
+        (with-current-buffer chat-buf
+          (setq-local mevedel--session session gptel-backend backend gptel-model 'gone)
+          (cl-flet ((fail (error status)
+                      (mevedel--turn-record-request-failure
+                       (gptel-make-fsm
+                        :info (list :buffer chat-buf :backend backend :model 'gone
+                                    :position (copy-marker (point-max))
+                                    :http-status status :error error)))))
+            ;; Overload text naming the model is transient, not a missing model.
+            (fail '(:type "overloaded" :message "The model is unavailable, retry later") "503")
+            (should-not (mevedel-recovery-blocker session))
+            (should (equal "Failing:gone" (mevedel-session-model-provider session)))
+            ;; Credential text is a labelled, non-blocking notice.
+            (fail '(:message "No auth credentials found") "401")
+            (should-not (mevedel-recovery-blocker session))
+            (should (equal "authentication"
+                           (plist-get (car (mevedel-session-recovery-issues session)) :category)))
+            (should-not (string-search "credentials"
+                                       (plist-get (car (mevedel-session-recovery-issues session)) :message)))
+            (fail '(:code "model_not_found" :message "Model gone does not exist") "404")
+            (should (equal "Fallback:kept" (mevedel-session-model-provider session)))
+            (should (eq 'kept gptel-model))
+            (should (string-search "using Fallback:kept"
+                                   (plist-get (cl-find "model" (mevedel-session-recovery-issues session)
+                                                       :key (lambda (issue) (plist-get issue :id))
+                                                       :test #'equal)
+                                              :message)))
+            (should-not (mevedel-recovery-blocker session))))
       (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-record-settlement
@@ -445,7 +486,8 @@
             (let ((deadline (+ (float-time) 5)))
               (while (and (mevedel-turn-busy-p chat-buf) (< (float-time) deadline)) (sleep-for .002))))
           (should (mevedel-session-save-path session))
-			 (should (mevedel-session-pending-input-failure-paused session))
+          ;; Failure without undelivered steering leaves delivery running.
+          (should-not (mevedel-session-pending-input-failure-paused session))
           (should (mevedel-session-artifacts-artifact-present-p
                        session (format "segment-%04d.chat.org"
                                        (mevedel-session-current-segment session)) t))
@@ -802,9 +844,8 @@
            `(turn (plan ,(car case)) baseline goal-failure)
            (and (eq (car case) 'error)
                 '(failure-record))
-			  `(pending-input-failure save (StopFailure ,(car case))
-             restore pending-input-failure
-             request-end goal-save goal-retry)))))
+           `(pending-input-failure save (StopFailure ,(car case))
+             restore request-end goal-save goal-retry)))))
     (should-not drained)))
 
   :doc "transport rejection still performs local failure admission cleanup"
@@ -832,7 +873,7 @@
                        (with-current-buffer chat-buf
                          (setq mevedel--current-request nil)))))
             (mevedel--fail-turn fsm 'aborted))
-          (should (equal '(restore pending-input-failure request-end)
+          (should (equal '(pending-input-failure restore request-end)
                          (nreverse events)))
           (with-current-buffer chat-buf
             (should-not mevedel--current-request)))
@@ -978,7 +1019,7 @@
       (kill-buffer chat-buf)
       (kill-buffer view-buf)))
 
-		 :doc "abort pauses delivery even without undelivered matching steering"
+  :doc "abort with no undelivered matching steering does not pause"
   (let* ((chat-buf (generate-new-buffer " *mevedel-turn-input-clean*"))
          (session (mevedel-session--create))
          (request (mevedel-request--create :id "finished" :session session))
@@ -995,7 +1036,7 @@
            (gptel-make-fsm :info (list :buffer chat-buf)))
           (should (equal (list other)
                          (mevedel-session-pending-steering session)))
-			 (should
+          (should-not
            (mevedel-session-pending-input-failure-paused session)))
       (kill-buffer chat-buf))))
 

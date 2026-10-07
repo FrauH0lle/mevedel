@@ -81,7 +81,35 @@
                        (mevedel-session-pending-steering session)))
         (should (equal '((:input "later"))
                        (mevedel-session-pending-follow-ups session)))
-        (should (= 1 notifications))))))
+        (should (= 1 notifications)))))
+  :doc "saves and notifies only when a queue changed"
+  (mevedel-pending-inputs-test--with-session
+    (let ((notifications 0) (saves 0))
+      (cl-letf (((symbol-function 'mevedel-collaboration-notify-queue-changed)
+                 (lambda (_) (cl-incf notifications)))
+                ((symbol-function 'mevedel-recovery-save)
+                 (lambda (_) (cl-incf saves))))
+        (mevedel-pending-inputs--set-queues
+         session 'follow-up (mevedel-session-pending-follow-ups session))
+        (should (= 0 (+ notifications saves)))
+        ;; Steering is not guest-visible, but it is durable.
+        (mevedel-pending-inputs--set-queues session 'steering '((:input "now")))
+        (should (= 0 notifications))
+        (should (= 1 saves))))))
+
+(mevedel-deftest mevedel-view--pending-inputs-render ()
+  ,test
+  (test)
+  :doc "shows no review banner once nothing remains to review"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-set-pending-input-failure-paused session t)
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-rebuild)
+      (should-not (string-search "delivery stopped" (buffer-string))))
+    (mevedel-session-enqueue-pending-input session 'follow-up '(:input "later"))
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-rebuild)
+      (should (string-search "delivery stopped" (buffer-string))))))
 
 (mevedel-deftest mevedel-pending-inputs-follow-up-changed ()
   ,test

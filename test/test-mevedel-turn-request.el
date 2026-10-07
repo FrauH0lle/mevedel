@@ -158,6 +158,43 @@
         (should (= 5 (mevedel-request-turn req)))
         (should (= 4 (mevedel-session-turn-count session))))))
 
+  :doc "a root request is the retry: it clears notices and an unjustified failure pause"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (mevedel-recovery-report session "request" 'authentication "Failed" nil)
+      (mevedel-recovery-report session "agent:a" 'request "Agent a failed" nil)
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (mevedel-request-begin session)
+      (should-not (mevedel-session-recovery-issues session))
+      (should-not (mevedel-session-pending-input-failure-paused session))
+      (mevedel-request-end)
+      ;; Failed input still awaiting review keeps delivery paused.
+      (setf (mevedel-session-pending-steering session)
+            (list (list :id 1 :input "lost" :state 'failed-turn)))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (mevedel-request-begin session)
+      (should (mevedel-session-pending-input-failure-paused session))
+      (mevedel-request-end)
+      (setf (mevedel-session-pending-steering session) nil)
+      ;; Owned blocking issues refuse the request and survive it.
+      (mevedel-recovery-report session "preset" 'configuration "Choose a preset" t)
+      (should-error (mevedel-request-begin session) :type 'user-error)
+      (should (mevedel-recovery-blocker session))))
+
+  :doc "a retained agent's admission leaves root recovery state alone"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create :path "/root/child"))
+      (mevedel-recovery-report session "authentication" 'authentication "Sign in" t)
+      (mevedel-recovery-report session "request" 'request "Root failed" nil)
+      (mevedel-request-begin session)
+      (should (= 2 (length (mevedel-session-recovery-issues session))))))
+
   :doc "sets directive-uuid when provided"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create

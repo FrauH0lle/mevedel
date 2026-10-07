@@ -15,6 +15,8 @@
           "helpers"))
 (require 'cl-lib)
 (require 'mevedel-collaboration-lobby)
+(require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-projection)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)

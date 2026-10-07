@@ -73,9 +73,15 @@ TRAMP operation is on the stack and arms them when it returns; outside one the
 filter runs unchanged. Watchdogs validate their captured identity before
 closing the connection, so a retired timer restored from a suspended list cannot
 close a healthy conversation. MCP calls and hook decisions arrive synchronously
-on their socket while ACP frames wait for the library's drain timer, so the
-runner queues them behind that timer; a tool cannot overtake a receipt the agent
-emitted first. Queued work waits for idle target transport, and reentrant
+on their socket while ACP frames wait for the library's drain timer. Before
+queuing socket work, the runner reads ACP output that is already available, then
+queues behind the drain that output armed. Every ACP frame Emacs can read when
+a socket message is handled is therefore processed first, whichever descriptor
+Emacs happened to read first. The receipt and the call reach Emacs through
+different relays (the adapter's stdout and the MCP bridge), so a receipt still
+inside the adapter is not ordered; Claude emits the receipt and then runs a
+model sample before its next call, which leaves that gap theoretical rather
+than guaranteed. Queued work waits for idle target transport, and reentrant
 arrivals cannot overtake an in-progress segment publication. An interrupted
 request still consumes events the agent already reported, such as completed
 compaction, and its owned terminal acknowledgement for usage and settlement,
@@ -95,9 +101,19 @@ gptel discovery, chat creation, and readiness do not need them.
 ## Headless recovery and runtime maintenance
 
 Provider readiness belongs to the harness, before root input is committed.
-Saved provider selections may fall back to one configured provider or the host
-default, with a visible notice; explicit invalid selections remain errors. Missing
-presets require owner selection, without changing permission or sandbox authority.
+Claude readiness is learned from root turn startup rather than a separate
+probe: unknown readiness admits the send, whose own launch is the check; a
+failed startup refuses later sends with its cause and checks again; configuration,
+login and runtime changes forget it. Saved provider selections may fall back to
+one configured provider or the host default, with a visible notice; explicit
+invalid selections remain errors. A live provider failure moves the session only
+on a structured model-not-found signal. Missing presets require owner selection,
+without changing permission or sandbox authority.
+
+Only owners that re-check an issue report it as blocking: readiness, preset
+restore and saved-model restore, each clearing only its own issue. Request,
+agent and other failures are informational and cleared by the next root
+request, which is the user's retry; retained agents never touch root recovery.
 Authentication recovery uses asynchronous Codex refresh/device login and the
 Claude CLI's subscription login/status interfaces. Credentials remain local;
 owner peers receive ephemeral URL/code challenges. Unsent input is durable and
@@ -105,10 +121,13 @@ may resume after repair, while submitted failure or interruption requires explic
 continuation. Native history recovery still requires an idle conversation and
 preserves the transcript and effects.
 
-Queued input records a durable delivery intent before dispatch. A failed
-publication cannot put a committed prompt back into the runnable queue. On
-restart, interrupted delivery and uncertain native turns require explicit review
-before continuation. OAuth readiness also runs at each gptel sampling boundary,
+Queued input records one durable delivery intent, a sidecar-only `dispatching`
+mark, before dispatch; delivery writes nothing further, so a committed prompt
+cannot return to the runnable queue. Other queue and pause changes use the
+coalesced sidecar save. On restart, interrupted delivery and uncertain native
+turns require explicit review before continuation. A failed turn pauses delivery
+only for input it left undelivered or uncertain. Refused guest input is dropped
+with a notice rather than held. OAuth readiness also runs at each gptel sampling boundary,
 so expiry during a tool loop settles the turn without synchronous login.
 
 Stable CLI/adapter maintenance runs asynchronously behind an installation lock.
@@ -125,6 +144,18 @@ pinned adapter. Headless browser use exposed inaccessible recovery prompts and
 stale installations. Owner-only typed recovery and automatic checked maintenance
 replace that setup policy while retaining the installed CLI's credential and
 conversation ownership.
+
+The first recovery layer blocked a session on any classified request failure,
+checked Claude readiness with a full native session whose result expired after
+30 seconds, paused delivery after every failed or aborted turn, held refused
+guest input with a blocking issue, and saved the full session on every queue
+change. Review reproduced the consequences. Regexes over provider text, such as
+"upgrade" in a billing message, persisted blocking issues no Emacs action
+cleared. Most Claude sends were refused once and started Claude twice. A single
+abort stopped follow-up delivery indefinitely. A refused `/compact` from a guest
+locked out the host. Queue saves cost about 70 ms each on a 400 KB transcript.
+Blocking state now belongs to owners that re-check it, readiness to turn startup,
+the pause to affected input, and queue durability to the sidecar.
 
 ## Rationale and consequences
 
@@ -169,7 +200,11 @@ not in this record.
   cancellation, without reopening tool or continuation authority.
 - **Socket ordering:** a tool call read in the same pass as an earlier context
   receipt ran first and failed the turn with an unacknowledged-context error.
-  Queuing socket work behind the drain timer restores arrival order.
+  Queuing socket work behind the drain timer fixed it only when Emacs read the
+  ACP pipe before the socket; a review repro with the reads swapped (Emacs reads
+  ready descriptors in no fixed order) failed the turn the same way. The runner
+  now first reads ACP output already available, so the receipt's drain is armed
+  before the socket work's timer.
 - **Native call ledger:** call identities were first committed to the session
   sidecar before each tool executed and kept for the conversation's lifetime to
   reject replays. Profiling put that commit at 51 ms of synchronous main-thread

@@ -24,6 +24,8 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'mevedel-recovery)
+
 ;; `gptel'
 (defvar gptel-model)
 (defvar gptel-post-tool-call-functions)
@@ -318,11 +320,11 @@ local command drains without starting one, and a host-side edit starts
 nothing at all, so without this seam the guest keeps a card for an
 entry that is already gone."
   (when-let* ((room (mevedel-collaboration--room-for-session session)))
-    (condition-case nil
+    (condition-case err
         (progn
           (mevedel-collaboration--publish-queue room)
           (mevedel-collaboration--publish-status room))
-      (error (mevedel-collaboration--observer-failure room)))))
+      (error (mevedel-collaboration--observer-failure room err)))))
 
 (defconst mevedel-collaboration-needs-host-message
   "This needs a decision in Emacs on the host first"
@@ -586,7 +588,8 @@ identity.  The id never enters model context or the transcript."
       (mevedel-collaboration--publish-status room)
       (mevedel-collaboration--publish-history room)
       (mevedel-collaboration--publish-agents room)
-      (mevedel-collaboration--publish-tasks room))))
+      (mevedel-collaboration--publish-tasks room)
+      (plist-put room :observer-failed nil))))
 
 (defun mevedel-collaboration--queue-state (room)
   "Return ROOM's guest-visible pending queue state as a plist.
@@ -685,8 +688,15 @@ room, and follows a rename, including an automatic title."
     (list :t "status"
           :name (when-let* ((session (plist-get room :session)))
                   (mevedel-session-name session))
-          :issues (vconcat (when-let* ((session (plist-get room :session)))
-                             (mevedel-session-recovery-issues session)))
+          ;; Host diagnostics reach owners only, in their recovery frame.
+          :issues (vconcat
+                   (when-let* ((session (plist-get room :session)))
+                     (mapcar (lambda (issue)
+                               (list :id (plist-get issue :id)
+                                     :category (plist-get issue :category)
+                                     :blocking (plist-get issue :blocking)
+                                     :message (mevedel-recovery-public-message issue)))
+                             (mevedel-session-recovery-issues session))))
           :outcome (when-let* ((session (plist-get room :session))
                                (outcome (mevedel-session-last-outcome session)))
                      (symbol-name outcome))
@@ -729,9 +739,9 @@ room, and follows a rename, including an automatic title."
 (defun mevedel-collaboration-notify-request-changed (data-buffer)
   "Publish DATA-BUFFER's settled request ownership without delaying the turn."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (condition-case nil
+    (condition-case err
         (mevedel-collaboration--publish-status room)
-      (error (mevedel-collaboration--observer-failure room)))))
+      (error (mevedel-collaboration--observer-failure room err)))))
 
 (defun mevedel-collaboration--on-session-event (data-buffer event)
   "Publish DATA-BUFFER's status when its session EVENT changes it.
@@ -742,9 +752,9 @@ A rename, manual or automatic, changes the name the room is headed by."
 (defun mevedel-collaboration-notify-history-changed (data-buffer)
   "Refresh DATA-BUFFER's browser history after a segment transition commits."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (condition-case nil
+    (condition-case err
         (mevedel-collaboration--schedule-publish room)
-      (error (mevedel-collaboration--observer-failure room)))))
+      (error (mevedel-collaboration--observer-failure room err)))))
 
 (defun mevedel-collaboration--safe-accepted-prompt (data-buffer)
   "Publish DATA-BUFFER immediately after an accepted prompt is inserted.
@@ -752,9 +762,9 @@ A rename, manual or automatic, changes the name the room is headed by."
 This observer is failure-isolated so a collaboration viewer cannot block the
 request or prompt transaction."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (condition-case nil
+    (condition-case err
         (mevedel-collaboration--publish room)
-      (error (mevedel-collaboration--observer-failure room))))
+      (error (mevedel-collaboration--observer-failure room err))))
   nil)
 
 (defun mevedel-collaboration--schedule-publish (room)
@@ -1139,38 +1149,46 @@ Runs from a buffer-local hook, so the current buffer names the room."
 
 (defun mevedel-collaboration--safe-pre-tool (info)
   "Run the live tool-start observer without signaling into gptel."
-  (condition-case nil
+  (condition-case err
       (mevedel-collaboration--pre-tool info)
     (error (mevedel-collaboration--observer-failure
-            (mevedel-collaboration--room-for-buffer (current-buffer)))))
+            (mevedel-collaboration--room-for-buffer (current-buffer)) err)))
   nil)
 
 (defun mevedel-collaboration--safe-post-tool (info)
   "Run the live tool-settlement observer without signaling into gptel."
-  (condition-case nil
+  (condition-case err
       (mevedel-collaboration--post-tool info)
     (error (mevedel-collaboration--observer-failure
-            (mevedel-collaboration--room-for-buffer (current-buffer)))))
+            (mevedel-collaboration--room-for-buffer (current-buffer)) err)))
   nil)
 
-(defun mevedel-collaboration--observer-failure (room)
-  "Keep ROOM and its last good snapshot after a projection failure."
-  (when room
+(defun mevedel-collaboration--observer-failure (room &optional err)
+  "Keep ROOM and its last good snapshot after observer failure ERR.
+The host is warned and guests told once; the next successful publication
+re-arms the report, so a repeating fault does not flood either."
+  (when (and room (not (plist-get room :observer-failed)))
+    (plist-put room :observer-failed t)
     (condition-case nil
-        (mevedel-collaboration--broadcast
-         room (list :t "notice" :message
-                    "Live updates failed. Reconnect to resynchronize; the host request is still running."))
+        (progn
+          (display-warning
+           'mevedel (format "Live collaboration update failed: %s"
+                            (if err (error-message-string err) "unknown error"))
+           :warning)
+          (mevedel-collaboration--broadcast
+           room (list :t "notice" :message
+                      "Live updates failed. Reconnect to resynchronize.")))
       (error nil))))
 
 (defun mevedel-collaboration--safe-post-response (&rest _positions)
   "Schedule response publication without signaling into gptel.
 Accept both the stream hook and settled-response hook's arguments."
-  (condition-case nil
+  (condition-case err
       (when-let* ((room (mevedel-collaboration--room-for-buffer
                          (current-buffer))))
         (mevedel-collaboration--schedule-publish room))
     (error (mevedel-collaboration--observer-failure
-            (mevedel-collaboration--room-for-buffer (current-buffer))))))
+            (mevedel-collaboration--room-for-buffer (current-buffer)) err))))
 
 (provide 'mevedel-collaboration)
 ;;; mevedel-collaboration.el ends here

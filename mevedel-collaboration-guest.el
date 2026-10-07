@@ -32,8 +32,6 @@
                   "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--guest-text
                   "mevedel-collaboration" (value))
-(declare-function mevedel-collaboration--observer-failure
-                  "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--publish-queue
                   "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--publish-status
@@ -700,8 +698,6 @@ Authority comes only from the tokens FRAME proves it holds."
     (mevedel-collaboration--transport-send
      (plist-get room :transport) peer
      (mevedel-collaboration--status-frame room))
-    (when (plist-get guest :owner)
-      (mevedel-collaboration-recovery-send room peer))
     ;; The roster broadcast is latched on change, so a joining guest
     ;; is told the current one directly -- an empty roster included,
     ;; because a reconnecting viewer must clear stale rows.
@@ -714,7 +710,11 @@ Authority comes only from the tokens FRAME proves it holds."
      (mevedel-collaboration--tasks-frame room))
     (when (and (plist-get guest :writable)
                mevedel-collaboration-remote-interactions)
-      (mevedel-collaboration--send-ui-requests room peer))))
+      (mevedel-collaboration--send-ui-requests room peer))
+    ;; Last, so an optional recovery fault cannot cost the owner the
+    ;; frames above.
+    (when (plist-get guest :owner)
+      (mevedel-collaboration-recovery-send room peer))))
 
 (defconst mevedel-collaboration--max-push-endpoint-bytes 2048
   "Maximum encoded bytes accepted for a browser push endpoint.")
@@ -1083,12 +1083,13 @@ the failed-enqueue cleanup."
   "Dispatch decoded guest FRAME from PEER for DATA-BUFFER's room.
 
 Failure isolation mirrors the gptel observers: a fault in guest input
-handling preserves the room and reports a safe notice.  Guests act
+handling preserves the room, warns the host with the error and tells only
+the sending guest.  Guests act
 while nobody may be at the keyboard, so frames run with
 `inhibit-interaction': a step that would ask in Emacs is refused to the
 sending guest instead of waiting for an answer."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (condition-case nil
+    (condition-case fault
         (condition-case err
             (let ((inhibit-interaction t))
               (mevedel-collaboration--dispatch-frame room peer frame))
@@ -1107,7 +1108,17 @@ sending guest instead of waiting for an answer."
             'mevedel
             (format "A guest's %s request needed a decision in Emacs and was refused%s"
                     (plist-get frame :t) (mevedel-view--refused-question err)))))
-      (error (mevedel-collaboration--observer-failure room)))))
+      (error
+       (condition-case nil
+           (progn
+             (display-warning
+              'mevedel (format "A guest's %s frame failed: %s"
+                               (plist-get frame :t) (error-message-string fault))
+              :warning)
+             (mevedel-collaboration--transport-send
+              (plist-get room :transport) peer
+              (list :t "notice" :message "The host could not handle this action")))
+         (error nil))))))
 
 (defun mevedel-collaboration--dispatch-frame (room peer frame)
   "Handle guest FRAME from PEER in ROOM."

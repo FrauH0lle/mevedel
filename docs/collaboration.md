@@ -66,13 +66,18 @@ than through the command allowlist:
   authority for an owner, who can create a session outright. The sheet
   says which of the two it is doing before the guest presses anything.
 
-- `recovery` exposes model and registered preset selection, native-history
-  recovery, retained-input retry, reviewed input requeue/discard, provider login and
-  runtime update checks. Login challenges go only to owner peers. Tokens and
-  subprocess output never enter shared transcript or recovery state. Signing in
-  changes host-wide provider credentials; cancelling discards the challenge.
-  Model/preset/history/input changes require idle turns and current session
-  mutation authority. Preset replacement preserves permission and sandbox modes.
+- `recovery` exposes selection among the offered models and registered presets,
+  native-history recovery, retained-input retry, reviewed input requeue/discard,
+  provider login and, in Claude Code sessions, runtime update checks. Login
+  challenges go only to owner peers of rooms whose session uses that provider or
+  whose owner started that login. Tokens never enter shared transcript or
+  recovery state. Owners see recovery issues with the host's details; other
+  readers see readiness and runtime issues only by category, since host
+  diagnostics can name local paths. Signing in changes host-wide provider
+  credentials; cancelling discards the challenge. Model/preset/history/input
+  changes require idle turns and current session mutation authority. Preset
+  replacement preserves the session's and data buffer's permission and sandbox
+  modes. Only histories that can still be recovered are offered.
 
 Owner authority is never granted alone: the owner link contains the write
 token, so a peer claiming the owner token without it is a forgery and is
@@ -257,18 +262,30 @@ signals instead:
 
 - a frame is refused to its sender with a notice, "This needs a decision in
   Emacs on the host first", and the room stays up;
-- an unsent queued message and its attachments are retained, with a blocking
-  issue and a notice to the sender. Repairing its blocker resumes eligible input.
+- a queued message is dropped with its attachments, as on a retraction; its
+  sender gets the same notice, and the host a warning naming the guest.
 
-Host-only questions expose a generic notice; user-facing refusals retain their
-safe explanation. Operational issues are visible to every conversation reader.
+Either way the host's warning quotes the question; guests see only the notice,
+since prompts can name hosts and paths.
+
+A queued message the host refuses for another reason, such as `/compact` in a
+Claude session, is dropped the same way rather than blocking the queue. Its
+sender is told it was not sent, and the host sees the error. A settling turn or
+running compaction only delays the drain, so the message waits in the queue. An
+attempt that may already have reached the transcript stays queued for review
+instead, and its sender is told so. None of these refusals blocks the host's own
+requests.
+
 Owners can choose a replacement provider or preset, complete provider login,
 recover a root or child native history, or explicitly retry retained input.
-Submitted failures and interruptions pause delivery until the owner continues;
-undelivered steering must be reviewed first. Recovery never resends a submitted
-prompt. Queue acceptance, removal and pause state are persisted with the session.
-Projection failures preserve the room and last good snapshot, showing a reconnect
-notice instead of stopping the host request.
+Undelivered steering or an interrupted queued delivery pauses delivery and must
+be reviewed first. Recovery never resends a submitted prompt. Queue acceptance,
+removal and pause state are persisted with the session.
+
+A failing observer or projection preserves the room and its last good snapshot.
+The host gets one warning with the error and guests one reconnect notice until a
+publication succeeds again. A fault while handling one guest's frame warns the
+host and notifies only that guest.
 
 Later steps of a turn run from timers and process callbacks, outside any
 binding. An Emacs daemon without a client frame reads the minibuffer on its

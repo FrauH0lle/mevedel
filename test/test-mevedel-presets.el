@@ -1077,7 +1077,19 @@
         (should (eq 'test-preset gptel--preset))
         (should (equal "Trusted system prompt" gptel-system-prompt))
         (should (= 0.25 gptel-temperature))
-        (should-not (local-variable-p 'kill-buffer-hook))))))
+        (should-not (local-variable-p 'kill-buffer-hook))))
+    ;; A missing preset blocks until any preset is applied to the session.
+    (with-temp-buffer
+      (let ((session (mevedel-session--create :name "missing" :preset-name 'gone)))
+        (setq-local mevedel--session session)
+        (mevedel-preset-restore-session session)
+        (should (equal "preset" (plist-get (mevedel-recovery-blocker session) :id)))
+        (cl-letf (((symbol-function 'mevedel-agents--setup-for-request) #'ignore)
+                  ((symbol-function 'mevedel-preset--setup-catalog) #'ignore)
+                  ((symbol-function 'mevedel-preset--setup-extras) #'ignore))
+          (mevedel-preset-apply 'test-preset))
+        (should (eq 'test-preset (mevedel-session-preset-name session)))
+        (should-not (mevedel-recovery-blocker session))))))
 
 (mevedel-deftest mevedel-with-preset
   (:after-each

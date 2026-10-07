@@ -2696,6 +2696,16 @@
                   (cdr (assoc
                         "/root/worker"
                         (mevedel-session-agent-registry session)))))))
+  :doc "refuses save-as while input is queued, which both copies would deliver"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create :name "save-as")))
+      (setq-local mevedel--session session)
+      (mevedel-session-enqueue-pending-input session 'follow-up '(:input "later"))
+      (should (string-match-p
+               "Resolve pending input"
+               (error-message-string
+                (should-error (mevedel-save-session t) :type 'user-error))))
+      (should (mevedel-session-pending-follow-ups session))))
   :doc "save-as canonically publishes the parent and cloned sidecar"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

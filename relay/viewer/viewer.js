@@ -103,6 +103,7 @@
     if (className !== 'connected') {
       state.connected = false;
       recoverySignature = '';
+      recoveryAuthSignature = '';
       const recoveryAuth = document.getElementById('recovery-auth');
       if (recoveryAuth) recoveryAuth.replaceChildren();
       state.busy = null;
@@ -269,7 +270,9 @@
 
   // Recovery never replaces the composer or its draft. Auth challenges remain
   // in memory only and arrive exclusively on the host's owner projection.
+  // The login block renders separately so other updates keep a typed code.
   let recoverySignature = '';
+  let recoveryAuthSignature = '';
   function recoveryAction(action, value, extra = {}) {
     send({t: 'recovery', action, value, ...extra});
   }
@@ -284,16 +287,14 @@
   }
   function renderRecovery(frame) {
     if (!state.owner) return;
-    const signature = JSON.stringify(frame);
-    if (signature === recoverySignature) return;
-    recoverySignature = signature;
     const controls = document.getElementById('recovery-controls');
     const actions = document.getElementById('recovery-actions');
     const auth = document.getElementById('recovery-auth');
     if (!controls || !actions || !auth) return;
     controls.hidden = false;
-    actions.replaceChildren();
-    auth.replaceChildren();
+    const {auth: login, ...rest} = frame;
+    const signature = JSON.stringify(rest);
+    const authSignature = JSON.stringify([frame.provider, login]);
     const button = (parent, text, action) => {
       const node = el('button', 'btn quiet', text);
       node.type = 'button'; node.addEventListener('click', action); parent.append(node);
@@ -308,6 +309,17 @@
       wrapper.append(select); actions.append(wrapper);
       button(actions, `Apply ${label.toLowerCase()}`, () => recoveryAction(action, select.value));
     };
+    if (authSignature !== recoveryAuthSignature) {
+      recoveryAuthSignature = authSignature;
+      renderRecoveryAuth(auth, frame, button);
+    }
+    if (signature === recoverySignature) return;
+    recoverySignature = signature;
+    actions.replaceChildren();
+    // Owners see the host's details; other readers only the category.
+    for (const issue of Array.isArray(frame.issues) ? frame.issues : []) {
+      if (typeof issue.message === 'string') actions.append(el('p', 'recovery-issue', issue.message));
+    }
     picker('Model', frame.models, 'model');
     picker('Preset', frame.presets, 'preset');
     button(actions, 'Retry retained input', () => recoveryAction('retry'));
@@ -323,8 +335,10 @@
         if (window.confirm('Discard this retained input?')) recoveryAction('input-discard', entry.id);
       });
     }
-    button(actions, 'Check updates', () => recoveryAction('update'));
-    if (frame.runtime && frame.runtime.message) actions.append(el('p', '', frame.runtime.message));
+    if (frame.runtime) {
+      button(actions, 'Check updates', () => recoveryAction('update'));
+      if (frame.runtime.message) actions.append(el('p', '', frame.runtime.message));
+    }
     const provider = document.createElement('select');
     provider.setAttribute('aria-label', 'Login provider');
     for (const name of frame.providers || []) {
@@ -333,6 +347,9 @@
     }
     actions.append(provider);
     button(actions, 'Sign in', () => recoveryAction('login', null, {provider: provider.value}));
+  }
+  function renderRecoveryAuth(auth, frame, button) {
+    auth.replaceChildren();
     auth.append(el('p', '', 'Signing in changes the credentials used by this Emacs host.'));
     if (frame.auth) {
       auth.append(el('p', '', frame.auth.message || ''));
