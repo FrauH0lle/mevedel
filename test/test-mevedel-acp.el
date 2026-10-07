@@ -97,17 +97,37 @@
         (await (lambda () outcome))
         (should (eq 'success (plist-get outcome :status))))))
 
-  :doc "process loss fails the active prompt without automatically restarting"
+  :doc "process loss fails the active prompt with the agent's stderr, without restarting"
   (mevedel-acp-test--with-connection nil
     (let (outcomes)
       (mevedel-acp-prompt connection [((type . "text") (text . "crash"))]
                           #'ignore (lambda (outcome) (push outcome outcomes)))
+      ;; Busy Emacs: the stderr text and the exit are both pending at once.
+      (let ((end (+ (float-time) 0.2))) (while (< (float-time) end)))
       (await (lambda () outcomes))
       (should (= 1 (length outcomes)))
       (should (eq 'error (plist-get (car outcomes) :status)))
+      (should (string-search "fixture crash: native binary missing"
+                             (plist-get (car outcomes) :message)))
       (should-error
        (mevedel-acp-prompt connection [((type . "text") (text . "again"))]
-                           #'ignore #'ignore)))))
+                           #'ignore #'ignore))))
+
+  :doc "agent permission and filesystem requests are refused, never executed"
+  (mevedel-acp-test--with-connection nil
+    (let ((text "") outcome)
+      (mevedel-acp-prompt
+       connection [((type . "text") (text . "ask-permission"))]
+       (lambda (notification)
+         (let ((update (alist-get 'update (alist-get 'params notification))))
+           (setq text (concat text (alist-get 'text (alist-get 'content update))))))
+       (lambda (value) (setq outcome value)))
+      (await (lambda () outcome))
+      (should (eq 'success (plist-get outcome :status)))
+      (let ((answers (json-parse-string text :object-type 'plist)))
+        (should (equal '(:outcome (:outcome "cancelled"))
+                       (plist-get answers :permission)))
+        (should (= -32601 (plist-get (plist-get answers :fs) :code)))))))
 
 (mevedel-deftest mevedel-acp-cancel
   (:doc "interrupt waits for the cancelled prompt response and keeps history usable")
@@ -149,7 +169,11 @@
           (mevedel-acp-cancel connection)
           (should-not (cl-set-difference (process-list) before)))
         (should (eq 'closed (mevedel-acp-state connection)))
-        (should (eq 'error (plist-get outcome :status)))))))
+        (should (eq 'error (plist-get outcome :status)))
+        ;; Let the deferred sentinel release the stderr pipe inside this test.
+        (with-timeout (5 (ert-fail "Agent sentinel did not run"))
+          (while (get-process (concat (process-name process) " stderr"))
+            (accept-process-output nil 0.01)))))))
 
 (mevedel-deftest mevedel-acp-open ()
   ,test
@@ -217,6 +241,24 @@
         (funcall reject "Late failure")
         (should-not (alist-get :process (mevedel-acp-client connection)))
         (should (eq 'closed (mevedel-acp-state connection))))))
+
+  :doc "a failing READY settles its owner through FAILURE"
+  (let* ((directory (make-temp-file "mevedel-acp-test-" t))
+         failure
+         (connection
+          (mevedel-acp-open
+           (list :command (executable-find "python3")
+                 :args (list mevedel-acp-test--peer) :cwd directory)
+           (lambda (_connection) (error "Ready exploded"))
+           (lambda (message) (setq failure message)))))
+    (unwind-protect
+        (progn
+          (with-timeout (5 (ert-fail "READY failure was not delivered"))
+            (while (not failure) (accept-process-output nil 0.01)))
+          (should (equal "Ready exploded" failure))
+          (should (eq 'closed (mevedel-acp-state connection))))
+      (mevedel-acp-close connection)
+      (delete-directory directory t)))
 
   :doc "missing retained history fails startup without creating a fresh session"
   (mevedel-acp-test--with-connection "missing-session"

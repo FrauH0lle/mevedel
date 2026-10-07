@@ -312,9 +312,24 @@
             (setq locked t)
             (should
              (mevedel-transport-busy-p "/ssh:user@host:/srv/project"))
+            ;; A target resolved once answers like its file name.
+            (should
+             (mevedel-transport-busy-p
+              (mevedel-transport-target "/ssh:user@host:/srv/project")))
             ;; A local path has no connection to consult.
             (should-not (mevedel-transport-busy-p "/srv/project")))
         (delete-process process)))))
+
+(mevedel-deftest mevedel-transport-target ()
+  ,test
+  (test)
+  :doc "resolves remote file names once and leaves local ones unresolved"
+  (progn
+    (should-not (mevedel-transport-target nil))
+    (should-not (mevedel-transport-target "/srv/project"))
+    (let ((target (mevedel-transport-target "/ssh:user@host:/srv/project")))
+      (should (tramp-file-name-p target))
+      (should (equal "host" (tramp-file-name-host target))))))
 
 (mevedel-deftest mevedel-transport-with-exclusive-connection ()
   ,test

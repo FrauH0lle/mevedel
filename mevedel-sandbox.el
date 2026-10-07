@@ -17,7 +17,7 @@
   (require 'subr-x))
 
 ;; `mevedel-mcp'
-(declare-function mevedel-mcp-socket-root "mevedel-mcp" ())
+(declare-function mevedel-mcp-socket-root "mevedel-mcp" (&optional noerror))
 (autoload 'mevedel-mcp-socket-root "mevedel-mcp")
 
 ;; `mevedel-permission-rules'
@@ -922,8 +922,10 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                     roots)
                    (plist-get plan :arguments)
                    ;; Local tool servers carry the owning turn's authority.
-                   (unless (file-remote-p canonical-workdir)
-                     (list "--tmpfs" (mevedel-mcp-socket-root)))
+                   ;; Without a socket root no server can exist to mask.
+                   (when-let* (((not (file-remote-p canonical-workdir)))
+                               (root (mevedel-mcp-socket-root t)))
+                     (list "--tmpfs" root))
                    (list "--unshare-user"
                          "--unshare-pid")
                    (unless network-access-p

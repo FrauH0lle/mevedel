@@ -32,6 +32,7 @@
 (require 'mevedel-tool-patch-registration)
 (require 'mevedel-tool-ptc)
 (require 'mevedel-goal)
+(require 'mevedel-prompt-submission)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-editing)
@@ -81,10 +82,6 @@
 (declare-function mevedel-permission-queue-sweep-request
                   "mevedel-permission-queue"
                   (request-id &optional session no-render))
-
-;; `mevedel-prompt-submission'
-(declare-function mevedel-prompt-submission-commit
-                  "mevedel-prompt-submission" (submission))
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-commit-invoked-records
@@ -201,8 +198,11 @@ OWNER's Goal attribution first; UpdateGoal visibility depends on it."
     (cl-loop for tool in gptel-tools
              for name = (gptel-tool-name tool)
              when (if (member name mutators) goal-p (funcall visible name))
-             collect (or (cl-find tool (mevedel-tool-all) :key #'mevedel-tool-gptel-tool :test #'eq)
-                         (error "Tool %s is not registered with mevedel" name)))))
+             collect (let ((registered
+                            (mevedel-tool-get name (gptel-tool-category tool))))
+                       (if (and registered (eq tool (mevedel-tool-gptel-tool registered)))
+                           registered
+                         (error "Tool %s is not registered with mevedel" name))))))
 
 (defun mevedel-tools--handle-plan-tool-filter (fsm)
   "Apply Plan and Goal request-time tool visibility to FSM."

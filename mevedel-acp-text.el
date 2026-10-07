@@ -71,9 +71,10 @@ LAUNCH must have no retained session.  Supplied MCP servers remain caller-owned.
                  (lambda (active)
                    (when-let* ((timeout (plist-get launch :response-timeout)))
                      (setq timer
-                           (run-at-time timeout nil
-                                        (lambda ()
-                                          (finish '(:status error :message "ACP inspection response timed out"))))))
+                           (mevedel-transport-run-at-time
+                            timeout
+                            (lambda ()
+                              (finish '(:status error :message "ACP inspection response timed out"))))))
                    (mevedel-acp-prompt
                     active (vector `((type . "text") (text . ,prompt)))
                     #'event #'finish))
