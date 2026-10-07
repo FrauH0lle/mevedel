@@ -17,12 +17,14 @@
 ;; compiles to a call to a function that does not exist.
 (eval-when-compile (require 'mevedel-structs))
 (require 'mevedel-engine)
+;; Every directive request runs in a chat session; chat also loads the
+;; presets and session artifacts a request applies.
+(require 'mevedel-chat)
 
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel)
-  (require 'gptel-request)
-  (require 'mevedel-presets))
+  (require 'gptel-request))
 
 
 ;; `cl-seq'
@@ -46,17 +48,12 @@
 (defvar gptel-request--transitions)
 (defvar gptel-stream)
 
+;; `mevedel'
+(defvar mevedel-default-chat-preset)
+
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
-
-;; `mevedel-chat'
-(declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
-(declare-function mevedel--chat-buffer
-                  "mevedel-chat"
-                  (session-name &optional create workspace working-directory))
-(declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
-(defvar mevedel-show-chat-buffer)
 
 ;; `mevedel-claude-code-session'
 (declare-function mevedel-claude-code-send "mevedel-claude-code-session" (&optional model-input))
@@ -146,28 +143,6 @@
   "mevedel-plan-handoff")
 (autoload 'mevedel-plan-handoff-validate-skill-bindings
   "mevedel-plan-handoff")
-
-;; `mevedel-presets'
-(declare-function mevedel-preset--build-transitions
-                  "mevedel-presets" (transitions))
-(declare-function mevedel-preset-apply "mevedel-presets"
-		  (name &optional buffer))
-(defvar mevedel--directive-read-only-request-p)
-(defvar mevedel-action-preset-alist)
-(defvar mevedel-default-chat-preset)
-
-;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-assert-new-mutation-authority
-                  "mevedel-session-artifacts" (session))
-(declare-function mevedel-session-artifacts-ensure-files
-                  "mevedel-session-artifacts" (session buffer))
-(declare-function
- mevedel-session-artifacts-install-gptel-save-state-advice
- "mevedel-session-artifacts" nil)
-(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-ensure-files
-  "mevedel-session-artifacts")
 
 ;; `mevedel-session-naming'
 (declare-function mevedel-session-naming-consider "mevedel-session-naming" (session prompt))
@@ -490,9 +465,6 @@ FEEDBACK supplies requested changes or optional retry guidance."
 ;;
 ;;; Directive processing
 
-(defvar-local mevedel--current-directive-uuid nil
-  "UUID of the directive currently being processed.")
-
 (defun mevedel--directive-display-text (action directive-text)
   "Return the human-facing transcript text for ACTION and DIRECTIVE-TEXT."
   (let ((label (mevedel-overlay-ui-directive-action-label action)))
@@ -590,7 +562,7 @@ settling."
   (and (buffer-file-name)
        (buffer-modified-p)
        (not (bound-and-true-p mevedel--session))
-       (not (bound-and-true-p mevedel--agent-invocation))))
+       (not mevedel--agent-invocation)))
 
 (defun mevedel--directive-model-policy (directive)
   "Return DIRECTIVE's resolved request-local model policy, or nil."
@@ -951,7 +923,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
             (when (mevedel-engine-external-p
                    (or (plist-get model-policy :backend) gptel-backend))
               ;; Commit a complete transcript before its next directive frame
-              ;; opens; native identity publication can then update only metadata.
+              ;; opens.
               (mevedel-session-artifacts-save mevedel--session chat-buffer))
 	    (setq execution-session-id
 		  (mevedel-session-session-id mevedel--session)))

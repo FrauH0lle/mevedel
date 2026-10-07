@@ -18,6 +18,7 @@
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
+(autoload 'mevedel-plan-approval-abort "mevedel-plan-mode")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt-sequence

@@ -223,7 +223,15 @@ must not need a load-order recipe.
 - **Use real autoloaded entry points**. `declare-function` and `defvar` are
   byte-compiler declarations; they do not load libraries, and variable access
   does not trigger autoloading. Use `eval-when-compile` only for compile-time
-  dependencies.
+  dependencies. A caller that may run before its callee's module loads pairs
+  the declaration with an `autoload` in the calling module; an `autoload` in a
+  module that is not loaded yet has no effect. Buffer-local state that
+  several owners read lives in an eagerly loaded module such as
+  `mevedel-structs`, not behind `boundp` guards.
+- **Keep M-x entry points reachable**. Top-level commands carry
+  `;;;###autoload` cookies for package installs and an `autoload` in
+  `mevedel.el` for source checkouts. Mode-local and transient suffix commands
+  load with the module that binds them.
 - **Load dependencies at feature boundaries**. When a runtime dependency is
   not autoloaded or otherwise guaranteed to be loaded, `require` it once in a
   cold command/setup entry point, or at top level when it is unconditional
@@ -239,8 +247,11 @@ must not need a load-order recipe.
   circular dependencies through module direction rather than scattering
   lazy `require`s through helpers.
 - **Verify cold first use and the tradeoff**. Exercise changed boundaries
-  through caller entry points in a fresh isolated Emacs, including compiled
-  code; preloaded fixtures can hide missing dependencies. Check that optional
+  through caller entry points in a fresh isolated Emacs, including code
+  byte-compiled in one process as package managers do; preloaded fixtures can
+  hide missing dependencies. `test/test-mevedel-loading.el` runs installation,
+  first composer send, session resume, directive commands and M-x
+  reachability this way. Check that optional
   features remain unloaded or inactive until needed. Measure package load,
   installation, first use, and steady-state work separately before claiming
   performance gains. Moving a pause to the first interaction is not by itself

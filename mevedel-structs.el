@@ -234,7 +234,7 @@ workspace."
   pending-follow-ups ; durable FIFO of prompts awaiting separate root turns
   pending-input-next-id ; next session-local pending-input identity
   pending-input-paused ; non-nil while automatic delivery is user-paused
-  pending-input-failure-paused ; non-nil after a submitted turn fails or aborts
+  pending-input-failure-paused ; non-nil after a failed turn leaves undelivered or uncertain input
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
@@ -719,6 +719,12 @@ Return the expanded paths activated."
 (defvar-local mevedel--current-request nil
   "The `mevedel-request' struct for the active request.
 Set at request start and cleared by the request lifecycle owner.")
+
+(defvar-local mevedel--current-directive-uuid nil
+  "UUID of the directive currently being processed.")
+
+(defvar-local mevedel--agent-invocation nil
+  "Invocation that owns this retained agent conversation buffer.")
 
 (cl-defstruct (mevedel-request (:constructor mevedel-request--create))
   "Per-request state, scoped to a single LLM request/response cycle.

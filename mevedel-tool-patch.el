@@ -59,6 +59,7 @@
 ;; `mevedel-patch-review'
 (declare-function mevedel-patch-review-start
                   "mevedel-patch-review" (proposal callback data-buffer))
+(autoload 'mevedel-patch-review-start "mevedel-patch-review")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective

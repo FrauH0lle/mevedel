@@ -23,6 +23,8 @@
 (require 'gptel-openai)
 (require 'gptel-request)
 (require 'mevedel)
+(require 'mevedel-permission-rules)
+(require 'mevedel-side-conversation)
 (require 'mevedel-view)
 
 (declare-function gptel-make-openai "ext:gptel-openai" (name &rest args))

@@ -78,6 +78,7 @@
 (autoload 'mevedel-journal-store-entries "mevedel-journal-store")
 (autoload 'mevedel-journal-store-file-name-p "mevedel-journal-store")
 (autoload 'mevedel-journal-store-read "mevedel-journal-store")
+(autoload 'mevedel-journal-store-recall-p "mevedel-journal-store")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-segment-number

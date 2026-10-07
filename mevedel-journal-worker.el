@@ -48,6 +48,8 @@
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication--cached-generation "mevedel-session-publication" (session-dir head))
 (declare-function mevedel-session-publication--cached-sidecar-facts "mevedel-session-publication" (session-dir head generation))
+(autoload 'mevedel-session-publication--cached-generation "mevedel-session-publication")
+(autoload 'mevedel-session-publication--cached-sidecar-facts "mevedel-session-publication")
 
 ;; `subr'
 (defvar read-eval)
