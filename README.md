@@ -147,7 +147,9 @@ checks Claude Code 2.1.290+, Node.js 22+, Python 3.8+, acp.el 0.15.2+ and the
 subscription login without starting a model request. Subscription selection
 rejects API authentication and does not enable paid overflow.
 
-Mevedel keeps the native CLI and its managed ACP adapter on the stable release.
+Mevedel keeps the native CLI on its own configured release channel
+(`autoUpdatesChannel`, `latest` by default) and the managed ACP adapter on its
+latest release.
 A Claude launch starts a background check when one is due (daily, hourly after
 a failure). A new runtime is selected only after its versions and ACP handshake
 pass; running invocations keep their executables, and a failed check keeps the

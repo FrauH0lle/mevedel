@@ -47,7 +47,11 @@ elif sys.argv[1:] == ["auth", "status", "--json"]:
     print(json.dumps({"loggedIn": True,
                       "authMethod": os.getenv("MEVEDEL_TEST_AUTH_METHOD", "claude.ai"),
                       "apiProvider": os.getenv("MEVEDEL_TEST_AUTH_PROVIDER", "firstParty"), "subscriptionType": "max"}))
-elif sys.argv[1:] == ["install", "stable"]:
+elif sys.argv[1:2] == ["install"]:
+    channel = os.getenv("MEVEDEL_TEST_INSTALL_CHANNEL")
+    if channel:
+        with open(channel, "w") as stream:
+            stream.write(sys.argv[2])
     sys.exit(1 if os.getenv("MEVEDEL_TEST_INSTALL_FAIL") else 0)
 elif sys.argv[1:] == ["auth", "login", "--claudeai"]:
     print("https://claude.ai/oauth/authorize?state=fixture-state", flush=True)

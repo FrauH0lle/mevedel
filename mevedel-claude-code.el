@@ -355,7 +355,8 @@ Return the setup buffer."
 
 ;;;###autoload
 (defun mevedel-claude-code-install-adapter ()
-  "Check and install stable Claude CLI and adapter updates asynchronously.
+  "Check and install Claude CLI and adapter updates asynchronously.
+The CLI follows its own configured release channel.
 The echo area reports a check already running and the result."
   (interactive)
   (mevedel-claude-code-maintenance-check t))

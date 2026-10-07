@@ -75,6 +75,21 @@
      (should (equal cli (plist-get state :cli)))
      (should (equal adapter (plist-get state :adapter)))
      (should-not (file-locked-p (file-name-concat mevedel-claude-code-directory "runtime-update")))))
+  :doc "the native CLI updates on its configured channel, latest by default"
+  (mevedel-maintenance-test--with-installation
+   (let ((config (file-name-concat directory "config"))
+         (installed (file-name-concat directory "installed-channel")))
+     (make-directory config)
+     (setenv "CLAUDE_CONFIG_DIR" config)
+     (setenv "MEVEDEL_TEST_INSTALL_CHANNEL" installed)
+     (mevedel-claude-code-maintenance-check t)
+     (await)
+     (should (equal "latest" (with-temp-buffer (insert-file-contents installed) (buffer-string))))
+     (write-region "{\"autoUpdatesChannel\": \"stable\"}" nil
+                   (file-name-concat config "settings.json") nil 'silent)
+     (mevedel-claude-code-maintenance-check t)
+     (await)
+     (should (equal "stable" (with-temp-buffer (insert-file-contents installed) (buffer-string))))))
   :doc "external installations remain untouched and return actionable status"
   (mevedel-maintenance-test--with-installation
    (let ((mevedel-claude-code-executable (file-name-concat bin "external-claude")))

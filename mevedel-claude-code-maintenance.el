@@ -138,8 +138,22 @@ timeout release the child and both private output buffers."
         (file-error (copy-file source target))))
     target))
 
+(defun mevedel-claude-code-maintenance--channel ()
+  "Return the native CLI's configured release channel, \"latest\" by default.
+`claude install CHANNEL' saves CHANNEL to the user's Claude settings, so
+installing anything else would silently move the user to another channel."
+  (let ((file (file-name-concat (or (getenv "CLAUDE_CONFIG_DIR") (expand-file-name "~/.claude"))
+                                "settings.json")))
+    (if (equal "stable"
+               (ignore-errors
+                 (with-temp-buffer
+                   (insert-file-contents file)
+                   (plist-get (json-parse-buffer :object-type 'plist) :autoUpdatesChannel))))
+        "stable"
+      "latest")))
+
 (defun mevedel-claude-code-maintenance-check (&optional force)
-  "Check stable updates asynchronously when due, or now with FORCE.
+  "Check updates on the CLI's own channel asynchronously when due, or now with FORCE.
 Return current state.  Concurrent sessions and hosts share an installation
 lock.  A forced check reports a running check and its result in the echo area."
   (when (and mevedel-claude-code-auto-update (not mevedel-claude-code-maintenance--timer))
@@ -240,7 +254,7 @@ lock.  A forced check reports a running check and its result in the echo area."
                             (let ((version (json-parse-string output)))
                               (unless (and (stringp version)
                                            (string-match-p "\\`[0-9]+\\.[0-9]+\\.[0-9]+\\'" version))
-                                (error "Invalid stable adapter version"))
+                                (error "Invalid adapter version"))
                               (setq stage (file-name-concat directory "runtimes" version)
                                     adapter (file-name-concat stage "node_modules" ".bin" "claude-agent-acp"))
                               (if (file-executable-p adapter) (validate-adapter)
@@ -269,10 +283,10 @@ lock.  A forced check reports a running check and its result in the echo area."
                         (mevedel-claude-code-executable configured-cli)
                         (mevedel-claude-code-adapter-executable configured-adapter))
                     (mevedel-claude-code-maintenance--write
-                     (append (list :status "checking" :message "Checking stable Claude updates")
+                     (append (list :status "checking" :message "Checking Claude updates")
                              (cl-loop for (key value) on old by #'cddr
                                       unless (memq key '(:status :message)) append (list key value)))))
-                  (run (list cli "install" "stable")
+                  (run (list cli "install" (mevedel-claude-code-maintenance--channel))
                        (lambda (_)
                          (setq candidate (mevedel-claude-code-maintenance--pin cli directory))
                          (check-cli #'install-adapter)))))
