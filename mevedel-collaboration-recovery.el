@@ -4,6 +4,7 @@
 ;; Closed browser actions reuse host model, preset, login and history APIs.
 ;; Login challenges are ephemeral and sent only to authenticated owner peers
 ;; of rooms whose session uses that provider or whose owner started the login.
+;; A room follows a browser-started login, in every frame, until it settles.
 
 ;;; Code:
 
@@ -30,12 +31,13 @@
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 
 (defun mevedel-collaboration-recovery-send (room peer &optional backend)
-  "Send owner PEER current ROOM recovery choices and BACKEND login state."
+  "Send owner PEER current ROOM recovery choices and BACKEND login state.
+BACKEND defaults to the room's unsettled browser login, then the session's."
   (when (mevedel-collaboration--owner room peer)
     (when-let* ((buffer (mevedel-collaboration--room-data-buffer room)))
       (with-current-buffer buffer
         (let* ((session (plist-get room :session))
-               (backend (or backend gptel-backend)))
+               (backend (or backend (plist-get room :recovery-login) gptel-backend)))
           (mevedel-collaboration--transport-send
            (plist-get room :transport) peer
            (list :t "recovery" :models (vconcat (mapcar #'car (mevedel-model-candidates)))
@@ -71,19 +73,22 @@
   "Resend BUFFER's room owners their recovery frame after its issues change."
   (when-let* (((boundp 'mevedel-collaboration--rooms))
               (room (mevedel-collaboration--room-for-buffer buffer)))
-    (mevedel-collaboration-recovery--send-owners room (plist-get room :recovery-login))))
+    (mevedel-collaboration-recovery--send-owners room)))
 
-(defun mevedel-collaboration-recovery-auth-changed (backend _state)
+(defun mevedel-collaboration-recovery-auth-changed (backend state)
   "Publish BACKEND's login state to owners of rooms that use it.
-A room uses BACKEND when its session does or its owner started that login."
+A room uses BACKEND when its session does or its owner started that login.
+A browser login stops routing to its room once STATE settles."
   (when (boundp 'mevedel-collaboration--rooms)
     (maphash
      (lambda (buffer room)
-       (when (and (buffer-live-p buffer)
-                  (or (eq backend (plist-get room :recovery-login))
-                      (with-current-buffer buffer
-                        (mevedel-readiness-uses-p backend))))
-         (mevedel-collaboration-recovery--send-owners room backend)))
+       (let ((login (eq backend (plist-get room :recovery-login))))
+         (when (and (buffer-live-p buffer)
+                    (or login (with-current-buffer buffer
+                                (mevedel-readiness-uses-p backend))))
+           (mevedel-collaboration-recovery--send-owners room backend))
+         (when (and login (not (member (plist-get state :status) '("login" "refreshing"))))
+           (plist-put room :recovery-login nil))))
      mevedel-collaboration--rooms)))
 (add-hook 'mevedel-auth-changed-hook #'mevedel-collaboration-recovery-auth-changed)
 
@@ -94,7 +99,7 @@ A room uses BACKEND when its session does or its owner started that login."
      (lambda (buffer room)
        (when (and (buffer-live-p buffer)
                   (mevedel-claude-code-backend-p (buffer-local-value 'gptel-backend buffer)))
-         (mevedel-collaboration-recovery--send-owners room (plist-get room :recovery-login))))
+         (mevedel-collaboration-recovery--send-owners room)))
      mevedel-collaboration--rooms)))
 (add-hook 'mevedel-claude-code-maintenance-changed-hook #'mevedel-collaboration-recovery-runtime-changed)
 
@@ -166,8 +171,10 @@ bindings, including the absence of one."
                 'follow-up (append (remq entry (mevedel-session-pending-follow-ups session))
                                    (and replacement (list replacement)))))))
           ("login"
-           (setq room (plist-put room :recovery-login backend))
-           (mevedel-auth-start backend))
+           ;; Recorded only once started: starting first cancels the
+           ;; provider's settled operation, which would clear it again.
+           (when (member (plist-get (mevedel-auth-start backend) :status) '("login" "refreshing"))
+             (setq room (plist-put room :recovery-login backend))))
           ("login-code" (mevedel-auth-submit-code backend (plist-get frame :id) value))
           ("cancel-login" (mevedel-auth-cancel backend))
           ("update"
@@ -194,7 +201,7 @@ bindings, including the absence of one."
               (mevedel-view--schedule-late-follow-up-drain))))
         (mevedel-collaboration--publish-status room)
         (mevedel-collaboration--publish-queue room)
-        (mevedel-collaboration-recovery-send room peer backend)))))
+        (mevedel-collaboration-recovery-send room peer)))))
 
 (provide 'mevedel-collaboration-recovery)
 ;;; mevedel-collaboration-recovery.el ends here

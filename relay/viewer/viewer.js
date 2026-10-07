@@ -104,6 +104,7 @@
       state.connected = false;
       recoverySignature = '';
       recoveryAuthSignature = '';
+      recoveryProvider = '';
       const recoveryAuth = document.getElementById('recovery-auth');
       if (recoveryAuth) recoveryAuth.replaceChildren();
       state.busy = null;
@@ -273,6 +274,7 @@
   // The login block renders separately so other updates keep a typed code.
   let recoverySignature = '';
   let recoveryAuthSignature = '';
+  let recoveryProvider = '';
   function recoveryAction(action, value, extra = {}) {
     send({t: 'recovery', action, value, ...extra});
   }
@@ -316,10 +318,9 @@
     if (signature === recoverySignature) return;
     recoverySignature = signature;
     actions.replaceChildren();
-    // Owners see the host's details; other readers only the category.
-    for (const issue of Array.isArray(frame.issues) ? frame.issues : []) {
-      if (typeof issue.message === 'string') actions.append(el('p', 'recovery-issue', issue.message));
-    }
+    // Owners see the host's details in place of the status frame's
+    // category-only list; other readers only the category.
+    renderRecoveryIssues(frame.issues);
     picker('Model', frame.models, 'model');
     picker('Preset', frame.presets, 'preset');
     button(actions, 'Retry retained input', () => recoveryAction('retry'));
@@ -342,9 +343,12 @@
     const provider = document.createElement('select');
     provider.setAttribute('aria-label', 'Login provider');
     for (const name of frame.providers || []) {
-      const option = el('option', '', name); option.value = name;
-      option.selected = name === frame.provider; provider.append(option);
+      const option = el('option', '', name); option.value = name; provider.append(option);
     }
+    // The owner's choice survives re-renders; otherwise follow the host.
+    const chosen = (frame.providers || []).includes(recoveryProvider) ? recoveryProvider : frame.provider;
+    if (chosen) provider.value = chosen;
+    provider.addEventListener('change', () => { recoveryProvider = provider.value; });
     actions.append(provider);
     button(actions, 'Sign in', () => recoveryAction('login', null, {provider: provider.value}));
   }
@@ -1182,7 +1186,8 @@
           frame.outcome === 'error' ? 'Turn failed' : ['aborted', 'lost'].includes(frame.outcome) ? 'Turn interrupted' : 'Turn finished',
           frame.outcome === 'error' ? 'Open the session for the failure and recovery actions.' : 'The mevedel session is idle again.');
       }
-      renderRecoveryIssues(frame.issues);
+      // Once an owner has the detailed recovery frame, it owns the list.
+      if (!state.owner || !recoverySignature) renderRecoveryIssues(frame.issues);
       state.busy = frame.busy === true;
       if (typeof frame.model === 'string') state.model = frame.model;
       if (typeof frame.mode === 'string') state.mode = frame.mode;

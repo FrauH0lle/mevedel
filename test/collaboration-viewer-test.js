@@ -1765,7 +1765,27 @@ async function main() {
                  issues: [{id: 'authentication', message: 'Install Claude Code first'}]});
   assert.equal(nodes['recovery-auth'].children.find(node => node.type === 'password'), codeInput);
   assert.equal(codeInput.value, 'partial-code');
-  assert.match(textOf(nodes['recovery-actions']), /Install Claude Code first/);
+  // Each issue is listed once, and a later category-only status list
+  // does not replace the owner's details.
+  assert.match(textOf(nodes['recovery-issues']), /Install Claude Code first/);
+  assert.doesNotMatch(textOf(nodes['recovery-actions']), /Install Claude Code first/);
+  await deliver({t: 'status', busy: false, issues: [{id: 'authentication', message: 'Claude is not ready'}]});
+  assert.match(textOf(nodes['recovery-issues']), /Install Claude Code first/);
+  assert.doesNotMatch(textOf(nodes['recovery-issues']), /Claude is not ready/);
+  // The chosen login provider survives unrelated recovery updates.
+  const loginProvider = () => nodes['recovery-actions'].children.find(
+    node => node.attributes && node.attributes['aria-label'] === 'Login provider');
+  await deliver({t: 'recovery', models: [], presets: [], providers: ['Codex', 'Claude Code'], provider: 'Claude Code'});
+  assert.equal(loginProvider().value, 'Claude Code');
+  loginProvider().value = 'Codex';
+  loginProvider().dispatch('change');
+  await deliver({t: 'recovery', models: [], presets: [], providers: ['Codex', 'Claude Code'], provider: 'Claude Code',
+                 issues: [{id: 'model', message: 'Select a model'}]});
+  assert.equal(loginProvider().value, 'Codex');
+  const providerBefore = first.sent.length;
+  nodes['recovery-actions'].children.find(node => node.textContent === 'Sign in').dispatch('click');
+  await waitFor(() => first.sent.length === providerBefore + 1, 'sealed login with chosen provider');
+  assert.equal((await unseal(key, first.sent.at(-1))).provider, 'Codex');
   await deliver({t: 'recovery', models: [], presets: [], providers: [], auth: {status: 'ready', message: 'Login ready'}});
   assert.doesNotMatch(textOf(nodes['recovery-auth']), /ABCD-1234/);
 
