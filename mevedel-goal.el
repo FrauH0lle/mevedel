@@ -36,6 +36,7 @@
 (declare-function mevedel--submit-generated-turn
                   "mevedel-chat" (prompt &optional display-text
                                          prompt-submission))
+(autoload 'mevedel--submit-generated-turn "mevedel-chat")
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-pending-inputs-follow-up-changed
@@ -114,6 +115,7 @@
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-pending-p
                   "mevedel-view-interaction" (&optional view-buffer))
+(autoload 'mevedel-view-interaction-pending-p "mevedel-view-interaction")
 
 
 ;;

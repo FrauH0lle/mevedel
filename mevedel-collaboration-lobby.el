@@ -45,10 +45,15 @@
                   "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--workspace-key
                   "mevedel-collaboration-guest" (room))
+(autoload 'mevedel-collaboration--admit-hello "mevedel-collaboration-guest")
+(autoload 'mevedel-collaboration--model-labels "mevedel-collaboration-guest")
+(autoload 'mevedel-collaboration--request-id-p "mevedel-collaboration-guest")
+(autoload 'mevedel-collaboration--workspace-key "mevedel-collaboration-guest")
 
 ;; `mevedel-collaboration-owner'
 (declare-function mevedel-collaboration--handle-new-session
                   "mevedel-collaboration-owner" (room peer frame))
+(autoload 'mevedel-collaboration--handle-new-session "mevedel-collaboration-owner")
 
 ;; `mevedel-collaboration-share'
 (declare-function mevedel-collaboration-share-dismiss
@@ -67,6 +72,10 @@
                   "mevedel-collaboration-transport" (transport peer frame))
 (declare-function mevedel-collaboration--transport-stop
                   "mevedel-collaboration-transport" (transport))
+(autoload 'mevedel-collaboration--transport-open "mevedel-collaboration-transport")
+(autoload 'mevedel-collaboration--transport-open-p "mevedel-collaboration-transport")
+(autoload 'mevedel-collaboration--transport-send "mevedel-collaboration-transport")
+(autoload 'mevedel-collaboration--transport-stop "mevedel-collaboration-transport")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-delete
@@ -83,6 +92,7 @@
 (autoload 'mevedel-session-persistence-list-sessions
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-restore "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-parse-iso-time "mevedel-session-persistence")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)

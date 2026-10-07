@@ -353,8 +353,7 @@ blockers compose and stale releases cannot alter a later follow-up."
         (let ((saved-p
                (with-current-buffer buffer
                  (or (not (buffer-modified-p))
-                     (when (and (boundp 'mevedel--agent-invocation)
-                                mevedel--agent-invocation)
+                     (when mevedel--agent-invocation
                        (mevedel-agent-conversation-save
                         mevedel--agent-invocation))))))
           (if saved-p
@@ -375,8 +374,7 @@ blockers compose and stale releases cannot alter a later follow-up."
 
 (defun mevedel-agent-control-current-path (session)
   "Return the current caller's canonical path in SESSION."
-  (let ((invocation (and (boundp 'mevedel--agent-invocation)
-                         mevedel--agent-invocation)))
+  (let ((invocation mevedel--agent-invocation))
     (if (not invocation)
         "/root"
       (or (mevedel-agent-control--path-for-invocation session invocation)

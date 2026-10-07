@@ -401,7 +401,6 @@ the next send.
 | `mevedel-pending-inputs-edit`       | Edit the selected Pending Inputs entry in the composer; save updates it, cancel restores the prior draft. |
 | `mevedel-pending-inputs-clear`      | Confirm and clear all pending steering and follow-ups (`C-c C-q`). |
 | `mevedel-view-toggle-transcript`     | Switch from the view to the raw data buffer.             |
-| `mevedel-view-rerender`              | Debounced full refresh of the rendered view.             |
 
 | Custom Variable                                | Variable Description                                               |
 |------------------------------------------------|--------------------------------------------------------------------|

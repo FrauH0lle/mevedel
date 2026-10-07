@@ -119,6 +119,7 @@
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-status
                   "mevedel-session-publication" (session))
+(autoload 'mevedel-session-publication-status "mevedel-session-publication")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)

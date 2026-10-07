@@ -69,6 +69,7 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-strip-gptel-config-properties
   "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-assert-not-superseded "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p
@@ -119,6 +120,7 @@
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
 (autoload 'mevedel-transcript-segments "mevedel-transcript")
+(autoload 'mevedel-transcript-project-segments "mevedel-transcript")
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-enable-gptel-mode
@@ -161,6 +163,10 @@
                   "mevedel-view-agent" ())
 (declare-function mevedel-view-refresh-agent-rendering
                   "mevedel-view-agent" (view-buffer agent-id))
+(autoload 'mevedel-view-agent-live-transcript-post-tool "mevedel-view-agent")
+(autoload 'mevedel-view-agent-live-transcript-pre-tool "mevedel-view-agent")
+(autoload 'mevedel-view-agent-live-transcript-stream "mevedel-view-agent")
+(autoload 'mevedel-view-refresh-agent-rendering "mevedel-view-agent")
 
 ;; `org-element'
 (declare-function org-element-cache-reset "ext:org-element"
@@ -187,9 +193,6 @@ A non-positive value saves immediately.  Terminal paths always save now."
 Only the latest item is consulted, to keep waiting items sparse; the list
 is neither persisted nor rendered, so an unbounded history only cost
 memory and a quadratic rewrite of every agent's metadata.")
-
-(defvar-local mevedel--agent-invocation nil
-  "Invocation that owns this retained agent conversation buffer.")
 
 (defun mevedel-agent-conversation--reject-terminal-tool-call (&rest _)
   "Stop a tool call after the current retained invocation has settled."
@@ -849,11 +852,9 @@ When DEFERRED is non-nil, coalesce writes through an idle timer."
 
 (defun mevedel-agent-conversation--on-buffer-kill ()
   "Persist and abort any live request owned by the current conversation."
-  (when (and (boundp 'mevedel--agent-invocation)
-             (mevedel-agent-invocation-p mevedel--agent-invocation))
+  (when (mevedel-agent-invocation-p mevedel--agent-invocation)
     (mevedel-agent-conversation-save mevedel--agent-invocation))
-  (when (and (boundp 'mevedel--agent-invocation)
-             (mevedel-agent-invocation-p mevedel--agent-invocation)
+  (when (and (mevedel-agent-invocation-p mevedel--agent-invocation)
              (boundp 'gptel--request-alist)
              (cl-some
               (lambda (entry)
