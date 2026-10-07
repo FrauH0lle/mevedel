@@ -44,7 +44,9 @@ The selected provider is the one this owner last chose, else the session's."
               (list
                :t "recovery" :models (vconcat (mapcar #'car (mevedel-model-candidates)))
                :presets (vconcat (mapcar (lambda (row) (symbol-name (car row))) mevedel-preset--registry))
-               :model (mevedel-model-current-label buffer)
+               ;; The picker selects by its option labels, which are exact
+               ;; BACKEND:MODEL pairs; a bare name matches none of them.
+               :model (mevedel-model-current-provider-label buffer)
                :provider (and provider (gptel-backend-name provider))
                :providers (vconcat (mapcar #'car gptel--known-backends))
                :auth (condition-case nil (mevedel-auth-state provider) (user-error nil))

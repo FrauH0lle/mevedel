@@ -133,6 +133,8 @@ BODY sees ROOM, SESSION, BUFFER and SENT, the frames sent to peers."
       (should (equal ["root"] (plist-get frame :histories)))
       (should (string-search "/opt/claude" (prin1-to-string (plist-get frame :issues))))
       (should (member "Recovery:second" (append (plist-get frame :models) nil)))
+      ;; The current model is named as the picker offers it.
+      (should (equal "Recovery:first" (plist-get frame :model)))
       ;; Runtime maintenance belongs to Claude sessions only.
       (should-not (plist-get frame :runtime))))
 
