@@ -309,7 +309,7 @@ admitted, and its prompt sent, only after both succeed (overlapping them took a
 warm launch from about 500 to 380 ms);
 `M-x mevedel-claude-code-setup` runs the same check, plus the packaged MCP
 bridge, without a model request. Installation, maintenance and user steps are
-in the [README](../README.md#claude-promax-subscriptions). Status commands run
+in the [README](https://github.com/FrauH0lle/mevedel/blob/master/README.md#claude-promax-subscriptions). Status commands run
 asynchronously, each with a ten-second timeout, and are cancelled with their
 owning request. Successful version checks are reused while the resolved
 executable and its enclosing package metadata stay unchanged. Every launch
@@ -1541,7 +1541,7 @@ to continue. Rewind preserves session preset settings but clears Goal state.
 
 ### Explicit migration to v0.5.10
 
-The standalone [migration script](../scripts/migrate-session-v0.5.6.el) converts
+The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-session-v0.5.6.el) converts
 v0.5.6 and v0.5.9 sessions to v0.5.10. Close the source session first, then run
 from the repository root with a new destination outside the source directory:
 
