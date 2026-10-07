@@ -12,10 +12,8 @@
 
 (mevedel-deftest mevedel--send-request/claude-large-context (:quiet t)
                  (dolist (mode '(normal missing pause cancel restore))
-                   (mevedel-engine-test--with-session
-                    (let* ((gptel--known-backends nil)
-                           (mevedel-claude-code-directory (file-name-concat root "claude"))
-                           (mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
+                   (mevedel-engine-test--with-claude-session
+                    (let* ((mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
                            (mevedel-system-retained-components '(memory))
                            (state "Initial memory")
                            (changed (concat "FULL-UPDATE-" (make-string 5100 ?😀) "-END"))
@@ -31,9 +29,6 @@
                       (setf (alist-get 'memory mevedel-system--prompt-components)
                             (mevedel-system-prompt-component--create :name 'memory :producer (lambda (_) state)))
                       (write-region "Evidence" nil file nil 'silent)
-                      (mevedel-claude-code-register)
-                      (mevedel-model-set-session-provider
-                       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
                       (setq-local gptel-system-prompt "Continuation fixture"
                                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
                       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -82,8 +77,8 @@
                                                                                               (usage . ((inputTokens . 17) (cachedWriteTokens . 0) (outputTokens . 11))))))])))))))
                         (mevedel--insert-user-turn "Read with the latest memory")
                         (mevedel--send-request "Read with the latest memory")
-                        (with-timeout (8 (ert-fail "Full-context continuation did not settle"))
-                          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+                        (mevedel-test--await 8 "Full-context continuation did not settle"
+                          (not (mevedel-turn-busy-p buffer))))
                       (ert-info ((format "mode=%s error=%S" mode (plist-get (mevedel-engine-info request) :error)))
                                 (should (eq (pcase mode ('missing 'error) ('cancel 'aborted) (_ 'success))
                                             (plist-get (mevedel-engine-info request) :mevedel-acp-outcome))))
@@ -108,10 +103,8 @@
                         (should (= (if (memq mode '(pause cancel)) 20 48) (mevedel-goal-tokens-used goal))))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-large-context (:quiet t)
-                 (mevedel-engine-test--with-session
-                  (let* ((gptel--known-backends nil)
-                         (mevedel-claude-code-directory (file-name-concat root "claude"))
-                         (mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
+                 (mevedel-engine-test--with-claude-session
+                  (let* ((mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
                          (state "Initial child memory")
                          (file (file-name-concat root "evidence.txt"))
                          (calls 0) record invocation
@@ -123,9 +116,6 @@
                           (mevedel-system-prompt-component--create :name 'memory :producer (lambda (_) state)))
                     (write-region "Evidence" nil file nil 'silent)
                     (mevedel-tool-ensure "Read")
-                    (mevedel-claude-code-register)
-                    (mevedel-model-set-session-provider
-                     session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
                     (unwind-protect
                         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                                    (mevedel-engine-test--claude-launch
@@ -145,9 +135,8 @@
                                                          :tools '(Read) :max-turns 2 :context-components '(memory)
                                                          :system-prompt "Child continuation fixture")
                            :on-invocation (lambda (value) (setq invocation value)))
-                          (with-timeout (8 (ert-fail "Child full-context continuation did not settle"))
-                            (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                              (accept-process-output nil 0.01)))
+                          (mevedel-test--await 8 "Child full-context continuation did not settle"
+                            (mevedel-agent-invocation-runtime-settled-p invocation))
                           (should (= 2 calls))
                           (should (= 2 (mevedel-agent-invocation-turn-count invocation)))
                           (should (eq 'completed (mevedel-agent-record-settled-outcome record)))
@@ -160,10 +149,8 @@
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-restoration-limit (:quiet t)
                  (dolist (scenario '((2 . t) (3 . t) (2) (3)))
-                   (mevedel-engine-test--with-session
+                   (mevedel-engine-test--with-claude-session
                     (let* ((limit (car scenario))
-                           (gptel--known-backends nil)
-                           (mevedel-claude-code-directory (file-name-concat root "claude"))
                            (mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
                            (state "Initial memory")
                            (file (file-name-concat root "evidence.txt"))
@@ -173,9 +160,6 @@
                             (mevedel-system-prompt-component--create :name 'memory :producer (lambda (_) state)))
                       (write-region "Evidence" nil file nil 'silent)
                       (mevedel-tool-ensure "Read")
-                      (mevedel-claude-code-register)
-                      (mevedel-model-set-session-provider
-                       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
                       (unwind-protect
                           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                                      (mevedel-engine-test--claude-launch
@@ -199,9 +183,8 @@
                                                            :tools '(Read) :max-turns limit :context-components '(memory)
                                                            :system-prompt "Restoration sample limit fixture")
                              :on-invocation (lambda (value) (setq invocation value)))
-                            (with-timeout (8 (ert-fail "Restored child did not settle"))
-                              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                                (accept-process-output nil 0.01)))
+                            (mevedel-test--await 8 "Restored child did not settle"
+                              (mevedel-agent-invocation-runtime-settled-p invocation))
                             (should (eq 'completed (mevedel-agent-record-settled-outcome record)))
                             (should (= limit (mevedel-agent-invocation-turn-count invocation)))
                             (should (= (1- limit) calls))

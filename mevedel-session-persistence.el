@@ -838,7 +838,7 @@ session buffers must cross the session-owned root registration seam."
        (with-current-buffer buffer
          (let ((session (and (boundp 'mevedel--session)
                              mevedel--session)))
-           (and (not (bound-and-true-p mevedel--agent-invocation))
+           (and (not mevedel--agent-invocation)
                 (or (and session
                          (eq buffer (mevedel-session-root-buffer session)))
                     (and (null session)
@@ -855,7 +855,7 @@ already registered the session-owned data buffer."
     (with-current-buffer buffer
       (let ((session (and (boundp 'mevedel--session) mevedel--session)))
         (cond
-         ((bound-and-true-p mevedel--agent-invocation) nil)
+         (mevedel--agent-invocation nil)
          ((and session (buffer-live-p (mevedel-session-root-buffer session)))
           (mevedel-session-root-buffer session))
          ((mevedel-session-persistence-root-data-buffer-p buffer)
@@ -1160,11 +1160,11 @@ publication.  Views and read-only inspection buffers never write."
                      (save-restriction (widen) (> (buffer-size) 0)))
                  (not (bound-and-true-p mevedel-session--read-only-mode))
                  (not (bound-and-true-p mevedel-session--inspection-buffer-p))
-                 (or (bound-and-true-p mevedel--agent-invocation)
+                 (or mevedel--agent-invocation
                      (eq buffer (mevedel-session-root-buffer mevedel--session))))
         (let ((inhibit-quit t))
           (condition-case err
-              (let* ((agent (bound-and-true-p mevedel--agent-invocation))
+              (let* ((agent mevedel--agent-invocation)
                      (portable (mevedel-session-codec-portable-authority-p
                                 mevedel--session))
                      ;; A checkpoint needs a marker, so let the transcript
@@ -2955,9 +2955,8 @@ bad buffer can't block exit."
     ;; them through their owner before saving sidecars or releasing leases.
     (dolist (buffer (buffer-list))
       (when (and (buffer-live-p buffer)
-                 (boundp 'mevedel--agent-invocation)
                  (with-current-buffer buffer
-                   (bound-and-true-p mevedel--agent-invocation)))
+                   mevedel--agent-invocation))
         (mevedel-session-persistence-autosave-buffer buffer)))
     ;; A debounced agent-state save left in its window would be lost, and
     ;; registry mutations do not mark the root buffer modified, so the
@@ -2974,7 +2973,7 @@ bad buffer can't block exit."
           (with-current-buffer buf
             (when (and (boundp 'mevedel--session)
                        mevedel--session
-                       (not (bound-and-true-p mevedel--agent-invocation)))
+                       (not mevedel--agent-invocation))
               (when (or (buffer-modified-p)
                         mevedel-session--save-failed
                         (mevedel-session-publication-uncommitted-batches

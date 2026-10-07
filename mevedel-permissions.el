@@ -386,8 +386,7 @@ happen for a non-read-only tool."
   (let ((owner
          (or session
              (and (boundp 'mevedel--session) mevedel--session)
-             (and (boundp 'mevedel--agent-invocation)
-                  mevedel--agent-invocation
+             (and mevedel--agent-invocation
                   (mevedel-agent-invocation-parent-session
                    mevedel--agent-invocation)))))
     (or (mevedel-plan-read-only-request-p)

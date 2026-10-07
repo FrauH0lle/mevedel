@@ -204,11 +204,10 @@
   (mevedel-claude-code-test--with-cli
     (let* ((gptel--known-backends nil)
            (backend (mevedel-claude-code-register))
-           (peer (expand-file-name "test/fixtures/acp-agent.py" default-directory))
            (launch (mevedel-claude-code-launch "Catalog fixture" [] "sonnet" 'max))
            ready failure connection)
       (plist-put launch :command (executable-find "python3"))
-      (plist-put launch :args (list peer))
+      (plist-put launch :args (list mevedel-test--acp-peer))
       (plist-put launch :meta
                  '((sessionInfo .
                     ((configOptions .
@@ -226,8 +225,7 @@
             (setq connection
                   (mevedel-acp-open launch (lambda (_) (setq ready t))
                                     (lambda (message) (setq failure message))))
-            (with-timeout (5 (ert-fail "Model discovery did not settle"))
-              (while (not (or ready failure)) (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Model discovery did not settle" (or ready failure))
             (should-not failure)
             ;; Session initialization discovers choices without any prompt.
             (dolist (name '("Claude Code:sonnet" "Claude Code:opus" "Claude Code:haiku"
@@ -255,12 +253,11 @@
              (models (copy-sequence (gptel-backend-models backend)))
              (provisional (mevedel-model-resolve-provider (concat "Claude Code:" model)))
              (launch (mevedel-claude-code-launch "Validation fixture" [] model effort))
-             (peer (expand-file-name "test/fixtures/acp-agent.py" default-directory))
              done response info cancel)
         (should (eq backend (plist-get provisional :backend)))
         (should (equal models (gptel-backend-models backend)))
         (plist-put launch :command (executable-find "python3"))
-        (plist-put launch :args (list peer))
+        (plist-put launch :args (list mevedel-test--acp-peer))
         (plist-put launch :meta
                    `((sessionInfo .
                       ((configOptions .
@@ -277,8 +274,7 @@
                             launch "This prompt must never reach the model"
                             (lambda (result metadata)
                               (setq done t response result info metadata))))
-              (with-timeout (5 (ert-fail "Model validation did not settle"))
-                (while (not done) (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "Model validation did not settle" done)
               (should-not response)
               (should (string-search diagnostic (plist-get info :error))))
           (when cancel (funcall cancel)))))))
@@ -301,7 +297,6 @@
                (backend (mevedel-claude-code-register))
                (model (plist-get (mevedel-model-resolve-provider "Claude Code:opus") :model))
                (launch (mevedel-claude-code-launch "Effort fixture" [] "opus" effort))
-               (peer (expand-file-name "test/fixtures/acp-agent.py" default-directory))
                done response info cancel)
           (setq-local gptel-backend backend gptel-model model)
           (setq-local mevedel--session
@@ -309,7 +304,7 @@
           ;; This is the same pre-connection selection used by the model menu.
           (mevedel-model-set-session-effort mevedel--session effort)
           (plist-put launch :command (executable-find "python3"))
-          (plist-put launch :args (list peer))
+          (plist-put launch :args (list mevedel-test--acp-peer))
           (plist-put launch :meta
                      `((configBehavior . ,behavior)
                        (sessionInfo .
@@ -336,8 +331,7 @@
                   ;; Interrupt startup, including a pending configuration request.
                   (accept-process-output nil 0.2)
                   (funcall cancel))
-                (with-timeout (5 (ert-fail "Effort configuration did not settle"))
-                  (while (not done) (accept-process-output nil 0.01)))
+                (mevedel-test--await 5 "Effort configuration did not settle" done)
                 (cond
                  ((equal behavior "wait")
                   (should (eq response 'abort)))
@@ -368,12 +362,10 @@
       (unwind-protect
           (progn
             (should (< (- (float-time) start) 0.15))
-            (with-timeout (2 (ert-fail "Editor timer did not run during readiness"))
-              (while (not tick) (accept-process-output nil 0.01)))
+            (mevedel-test--await 2 "Editor timer did not run during readiness" tick)
             (should-not output)
             (should-not failure)
-            (with-timeout (2 (ert-fail "Status command did not complete"))
-              (while (not (or output failure)) (accept-process-output nil 0.01)))
+            (mevedel-test--await 2 "Status command did not complete" (or output failure))
             (should-not failure)
             (should (eq t (plist-get (json-parse-string output :object-type 'plist) :loggedIn))))
         (cancel-timer timer)
@@ -410,8 +402,7 @@
               (setq cancel (mevedel-claude-code--command-output-async
                             mevedel-claude-code-executable '("auth" "status" "--json")
                             (lambda (text) (setq output text)) (lambda (text) (setq failure text)))))
-            (with-timeout (2 (ert-fail "Readiness timeout did not run"))
-              (while (not failure) (accept-process-output nil 0.01)))
+            (mevedel-test--await 2 "Readiness timeout did not run" failure)
             (should-not output)
             (should (string-search "Setup check timed out: claude auth status" failure)))
         (when cancel (funcall cancel))))))
@@ -490,8 +481,7 @@
                        (lambda (&rest args) (setq started t) (apply send args))))
               (setq connection (mevedel-acp-open launch (lambda (_) (setq ready t))
                                                   (lambda (text) (setq failure text))))
-              (with-timeout (2 (ert-fail "Authentication failure did not settle"))
-                (while (not failure) (accept-process-output nil 0.01))))
+              (mevedel-test--await 2 "Authentication failure did not settle" failure))
             (should-not ready)
             (should-not started)
             (should (eq 'closed (mevedel-acp-state connection)))

@@ -199,8 +199,7 @@ or skill dispatch path if `gptel-send' aborts before request creation.")
 Reads the buffer-local `mevedel--agent-invocation' set by
 `mevedel-agent-conversation-open' on agent buffers;
 returns nil when called outside any sub-agent."
-  (and (boundp 'mevedel--agent-invocation)
-       mevedel--agent-invocation))
+  mevedel--agent-invocation)
 
 (defun mevedel-skills--current-request ()
   "Return the active request struct, or nil."
@@ -256,7 +255,7 @@ even after the pending skill context has been consumed."
            (mevedel-request-model-policy mevedel--current-request))
       (mevedel-model-resolve-workload
        (and (bound-and-true-p mevedel--session)
-            (not (bound-and-true-p mevedel--agent-invocation))
+            (not mevedel--agent-invocation)
             (mevedel-session-plan-mode mevedel--session)
             'planning)
        (plist-get mevedel-skills--pending-request-context :model)
@@ -761,8 +760,7 @@ its outcome exactly once."
         (invocation-local-p
          (local-variable-p 'mevedel--agent-invocation))
         (previous-invocation
-         (and (boundp 'mevedel--agent-invocation)
-              mevedel--agent-invocation))
+         mevedel--agent-invocation)
         settled)
     (setq-local mevedel--current-request
                 (mevedel-request--create

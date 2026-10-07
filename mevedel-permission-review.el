@@ -73,8 +73,7 @@ authorization.  The result explicitly records omitted older turns."
   (let ((root (mevedel-session-persistence-root-buffer-for-session session buffer))
         turns omitted (remaining 20000))
     (when (and (buffer-live-p root)
-               (not (and (boundp 'mevedel--agent-invocation)
-                         (buffer-local-value 'mevedel--agent-invocation root))))
+               (not (buffer-local-value 'mevedel--agent-invocation root)))
       (with-current-buffer root
         (save-restriction
           (widen)

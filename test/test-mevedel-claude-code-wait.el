@@ -14,12 +14,10 @@
 
 (mevedel-deftest mevedel--send-request/claude-child-permission-wait (:quiet t)
                  (dolist (scenario '((allow) (deny) (interrupt) (allow . t) (deny . t) (interrupt . t)))
-                   (mevedel-engine-test--with-session
+                   (mevedel-engine-test--with-claude-session
                     (let* ((decision (car scenario))
                            (nested (cdr scenario))
                            (path (if nested "/root/reader/helper" "/root/reader"))
-                           (gptel--known-backends nil)
-                           (mevedel-claude-code-directory (file-name-concat root "claude"))
                            (mevedel-permission-reviewer nil)
                            (file (file-name-concat root "evidence.txt"))
                            view record permission)
@@ -27,9 +25,6 @@
                       (setf (mevedel-session-permission-mode session) 'edits
                             (mevedel-session-permission-rules session) '(("Read" :action ask))
                             (mevedel-session-agent-turn-capacity session) (if nested 2 1))
-                      (mevedel-claude-code-register)
-                      (mevedel-model-set-session-provider
-                       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
                       (setq-local gptel-system-prompt "Retained child permission fixture"
                                   gptel-tools (mapcar (lambda (name) (mevedel-tool-gptel-tool (mevedel-tool-ensure name)))
                                                       '("Agent" "WaitAgent" "Read")))
@@ -50,15 +45,14 @@
                                                                           `[[((name . "Read") (id . "read") (args . ((file_path . ,file))))]])))))))))
                             (mevedel--insert-user-turn "Delegate a read and wait for its result")
                             (mevedel--send-request "Delegate a read and wait for its result")
-                            (with-timeout (8 (ert-fail "Child permission and parent wait did not become ready"))
-                              (while (not (and (mevedel-agent-control-root-waiting-p session)
-                                               (mevedel-session-permission-queue session)
-                                               (or (not nested)
-                                                   (equal "waiting"
-                                                          (plist-get (cl-find "/root/reader" (mevedel-agent-control-list-agents session)
-                                                                              :key (lambda (row) (plist-get row :path)) :test #'equal)
-                                                                     :activity)))))
-                                (accept-process-output nil 0.01)))
+                            (mevedel-test--await 8 "Child permission and parent wait did not become ready"
+                              (and (mevedel-agent-control-root-waiting-p session)
+                                   (mevedel-session-permission-queue session)
+                                   (or (not nested)
+                                       (equal "waiting"
+                                              (plist-get (cl-find "/root/reader" (mevedel-agent-control-list-agents session)
+                                                                  :key (lambda (row) (plist-get row :path)) :test #'equal)
+                                                         :activity)))))
                             (setq record (cdr (assoc path (mevedel-session-agent-registry session))))
                             (should (mevedel-turn-busy-p buffer))
                             (should (mevedel-agent-control-active-turn-p session))
@@ -79,9 +73,8 @@
                                 ('allow (call-interactively #'mevedel-permission--prompt-approve-once))
                                 ('deny (call-interactively #'mevedel-permission--prompt-deny-once))
                                 ('interrupt (mevedel-agent-control-interrupt session path))))
-                            (with-timeout (8 (ert-fail "Child decision did not wake and settle its parent"))
-                              (while (or (mevedel-turn-busy-p buffer) (mevedel-agent-control-active-turn-p session))
-                                (accept-process-output nil 0.01)))
+                            (mevedel-test--await 8 "Child decision did not wake and settle its parent"
+                              (not (or (mevedel-turn-busy-p buffer) (mevedel-agent-control-active-turn-p session))))
                             (should-not (mevedel-session-permission-queue session))
                             (should-not (mevedel-agent-control-root-waiting-p session))
                             (should-not (overlay-buffer permission))
@@ -97,12 +90,12 @@
                             (let (replacement)
                               (mevedel-agent-control-spawn session "replacement" "Use the released capacity."
                                                            (lambda (value) (setq replacement value)))
-                              (with-timeout (8 (ert-fail "Released child capacity was not reusable"))
-                                (while (not replacement) (accept-process-output nil 0.01)))
+                              (mevedel-test--await 8 "Released child capacity was not reusable"
+                                replacement)
                               (should (eq 'success (plist-get replacement :outcome)))
                               (mevedel-agent-control-interrupt session "/root/replacement")
-                              (with-timeout (8 (ert-fail "Replacement interruption did not settle"))
-                                (while (mevedel-agent-control-active-turn-p session) (accept-process-output nil 0.01)))
+                              (mevedel-test--await 8 "Replacement interruption did not settle"
+                                (not (mevedel-agent-control-active-turn-p session)))
                               (should-not (mevedel-session-permission-queue session))
                               (should (= 1 (mevedel-session-turn-count session)))))
                         (mevedel-agent-control-teardown-session session))))))

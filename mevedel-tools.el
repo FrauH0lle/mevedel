@@ -328,8 +328,7 @@ gptel's generic unknown-tool fallback consumes those calls."
   "Return BUFFER's local agent invocation, when it has one."
   (when (and buffer (buffer-live-p buffer))
     (with-current-buffer buffer
-      (and (boundp 'mevedel--agent-invocation)
-           (mevedel-agent-invocation-p mevedel--agent-invocation)
+      (and (mevedel-agent-invocation-p mevedel--agent-invocation)
            mevedel--agent-invocation))))
 
 (defun mevedel-tools--buffer-local-session (buffer)
@@ -364,8 +363,7 @@ Falls back to the current buffer's `mevedel--agent-invocation' before
 tests or tool dispatch paths already inside an agent buffer)."
   (if mevedel-tools--current-engine
       (mevedel-tools--context-for mevedel-tools--current-engine)
-    (or (and (boundp 'mevedel--agent-invocation)
-             (mevedel-agent-invocation-p mevedel--agent-invocation)
+    (or (and (mevedel-agent-invocation-p mevedel--agent-invocation)
              mevedel--agent-invocation)
         (and (boundp 'mevedel--session) mevedel--session))))
 

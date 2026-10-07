@@ -117,9 +117,8 @@
      (remhash session mevedel-session-persistence--deferred-agent-saves))
    (should-not (test-mevedel-recovery--saved-follow-ups session))
    (mevedel-session-persistence--deferred-agent-save session)
-   (with-timeout (5 (ert-fail "Deferred save did not run"))
-     (while (not (test-mevedel-recovery--saved-follow-ups session))
-       (accept-process-output nil 0.01)))
+   (mevedel-test--await 5 "Deferred save did not run"
+     (test-mevedel-recovery--saved-follow-ups session))
    (should (equal "hello" (plist-get (car (test-mevedel-recovery--saved-follow-ups session))
                                      :input))))
   :doc "an unchanged queue replacement schedules no save"

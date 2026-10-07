@@ -25,8 +25,8 @@
                                                port-file (number-to-string ,status)))))
      (unwind-protect
          (cl-labels ((await (predicate)
-                       (with-timeout (5 (ert-fail "Authentication fixture timed out"))
-                         (while (not (funcall predicate)) (accept-process-output nil 0.01)))))
+                       (mevedel-test--await 5 "Authentication fixture timed out"
+                         (funcall predicate))))
            (await (lambda () (file-exists-p port-file)))
            (let ((gptel--openai-oauth-url
                   (concat "http://127.0.0.1:" (with-temp-buffer (insert-file-contents port-file) (buffer-string)))))
@@ -134,8 +134,7 @@
      (let ((buffers (buffer-list)) result)
        (mevedel-auth--http (concat url "/oauth/token") '(("grant_type" "refresh_token")) t
                            (lambda (payload code) (setq result (list payload code))))
-       (with-timeout (5 (ert-fail "HTTP request did not settle"))
-         (while (not result) (accept-process-output nil 0.01)))
+       (mevedel-test--await 5 "HTTP request did not settle" result)
        (should (equal 401 (cadr result)))
        (should-not (seq-filter (lambda (buffer) (string-prefix-p " *http" (buffer-name buffer)))
                                (seq-difference (buffer-list) buffers))))))
@@ -149,8 +148,7 @@
                              (lambda (payload code) (setq result (list payload code)))
                              '(("Authorization" . "Bearer test"))
                              (lambda () (json-parse-buffer :object-type 'alist)))
-         (with-timeout (5 (ert-fail "HTTP request did not settle"))
-           (while (not result) (accept-process-output nil 0.01)))
+         (mevedel-test--await 5 "HTTP request did not settle" result)
          (should (equal '(((a . 1)) 200) result))
          (should (string-prefix-p "GET /usage" request)))))))
 

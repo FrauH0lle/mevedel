@@ -12,14 +12,10 @@
           (file-name-directory (or load-file-name buffer-file-name)) "mevedel-engine-test-support"))
 
 (mevedel-deftest mevedel--send-request/claude-continuation-unknown-usage (:quiet t)
-  (mevedel-engine-test--with-session
-    (let* ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
-           (mevedel-goal-token-budget 100)
+  (mevedel-engine-test--with-claude-session
+    (let* ((mevedel-goal-token-budget 100)
            (goal (mevedel-goal-create "Complete both prompts" session))
            (next t) outcomes)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Continuation usage fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                  (mevedel-engine-test--claude-launch
@@ -35,8 +31,8 @@
                 ((symbol-function 'mevedel-goal--schedule-continuation) #'ignore))
         (mevedel--insert-user-turn "Do both prompts")
         (mevedel--send-request "Do both prompts")
-        (with-timeout (5 (ert-fail "Continuation usage fixture did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01))))
+        (mevedel-test--await 5 "Continuation usage fixture did not settle"
+          (not (mevedel-turn-busy-p buffer))))
       (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
       (should (= 15 (mevedel-goal-tokens-used goal)))
       (ert-info ((format "outcomes=%S, next=%S" outcomes next))

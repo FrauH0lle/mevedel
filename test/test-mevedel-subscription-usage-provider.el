@@ -12,9 +12,6 @@
 (defconst mevedel-usage-test--native
   "## Usage\n\n> Claude max subscription usage\n\n### Limits\n\n**5-hour limit** — **12%** · Resets Oct 7, 8:00 PM UTC\n\n`██░░░░░░░░░░░░░░░░░░`\n\n**Weekly · all models** — **0%**\n\n`░░░░░░░░░░░░░░░░░░░░`\n\n---\n\n### This session\n\nCost: $0\n\n---\n\n### What’s using your limits?\n\nprivate behavior")
 
-(defconst mevedel-usage-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-subscription-usage-provider--value ()
   (should (equal ,expected (mevedel-subscription-usage-provider--value ,value)))
   (value expected)
@@ -151,8 +148,7 @@
              (setq cancel (mevedel-subscription-usage-provider-fetch backend
                             (lambda (text error) (push (list text error) results))))
              (if ,cancel (funcall cancel)
-               (with-timeout (5 (ert-fail "HTTP quota request did not settle"))
-                 (while (not results) (accept-process-output nil 0.01))))
+               (mevedel-test--await 5 "HTTP quota request did not settle" results))
              (if ,cancel (should-not results)
                (should (= 1 (length results)))
                (should (string-match-p ,expected (or (caar results) (cadar results))))
@@ -190,7 +186,7 @@
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                      (lambda (_system mcp _model _effort &rest _)
                        (should (equal [] mcp))
-                       (list :command (executable-find "python3") :args (list mevedel-usage-test--peer)
+                       (list :command (executable-find "python3") :args (list mevedel-test--acp-peer)
                              :cwd directory :mcp mcp
                              :meta `((inspection . ((advertise . ,,advertise) (missing . ,,missing)
                                                    (wait . ,,wait) (promptLog . ,log)))
@@ -213,8 +209,7 @@
                           (lambda (text error) (push (list text error) results))))
             (if ,cancel
                 (progn (funcall cancel) (should-not results))
-              (with-timeout (5 (ert-fail "ACP inspection did not settle"))
-                (while (not results) (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "ACP inspection did not settle" results)
               (should (= 1 (length results)))
               (should (string-match-p ,expected (or (caar results) (cadar results)))))
             (if ,prompt

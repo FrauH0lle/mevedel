@@ -198,6 +198,16 @@ TYPE and ARGS are passed through unchanged."
      (or load-file-name buffer-file-name default-directory))))
   "Worktree root whose portable control artifacts tests must not mutate.")
 
+(defconst mevedel-test--acp-peer
+  (file-name-concat mevedel-test--worktree-root "test" "fixtures" "acp-agent.py")
+  "The scripted ACP peer standing in for an agent adapter.")
+
+(defmacro mevedel-test--await (timeout message condition)
+  "Process output until CONDITION holds; fail with MESSAGE after TIMEOUT seconds."
+  (declare (indent 2) (debug t))
+  `(with-timeout (,timeout (ert-fail ,message))
+     (while (not ,condition) (accept-process-output nil 0.01))))
+
 (defvar mevedel-test--timestamp-offset 0
   "Seconds added to every timestamp mevedel formats inside a shifted clock.
 

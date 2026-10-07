@@ -14,15 +14,10 @@
 (require 'gptel-transient)
 
 (mevedel-deftest mevedel-menu/claude-history (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          view)
+  (mevedel-engine-test--with-claude-session
+    (let (view)
       (unwind-protect
           (progn
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq-local gptel-system-prompt "History control fixture" gptel-tools nil)
             (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                        (mevedel-engine-test--claude-launch
@@ -30,8 +25,8 @@
                           nil))))
               (mevedel--insert-user-turn "history evidence")
               (mevedel--send-request)
-              (with-timeout (5 (ert-fail "History fixture did not settle"))
-                (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+              (mevedel-test--await 5 "History fixture did not settle"
+                (not (mevedel-turn-busy-p buffer))))
             (setq view (mevedel-view--ensure buffer))
             (with-current-buffer view (mevedel-view--full-rerender))
             (let ((before (buffer-string))
@@ -86,10 +81,9 @@
         (when (buffer-live-p view) (kill-buffer view))))))
 
 (mevedel-deftest mevedel-gptel-bridge-open/claude (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
-    (let ((gptel--known-backends nil)
-          (advice-state
+    (let ((advice-state
            (mapcar (lambda (pair)
                      (list (car pair) (cdr pair) (advice-member-p (cdr pair) (car pair))))
                    '((gptel-menu . mevedel-gptel-bridge--assert-menu-backend)
@@ -99,9 +93,6 @@
           view)
       (unwind-protect
           (progn
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq view (mevedel-view--ensure buffer))
             (mevedel-gptel-bridge-install)
             (cl-letf (((symbol-function 'transient-setup)

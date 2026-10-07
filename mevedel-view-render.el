@@ -1259,8 +1259,7 @@ buffer's font-lock refontification cycles."
 
 (defun mevedel-view--running-agent-transcript-buffer-p ()
   "Return non-nil when the current buffer is a live agent transcript."
-  (let ((inv (and (boundp 'mevedel--agent-invocation)
-                  mevedel--agent-invocation)))
+  (let ((inv mevedel--agent-invocation))
     (and (mevedel-agent-invocation-p inv)
          (eq (mevedel-agent-invocation-transcript-status inv)
              'running))))

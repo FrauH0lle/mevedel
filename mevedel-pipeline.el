@@ -942,8 +942,7 @@ permission or handler work begins."
 
 (defun mevedel-pipeline--current-invocation ()
   "Return the current agent invocation struct, if any."
-  (and (boundp 'mevedel--agent-invocation)
-       mevedel--agent-invocation))
+  mevedel--agent-invocation)
 
 (defun mevedel-pipeline--validate-updated-args (tool args)
   "Return validation error for TOOL ARGS, or nil."

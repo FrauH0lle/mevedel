@@ -12,12 +12,10 @@
 
 (mevedel-deftest mevedel-view-send/claude-selected-context (:quiet t)
   (dolist (placement '(user system))
-    (mevedel-engine-test--with-session
+    (mevedel-engine-test--with-claude-session
       (mevedel-request-end)
       (let* ((view (generate-new-buffer " *claude-context-composer*"))
              (source (generate-new-buffer " *selected-source*"))
-             (gptel--known-backends nil)
-             (mevedel-claude-code-directory (file-name-concat root "claude"))
              (file (file-name-concat root "selected.txt"))
              launch-system overlay)
         (unwind-protect
@@ -29,9 +27,6 @@
                   (insert "SELECTED BUFFER EVIDENCE")
                   (setq overlay (make-overlay start (point) source)))
                 (insert "\nPRIVATE AFTER\n"))
-              (mevedel-claude-code-register)
-              (mevedel-model-set-session-provider
-               session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
               (setq-local gptel-system-prompt "Context fixture" gptel-tools nil
                           gptel-use-context placement
                           gptel-context (list (list source :overlays (list overlay))
@@ -47,10 +42,9 @@
                   (goto-char (mevedel-view--input-start))
                   (insert "Describe the selected evidence")
                   (mevedel-view-send))
-                (with-timeout (5 (ert-fail "Selected context turn did not settle"))
-                  (while (or (zerop (mevedel-session-turn-count session))
-                             (mevedel-turn-busy-p buffer))
-                    (accept-process-output nil 0.01))))
+                (mevedel-test--await 5 "Selected context turn did not settle"
+                  (not (or (zerop (mevedel-session-turn-count session))
+                           (mevedel-turn-busy-p buffer)))))
               (let ((delivered (if (eq placement 'system) launch-system (buffer-string))))
                 (should (string-search "SELECTED FILE EVIDENCE" delivered))
                 (should (string-search "SELECTED BUFFER EVIDENCE" delivered))
@@ -62,19 +56,14 @@
 
 (mevedel-deftest mevedel-view-send/claude-async-context (:quiet t)
   (pcase-dolist (`(,placement ,abort-p) '((user nil) (system nil) (system t) (user invalid)))
-    (mevedel-engine-test--with-session
+    (mevedel-engine-test--with-claude-session
       (mevedel-request-end)
       (let* ((view (generate-new-buffer " *claude-async-context*"))
-             (gptel--known-backends nil)
-             (mevedel-claude-code-directory (file-name-concat root "claude"))
              (file (file-name-concat root "selected.txt"))
              (launches 0) resume launch-system)
         (unwind-protect
             (progn
               (write-region "ASYNC SELECTED EVIDENCE" nil file nil 'silent)
-              (mevedel-claude-code-register)
-              (mevedel-model-set-session-provider
-               session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
               (setq-local gptel-system-prompt (lambda () (format "Async fixture %d" (length gptel-tools)))
                           gptel-tools nil
                           gptel-use-context placement gptel-context (list file)
@@ -104,8 +93,8 @@
                 ;; A formatter can complete in a different buffer, and a
                 ;; duplicate or late callback must not dispatch another turn.
                 (with-temp-buffer (funcall resume) (funcall resume))
-                (with-timeout (5 (ert-fail "Async context turn did not settle"))
-                  (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+                (mevedel-test--await 5 "Async context turn did not settle"
+                  (not (mevedel-turn-busy-p buffer))))
               (should (= (if abort-p 0 1) launches))
               (when (eq abort-p 'invalid)
                 (should (string-search "Context formatter must return text" (buffer-string))))
@@ -120,14 +109,9 @@
 
 (mevedel-deftest mevedel--send-request/claude-selected-context-restoration (:quiet t)
   (dolist (receipt '(t nil))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-claude-code-directory (file-name-concat root "claude"))
-            (file (file-name-concat root "selected.txt")))
+    (mevedel-engine-test--with-claude-session
+      (let ((file (file-name-concat root "selected.txt")))
         (write-region "RESTORE SELECTED EVIDENCE" nil file nil 'silent)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt "Restore fixture" gptel-use-context 'user
                     gptel-context (list file)
                     gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
@@ -141,8 +125,8 @@
                                                       (args . ((file_path . ,file))))]])))))))
           (insert "Use the selected evidence")
           (mevedel--send-request "Use the selected evidence")
-          (with-timeout (5 (ert-fail "Selected context restoration did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+          (mevedel-test--await 5 "Selected context restoration did not settle"
+            (not (mevedel-turn-busy-p buffer))))
         (should (eq (if receipt 'success 'error)
                     (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
         ;; The wire marker stays out of the transcript; the typed record remains.

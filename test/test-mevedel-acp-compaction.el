@@ -11,10 +11,8 @@
 (require 'mevedel-claude-code-session)
 
 (mevedel-deftest mevedel--send-request/native-compaction (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (events
+  (mevedel-engine-test--with-claude-session
+    (let ((events
            [((sessionUpdate . "agent_message_chunk")
              (content . ((type . "text") (text . "ARCHIVED RESPONSE\n"))))
             ((sessionUpdate . "compaction_update") (compactionId . "compact-1") (status . "in_progress"))
@@ -25,9 +23,6 @@
             ((sessionUpdate . "compaction_update") (compactionId . "compact-1") (status . "completed")
              (summary . [((type . "text") (text . "CLEANED CLAUDE SUMMARY"))]))
             ((sessionUpdate . "compaction_update") (compactionId . "compact-1") (status . "completed"))]))
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Compaction fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                  (mevedel-engine-test--claude-launch
@@ -35,8 +30,7 @@
                     (list :meta `((compactionEvents . ,events)))))))
         (mevedel--insert-user-turn "Submitted before compaction")
         (mevedel--send-request "Submitted before compaction")
-        (with-timeout (5 (ert-fail "Compacted turn did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+        (mevedel-test--await 5 "Compacted turn did not settle" (not (mevedel-turn-busy-p buffer))))
       (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
       (should (= 2 (mevedel-session-current-segment session)))
       (should (= 1 (mevedel-session-turn-count session)))
@@ -53,53 +47,43 @@
 
 (mevedel-deftest mevedel--send-request/native-compaction-terminal (:quiet t)
   (dolist (status '("cancelled" "failed" "completed" "empty"))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-claude-code-directory (file-name-concat root "claude")))
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-        (setq-local gptel-system-prompt "Compaction fixture" gptel-tools nil)
-        (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                   (mevedel-engine-test--claude-launch
-                    (lambda (_system mcp _model _effort &optional id _hook)
-                      (list :meta `((compactionEvents .
-                                                      [((sessionUpdate . "compaction_update") (compactionId . "terminal")
-                                                        (status . "in_progress"))
-                                                       ((sessionUpdate . "compaction_summary_chunk") (compactionId . "terminal")
-                                                        (content . ((type . "text") (text . ,(if (equal status "empty") "" "STREAMED SUMMARY")))))
-                                                       ((sessionUpdate . "compaction_update") (compactionId . "terminal")
-                                                        (status . ,(if (equal status "empty") "completed" status)))
-                                                       ((sessionUpdate . "compaction_update") (compactionId . "terminal")
-                                                        (status . "completed")
-                                                        (summary . [((type . "text") (text . "LATE SUMMARY"))]))])))))))
-          (mevedel--insert-user-turn "Original prompt")
-          (mevedel--send-request "Original prompt")
-          (with-timeout (5 (ert-fail "Terminal compaction did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
-        (should (eq (if (equal status "empty") 'error 'success)
-                    (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
-        (should (= (if (equal status "completed") 2 1)
-                   (mevedel-session-current-segment session)))
-        (should-not (string-search "LATE SUMMARY" (buffer-string)))
-        (when (equal status "completed")
-          (should (string-search "STREAMED SUMMARY" (buffer-string))))))))
+    (mevedel-engine-test--with-claude-session
+      (setq-local gptel-system-prompt "Compaction fixture" gptel-tools nil)
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (_system mcp _model _effort &optional id _hook)
+                    (list :meta `((compactionEvents .
+                                                    [((sessionUpdate . "compaction_update") (compactionId . "terminal")
+                                                      (status . "in_progress"))
+                                                     ((sessionUpdate . "compaction_summary_chunk") (compactionId . "terminal")
+                                                      (content . ((type . "text") (text . ,(if (equal status "empty") "" "STREAMED SUMMARY")))))
+                                                     ((sessionUpdate . "compaction_update") (compactionId . "terminal")
+                                                      (status . ,(if (equal status "empty") "completed" status)))
+                                                     ((sessionUpdate . "compaction_update") (compactionId . "terminal")
+                                                      (status . "completed")
+                                                      (summary . [((type . "text") (text . "LATE SUMMARY"))]))])))))))
+        (mevedel--insert-user-turn "Original prompt")
+        (mevedel--send-request "Original prompt")
+        (mevedel-test--await 5 "Terminal compaction did not settle"
+          (not (mevedel-turn-busy-p buffer))))
+      (should (eq (if (equal status "empty") 'error 'success)
+                  (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
+      (should (= (if (equal status "completed") 2 1)
+                 (mevedel-session-current-segment session)))
+      (should-not (string-search "LATE SUMMARY" (buffer-string)))
+      (when (equal status "completed")
+        (should (string-search "STREAMED SUMMARY" (buffer-string)))))))
 
 (mevedel-deftest mevedel-view-send/native-compaction-reopen (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
-    (let ((gptel--known-backends nil)
-          (view (generate-new-buffer " *native-compaction-view*"))
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
+    (let ((view (generate-new-buffer " *native-compaction-view*"))
           (events [((sessionUpdate . "compaction_update") (compactionId . "saved")
                     (status . "completed")
                     (summary . [((type . "text") (text . "DURABLE NATIVE SUMMARY"))]))])
           restored restored-session ids)
       (unwind-protect
           (progn
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq-local gptel-system-prompt "Compaction fixture" gptel-tools nil)
             (mevedel-chat-install-request-hooks)
             (mevedel-view--setup view buffer)
@@ -114,10 +98,9 @@
                 (mevedel-view-send)
                 (goto-char (mevedel-view--input-start))
                 (insert "> Preserve my draft\nand its second line"))
-              (with-timeout (5 (ert-fail "View compaction did not settle"))
-                (while (or (zerop (mevedel-session-turn-count session))
-                           (mevedel-turn-busy-p buffer))
-                  (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "View compaction did not settle"
+                (not (or (zerop (mevedel-session-turn-count session))
+                         (mevedel-turn-busy-p buffer))))
               (with-current-buffer view
                 (should (equal "> Preserve my draft\nand its second line"
                                (mevedel-view--input-text))))
@@ -133,8 +116,8 @@
                 (goto-char (point-max))
                 (mevedel--insert-user-turn "Continue after reopen")
                 (mevedel--send-request "Continue after reopen")
-                (with-timeout (5 (ert-fail "Compacted history did not resume"))
-                  (while (mevedel-turn-busy-p restored) (accept-process-output nil 0.01)))
+                (mevedel-test--await 5 "Compacted history did not resume"
+                  (not (mevedel-turn-busy-p restored)))
                 (should (= 2 (mevedel-session-turn-count restored-session)))
                 (should (string-search "answer:Continue after reopen" (buffer-string))))
               (should (equal '("fixture-session" nil) ids))))
@@ -143,14 +126,9 @@
           (test-mevedel-session-persistence--release-and-kill restored restored-session))))))
 
 (mevedel-deftest mevedel--send-request/native-compaction-tools (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (file (file-name-concat root "evidence.txt")))
+  (mevedel-engine-test--with-claude-session
+    (let ((file (file-name-concat root "evidence.txt")))
       (write-region "Tool evidence" nil file nil 'silent)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Tool compaction fixture"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -168,8 +146,7 @@
                                                     (args . ((file_path . ,file))))]])))))))
         (mevedel--insert-user-turn "Read before and after compaction")
         (mevedel--send-request "Read before and after compaction")
-        (with-timeout (5 (ert-fail "Tool compaction did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+        (mevedel-test--await 5 "Tool compaction did not settle" (not (mevedel-turn-busy-p buffer))))
       (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
       (should (= 2 (mevedel-session-current-segment session)))
       (should (= 1 (how-many "^#\\+begin_tool" (point-min) (point-max))))
@@ -190,13 +167,8 @@
           (kill-buffer archive))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/native-compaction (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          record invocation)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+  (mevedel-engine-test--with-claude-session
+    (let (record invocation)
       (setq-local gptel-system-prompt "Root fixture" gptel-tools nil)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -214,9 +186,8 @@
              :agent (mevedel-agent--create :name "compact_child" :description "Summarize"
                                           :tools nil :max-turns nil :system-prompt "Child fixture")
              :on-invocation (lambda (value) (setq invocation value)))
-            (with-timeout (5 (ert-fail "Child compaction did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Child compaction did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (eq 'completed (mevedel-agent-record-settled-outcome record)))
             (with-current-buffer (mevedel-agent-record-conversation-buffer record)
               (should (string-search "CHILD RETAINED SUMMARY" (buffer-string)))
@@ -229,15 +200,10 @@
 
 (mevedel-deftest mevedel--send-request/native-compaction-busy (:quiet t)
   (dolist (abort '(nil t))
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (file (file-name-concat root "evidence.txt"))
+  (mevedel-engine-test--with-claude-session
+    (let ((file (file-name-concat root "evidence.txt"))
           busy timer snapshot hook-seen)
       (write-region "Busy target evidence" nil file nil 'silent)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Busy compaction fixture"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
       (unwind-protect
@@ -268,8 +234,8 @@
                                                         (args . ((file_path . ,file))))]])))))))
             (mevedel--insert-user-turn "Wait for the target")
             (mevedel--send-request "Wait for the target")
-            (with-timeout (5 (ert-fail "Deferred compaction did not settle"))
-              (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Deferred compaction did not settle"
+              (not (mevedel-turn-busy-p buffer)))
             (should (equal '(1 nil) snapshot))
             (should hook-seen)
             (should (eq (if abort 'aborted 'success)
@@ -282,15 +248,10 @@
         (when timer (cancel-timer timer)))))))
 
 (mevedel-deftest mevedel--send-request/native-compaction-running-command (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-execution-event-functions '(mevedel-view-stream-handle-execution-event))
+  (mevedel-engine-test--with-claude-session
+    (let ((mevedel-execution-event-functions '(mevedel-view-stream-handle-execution-event))
           (mevedel-execution-mailbox-delivery-function #'mevedel-tool-exec-handle-execution-event)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
           (unlock (file-name-concat root "unlock")))
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Running command fixture"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Bash"))))
       (unwind-protect
@@ -309,16 +270,15 @@
                                                                (yield_time_ms . 250))))] []])))))))
             (mevedel--insert-user-turn "Start a command and compact")
             (mevedel--send-request "Start a command and compact")
-            (with-timeout (5 (ert-fail "Running command turn did not settle"))
-              (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Running command turn did not settle"
+              (not (mevedel-turn-busy-p buffer)))
             (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
             (should (= 2 (mevedel-session-current-segment session)))
             (ert-info ((mevedel-session-artifacts-read-artifact session "segment-0001.chat.org" t))
               (should (= 1 (length (mevedel-transcript-audit-records (buffer-string) 'execution-archive)))))
             (write-region "finish" nil unlock nil 'silent)
-            (with-timeout (5 (ert-fail "Archived command did not publish completion"))
-              (while (not (mevedel-transcript-audit-records (buffer-string) 'execution-completion))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Archived command did not publish completion"
+              (mevedel-transcript-audit-records (buffer-string) 'execution-completion))
             (should-not (mevedel-transcript-audit-records (buffer-string) 'execution-archive))
             (let ((records (mevedel-transcript-audit-records (buffer-string) 'execution-completion)))
               (should (= 1 (length records)))

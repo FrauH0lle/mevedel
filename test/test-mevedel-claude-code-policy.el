@@ -10,10 +10,6 @@
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
 
-(defconst mevedel-claude-code-policy-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-view-send/claude-request-policy (:quiet t)
   (pcase-dolist (`(,skill-p ,selected)
 		 '((nil "Claude Code:haiku") (t "Claude Code:haiku")
@@ -59,10 +55,9 @@
 		 (goto-char (mevedel-view--input-start))
 		 (insert (if skill-p "$inspect this change" "Plan this change"))
 		 (mevedel-view-send))
-	       (with-timeout (5 (ert-fail (format "Policy turn did not settle: %s" mevedel-test--captured)))
-		 (while (or (zerop (mevedel-session-turn-count session))
-			    (mevedel-turn-busy-p buffer))
-		   (accept-process-output nil 0.01))))
+	       (mevedel-test--await 5 (format "Policy turn did not settle: %s" mevedel-test--captured)
+                 (not (or (zerop (mevedel-session-turn-count session))
+                          (mevedel-turn-busy-p buffer)))))
 	     (should (equal (if skill-p '("opus" xhigh) '("sonnet" high)) launch))
 	     (should (equal (if (string-prefix-p "API fixture:" selected) "api-model" "haiku")
                             (gptel--model-name gptel-model)))
@@ -107,7 +102,7 @@
         (unwind-protect
             (progn
               (copy-file (file-name-concat
-                          (file-name-directory mevedel-claude-code-policy-test--peer)
+                          (file-name-directory mevedel-test--acp-peer)
                           "claude-status.py") mevedel-claude-code-executable)
               (set-file-modes mevedel-claude-code-executable #o700)
               (copy-file mevedel-claude-code-executable (file-name-concat root "node"))
@@ -134,7 +129,7 @@
                            (let* ((config (funcall launch system mcp model effort id hook))
                                   (observe (plist-get config :observe)))
                              (plist-put config :command (executable-find "python3"))
-                             (plist-put config :args (list mevedel-claude-code-policy-test--peer))
+                             (plist-put config :args (list mevedel-test--acp-peer))
                              (plist-put config :observe
                                         (lambda (request notification)
                                           (when (equal "user"
@@ -171,8 +166,8 @@
                     (goto-char (mevedel-view--input-start))
                     (insert "This must never be sampled")
                     (mevedel-view-send)))
-                (with-timeout (5 (ert-fail "Unavailable-model request did not settle"))
-                  (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+                (mevedel-test--await 5 "Unavailable-model request did not settle"
+                  (not (mevedel-turn-busy-p buffer))))
               (ert-info ((format "Unavailable route: %s" route))
                 (should (equal "claude-unavailable-fixture" selected))
                 (should-not prompt-delivered)

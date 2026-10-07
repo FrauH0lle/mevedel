@@ -163,8 +163,7 @@ The pipeline supplies these invocation-only capabilities, never model input.")
    :session session
    :workspace (and session (mevedel-session-workspace session))
    :request mevedel--current-request
-   :invocation (and (boundp 'mevedel--agent-invocation)
-                    mevedel--agent-invocation)
+   :invocation mevedel--agent-invocation
    :buffer (current-buffer)))
 
 (defun mevedel-tool-exec-permission-default-directory ()

@@ -10,10 +10,6 @@
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-acp-text)
 
-(defconst mevedel-acp-text-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-acp-text-request (:quiet t)
   ,test
   (test)
@@ -23,15 +19,14 @@
     (let (responses terminal-info)
       (mevedel-acp-text-request
        (list :command (executable-find "python3")
-             :args (list mevedel-acp-text-test--peer) :cwd temporary-file-directory
+             :args (list mevedel-test--acp-peer) :cwd temporary-file-directory
              :normalize-outcome (lambda (outcome) (plist-put outcome :tokens '(:input 17 :output 3))))
        "hello"
        (lambda (response info)
          (push response responses)
          (when (eq t response) (setq terminal-info info)))
        t)
-      (with-timeout (5 (ert-fail "Isolated ACP text did not finish"))
-        (while (not terminal-info) (accept-process-output nil 0.01)))
+      (mevedel-test--await 5 "Isolated ACP text did not finish" terminal-info)
       (should (equal '("answer:" "hello" t) (reverse responses)))
       (should (equal '(:input 17 :output 3) (plist-get terminal-info :tokens)))
       (should (eq t (plist-get terminal-info :stream)))))
@@ -42,10 +37,9 @@
       (let ((cancel
              (mevedel-acp-text-request
               (list :command (executable-find "python3")
-                    :args (list mevedel-acp-text-test--peer) :cwd temporary-file-directory)
+                    :args (list mevedel-test--acp-peer) :cwd temporary-file-directory)
               "hello" (lambda (response _info) (push response responses)))))
-        (with-timeout (5 (ert-fail "Nonstream ACP text did not finish"))
-          (while (not responses) (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "Nonstream ACP text did not finish" responses)
         (funcall cancel)
         (should (equal '("answer:hello") responses)))))
 
@@ -57,10 +51,9 @@
             (setq cancel
                   (mevedel-acp-text-request
                    (list :command (executable-find "python3")
-                         :args (list mevedel-acp-text-test--peer) :cwd temporary-file-directory)
+                         :args (list mevedel-test--acp-peer) :cwd temporary-file-directory)
                    "wait" (lambda (response _info) (push response responses)) t)))
-          (with-timeout (5 (ert-fail "ACP text never became active"))
-            (while (not responses) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "ACP text never became active" responses)
           (kill-buffer buffer)
           (funcall cancel)
           (should (equal '(abort "waiting") responses)))

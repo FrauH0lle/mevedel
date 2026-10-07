@@ -12,11 +12,6 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-claude-code)
 
-(defconst mevedel-engine-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py")
-  "The scripted ACP peer standing in for Claude's adapter.")
-
 (defconst mevedel-engine-test--owned-timer-functions
   '(mevedel-goal--scheduled-continuation
     mevedel-view--run-follow-up-drain
@@ -85,6 +80,19 @@ Fail when BODY leaves a timer the fixture does not own."
                               (if (symbolp function) function 'lambda)))
                           leaked)))))))
 
+(defmacro mevedel-engine-test--with-claude-session (&rest body)
+  "Run BODY in `mevedel-engine-test--with-session' on Claude Code's sonnet.
+Claude's backend is registered in an otherwise empty catalog and keeps its
+state under the fixture root."
+  (declare (indent 0) (debug t))
+  `(mevedel-engine-test--with-session
+     (let ((gptel--known-backends nil)
+           (mevedel-claude-code-directory (file-name-concat root "claude")))
+       (mevedel-claude-code-register)
+       (mevedel-model-set-session-provider
+        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+       ,@body)))
+
 (defun mevedel-engine-test--session-info (model)
   "Return the capabilities Claude's adapter reports for MODEL."
   (let ((levels (cdr (assoc model mevedel-claude-code--aliases))))
@@ -121,7 +129,7 @@ supplies them, and its other keys replace the real plist's."
                          ,@(plist-get launch :meta)))
           (unless (assq key meta) (setq meta (append meta (list (cons key value))))))
         (setq launch (plist-put launch :command python))
-        (setq launch (plist-put launch :args (list mevedel-engine-test--peer)))
+        (setq launch (plist-put launch :args (list mevedel-test--acp-peer)))
         (setq launch (plist-put launch :prepare-launch nil))
         (setq launch (plist-put launch :meta meta))
         (cl-loop for (key value) on overrides by #'cddr

@@ -10,10 +10,6 @@
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 
-(defconst mevedel-acp-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (defvar mevedel-acp-test--launch-options nil
   "Additional launch settings captured by the connection fixture.")
 
@@ -25,7 +21,7 @@
           (connection
            (mevedel-acp-open
             (append (list :command (executable-find "python3")
-                          :args (list mevedel-acp-test--peer)
+                          :args (list mevedel-test--acp-peer)
                           :cwd directory :session-id ,session-id)
                     mevedel-acp-test--launch-options)
             (lambda (_connection) (setq ready t))
@@ -33,9 +29,7 @@
           (startup-timer (mevedel-acp-timer connection)))
      (unwind-protect
          (cl-labels ((await (predicate)
-                       (with-timeout (5 (ert-fail "ACP peer did not respond"))
-                         (while (not (funcall predicate))
-                           (accept-process-output nil 0.01)))))
+                       (mevedel-test--await 5 "ACP peer did not respond" (funcall predicate))))
            (await (lambda () (or ready failure)))
            ,@body)
        (mevedel-acp-close connection)
@@ -175,9 +169,8 @@
         (should (eq 'closed (mevedel-acp-state connection)))
         (should (eq 'error (plist-get outcome :status)))
         ;; Let the deferred sentinel release the stderr pipe inside this test.
-        (with-timeout (5 (ert-fail "Agent sentinel did not run"))
-          (while (get-process (concat (process-name process) " stderr"))
-            (accept-process-output nil 0.01)))))))
+        (mevedel-test--await 5 "Agent sentinel did not run"
+          (not (get-process (concat (process-name process) " stderr"))))))))
 
 (mevedel-deftest mevedel-acp-open ()
   ,test
@@ -252,13 +245,12 @@
          (connection
           (mevedel-acp-open
            (list :command (executable-find "python3")
-                 :args (list mevedel-acp-test--peer) :cwd directory)
+                 :args (list mevedel-test--acp-peer) :cwd directory)
            (lambda (_connection) (error "Ready exploded"))
            (lambda (message) (setq failure message)))))
     (unwind-protect
         (progn
-          (with-timeout (5 (ert-fail "READY failure was not delivered"))
-            (while (not failure) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "READY failure was not delivered" failure)
           (should (equal "Ready exploded" failure))
           (should (eq 'closed (mevedel-acp-state connection))))
       (mevedel-acp-close connection)

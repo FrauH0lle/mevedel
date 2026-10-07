@@ -32,9 +32,8 @@
            (make-symbolic-link native mevedel-claude-code-executable)
            (copy-file native (file-name-concat bin "npm"))
            (cl-labels ((await ()
-                         (with-timeout (8 (ert-fail "Maintenance fixture timed out"))
-                           (while (> (hash-table-count mevedel-claude-code-maintenance--jobs) 0)
-                             (accept-process-output nil 0.01)))))
+                         (mevedel-test--await 8 "Maintenance fixture timed out"
+                           (not (> (hash-table-count mevedel-claude-code-maintenance--jobs) 0)))))
              ,@body))
        (mevedel-claude-code-maintenance-stop)
        (delete-directory directory t))))

@@ -196,7 +196,7 @@ handler result; owner teardown drops delivery and releases owned resources."
          (address (plist-get descriptor :address))
          (request (bound-and-true-p mevedel--current-request))
          (origin-buffer (current-buffer))
-         (invocation (bound-and-true-p mevedel--agent-invocation))
+         (invocation mevedel--agent-invocation)
          (args (plist-put (copy-sequence args) :operation operation))
          directory iterator timer helper finished stepping delivery skipped)
     (cl-labels

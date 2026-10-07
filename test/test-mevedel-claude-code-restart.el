@@ -21,7 +21,7 @@
                             (setq load-path ',load-path)
                             (load ,(file-name-concat mevedel-claude-restart-test--fixtures "claude-restart.el") nil t)
                             (mevedel-test-claude-restart
-                             ,root ,phase ,(file-name-concat mevedel-claude-restart-test--fixtures "acp-agent.py"))))
+                             ,root ,phase ,mevedel-test--acp-peer)))
                    (status (call-process emacs nil t nil "--batch" "-Q" "--eval" (prin1-to-string form))))
               (ert-info ((format "Restart phase %d: %s" phase (buffer-string)))
                 (should (equal 0 status))

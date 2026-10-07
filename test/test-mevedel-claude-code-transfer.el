@@ -11,19 +11,14 @@
 (require 'mevedel-claude-code-session)
 
 (mevedel-deftest mevedel--send-request/transfer-to-claude (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          ids)
-      (mevedel-claude-code-register)
+  (mevedel-engine-test--with-claude-session
+    (let (ids)
       (mevedel--insert-user-turn "Earlier API task")
       (insert (propertize "\nAPI EVIDENCE RETAINED\n" 'gptel 'response))
       (setf (mevedel-session-turn-count session) 1
             (mevedel-session-prompt-index session) '((1 (:cum-turn 1))))
       (mevedel-request-end)
       (setq request (mevedel-request-begin session))
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Transfer fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                  (mevedel-engine-test--claude-launch
@@ -32,8 +27,8 @@
                     nil))))
         (mevedel--insert-user-turn "Continue using Claude")
         (mevedel--send-request "Continue using Claude")
-        (with-timeout (5 (ert-fail "Excerpt continuation did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "Excerpt continuation did not settle"
+          (not (mevedel-turn-busy-p buffer)))
         (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
         (should (string-search "answer:Excerpt continuation" (buffer-string)))
         (should (string-search "provenance: assistant ---\nAPI EVIDENCE RETAINED" (buffer-string)))
@@ -41,8 +36,7 @@
         (goto-char (point-max))
         (mevedel--insert-user-turn "Second native turn")
         (mevedel--send-request "Second native turn")
-        (with-timeout (5 (ert-fail "Native followup did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "Native followup did not settle" (not (mevedel-turn-busy-p buffer)))
         (should (stringp (car ids)))
         (should (string-search "answer:Second native turn" (buffer-string)))))))
 
@@ -77,8 +71,8 @@
                                                       (content . ((type . "text") (text . "UNSIGNED THOUGHT"))))])))))))
         (mevedel--insert-user-turn "Native task")
         (mevedel--send-request "Native task")
-        (with-timeout (5 (ert-fail "Native source turn did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+        (mevedel-test--await 5 "Native source turn did not settle"
+          (not (mevedel-turn-busy-p buffer))))
       (ert-info ((format "Native outcome: %S / %S"
                          (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)
                          (plist-get (mevedel-engine-info request) :error)))
@@ -138,8 +132,8 @@
           (goto-char (point-max))
           (mevedel--insert-user-turn "Return to Claude")
           (mevedel--send-request "Return to Claude")
-          (with-timeout (5 (ert-fail "Replacement native turn did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Replacement native turn did not settle"
+            (not (mevedel-turn-busy-p buffer)))
           (should (equal '(nil) ids))
           (let ((path (mevedel-session-save-path session)))
             (test-mevedel-session-persistence--release-and-kill buffer session)
@@ -150,8 +144,8 @@
           (goto-char (point-max))
           (mevedel--insert-user-turn "After reopening")
           (mevedel--send-request "After reopening")
-          (with-timeout (5 (ert-fail "Replacement native history did not resume"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Replacement native history did not resume"
+            (not (mevedel-turn-busy-p buffer)))
           (should (equal '("replacement-session" nil) ids)))))))
 
 (provide 'test-mevedel-claude-code-transfer)

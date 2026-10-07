@@ -179,7 +179,7 @@ the matching original Bash row; do not publish an unsent in-memory draft."
            (portable (mevedel-session-codec-portable-authority-p session))
            (root-buffer
             (and portable
-                 (if (bound-and-true-p mevedel--agent-invocation)
+                 (if mevedel--agent-invocation
                      (mevedel-agent-invocation-parent-data-buffer
                       mevedel--agent-invocation)
                    (current-buffer))))
@@ -360,7 +360,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
                     (mevedel-session-codec-portable-authority-p session))
                    (root-buffer
                     (and portable
-                         (if (bound-and-true-p mevedel--agent-invocation)
+                         (if mevedel--agent-invocation
                              (mevedel-agent-invocation-parent-data-buffer
                               mevedel--agent-invocation)
                            data-buffer)))
