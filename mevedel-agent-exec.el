@@ -112,12 +112,10 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--agent-transform
                   "mevedel-reminders" (fsm))
-(declare-function mevedel-reminders--collect-from
-                  "mevedel-reminders" (reminders turn-count ctx))
 (declare-function mevedel-reminders--stage-batch
                   "mevedel-reminders" (fsm entries commits))
-(declare-function mevedel-reminder-type "mevedel-reminders" (cl-x) t)
 (declare-function mevedel-reminders-agent-turn-limit-context "mevedel-reminders" (invocation))
+(declare-function mevedel-reminders-agent-turn-warnings "mevedel-reminders" (invocation count))
 (declare-function mevedel-reminders-stage-entry
                   "mevedel-reminders" (fsm type body &optional commit))
 
@@ -214,13 +212,7 @@ it still calls, settling with its latest response."
               (mevedel-reminders-stage-entry
                fsm 'max-turns-limit
                (mevedel-reminders-agent-turn-limit-context inv)))
-          (let ((staged
-                 (mevedel-reminders--collect-from
-                  (seq-filter (lambda (reminder)
-                                (eq 'max-turns-warning
-                                    (mevedel-reminder-type reminder)))
-                              (mevedel-agent-invocation-reminders inv))
-                  count inv)))
+          (let ((staged (mevedel-reminders-agent-turn-warnings inv count)))
             (mevedel-reminders--stage-batch
              fsm (plist-get staged :entries) (plist-get staged :commits))))))))
 

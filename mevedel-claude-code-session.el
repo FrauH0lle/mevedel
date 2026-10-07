@@ -2,7 +2,8 @@
 
 ;;; Commentary:
 ;; Connects normal session selection to the request-owned ACP runner.  Root
-;; and directive conversations retain independent native histories.  The local
+;; native history is resumed; each directive or shared-item turn starts an
+;; isolated native conversation from its selected prompt.  The local
 ;; installed agent owns those histories; session metadata stores references,
 ;; never credentials or a replay queue for tool effects.
 
@@ -14,6 +15,7 @@
 (require 'mevedel-claude-code-history)
 (require 'mevedel-context-delivery)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-shared-conversation)
 (require 'mevedel-skills-core)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tools)
@@ -112,40 +114,38 @@ This command does not start a model request or resume a paused Goal."
 When omitted, read the latest submitted prompt from the canonical transcript."
   (unless (and mevedel--session (mevedel-claude-code-backend-p gptel-backend))
     (user-error "Select Claude Code in a mevedel session first"))
-  (unless mevedel--current-directive-uuid
-    (mevedel-claude-code-history-assert-current
-     (cdr (assoc "root" (mevedel-session-external-conversations mevedel--session)))))
   (let* ((session mevedel--session)
          (buffer (current-buffer))
-         (scope (or mevedel--current-directive-uuid "root"))
-         ;; Directive prompts already contain their precisely selected durable
-         ;; history. Resuming hidden history would reintroduce excluded turns.
-         (history (and (not mevedel--current-directive-uuid)
-                       (alist-get scope (mevedel-session-external-conversations session)
+         (directive mevedel--current-directive-uuid)
+         ;; A shared-item question keeps its own context, apart from the room.
+         (shared (and (not directive) (mevedel-shared-conversation-current)))
+         ;; Directive and item prompts carry their precisely selected durable
+         ;; history.  Resuming hidden history would reintroduce excluded turns,
+         ;; and their turns must not enter the root's native history.
+         (isolated (or directive shared))
+         (history (and (not isolated)
+                       (alist-get "root" (mevedel-session-external-conversations session)
                                   nil nil #'equal)))
-         (excerpt (and (not mevedel--current-directive-uuid)
-                       (not (plist-get history :id))
-                       (mevedel-engine-root-history-p session)
-                       (mevedel-claude-code-history-excerpt session)))
-         (directory (expand-file-name mevedel-claude-code-directory))
+         (excerpt (progn
+                    (mevedel-claude-code-history-assert-current history)
+                    (and (not isolated)
+                         (not (plist-get history :id))
+                         (mevedel-engine-root-history-p session)
+                         (mevedel-claude-code-history-excerpt session))))
          (backend gptel-backend)
          (model-id gptel-model)
          (model (gptel--model-name gptel-model))
          (effort gptel-reasoning-effort)
-         (prompt (mevedel-tool-render-data-strip-non-media
-                  (or model-input
-                      (buffer-substring
-                       (mevedel-transcript-prompt-transform-start) (point-max)))))
-         (tools (mapcar
-                 (lambda (tool)
-                   (or (cl-find tool (mevedel-tool-all)
-                                :key #'mevedel-tool-gptel-tool :test #'eq)
-                       (error "Tool %s is not registered with mevedel" (gptel-tool-name tool))))
-                 gptel-tools))
+         (prompt (concat
+                  (when shared (mevedel-shared-conversation-prefix session shared t))
+                  (mevedel-tool-render-data-strip-non-media
+                   (or model-input
+                       (buffer-substring
+                        (mevedel-transcript-prompt-transform-start) (point-max))))))
          (request (or mevedel--current-request
-                      (mevedel-request-begin session mevedel--current-directive-uuid)))
+                      (mevedel-request-begin session directive)))
          (system-prompt gptel-system-prompt)
-         record selected)
+         tools record selected)
     (unless (and (eq session (mevedel-request-session request))
                  (eq request mevedel--current-request))
       (error "Subscription send lost its admitted request"))
@@ -155,32 +155,25 @@ When omitted, read the latest submitted prompt from the canonical transcript."
     (setf (mevedel-engine-info request)
           (append (mevedel-engine-info request)
                   (list :backend backend :model model-id :reasoning-effort effort
-                        :external-history t)))
+                        :external-history t :mevedel-native-isolated isolated)))
+    ;; UpdateGoal visibility depends on the request's Goal attribution.
+    (mevedel-goal-capture-request request)
+    (setq tools (mevedel-tools-native-roster request))
     ;; Preparation can settle before the agent returns an identity.  Record
     ;; that startup state without inventing a resumable native history.
-    (unless (or history mevedel--current-directive-uuid)
-      (setf (alist-get scope (mevedel-session-external-conversations session)
+    (unless (or history isolated)
+      (setf (alist-get "root" (mevedel-session-external-conversations session)
                        nil nil #'equal)
-            '(:engine claude-code :state unstarted)))
+            (list :engine 'claude-code :state 'unstarted)))
     (mevedel-acp-turn-start
      request
      (lambda (mcp hook-command)
        (let ((gptel-backend backend) (gptel-model model-id)
              (gptel-reasoning-effort effort))
-         (mevedel-claude-code-history-assert-current history)
-         (when (and (plist-get history :id)
-                    (not (and (eq 'claude-code (plist-get history :engine))
-                              (equal (system-name) (plist-get history :host))
-                              (equal directory (plist-get history :directory)))))
-           (user-error "This Claude history belongs to another installation; its transcript remains readable"))
-         (plist-put
-          (mevedel-claude-code-launch
-           (with-current-buffer buffer
-             (mevedel-claude-code-context-system
-              request (if (functionp system-prompt) (funcall system-prompt) system-prompt)
-              selected))
-           mcp model effort (plist-get history :id) hook-command)
-          :admit-tool #'mevedel-claude-code-history-admit)))
+         (mevedel-claude-code-launch
+          (with-current-buffer buffer
+            (mevedel-claude-code-context-system request system-prompt selected))
+          mcp model effort (plist-get history :id) hook-command)))
      (lambda ()
        (let ((gptel-backend backend) (gptel-model model-id)
              (gptel-reasoning-effort effort))
@@ -190,24 +183,20 @@ When omitted, read the latest submitted prompt from the canonical transcript."
      tools
      (lambda (id)
        (mevedel-claude-code-history-assert-current history)
-       (setq record (list :engine 'claude-code :id id :host (system-name)
-                          :directory directory :state 'in-flight
-                          :tool-calls (copy-tree (plist-get history :tool-calls))))
-       (unless (mevedel-request-directive-uuid request)
+       ;; Each directive or item turn starts an isolated native conversation
+       ;; that is never resumed, so its identity needs no durable reference.
+       (unless isolated
          ;; A submitted prompt belongs to native history even if interruption
          ;; precedes all output.  Exclude mutable leading Org metadata offsets.
-         (plist-put record :input-boundary
-                    (cons (mevedel-session-current-segment session)
-                          (- (marker-position (plist-get (mevedel-engine-info request) :position))
-                             (mevedel-session-artifacts-content-start buffer)))))
-       (setf (mevedel-engine-info request)
-             (plist-put (mevedel-engine-info request) :mevedel-claude-history record))
-       (setf (alist-get scope (mevedel-session-external-conversations session)
-                        nil nil #'equal) record)
-       ;; A crash after dispatch leaves an explicit uncertain turn.  The
-       ;; retained ID is durable before any model-triggered effect can occur.
-       (if (mevedel-request-directive-uuid request)
-           (mevedel-session-artifacts-publish-sidecar-state session buffer)
+         (setq record (mevedel-claude-code-history-open
+                       request id
+                       (cons (mevedel-session-current-segment session)
+                             (- (marker-position (plist-get (mevedel-engine-info request) :position))
+                                (mevedel-session-artifacts-content-start buffer)))))
+         (setf (alist-get "root" (mevedel-session-external-conversations session)
+                          nil nil #'equal) record)
+         ;; A crash after dispatch leaves an explicit uncertain turn.  The
+         ;; retained ID is durable before any model-triggered effect can occur.
          (mevedel-session-artifacts-save session buffer)
          ;; Publishing the first metadata drawer at an empty buffer's start
          ;; leaves a non-advancing submission marker before that drawer.
@@ -215,12 +204,7 @@ When omitted, read the latest submitted prompt from the canonical transcript."
            (when (< position (mevedel-session-artifacts-content-start buffer))
              (set-marker position (mevedel-session-artifacts-content-start buffer))))))
      (lambda (outcome)
-       (when (and (plist-get history :id) (not record))
-         (mevedel-claude-code-history-unavailable request))
-       (when (and record (not (eq 'diverged (plist-get record :state))))
-         (plist-put record :state
-                    (if (eq 'success (plist-get outcome :status))
-                        'ready 'uncertain))))
+       (mevedel-claude-code-history-settle request history record outcome))
      nil
      (lambda (done)
        (let ((gptel-backend backend) (gptel-model model-id)

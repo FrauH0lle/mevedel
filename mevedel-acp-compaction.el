@@ -17,6 +17,12 @@
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-session "mevedel-agents" (invocation))
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-make-pending-events "mevedel-reminders" ())
+(declare-function mevedel-session-ensure-reminder "mevedel-reminders" (session reminder))
+(autoload 'mevedel-reminders-make-pending-events "mevedel-reminders")
+(autoload 'mevedel-session-ensure-reminder "mevedel-reminders")
+
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view")
 
@@ -44,7 +50,12 @@
           (mevedel-session-artifacts-rotate-segment
            session (current-buffer) summary
            :tail-text tail :archive-text (mevedel-execution-transcript-archive-text plan))
-          (mevedel-execution-transcript-commit-archive (current-buffer) plan))
+          (mevedel-execution-transcript-commit-archive (current-buffer) plan)
+          ;; As after local compaction: the summary replaced file contents.
+          (when-let* ((reminder (mevedel-compact-target-file-reference-reminder-body
+                                 session 0 t)))
+            (mevedel-session-enqueue-pending-reminder session reminder)
+            (mevedel-session-ensure-reminder session (mevedel-reminders-make-pending-events))))
       (let ((target (or (mevedel-compact-target-agent-target owner)
                         (error "The child transcript is not ready for compaction"))))
         (setq target (plist-put target :execution-archive-plan plan))
@@ -71,8 +82,8 @@ rotate twice. A terminal summary supersedes streamed chunks when both arrive."
          (status (alist-get 'status update))
          (states (plist-get info :mevedel-acp-compactions))
          (state (alist-get id states nil nil #'equal)))
-    (when (and (mevedel-request-p owner) (mevedel-request-directive-uuid owner))
-      (error "Directive compaction cannot replace root history"))
+    (when (plist-get info :mevedel-native-isolated)
+      (error "Isolated compaction cannot replace root history"))
     (unless (and (stringp id) (not (string-empty-p id)))
       (error "ACP compaction has no identity"))
     (unless (plist-get state :terminal)

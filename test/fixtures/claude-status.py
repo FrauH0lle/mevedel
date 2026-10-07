@@ -36,7 +36,11 @@ elif sys.argv[1:] == ["--version"]:
         print("0.86.0")
     else:
         print("2.1.290 (Claude Code)")
-elif sys.argv[1:] == ["auth", "status"]:
+elif sys.argv[1:] == ["auth", "status", "--json"]:
+    if os.getenv("MEVEDEL_TEST_LOGGED_OUT"):
+        # The real CLI exits 1 while still printing valid status JSON.
+        print(json.dumps({"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"}))
+        sys.exit(1)
     print(json.dumps({"loggedIn": True,
                       "authMethod": os.getenv("MEVEDEL_TEST_AUTH_METHOD", "claude.ai"),
                       "apiProvider": os.getenv("MEVEDEL_TEST_AUTH_PROVIDER", "firstParty"), "subscriptionType": "max"}))

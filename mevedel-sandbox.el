@@ -16,6 +16,10 @@
 (eval-when-compile
   (require 'subr-x))
 
+;; `mevedel-mcp'
+(declare-function mevedel-mcp-socket-root "mevedel-mcp" ())
+(autoload 'mevedel-mcp-socket-root "mevedel-mcp")
+
 ;; `mevedel-permission-rules'
 (declare-function mevedel-permission-protected-path-policy
                   "mevedel-permission-rules" ())
@@ -917,6 +921,9 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                     (lambda (root) (list "--bind" root root))
                     roots)
                    (plist-get plan :arguments)
+                   ;; Local tool servers carry the owning turn's authority.
+                   (unless (file-remote-p canonical-workdir)
+                     (list "--tmpfs" (mevedel-mcp-socket-root)))
                    (list "--unshare-user"
                          "--unshare-pid")
                    (unless network-access-p

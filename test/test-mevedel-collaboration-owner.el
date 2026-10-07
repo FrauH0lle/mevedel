@@ -163,9 +163,8 @@
                                 &optional _images model)
                  (push (cons name prompt) asked)
                  (push model models)))
-              ((symbol-function 'mevedel-model-resolve-provider)
-               (lambda (spec &optional _noerror)
-                 (and (equal spec "Codex:gpt-6-luna") '(:backend b :model m)))))
+              ((symbol-function 'mevedel-model-candidates)
+               (lambda () '(("Codex:gpt-6-luna" :backend b :model m)))))
       (mevedel-collaboration--handle-new-session
        room 1 '(:reqId 1 :name "onboarding" :prompt "Design the flow"))
       (should (equal '(("onboarding" . "Design the flow")) created))

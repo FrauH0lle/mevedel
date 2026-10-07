@@ -11,10 +11,6 @@
 (require 'mevedel-claude-code-agent)
 (require 'mevedel-claude-code-session)
 
-(defconst mevedel-claude-code-agent-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-agent-control-spawn/claude-sample-limit (:quiet t)
   (dolist (limit '(1 3 8 nil))
     (mevedel-engine-test--with-session
@@ -29,25 +25,19 @@
          session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (unwind-protect
             (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                       (lambda (_system mcp _model _effort &optional id hook)
-                         (cl-incf launches)
-                         (list :command (executable-find "python3")
-                               :args (list mevedel-claude-code-agent-test--peer)
-                               :cwd root :mcp mcp :session-id id
-                               :tool-id-field :claudecode/toolUseId
-                               :control #'mevedel-claude-code--control
-                               :check-context #'mevedel-claude-code-context-check
-                               :observe #'mevedel-claude-code-context-observe
-                               :meta `((hookCommand . ,hook) (suppressResponseOnStop . t)
-                                       (compactBeforeBatch . ,(when (equal limit 3) 2))
-                                       (responseText . "All work completed")
-                                       (toolBatches . ,(vconcat
-                                                       (cl-loop for batch below 5 collect
-                                                                (vconcat
-                                                                 (cl-loop for tool below 2 collect
-                                                                          `((name . "Read")
-                                                                            (id . ,(format "%d-%d-%d" launches batch tool))
-                                                                            (args . ((file_path . ,file))))))))))))))
+                       (mevedel-engine-test--claude-launch
+                        (lambda (_system mcp _model _effort &optional id hook)
+                          (cl-incf launches)
+                          (list :meta `((hookCommand . ,hook) (suppressResponseOnStop . t)
+                                        (compactBeforeBatch . ,(when (equal limit 3) 2))
+                                        (responseText . "All work completed")
+                                        (toolBatches . ,(vconcat
+                                                         (cl-loop for batch below 5 collect
+                                                                  (vconcat
+                                                                   (cl-loop for tool below 2 collect
+                                                                            `((name . "Read")
+                                                                              (id . ,(format "%d-%d-%d" launches batch tool))
+                                                                              (args . ((file_path . ,file)))))))))))))))
               (dotimes (phase 2)
                 (if (= phase 0)
                     (mevedel-agent-control-spawn
@@ -92,25 +82,22 @@
          session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (unwind-protect
             (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                       (lambda (_system mcp _model _effort &optional id _hook)
-                         (cl-incf launches)
-                         (list :command (executable-find "python3")
-                               :args (list mevedel-claude-code-agent-test--peer)
-                               :cwd root :mcp mcp :session-id id
-                               :observe (lambda (owner event)
-                                          (mevedel-claude-code-context-observe owner event)
-                                          (when (equal "user" (alist-get 'type (alist-get 'message (alist-get 'params event))))
-                                            (setq receipt t)))
-                               :check-context #'mevedel-claude-code-context-check
-                               :meta `((echoAllText . t)
-                                       (compactionEvents .
-                                        ,(if (eq phase 'compacted)
-                                             [((sessionUpdate . "agent_message_chunk")
-                                               (content . ((type . "text") (text . "Prior response\n"))))
-                                              ((sessionUpdate . "compaction_update") (compactionId . "child")
-                                               (status . "completed")
-                                               (summary . [((type . "text") (text . "RETAINED CHILD SUMMARY"))]))]
-                                           [])))))))
+                       (mevedel-engine-test--claude-launch
+                        (lambda (_system mcp _model _effort &optional id _hook)
+                          (cl-incf launches)
+                          (list :observe (lambda (owner event)
+                                           (mevedel-claude-code-context-observe owner event)
+                                           (when (equal "user" (alist-get 'type (alist-get 'message (alist-get 'params event))))
+                                             (setq receipt t)))
+                                :meta `((echoAllText . t)
+                                        (compactionEvents .
+                                                          ,(if (eq phase 'compacted)
+                                                               [((sessionUpdate . "agent_message_chunk")
+                                                                 (content . ((type . "text") (text . "Prior response\n"))))
+                                                                ((sessionUpdate . "compaction_update") (compactionId . "child")
+                                                                 (status . "completed")
+                                                                 (summary . [((type . "text") (text . "RETAINED CHILD SUMMARY"))]))]
+                                                             []))))))))
               (mevedel-agent-control-spawn
                session "editor" (if (memq phase '(compacted active reopened)) "wait-silent" "SUBMITTED CHILD INPUT")
                (lambda (value) (setq record (plist-get value :record)))
@@ -195,20 +182,17 @@
        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                     (lambda (_system mcp _model _effort &optional id _hook)
-                       (list :command (executable-find "python3")
-                             :args (list mevedel-claude-code-agent-test--peer)
-                             :cwd root :mcp mcp :session-id id
-                             :observe
-                             (lambda (owner event)
-                               (mevedel-claude-code-context-observe owner event)
-                               (when (and (not edited)
-                                          (equal "user" (alist-get 'type (alist-get 'message (alist-get 'params event)))))
-                                 (setq edited t)
-                                 (with-current-buffer (mevedel-agent-invocation-buffer owner)
-                                   (goto-char (point-min))
-                                   (search-forward "SUBMITTED CHILD INPUT")
-                                   (replace-match "USER EDITED INPUT" t t))))))))
+                     (mevedel-engine-test--claude-launch
+                      (lambda (_system mcp _model _effort &optional id _hook)
+                        (list :observe (lambda (owner event)
+                                         (mevedel-claude-code-context-observe owner event)
+                                         (when (and (not edited)
+                                                    (equal "user" (alist-get 'type (alist-get 'message (alist-get 'params event)))))
+                                           (setq edited t)
+                                           (with-current-buffer (mevedel-agent-invocation-buffer owner)
+                                             (goto-char (point-min))
+                                             (search-forward "SUBMITTED CHILD INPUT")
+                                             (replace-match "USER EDITED INPUT" t t)))))))))
             (mevedel-agent-control-spawn
              session "editor" "SUBMITTED CHILD INPUT"
              (lambda (value) (setq record (plist-get value :record)))

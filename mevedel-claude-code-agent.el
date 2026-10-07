@@ -14,6 +14,7 @@
 (require 'mevedel-claude-code-history)
 (require 'mevedel-context-delivery)
 (require 'mevedel-session-artifacts)
+(require 'mevedel-tools)
 
 ;; `gptel'
 (defvar gptel-reasoning-effort)
@@ -40,10 +41,7 @@ Tools in the last allowed sample settle before the boundary ends the turn."
          buffer 'max-turns-limit
          (mevedel-reminders-agent-turn-limit-context invocation)))
        (boundary
-        (let* ((batch (mevedel-reminders--collect-from
-                       (seq-filter (lambda (reminder) (eq 'max-turns-warning (mevedel-reminder-type reminder)))
-                                   (mevedel-agent-invocation-reminders invocation))
-                       count invocation))
+        (let* ((batch (mevedel-reminders-agent-turn-warnings invocation count))
                (commits (plist-get batch :commits)))
           (when (plist-get batch :entries)
             (mevedel-reminders-queue-turn-event
@@ -60,7 +58,6 @@ its runtime canceller owns the transport without creating a gptel FSM."
          (scope (mevedel-agent-invocation-require-path invocation))
          (history (alist-get scope (mevedel-session-external-conversations session)
                              nil nil #'equal))
-         (directory (expand-file-name mevedel-claude-code-directory))
          record selected)
     (mevedel-claude-code-history-assert-current history)
     (mevedel-agent-conversation-configure invocation buffer)
@@ -81,33 +78,23 @@ its runtime canceller owns the transport without creating a gptel FSM."
       (let ((model (gptel--model-name gptel-model))
             (effort gptel-reasoning-effort)
             (system gptel-system-prompt)
-            (tools (mapcar
-                    (lambda (tool)
-                      (or (cl-find tool (mevedel-tool-all)
-                                   :key #'mevedel-tool-gptel-tool :test #'eq)
-                          (error "Tool %s is not registered with mevedel" (gptel-tool-name tool))))
-                    gptel-tools)))
+            (tools (mevedel-tools-native-roster invocation)))
         (mevedel-acp-turn-start
          invocation
          (lambda (mcp hook)
-           (mevedel-claude-code-history-assert-current history)
-           (when (and (plist-get history :id)
-                      (not (and (eq 'claude-code (plist-get history :engine))
-                                (equal (system-name) (plist-get history :host))
-                                (equal directory (plist-get history :directory)))))
-             (user-error "This Claude child history belongs to another installation; its transcript remains readable"))
-           (plist-put
-            (mevedel-claude-code-launch
-             (mevedel-claude-code-context-system invocation system selected)
-             mcp model effort (plist-get history :id) hook)
-            :admit-tool #'mevedel-claude-code-history-admit))
+           (mevedel-claude-code-launch
+            (mevedel-claude-code-context-system invocation system selected)
+            mcp model effort (plist-get history :id) hook))
          (lambda ()
            (mevedel-claude-code-agent-next-sample invocation)
            (mevedel-claude-code-context-prompt
             invocation
             (vconcat
              (when-let* ((excerpt (and history (not (plist-get history :id))
-                                      (mevedel-claude-code-history-excerpt session t))))
+                                      (mevedel-claude-code-history-excerpt
+                                       session t
+                                       (plist-get (mevedel-engine-info invocation)
+                                                  :mevedel-agent-prompt-start)))))
                (vector `((type . "text") (text . ,excerpt))))
              (mevedel-claude-code-context-input
               invocation (mevedel-tool-render-data-strip-non-media
@@ -116,28 +103,20 @@ its runtime canceller owns the transport without creating a gptel FSM."
          tools
          (lambda (id)
            (mevedel-claude-code-history-assert-current history)
-           (setq record (list :engine 'claude-code :id id :host (system-name)
-                              :directory directory :state 'in-flight
-                              :tool-calls (copy-tree (plist-get history :tool-calls))))
            ;; Children keep one canonical transcript across compactions, rather
            ;; than numbered root segments.  Zero identifies that private body.
-           (plist-put record :input-boundary
-                      (cons 0
-                            (- (marker-position
-                                (plist-get (mevedel-engine-info invocation) :position))
-                               (mevedel-session-artifacts-content-start buffer))))
-           (setf (mevedel-engine-info invocation)
-                 (plist-put (mevedel-engine-info invocation) :mevedel-claude-history record))
+           (setq record (mevedel-claude-code-history-open
+                         invocation id
+                         (cons 0
+                               (- (marker-position
+                                   (plist-get (mevedel-engine-info invocation) :position))
+                                  (mevedel-session-artifacts-content-start buffer)))))
            (setf (alist-get scope (mevedel-session-external-conversations session)
                             nil nil #'equal) record)
            (mevedel-session-artifacts-publish-sidecar-state
             session (mevedel-session-root-buffer session)))
          (lambda (outcome)
-           (when (and (plist-get history :id) (not record))
-             (mevedel-claude-code-history-unavailable invocation))
-           (when (and record (not (eq 'diverged (plist-get record :state))))
-             (plist-put record :state
-                        (if (eq 'success (plist-get outcome :status)) 'ready 'uncertain))))
+           (mevedel-claude-code-history-settle invocation history record outcome))
          (lambda (status)
            (mevedel-goal-charge-agent-progress invocation t)
            (funcall callback (pcase status ('success t) ('aborted 'abort) (_ nil))

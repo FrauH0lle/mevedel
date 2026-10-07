@@ -151,6 +151,16 @@
                   "mevedel-structs" (session))
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
+;; `mevedel-utilities'
+(declare-function mevedel--ui-timer-cancel "mevedel-utilities" (timer))
+(declare-function mevedel--ui-timer-pending-p "mevedel-utilities" (timer))
+(autoload 'mevedel--ui-timer-cancel "mevedel-utilities")
+(autoload 'mevedel--ui-timer-pending-p "mevedel-utilities")
+
 ;; `mevedel-turn'
 (defvar mevedel--current-request)
 
@@ -744,12 +754,15 @@ request or prompt transaction."
 
 (defun mevedel-collaboration--schedule-publish (room)
   "Coalesce assistant stream updates for ROOM."
-  (when (and room (not (plist-get room :publish-timer)))
+  ;; A plain timer armed while TRAMP suspends timers would vanish with that
+  ;; list and block every later publish; hold it until the wait returns.
+  (when (and room (not (mevedel--ui-timer-pending-p (plist-get room :publish-timer))))
     (setq room
           (plist-put room :publish-timer
-                     (run-at-time mevedel-collaboration--publish-delay nil
-                                  #'mevedel-collaboration--publish-timer
-                                  (plist-get room :data-buffer))))))
+                     (mevedel-transport-run-at-time
+                      mevedel-collaboration--publish-delay
+                      #'mevedel-collaboration--publish-timer
+                      (plist-get room :data-buffer))))))
 
 
 ;;
@@ -786,7 +799,7 @@ request or prompt transaction."
           (remove-hook 'gptel-post-tool-call-functions
                        #'mevedel-collaboration--safe-post-tool))))
     (when-let* ((timer (plist-get room :publish-timer)))
-      (cancel-timer timer))
+      (mevedel--ui-timer-cancel timer))
     (when-let* ((observer (plist-get room :session-observer)))
       (mevedel-session-control-transfer-unregister-observer
        (plist-get room :session) observer))

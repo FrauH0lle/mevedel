@@ -1180,6 +1180,14 @@ nothing for agents without a configured max-turns cap."
                           count max-turns remaining)))
      :interval 'one-shot)))
 
+(defun mevedel-reminders-agent-turn-warnings (invocation count)
+  "Return INVOCATION's due max-turns warning batch at sample COUNT.
+The batch has :entries and :commits, as `mevedel-reminders--collect-from'."
+  (mevedel-reminders--collect-from
+   (seq-filter (lambda (reminder) (eq 'max-turns-warning (mevedel-reminder-type reminder)))
+               (mevedel-agent-invocation-reminders invocation))
+   count invocation))
+
 (defun mevedel-reminders-agent-turn-limit-context (invocation)
   "Return current sample-limit guidance for INVOCATION, or nil without a cap.
 This producer does not consume the ordinary one-shot warning.  Engines can

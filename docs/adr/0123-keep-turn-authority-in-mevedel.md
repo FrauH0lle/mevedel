@@ -1,5 +1,9 @@
 # Keep turn authority in mevedel across model engines
 
+Status: accepted
+
+## Current decision
+
 Claude subscription access runs the installed Claude agent through ACP, with
 mevedel's tools exposed through a private asynchronous MCP bridge. Mevedel owns
 request admission, execution authority, effects, canonical transcript and
@@ -8,27 +12,40 @@ compaction. The gptel engine retains its real state machine, while external
 turns carry workflow context on the admitted request rather than manufacturing
 a gptel state machine.
 
-This boundary preserves the existing session workflow and the tested tool
-pipeline while using the supported subscription login. Treating Claude as an
-HTTP backend would misrepresent its retained history and native tool loop.
-Text-emulated tools would replace that loop and add another model-facing
-protocol. Direct stream-json would couple session communication to one CLI;
-ACP provides reusable session transport, with Claude-specific prompt, tool
-isolation, authentication and receipt extensions kept in its engine modules.
-Supporting ACP does not promise that arbitrary agents provide those controls.
-
 The bridge resolves every call against current mevedel authority. Discovery is
 not permission, and a request's cancellation revokes pending interactions and
-effects. Native call identities are persisted before tool execution so process
-failure cannot replay an admitted effect. Root, directive and child histories
-remain separate; directive requests reconstruct only their selected context.
-The existing root interaction and agent registry decisions remain in
+effects. The native conversation identity is persisted before its prompt is
+sent, so process failure leaves an uncertain turn; the next prompt must
+acknowledge current-state reconciliation before further tools. Call identities
+are unique only within the live turn. Root and child histories remain separate
+and resumable; each directive request or shared-item question starts an
+isolated native conversation from its selected context and retains no identity,
+so neither enters root native history nor rotates root segments. Only a
+retained native identity restricts local-history operations; unstarted and
+released markers do not. The existing root interaction and agent registry
+decisions remain in
 [ADR 0060](0060-centralize-agent-interactions-in-the-root-session.md) and
 [ADR 0063](0063-persist-the-agent-registry-explicitly.md).
 
-Acknowledged typed reminders use the shared hidden injection record, including
-restored guidance after compaction. Saving only their wire text lost source
-labels and made initial guidance appear under the assistant. The shared record
+Context reaches native history only at an observable SDK receipt: the exact
+block in the conversation's user-message echo, or a successful hook response
+carrying the exact hook output. Required context must be received before
+further tool effects and successful settlement. A delivery beyond Claude's
+inline hook limit continues the same admitted turn with a new prompt carrying
+the complete body; because `SessionStart(compact)` cannot stop the prompt, a
+`PreToolUse` hook denies and stops calls while that continuation is pending.
+The complete observation baseline stays in Claude's system prompt with the
+SDK's first-prompt snapshot disabled, so a resumed launch cannot keep stale
+mevedel instructions; restoration after native compaction supplies current
+differences. Prompts re-send path instructions and selected context only when
+the native conversation lacks their current form. The gptel payload rule
+remains in [ADR 0115](0115-retain-delivered-conversation-fragments.md);
+behavior is described under
+[native context delivery](../sessions.md#native-context-delivery).
+
+Acknowledged typed deliveries use the shared hidden injection record, including
+guidance restored after compaction; delivered mail follows as ordinary mailbox
+blocks. The receipt correlation marker stays on the wire. The shared record
 preserves source types and lets the normal renderer place initial deliveries
 with the user prompt and later deliveries at their point in assistant activity.
 
@@ -39,8 +56,9 @@ uses the effective segment and labels a new native conversation as excerpt
 continuation. Same-machine resume retains native identity. Operations requiring
 an exact native checkpoint mapping, including Fork and Rewind, refuse before
 effects when that mapping is unavailable. These constraints are documented in
-[session lifecycle](../sessions.md#external-conversation-references), rather than hidden
-behind a transcript copy that claims exact model-history equivalence.
+[session lifecycle](../sessions.md#external-conversation-references), rather
+than hidden behind a transcript copy that claims exact model-history
+equivalence.
 
 Raw transcript edits mark the owning root or child native history divergent;
 continuation requires explicit excerpt recovery. Recovery reads the effective
@@ -50,32 +68,108 @@ summaries for rendering, and edits can inherit the closing wrapper's ignored
 property; neither determines which summary the recovered model receives.
 
 Connection ownership includes the protocol library's deferred drains and
-watchdogs. A connection-local filter retains the library's newly scheduled
-continuations across ordinary TRAMP waits; those callbacks retain their
-successors too. Watchdogs validate their captured identity before closing the
-connection. An interrupted request still consumes its owned terminal
-acknowledgement for usage and settlement while discarding further work.
-Retained native invocations use the same bounded acknowledgement; their runtime
-canceller defers terminal settlement until the connection completes it. Queued
-hooks and tool calls receive failure replies after cancellation, allowing a
-peer waiting on those calls to reach its terminal reply without executing them.
+watchdogs. A connection-local filter holds timers the library schedules while a
+TRAMP operation is on the stack and arms them when it returns; outside one the
+filter runs unchanged. Watchdogs validate their captured identity before
+closing the connection, so a retired timer restored from a suspended list cannot
+close a healthy conversation. MCP calls and hook decisions arrive synchronously
+on their socket while ACP frames wait for the library's drain timer, so the
+runner queues them behind that timer; a tool cannot overtake a receipt the agent
+emitted first. Queued work waits for idle target transport, and reentrant
+arrivals cannot overtake an in-progress segment publication. An interrupted
+request still consumes events the agent already reported, such as completed
+compaction, and its owned terminal acknowledgement for usage and settlement,
+including a reply whose publication is waiting for target transport. It rejects
+new tools and hooks: queued ones receive failure replies without running, so
+the peer can reach its terminal reply, and cannot acquire a replacement turn's
+authority. A hook whose client gave up is not run later. Retained native
+invocations use the same bounded acknowledgement; their runtime canceller
+defers terminal settlement until the connection completes it.
+
+## Rationale and consequences
+
+This boundary preserves the existing session workflow and the tested tool
+pipeline while using the supported subscription login. Treating Claude as an
+HTTP backend would misrepresent its retained history and native tool loop.
+Text-emulated tools would replace that loop and add another model-facing
+protocol. Direct stream-json would couple session communication to one CLI;
+ACP provides reusable session transport, with Claude-specific prompt, tool
+isolation, authentication and receipt extensions kept in its engine modules.
+Supporting ACP does not promise that arbitrary agents provide those controls.
+
+ACP send completion does not prove that hook context entered the native
+conversation, and a hook preview or offloaded file is not the complete input.
+The installed adapter exposes the SDK's user-message echoes and hook lifecycle
+messages, which make delivery observable without a second history store.
+Receipt establishes SDK acceptance, not model understanding or retention
+through later compaction.
 
 The choice was validated through real ACP/MCP permission waits, reviewed
 patches, compaction and context restoration, independent conversations and
 same-machine restart, plus deterministic session and failure tests. The bounded
 live runs used an existing Enterprise subscription login through the same
 supported login path; they do not establish Pro/Max-specific allowance or
-performance claims. Detailed run evidence belongs in the working-material
-handoff, not in this ownership contract.
+performance claims. Run evidence is kept in the working-material progress log,
+not in this record.
 
 ## Decision history
 
-The initial callback queue protected work after ACP notifications were decoded.
-Deterministic subprocess tests then showed that an ordinary TRAMP wait could
-discard ACP's earlier drain timer, leaving its queue permanently busy, and
-restore a cancelled startup watchdog that closed an admitted conversation.
-Transport ownership now begins at the connection's process filter and follows
-its scheduled callbacks. A separate admitted-turn regression showed that
-cancellation discarded final usage already acknowledged by the native agent;
-terminal accounting therefore survives cancellation under the same owner,
-without reopening tool or continuation authority.
+- **Transport ownership:** the initial callback queue protected work after ACP
+  notifications were decoded. Deterministic subprocess tests then showed that an
+  ordinary TRAMP wait could discard ACP's earlier drain timer, leaving its queue
+  permanently busy, and restore a cancelled startup watchdog that closed an
+  admitted conversation. Ownership now begins at the connection's process
+  filter and follows its scheduled callbacks. The first retention let-bound
+  `timer-list` around the whole filter; `cancel-timer` then reached only the
+  temporary list, so cancelled ACP timers fired anyway. Retention now applies
+  only while a TRAMP operation is nested, moving filter timers to a held list.
+- **Cancellation:** cancellation first discarded every notification after
+  abort, losing final usage the agent had acknowledged and a native compaction
+  it had completed. Reported events and terminal accounting now survive
+  cancellation, without reopening tool or continuation authority.
+- **Socket ordering:** a tool call read in the same pass as an earlier context
+  receipt ran first and failed the turn with an unacknowledged-context error.
+  Queuing socket work behind the drain timer restores arrival order.
+- **Native call ledger:** call identities were first committed to the session
+  sidecar before each tool executed and kept for the conversation's lifetime to
+  reject replays. Profiling put that commit at 51 ms of synchronous main-thread
+  time per compiled tool call, and the ledger grew without bound and was copied
+  every turn. The protection was redundant: the in-flight record is already
+  durable before the prompt, a crash restores it as uncertain, and uncertain
+  history requires an acknowledged reconciliation notice before more tools. The
+  adapter was never observed replaying an old `toolUseId`, and a model retry
+  uses a new one. Per-turn uniqueness remains; the ledger was removed.
+- **Directive identities:** directive turns first persisted their identity under
+  the directive scope, and released or failed startups left `unstarted`
+  markers. None were ever resumed, but any entry permanently refused Fork,
+  Rewind, Redo, Save As, control transfer, manual compaction and side
+  conversations after one Claude directive or child, including the two-machine
+  transfer workflow. Directive identities are no longer stored, and the guard
+  counts only retained native identities.
+- **Oversized delivery:** mail first reached a running conversation only
+  through hooks, and updates above the hook limit failed explicitly, needing
+  another user turn. A child result above the limit could never reach a running
+  native root: the hook skipped it and WaitAgent returned immediately on the
+  non-empty mailbox, looping. Prompt submission now carries mail in full, and an
+  oversized hook update, including one message, continues the admitted turn
+  through another prompt.
+- **Compaction stop:** the continuation path first assumed that
+  `SessionStart(compact)` honors a stop. A live compaction run showed the CLI
+  continuing, with the MCP admission guard failing closed, and showed that
+  `PreToolUse` also needs an explicit deny beside its stop.
+- **Repeated prompt context:** every prompt first re-sent acknowledged path
+  instructions and user-placement selected context, accumulating copies in
+  Claude's retained history. Content hashes now suppress unchanged deliveries.
+- **Transcript form of receipts:** receipts first stored the wire batch,
+  marker included. That lost source labels, placed initial guidance under the
+  assistant, rendered markers as user prose or reasoning, leaked them into
+  excerpts and cost the view a regexp pass over every hidden segment. The
+  transcript now holds only the typed record and mail.
+- **Native summary segments:** restoration hooks alone left the transcript with
+  all pre-compaction history, which continuing through gptel would revive as
+  raw turns. Native compaction events now publish Claude's retained summary as
+  a segment.
+- **Cross-engine continuation:** an initial blanket guard refused switching
+  engines once history existed; the user rejected it. Effective native
+  compaction segments and gptel's reasoning-safe projection provide a usable
+  continuation boundary in both directions.

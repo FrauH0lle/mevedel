@@ -10,10 +10,6 @@
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
 
-(defconst mevedel-claude-code-selected-context-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-view-send/claude-selected-context (:quiet t)
   (dolist (placement '(user system))
     (mevedel-engine-test--with-session
@@ -43,14 +39,10 @@
               (mevedel-chat-install-request-hooks)
               (mevedel-view--setup view buffer)
               (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                         (lambda (system mcp _model _effort &optional id _hook)
-                           (setq launch-system system)
-                           (list :command (executable-find "python3")
-                                 :args (list mevedel-claude-code-selected-context-test--peer)
-                                 :cwd root :mcp mcp :session-id id
-                                 :meta '((echoAllText . t))
-                                 :observe #'mevedel-claude-code-context-observe
-                                 :check-context #'mevedel-claude-code-context-check))))
+                         (mevedel-engine-test--claude-launch
+                          (lambda (system mcp _model _effort &optional id _hook)
+                            (setq launch-system system)
+                            (list :meta '((echoAllText . t)))))))
                 (with-current-buffer view
                   (goto-char (mevedel-view--input-start))
                   (insert "Describe the selected evidence")
@@ -93,14 +85,11 @@
               (mevedel-chat-install-request-hooks)
               (mevedel-view--setup view buffer)
               (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                         (lambda (system mcp _model _effort &optional id _hook)
-                           (cl-incf launches)
-                           (setq launch-system system)
-                           (list :command (executable-find "python3")
-                                 :args (list mevedel-claude-code-selected-context-test--peer)
-                                 :cwd root :mcp mcp :session-id id :meta '((echoAllText . t))
-                                 :observe #'mevedel-claude-code-context-observe
-                                 :check-context #'mevedel-claude-code-context-check))))
+                         (mevedel-engine-test--claude-launch
+                          (lambda (system mcp _model _effort &optional id _hook)
+                            (cl-incf launches)
+                            (setq launch-system system)
+                            (list :meta '((echoAllText . t)))))))
                 (with-current-buffer view
                   (goto-char (mevedel-view--input-start))
                   (insert "Use the selected context")
@@ -143,32 +132,35 @@
                     gptel-context (list file)
                     gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                   (lambda (_system mcp _model _effort &optional id hook)
-                     (list :command (executable-find "python3")
-                           :args (list mevedel-claude-code-selected-context-test--peer)
-                           :cwd root :mcp mcp :session-id id
-                           :tool-id-field :claudecode/toolUseId
-                           :control #'mevedel-claude-code--control
-                           :observe #'mevedel-claude-code-context-observe
-                           :check-context #'mevedel-claude-code-context-check
-                           :meta `((hookCommand . ,hook) (compactBeforeBatch . 0)
-                                   (compactAcknowledgement . ,(if receipt t :false))
-                                   (responseText . "Completed")
-                                   (toolBatches . [[((name . "Read") (id . "read-selected")
-                                                    (args . ((file_path . ,file))))]]))))))
+                   (mevedel-engine-test--claude-launch
+                    (lambda (_system mcp _model _effort &optional id hook)
+                      (list :meta `((hookCommand . ,hook) (compactBeforeBatch . 0)
+                                    (compactAcknowledgement . ,(if receipt t :false))
+                                    (responseText . "Completed")
+                                    (toolBatches . [[((name . "Read") (id . "read-selected")
+                                                      (args . ((file_path . ,file))))]])))))))
           (insert "Use the selected evidence")
           (mevedel--send-request "Use the selected evidence")
           (with-timeout (5 (ert-fail "Selected context restoration did not settle"))
             (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
         (should (eq (if receipt 'success 'error)
                     (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
-        (should (= (if receipt 1 0)
-                   (how-many "mevedel-restoration:" (point-min) (point-max))))
-        (should (= (if receipt 1 0) (how-many "^#\\+begin_tool" (point-min) (point-max))))
-        (when receipt
-          (let ((text (buffer-string)))
-            (should (< (string-match "RESTORE SELECTED EVIDENCE" text)
-                       (string-match "^#\\+begin_tool" text)))))))))
+        ;; The wire marker stays out of the transcript; the typed record remains.
+        (should-not (string-search "mevedel-delivery:" (buffer-string)))
+        (let ((spans (seq-filter
+                      (lambda (span)
+                        (seq-find (lambda (item) (eq 'selected-context (plist-get item :type)))
+                                  (plist-get (plist-get span :record) :items)))
+                      (mevedel-transcript-audit-buffer-spans 'injected-reminders))))
+          (should (= (if receipt 1 0) (length spans)))
+          (should (= (if receipt 1 0) (how-many "^#\\+begin_tool" (point-min) (point-max))))
+          (when receipt
+            (should (string-search "RESTORE SELECTED EVIDENCE"
+                                   (plist-get (seq-find (lambda (item) (eq 'selected-context (plist-get item :type)))
+                                                        (plist-get (plist-get (car spans) :record) :items))
+                                              :body)))
+            (should (<= (plist-get (car spans) :end)
+                        (1+ (string-match "^#\\+begin_tool" (buffer-string)))))))))))
 
 (provide 'test-mevedel-claude-code-selected-context)
 ;;; test-mevedel-claude-code-selected-context.el ends here

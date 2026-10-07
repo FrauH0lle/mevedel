@@ -1977,3 +1977,46 @@ initial empty batch environment lacked the Codex backend and dropped that agent
 in its temporary decoded object; no stored bytes were changed by that check.
 The configured-editor check passed without warnings and preserved agent counts.
 Older `v0.5.0` sessions were left untouched. No model request was made.
+
+## Documentation consolidation — 2026-10-07
+
+Run evidence and fix details removed from ADR 0115/0060/0063 decision histories
+when the receipt contract moved to `docs/sessions.md#native-context-delivery`
+and its rationale to ADR 0123. Items already recorded above (live 12,223-char
+prompt echo, 22-Read compaction chains, 6.4 s and 76.19 s continuation runs,
+image echo, PDF non-advertisement, child permission WaitAgent test, two-process
+restart) are not repeated.
+
+- Review fixes: wire markers and raw observation text in the transcript cost the
+  view a regexp pass over every hidden segment, 3.2 ms per pass on a 2.3 MB
+  transcript. The UTF-16 hook-limit check counted the encoder's byte-order mark
+  and rejected output of exactly 10,000 units. A gptel directive after an engine
+  switch could stage root path instructions and acknowledge them for a root that
+  never received them (now moot: directives start isolated conversations).
+- Selected text context: collecting only media dropped selected files and
+  buffer regions; a bounded live turn per placement returned a marker supplied
+  only through the selected file. This verifies use, not an exact SDK receipt
+  for system placement.
+- Scoped instructions: a separate-editor restart test exposed local
+  `SessionStart` discarding learned native scopes; root hashes also suppressed
+  guidance in fresh directives until request-local hashes fixed that scope.
+- Shared reminders: the existing recovery test caught a duplicate recovery
+  notice with configured reminders enabled; routing root recovery through the
+  shared pending-event owner removed it.
+- Observation hooks: a bounded live Claude Code 2.1.291 run accepted a changed
+  memory section and discovered path instructions in one exact hook receipt and
+  used both markers. Deterministic cases reject foreign-session, malformed,
+  mismatched and failed receipts and oversized emoji payloads.
+- Native compaction restoration: a live turn with more than 12,000 characters of
+  system instructions compacted after 12 batches, accepted an exact
+  SessionStart receipt with changed memory and completed 10 further reads.
+- Child sample cap at continuation: retained-child tests caught a skipped sample
+  charge; a two-sample cap now stops after the denied attempt, a three-sample cap
+  permits exactly one restored sample with its warning, and a text-only
+  post-compaction sample cannot bypass the cap.
+- ADR 0060 child permissions: tests cover approval, denial and interruption for
+  direct and nested children while ancestors wait, reject late approval, and
+  reuse capacity after settlement.
+- ADR 0063 cold tool registry: the in-process tests had already populated the
+  global gptel registry and missed the unloaded `ToolCall` dependency; cold
+  decoding now initializes missing built-ins through their registrar.

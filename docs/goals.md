@@ -132,11 +132,11 @@ Known usage from earlier prompts remains in the lower bound. A startup failure
 before any prompt dispatch does not create a usage gap. While a prompt is still
 running without complete counters, `GetGoal` also reports its total as unknown.
 
-Automatic full-context continuation can use several native prompts within one
-admitted Goal turn. Each completed prompt contributes its usage once; later
-samples add to that frozen base. Delayed snapshots of completed sample
-identities cannot charge again. The whole admitted turn settles once. A user
-pause or cancellation at the context boundary prevents the next prompt.
+Automatic [full-context continuation](sessions.md#native-context-delivery) can
+use several native prompts within one admitted Goal turn. Each completed prompt
+contributes its usage once; later samples add to that frozen base. Delayed
+snapshots of completed sample identities cannot charge again, and the admitted
+turn is charged once at settlement.
 
 Native child progress charges its owning root Goal while the child runs, and
 settlement charges only the remaining delta. Each retained follow-up has its
@@ -179,7 +179,8 @@ request, counting the root turn's known in-flight usage; at 100% they are
 asked to stop new work and return their findings.
 Only an active Goal queues budget instructions; a turn that ends paused,
 blocked, or complete queues none for later work. Goal context still reports
-the budget, and `GetGoal` reports current usage.
+the budget, and `GetGoal` reports current usage, or only its known lower bound
+when usage is incomplete.
 
 `CreateGoal` accepts an optional positive `token_budget`, supplied only when
 explicitly requested. Omission uses `mevedel-goal-token-budget`; the tool cannot
@@ -197,9 +198,10 @@ settlement, an otherwise-active Goal at or above the limit becomes
 `/goal budget <N|none>` replaces or removes the durable limit and queues one
 reminder with the old limit, new limit, usage, remaining tokens, and resulting
 status. Lowering the limit to current usage immediately limits a nonterminal
-Goal and ends its running turn at the next tool boundary. Raising it above usage or removing it from a budget-limited Goal
-reactivates the Goal and schedules continuation behind the ordinary request
-gate.
+Goal and ends its running turn at the next tool boundary. Raising it above usage
+or removing it from a budget-limited Goal reactivates the Goal and schedules
+continuation behind the ordinary request gate. With incomplete usage, any limit
+keeps the Goal `budget-limited`; only removing it reactivates the Goal.
 
 ## Continuation
 
@@ -258,7 +260,9 @@ implement presets. Goal turns keep the session's tools, so a Goal started in
 read-only discussion can only investigate. They are session control
 tools; creating a Goal never raises execution permissions. Native schemas and
 the callable catalog use the same visibility checks, and handlers recheck the
-owning root request before acting. Child-agent, context-summary, ephemeral,
+owning root request before acting. An external engine's native roster is fixed
+for its whole turn, so it keeps both `CreateGoal` and `UpdateGoal` while either
+is visible; one can enable the other before that turn ends. Child-agent, context-summary, ephemeral,
 and cancelled requests cannot call them.
 
 Creation is unavailable in Plan mode, directive requests, while an unfinished

@@ -519,10 +519,6 @@ nested inside the outer body do not close it early."
     (lambda (seg) (and (<= (cadr seg) start) (< start (caddr seg))))
     base-segments)))
 
-(defconst mevedel-transcript--native-delivery-regexp
-  "^<!-- mevedel-delivery:[[:xdigit:]]\\{32\\} -->[ \t]*\n?"
-  "Standalone native context receipt marker.")
-
 (defun mevedel-transcript--control-prefix-p (range base-segments accepted)
   "Return non-nil when RANGE follows only ACCEPTED control structure.
 BASE-SEGMENTS delimit the containing raw property run."
@@ -541,15 +537,6 @@ BASE-SEGMENTS delimit the containing raw property run."
     ;; stays prose instead of collapsing into a control row.
     (when (and base (not (memq (car base) '(user response))))
       (setq cursor start))
-    ;; A native receipt begins a synthetic user block after authored input.
-    ;; Its standalone marker is accepted only outside quoted payloads.
-    (dolist (prior accepted)
-      (when (and cursor (eq (car prior) 'ignored)
-                 (>= (cadr prior) cursor) (<= (caddr prior) start)
-                 (save-excursion
-                   (goto-char (cadr prior))
-                   (looking-at-p mevedel-transcript--native-delivery-regexp)))
-        (setq cursor (caddr prior))))
     (dolist (prior (sort (copy-sequence accepted)
                          (lambda (a b) (< (cadr a) (cadr b)))))
       (when (and ok
@@ -633,7 +620,6 @@ own render-data.")
   '((reasoning "^#\\+begin_reasoning\\b" "^#\\+end_reasoning[^\n]*\n?")
     (mailbox)
     (reminder)
-    (native-delivery)
     (hook-context "^<hook-context>[ \t]*$" "^</hook-context>[ \t]*\n?")
     (task-background "^<task-background>[ \t]*$" "^</task-background>[ \t]*\n?")
     (render-data "^<!-- mevedel-render-data -->[ \t]*$"
@@ -651,10 +637,6 @@ source, not a work-slice boundary."
   (save-excursion
     (goto-char pos)
     (pcase (car spec)
-      ('native-delivery
-       (when (mevedel-transcript--search-control-line
-              mevedel-transcript--native-delivery-regexp end)
-         (cons (match-end 0) (list 'ignored (match-beginning 0) (match-end 0)))))
       ('reminder
        (when (mevedel-transcript--search-control-line
               "^<system-reminder>[ \t]*$" end)
@@ -737,11 +719,6 @@ collected by a resumable scan of this same source."
                     (save-excursion
                       (goto-char (cadr range))
                       (looking-at-p "<!-- mevedel-hook-audit -->"))))
-              (native-p
-               (and (eq (car range) 'ignored)
-                    (save-excursion
-                      (goto-char (cadr range))
-                      (looking-at-p mevedel-transcript--native-delivery-regexp))))
               (render-p (eq (car range) 'render-data))
               ;; Generated control blocks reach the transcript in their
               ;; own run, never inside gptel's streamed `response' run,
@@ -789,9 +766,8 @@ collected by a resumable scan of this same source."
             ;; structure.  Ranges are visited in start order and a
             ;; container never starts after its own contents, so the
             ;; enclosing payload is already recorded here.
-            (unless (and (or native-p
-                             (not (memq (car range)
-                                        mevedel-transcript--self-proving-types)))
+            (unless (and (not (memq (car range)
+                                    mevedel-transcript--self-proving-types))
                          (cl-find-if
                           (lambda (span)
                             (and (> (cadr range) (car span))
@@ -1099,7 +1075,7 @@ stale `gptel' runs; incomplete controls remain ordinary transcript text."
                 (mevedel-transcript--overlay-range
                  segments (list 'user prompt-start prompt-end))))))
     ;; Repair stale prompt properties without changing authoritative controls
-    ;; inside that prefix, including acknowledged native context receipts.
+    ;; inside that prefix, such as hidden injection records.
     (when repaired
       (setq segments (mevedel-transcript--overlay-ranges segments ranges)))
     (mevedel-transcript--merge-adjacent-segments

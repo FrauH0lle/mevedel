@@ -158,9 +158,11 @@ Keep them request-local across temporary removal of all callable tools."
          (setq parsed (vconcat parsed (vector (copy-tree annotation t)))))))
     (plist-put container :tools parsed)))
 
-(defun mevedel-tools--handle-plan-tool-filter (fsm)
-  "Apply Plan and Goal request-time tool visibility to FSM."
-  (let* ((info (gptel-fsm-info fsm))
+(defun mevedel-tools-visibility (owner)
+  "Return a predicate of tool names visible to OWNER's next model sample.
+OWNER is a native gptel FSM or an external turn owner.  Plan and directive
+planning hide editing tools; Goal tools follow their current availability."
+  (let* ((info (mevedel-engine-info owner))
          (invocation (plist-get info :mevedel-agent-invocation))
          (buffer (plist-get info :buffer))
          (session
@@ -171,16 +173,42 @@ Keep them request-local across temporary removal of all callable tools."
          (request
           (and (buffer-live-p buffer)
                (buffer-local-value 'mevedel--current-request buffer)))
-         (directive-plan-p
-          (mevedel-plan-directive-p session request))
          (plan-read-only-p
-          (or (and session (mevedel-session-plan-mode session))
-              (and (mevedel-request-p request)
-                   (mevedel-request-plan-read-only request))
-              (and invocation
-                   (mevedel-agent-invocation-plan-read-only invocation))))
+          (and session
+               (or (mevedel-session-plan-mode session)
+                   (and (mevedel-request-p request)
+                        (mevedel-request-plan-read-only request))
+                   (and invocation
+                        (mevedel-agent-invocation-plan-read-only invocation)))))
          (apply-patch-visible-p
-          (and plan-read-only-p (not directive-plan-p)))
+          (and plan-read-only-p (not (mevedel-plan-directive-p session request)))))
+    (lambda (name)
+      (and (mevedel-tool-goal-available-p name owner)
+           (not (and plan-read-only-p
+                     (when-let* ((registered (mevedel-tool-get name)))
+                       (if (equal name "ApplyPatch")
+                           (not apply-patch-visible-p)
+                         (or (equal name "Eval")
+                             (memq 'edit (mevedel-tool-groups registered)))))))))))
+
+(defun mevedel-tools-native-roster (owner)
+  "Return the registered tools for the current `gptel-tools' offered to OWNER.
+An external engine fixes its roster for the whole turn, so both Goal mutators
+stay offered while either is visible: creating or completing a Goal can enable
+the other before the turn ends.  Calls still face current authority.  Capture
+OWNER's Goal attribution first; UpdateGoal visibility depends on it."
+  (let* ((visible (mevedel-tools-visibility owner))
+         (mutators '("CreateGoal" "UpdateGoal"))
+         (goal-p (cl-some visible mutators)))
+    (cl-loop for tool in gptel-tools
+             for name = (gptel-tool-name tool)
+             when (if (member name mutators) goal-p (funcall visible name))
+             collect (or (cl-find tool (mevedel-tool-all) :key #'mevedel-tool-gptel-tool :test #'eq)
+                         (error "Tool %s is not registered with mevedel" name)))))
+
+(defun mevedel-tools--handle-plan-tool-filter (fsm)
+  "Apply Plan and Goal request-time tool visibility to FSM."
+  (let* ((info (gptel-fsm-info fsm))
          (tools (plist-get info :tools))
          (goal-tools
           (cl-union
@@ -198,23 +226,10 @@ Keep them request-local across temporary removal of all callable tools."
                                  goal-tools tools
                                  :key #'gptel-tool-name :test #'equal))))
     (when tools
-      (let ((filtered
-             (cl-remove-if
-              (lambda (tool)
-                (let ((name (gptel-tool-name tool)))
-                  (or
-                   (not (mevedel-tool-goal-available-p name fsm))
-                   (and session
-                        plan-read-only-p
-                        (when-let* ((registered
-                                    (mevedel-tool-get name)))
-                          (if (equal name "ApplyPatch")
-                              (not apply-patch-visible-p)
-                            (or (equal name "Eval")
-                                (memq 'edit
-                                      (mevedel-tool-groups
-                                       registered)))))))))
-              tools)))
+      (let* ((visible (mevedel-tools-visibility fsm))
+             (filtered (cl-remove-if-not
+                        (lambda (tool) (funcall visible (gptel-tool-name tool)))
+                        tools)))
         (unless (equal filtered (plist-get info :tools))
           (plist-put info :tools filtered)
           (mevedel-tools--request-data-set-tools info))))))

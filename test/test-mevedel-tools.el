@@ -1269,6 +1269,68 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (kill-buffer buf))))
 
 
+(defun mevedel-tools-test--native-owner (session)
+  "Return (BUFFER . REQUEST) for an external turn owned by SESSION."
+  (let ((buffer (generate-new-buffer " *mt-native*"))
+        (request (mevedel-request--create :session session)))
+    (with-current-buffer buffer (setq-local mevedel--session session))
+    (setf (mevedel-request-context request) (list :buffer buffer))
+    (cons buffer request)))
+
+(mevedel-deftest mevedel-tools-visibility
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       (mevedel-tool-fs--register)
+                       (mevedel-tool-patch-register)
+                       (mevedel-tool-exec--register)
+                       (mevedel-tool-goal--register))
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "applies Plan and Goal visibility to an external turn owner without an FSM"
+  (let* ((session (mevedel-tools-test--make-session))
+         (owner (mevedel-tools-test--native-owner session)))
+    (unwind-protect
+        (let ((visible (mevedel-tools-visibility (cdr owner))))
+          (should (funcall visible "Eval"))
+          (should (funcall visible "CreateGoal"))
+          (should-not (funcall visible "UpdateGoal"))
+          (setf (mevedel-session-plan-mode session) t)
+          (setq visible (mevedel-tools-visibility (cdr owner)))
+          (should (funcall visible "Read"))
+          (should (funcall visible "ApplyPatch"))
+          (should-not (funcall visible "Eval"))
+          (should-not (funcall visible "CreateGoal"))
+          (should (funcall visible "GetGoal")))
+      (kill-buffer (car owner)))))
+
+(mevedel-deftest mevedel-tools-native-roster
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       (mevedel-tool-fs--register)
+                       (mevedel-tool-patch-register)
+                       (mevedel-tool-exec--register)
+                       (mevedel-tool-goal--register))
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "maps visible tools to registry entries for a turn-long native roster"
+  (let* ((session (mevedel-tools-test--make-session))
+         (owner (mevedel-tools-test--native-owner session))
+         (gptel-tools (mapcar (lambda (name) (mevedel-tool-gptel-tool (mevedel-tool-get name "mevedel")))
+                              '("Read" "ApplyPatch" "Eval" "CreateGoal" "UpdateGoal" "GetGoal"))))
+    (unwind-protect
+        (progn
+          ;; CreateGoal can enable UpdateGoal before the native turn ends.
+          (should (equal '("Read" "ApplyPatch" "Eval" "CreateGoal" "UpdateGoal" "GetGoal")
+                         (mapcar #'mevedel-tool-name (mevedel-tools-native-roster (cdr owner)))))
+          (should (mevedel-tool-p (car (mevedel-tools-native-roster (cdr owner)))))
+          (setf (mevedel-session-plan-mode session) t)
+          (should (equal '("Read" "ApplyPatch" "GetGoal")
+                         (mapcar #'mevedel-tool-name (mevedel-tools-native-roster (cdr owner)))))
+          (let ((gptel-tools (list (mevedel-tools-test--make-fake-gptel-tool "Unregistered"))))
+            (should-error (mevedel-tools-native-roster (cdr owner)))))
+      (kill-buffer (car owner)))))
+
+
 ;;
 ;;; Mailbox delivery
 

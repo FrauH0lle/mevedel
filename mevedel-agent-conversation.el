@@ -495,9 +495,12 @@ payload remains authoritative."
         (throw 'name (format "%s" (gptel-tool-name arg))))))))
 
 (defun mevedel-agent-conversation--activity-error-p (args)
-  "Return non-nil when hook ARGS contain a tool error."
+  "Return non-nil when post-tool hook ARGS report a tool error.
+gptel passes one plist whose :result holds the serialized result."
   (cl-some (lambda (arg)
-             (and (stringp arg) (string-prefix-p "Error:" arg)))
+             (let ((result (if (stringp arg) arg
+                             (and (plistp arg) (plist-get arg :result)))))
+               (and (stringp result) (string-prefix-p "Error:" result))))
            args))
 
 (defun mevedel-agent-conversation--activity-sanitize-item (item)

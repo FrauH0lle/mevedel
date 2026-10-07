@@ -118,7 +118,10 @@ includes captured media blocks; the separate outcome retains canonical display
 data. Pipeline context carries the owning engine, so Goal tools and nested
 ToolCall retain request authority with either a real gptel FSM or an external
 request. The private asynchronous MCP transport owns connection cleanup and
-pending call cancellation.
+pending call and hook-control cancellation. Every server socket lives under one
+owner-only directory, `$XDG_RUNTIME_DIR/mevedel-mcp-UID` (else under
+`temporary-file-directory`); local Bubblewrap confinement mounts an empty tmpfs
+over it, so confined children cannot call tools with a turn's authority.
 
 Retained invocations expose their native FSM context or their own external
 context through the shared engine accessor. Their ACP driver uses the same
@@ -127,22 +130,17 @@ publication, independently of root-request settlement.
 
 `mevedel-acp-turn` binds that endpoint to one admitted request, publishes ACP text
 and MCP results through the canonical gptel renderers, and shares final patch
-capture and terminal settlement. Native Claude post-tool hooks query the same
-private endpoint for boundary-stop decisions; they are absent from tool
-discovery. Hook handlers complete asynchronously, allowing the runner to queue
-events, hook decisions and tool admission until target transport is idle.
-Reentrant arrivals cannot overtake an in-progress segment publication, and
-cancelled queued calls cannot acquire a replacement turn's authority.
-The connection retains ACP's own drain timers before notifications reach that
-queue, including timers scheduled by a drain callback. Ordinary TRAMP waits
-therefore cannot discard the upstream continuation. Startup and cancellation
-watchdogs verify their captured ownership before firing; a retired timer restored
-from a suspended list cannot close a healthy conversation. Cancellation drops
-queued work while preserving the owned terminal acknowledgement for usage
-accounting and aborted settlement. This also holds when the native reply already
-arrived but its publication is waiting for target transport. Cancelled queued
-hooks and tools receive failure replies without running their transactions,
-so they cannot block the peer's terminal acknowledgement.
+capture and terminal settlement. Native Claude `PreToolUse`, `PostToolBatch`
+and `SessionStart(compact)` hooks query the same private endpoint for context
+and stop decisions; they are absent from tool discovery. Hook handlers complete asynchronously; the runner queues events, hook
+decisions and tool admission in arrival order until target transport is idle,
+and cancellation rejects queued work while still consuming events and terminal
+usage the agent already reported. [ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md)
+owns these connection-ordering and cancellation rules.
+Native tool calls run the data buffer's `gptel-pre-tool-call-functions` and
+`gptel-post-tool-call-functions` (tool repair already ran in the pipeline), so
+views, collaboration rooms and agent activity observe them as gptel calls; a
+hook's `:stop` ends the turn and `:block` refuses the call.
 The Claude Code provider routes ordinary root submissions through
 this runner. The adapter normalizes final prompt usage separately from context
 occupancy and model-level quota reports: normalized input includes cache

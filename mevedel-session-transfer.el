@@ -21,8 +21,11 @@
 
 ;; `mevedel-engine'
 (declare-function mevedel-engine-assert-local-history "mevedel-engine"
-                  (session operation &optional backend))
+                  (session operation &optional backend root-only))
+(declare-function mevedel-engine-external-history-p "mevedel-engine"
+                  (session &optional root-only))
 (autoload 'mevedel-engine-assert-local-history "mevedel-engine")
+(autoload 'mevedel-engine-external-history-p "mevedel-engine")
 
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-directory-p
@@ -626,7 +629,7 @@ poll, detects a lost lease."
         ;; requests the owner had never displayed -- silently, from the
         ;; user's point of view.
         (when (and request (not decision)
-                   (or (mevedel-session-external-conversations session)
+                   (or (mevedel-engine-external-history-p session)
                        (progn
                      (unless
                          (mevedel-session-transfer--valid-timeout-p
@@ -644,7 +647,7 @@ poll, detects a lost lease."
                        :owner-client-id (plist-get request :owner-client-id)
                        :requester-client-id
                        (plist-get request :requester-client-id)
-                       :decision (if (mevedel-session-external-conversations session)
+                       :decision (if (mevedel-engine-external-history-p session)
                                      'reject 'grant)
                        :decided-at now)))
             (mevedel-session-transfer--directory directory "requests")

@@ -118,29 +118,47 @@
           (should (eq 'argument delivered)))
       (when timer (cancel-timer timer))))
 
-  :doc "holds a library's timer across TRAMP suspension, including callback successors"
-  (let (timer successor delivered)
+  :doc "holds a filter's timer scheduled during a TRAMP wait until the wait ends"
+  (let (timer held delivered)
     (unwind-protect
         (progn
-          (mevedel-transport-call-with-retained-timers
-           (lambda ()
-             (setq timer
-                   (run-at-time 60 nil
-                                (lambda ()
-                                  (setq successor (run-at-time 0 nil (lambda () (setq delivered t)))))))))
           (mevedel-transport-call-as-remote-operation
            (lambda ()
              (with-tramp-suspended-timers
-               ;; A previously scheduled library callback runs during a wait.
-               (funcall (timer--function timer))
-               (should (mevedel-transport-held-timer-p successor))
-               (accept-process-output nil .03)
-               (should-not delivered))))
-          (with-timeout (2 (ert-fail "Callback successor was lost"))
-            (while (not delivered) (accept-process-output nil .01)))
-          (should-not (mevedel-transport-held-timer-p successor)))
+               (mevedel-transport-call-with-retained-timers
+                (lambda ()
+                  (setq timer (run-at-time 0 nil (lambda () (setq delivered t)))))))
+             (setq held (mevedel-transport-held-timer-p timer))
+             (accept-process-output nil .03)
+             (should-not delivered)))
+          (should held)
+          (with-timeout (2 (ert-fail "Filter timer was lost"))
+            (while (not delivered) (accept-process-output nil .01))))
+      (when timer (cancel-timer timer))))
+
+  :doc "holds a filter timer spliced behind an earlier timer on the bound list"
+  (let (timer earlier)
+    (unwind-protect
+        (mevedel-transport-call-as-remote-operation
+         (lambda ()
+           (let ((timer-list nil))
+             (setq earlier (run-at-time -1 nil #'ignore))
+             (mevedel-transport-call-with-retained-timers
+              (lambda () (setq timer (run-at-time 0 nil #'ignore))))
+             (should (mevedel-transport-held-timer-p timer))
+             (should-not (memq timer timer-list)))))
       (when timer (cancel-timer timer))
-      (when successor (cancel-timer successor))))
+      (setq mevedel-transport--held-timers
+            (delq timer (delq earlier mevedel-transport--held-timers)))))
+
+  :doc "lets the callback cancel a timer armed outside the filter"
+  (let ((outer (run-at-time 60 nil #'ignore)))
+    (unwind-protect
+        (progn
+          (mevedel-transport-call-with-retained-timers
+           (lambda () (cancel-timer outer)))
+          (should-not (memq outer timer-list)))
+      (cancel-timer outer)))
 
   :doc "retains a timer even when the library callback signals"
   (let (timer delivered)

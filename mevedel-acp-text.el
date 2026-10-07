@@ -67,15 +67,12 @@ LAUNCH must have no retained session.  Supplied MCP servers remain caller-owned.
                 (mevedel-acp-open
                  launch
                  (lambda (active)
-                   (setq connection active)
-                   (if finished (mevedel-acp-close active)
-                     (mevedel-acp-prompt
-                      active (vector `((type . "text") (text . ,prompt)))
-                      #'event #'finish)))
+                   (mevedel-acp-prompt
+                    active (vector `((type . "text") (text . ,prompt)))
+                    #'event #'finish))
                  (lambda (message) (finish (list :status 'error :message message)))))
         (error (finish (list :status 'error :message (error-message-string err))))
         (quit (cancel) (signal (car err) (cdr err))))
-      (when (and finished connection) (mevedel-acp-close connection))
       #'cancel)))
 
 (provide 'mevedel-acp-text)

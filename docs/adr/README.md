@@ -159,4 +159,6 @@ to the decision bearing that ID.
 
 - [ADR 0122: Let full links change project files directly](0122-let-full-links-change-project-files-directly.md).
 
-- [ADR 0123: Keep turn authority in mevedel across model engines](0123-keep-turn-authority-in-mevedel.md).
+- [ADR 0123: Keep turn authority in mevedel across model engines](0123-keep-turn-authority-in-mevedel.md)
+  also owns the native context-receipt decision; ADR 0115 keeps the gptel payload
+  rule. No original ADR is replaced.

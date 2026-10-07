@@ -1276,6 +1276,25 @@ spanning lines")))
          (lambda (&rest args) (setq received args)) 0)
         (should (equal '(0) received)))))
 
+  :doc "a dispatched send passes through with its model input and skill stash"
+  (let ((session (mevedel-skills-test--make-session))
+        received)
+    (mevedel-skills-test--with-chat-buffer session
+      (setq-local mevedel-skills--pending-request-context '(:permission-rules nil))
+      (insert "$hi")
+      (mevedel--dispatch-request
+       "EXPANDED"
+       (lambda ()
+         (mevedel-skills--gptel-send-advice
+          (lambda (&rest _) (setq received mevedel--pending-model-input)))))
+      (should (equal "EXPANDED" received))
+      (should mevedel-skills--pending-request-context)
+      ;; Composer input is for external engines; gptel keeps its stored prompt.
+      (mevedel--dispatch-request
+       nil (lambda () (setq received (list mevedel--pending-model-input)))
+       "COMPOSER INPUT")
+      (should (equal '(nil) received))))
+
   :doc "local command aborts the send (orig-fn not called)"
   ;; The advice is `:around', so we assert behavior by checking whether
   ;; the original send is called.
@@ -1499,13 +1518,18 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (insert "plain text")
       (goto-char (point-max))
-      ;; Simulate a leaked stash (e.g., from a prior failed dispatch).
+      ;; Simulate a leaked stash (e.g., from a prior failed dispatch).  Its
+      ;; model still governs the dispatched send before cleanup.
       (setq-local mevedel-skills--pending-request-context
-                  '(:permission-rules nil))
+                  (list :permission-rules nil
+                        :model (list :backend gptel-backend :model 'haiku)))
       (setq-local mevedel-skills-input--pending-inline-attachments
                   (list (list :name "alpha")))
-      (mevedel-test--with-captured-messages nil
-        (mevedel-skills--gptel-send-advice (lambda (&rest _) nil)))
+      (let (model)
+        (mevedel-test--with-captured-messages nil
+          (mevedel-skills--gptel-send-advice
+           (lambda (&rest _) (setq model gptel-model))))
+        (should (eq 'haiku model)))
       (should (null mevedel-skills--pending-request-context))
       (should (null mevedel-skills-input--pending-inline-attachments))))
 
@@ -1515,7 +1539,8 @@ spanning lines")))
       (insert "plain text")
       (goto-char (point-max))
       (setq-local mevedel-skills--pending-request-context
-                  '(:permission-rules nil))
+                  (list :permission-rules nil
+                        :model (list :backend gptel-backend :model 'haiku)))
       (setq-local mevedel-skills-input--pending-inline-attachments
                   (list (list :name "alpha")))
       (ignore-errors

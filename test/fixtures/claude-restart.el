@@ -95,8 +95,7 @@
               (should (= phase (mevedel-session-turn-count session)))
               (dolist (scope '("root" "/root/reader"))
                 (let ((history (alist-get scope (mevedel-session-external-conversations session) nil nil #'equal)))
-                  (should (eq 'ready (plist-get history :state)))
-                  (should (= phase (length (plist-get history :tool-calls))))))
+                  (should (eq 'ready (plist-get history :state)))))
               (dolist (conversation (list buffer (mevedel-agent-record-conversation-buffer child)))
                 (with-current-buffer conversation
                   (should (= 1 (mevedel-engine-test--count-evidence (format "RESTART-PATH-PHASE-%d" phase))))))

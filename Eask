@@ -67,8 +67,14 @@
     (dolist (entry '(("XDG_CACHE_HOME" . ".cache")
                      ("XDG_CONFIG_HOME" . ".config")
                      ("XDG_DATA_HOME" . ".local/share")
-                     ("XDG_STATE_HOME" . ".local/state")))
+                     ("XDG_STATE_HOME" . ".local/state")
+                     ;; Private sockets, such as the MCP bridge, stay test-local.
+                     ("XDG_RUNTIME_DIR" . ".runtime")))
       (setenv (car entry) (file-name-concat home (cdr entry))))
+    ;; A desktop session provides its runtime directory; private sockets go
+    ;; there instead of a test's temporary directory.
+    (make-directory (getenv "XDG_RUNTIME_DIR") t)
+    (set-file-modes (getenv "XDG_RUNTIME_DIR") #o700)
     (add-hook 'kill-emacs-hook
               (lambda ()
                 (ignore-errors (delete-directory home t))))))

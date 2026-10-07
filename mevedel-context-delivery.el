@@ -177,6 +177,8 @@ Use the recipient's selected components; never give a worker the root Goal."
           ;; Engine transfer invalidates delivery, but keeps known paths so
           ;; startup failure/reopen cannot silently discard nested guidance.
           (when (and (not invocation)
+                     ;; Fresh directives own request-local instruction hashes.
+                     (not (bound-and-true-p mevedel--current-directive-uuid))
                      (cl-some (lambda (entry)
                                 (and (equal "/root" (caar entry)) (null (cdr entry))))
                               (mevedel-session-workspace-instruction-hashes mevedel--session)))

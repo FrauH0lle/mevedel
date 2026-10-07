@@ -16,6 +16,11 @@ The strict Goal record additionally requires `:tokens-incomplete-p`; earlier
 development Goals missing it are dropped on normal restore. The standalone
 v0.5.6 converter preserves Goals by adding this field. No features were removed.
 
+A second independent review on 2026-10-07 found and fixed further transport,
+security, collaboration and gptel-path defects; see the
+[second review report](claude-code-engine-review-2026-10-07b.md) for fixes,
+verification and open items. The native call ledger was removed.
+
 ## Canonical implementation specification
 
 The [PRD](../../.scratch/claude-code-engine/PRD.md) is the current implementation

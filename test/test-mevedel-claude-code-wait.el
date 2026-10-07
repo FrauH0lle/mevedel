@@ -12,10 +12,6 @@
 (require 'mevedel-permission-prompt)
 (require 'mevedel-view)
 
-(defconst mevedel-claude-code-wait-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel--send-request/claude-child-permission-wait (:quiet t)
                  (dolist (scenario '((allow) (deny) (interrupt) (allow . t) (deny . t) (interrupt . t)))
                    (mevedel-engine-test--with-session
@@ -40,24 +36,18 @@
                       (setq view (mevedel-view--ensure buffer))
                       (unwind-protect
                           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                                     (lambda (_system mcp _model _effort &optional id hook)
-                                       (let* ((parent (eq (current-buffer) buffer))
-                                              (branch (or parent (and nested (equal "/root/reader" (mevedel-current-origin))))))
-                                         (list :command (executable-find "python3")
-                                               :args (list mevedel-claude-code-wait-test--peer)
-                                               :cwd root :mcp mcp :session-id id
-                                               :tool-id-field :claudecode/toolUseId
-                                               :control #'mevedel-claude-code--control
-                                               :observe #'mevedel-claude-code--observe
-                                               :check-context #'mevedel-claude-code-context-check
-                                               :meta `((hookCommand . ,hook) (preToolHook . t)
-                                                       (fixtureSessionId . ,(mevedel-current-origin))
-                                                       (responseText . ,(if parent "Parent complete" "Child complete"))
-                                                       (toolBatches . ,(if branch
-                                                                           `[[((name . "Agent") (id . "spawn")
-                                                                               (args . ((task_name . ,(if parent "reader" "helper")) (message . "Read the evidence."))))]
-                                                                             [((name . "WaitAgent") (id . "wait") (args . ((timeout_ms . 10000))))]]
-                                                                         `[[((name . "Read") (id . "read") (args . ((file_path . ,file))))]]))))))))
+                                     (mevedel-engine-test--claude-launch
+                                      (lambda (_system mcp _model _effort &optional id hook)
+                                        (let* ((parent (eq (current-buffer) buffer))
+                                               (branch (or parent (and nested (equal "/root/reader" (mevedel-current-origin))))))
+                                          (list :meta `((hookCommand . ,hook) (preToolHook . t)
+                                                        (fixtureSessionId . ,(mevedel-current-origin))
+                                                        (responseText . ,(if parent "Parent complete" "Child complete"))
+                                                        (toolBatches . ,(if branch
+                                                                            `[[((name . "Agent") (id . "spawn")
+                                                                                (args . ((task_name . ,(if parent "reader" "helper")) (message . "Read the evidence."))))]
+                                                                              [((name . "WaitAgent") (id . "wait") (args . ((timeout_ms . 10000))))]]
+                                                                          `[[((name . "Read") (id . "read") (args . ((file_path . ,file))))]])))))))))
                             (mevedel--insert-user-turn "Delegate a read and wait for its result")
                             (mevedel--send-request "Delegate a read and wait for its result")
                             (with-timeout (8 (ert-fail "Child permission and parent wait did not become ready"))

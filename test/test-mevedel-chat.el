@@ -1850,6 +1850,39 @@
       (kill-buffer buffer)
       (delete-directory root t)))
 
+  :doc "defers its checkpoint until no remote operation is in flight"
+  (let* ((root (make-temp-file "mevedel-abort-defer-" t))
+         (workspace
+          (mevedel-workspace--create :type 'file :id root :root root
+                                     :name "abort-defer"))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *abort-defer*"))
+         (key (list 'abort-checkpoint buffer)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (mevedel-chat-prepare-transcript-buffer)
+          (setq-local mevedel--session session)
+          (setq-local mevedel--workspace workspace)
+          (insert "User prompt\n")
+          (mevedel-session-artifacts-save session buffer)
+          (goto-char (point-max))
+          (insert (propertize "Partial answer\n" 'gptel 'response))
+          (mevedel-transport-call-as-remote-operation
+           (lambda () (mevedel-abort buffer)))
+          (should (buffer-modified-p))
+          (should (gethash key mevedel-transport--pending))
+          (with-timeout (5 (ert-fail "Deferred abort checkpoint did not run"))
+            (while (gethash key mevedel-transport--pending)
+              (accept-process-output nil 0.01)))
+          (should-not (buffer-modified-p))
+          (should-not mevedel-session--save-failed))
+      (mevedel-transport-cancel-pending key)
+      (mevedel-session-persistence-lock-release
+       (mevedel-session-save-path session) session)
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer)
+      (delete-directory root t)))
+
 
 		 :doc "flushes permission queues and the pending plan approval"
 		 (with-temp-buffer

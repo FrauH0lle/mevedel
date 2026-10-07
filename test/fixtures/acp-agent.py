@@ -51,7 +51,7 @@ continuation_prompts = []
 prompt_number = 0
 session_info = {}
 config_behavior = None
-effort_applied = "unset"
+applied = {}
 
 
 def sdk_messages(batches, index):
@@ -117,7 +117,7 @@ for line in sys.stdin:
             continue
         if config_behavior != "mismatch":
             option["currentValue"] = params["value"]
-            effort_applied = params["value"]
+            applied[params["configId"]] = params["value"]
         reply(request_id, session_info)
     elif method == "session/prompt":
         if prompt_number:
@@ -164,7 +164,7 @@ for line in sys.stdin:
                 print(json.dumps({"jsonrpc": "2.0", "id": request_id,
                                   "error": {"code": -32602, "message": "Image payload mismatch"}}), flush=True)
         elif prompt == "report-effort":
-            chunk(effort_applied)
+            chunk(applied.get("effort", "unset") + (" mode:" + applied["mode"] if "mode" in applied else ""))
             reply(request_id, {"stopReason": "end_turn"})
         elif prompt == "crash":
             sys.exit(7)
@@ -230,7 +230,9 @@ for line in sys.stdin:
                         output = subprocess.run(hook_command, shell=True, check=True,
                                                 input=json.dumps({"hook_event_name": "PostToolBatch"}),
                                                 capture_output=True, text=True, timeout=5)
-                        if after_hook_tool:
+                        # A model call racing the hook receipt; Claude makes
+                        # none after the hook stops the turn.
+                        if after_hook_tool and json.loads(output.stdout).get("continue") is not False:
                             call({"jsonrpc": "2.0", "id": next_id, "method": "tools/call",
                                   "params": {"name": after_hook_tool["name"],
                                              "arguments": after_hook_tool["args"],

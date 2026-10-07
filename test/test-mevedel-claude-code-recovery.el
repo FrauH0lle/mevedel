@@ -10,9 +10,54 @@
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
 
-(defconst mevedel-claude-code-recovery-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
+(mevedel-deftest mevedel-claude-code-history-assert-current ()
+  (let ((mevedel-claude-code-directory (make-temp-file "mevedel-history-" t)))
+    (unwind-protect
+        (let ((record (list :engine 'claude-code :id "native" :host (system-name)
+                            :directory (expand-file-name mevedel-claude-code-directory)
+                            :state 'ready)))
+          (should-not (mevedel-claude-code-history-assert-current nil))
+          (should-not (mevedel-claude-code-history-assert-current
+                       '(:engine claude-code :state unstarted)))
+          (should-not (mevedel-claude-code-history-assert-current record))
+          (should (string-search "recover-history"
+                                 (cadr (should-error (mevedel-claude-code-history-assert-current
+                                                      (plist-put (copy-sequence record) :state 'diverged))
+                                                     :type 'user-error))))
+          (dolist (foreign (list (plist-put (copy-sequence record) :host "other-machine")
+                                 (plist-put (copy-sequence record) :directory "/other/installation")))
+            (should (string-search "another installation"
+                                   (cadr (should-error (mevedel-claude-code-history-assert-current foreign)
+                                                       :type 'user-error))))))
+      (delete-directory mevedel-claude-code-directory t))))
+
+(mevedel-deftest mevedel-claude-code-history-open ()
+  (let* ((mevedel-claude-code-directory "/tmp/mevedel-history-open")
+         (owner (mevedel-request--create))
+         (record (mevedel-claude-code-history-open owner "native" '(1 . 4))))
+    (should (equal (list :engine 'claude-code :id "native" :host (system-name)
+                         :directory "/tmp/mevedel-history-open" :state 'in-flight
+                         :input-boundary '(1 . 4))
+                   record))
+    (should (eq record (plist-get (mevedel-engine-info owner) :mevedel-claude-history)))
+    (should-not (plist-member (mevedel-claude-code-history-open owner "child") :input-boundary))))
+
+(mevedel-deftest mevedel-claude-code-history-settle ()
+  (let ((owner (mevedel-request--create)))
+    (dolist (case '((success ready) (error uncertain) (interrupted uncertain)))
+      (let ((record (list :id "native" :state 'in-flight)))
+        (mevedel-claude-code-history-settle owner nil record (list :status (car case)))
+        (should (eq (cadr case) (plist-get record :state)))))
+    (let ((record (list :id "native" :state 'diverged)))
+      (mevedel-claude-code-history-settle owner nil record '(:status success))
+      (should (eq 'diverged (plist-get record :state))))
+    ;; A retained identity that failed to start names excerpt recovery.
+    (setf (mevedel-engine-info owner) (list :mevedel-acp-outcome 'error :error "Missing history"))
+    (mevedel-claude-code-history-settle owner '(:id "native") nil '(:status error))
+    (should (string-search "recover-history" (plist-get (mevedel-engine-info owner) :error)))
+    (setf (mevedel-engine-info owner) (list :mevedel-acp-outcome 'error :error "Startup failed"))
+    (mevedel-claude-code-history-settle owner nil nil '(:status error))
+    (should (equal "Startup failed" (plist-get (mevedel-engine-info owner) :error)))))
 
 (mevedel-deftest mevedel-claude-code-recover-history/root (:quiet t)
   (mevedel-engine-test--with-session
@@ -31,22 +76,16 @@
                         gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
             (mevedel-view--setup view buffer)
             (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                       (lambda (_system mcp _model _effort &optional id hook)
-                         (cl-incf launches)
-                         (push id ids)
-                         (list :command (executable-find "python3")
-                               :args (list mevedel-claude-code-recovery-test--peer)
-                               :cwd root :mcp mcp :session-id id
-                               :tool-id-field :claudecode/toolUseId
-                               :observe #'mevedel-claude-code--observe
-                               :check-context #'mevedel-claude-code-context-check
-                               :control #'mevedel-claude-code--control
-                               :meta (append `((hookCommand . ,hook)
-                                               (fixtureSessionId . ,(if (= launches 1) "original" "replacement"))
-                                               (echoAllText . t))
-                                             (when (= launches 1)
-                                               `((toolBatches . [[((name . "Read") (id . "old-read")
-                                                                  (args . ((file_path . ,file))))]]))))))))
+                       (mevedel-engine-test--claude-launch
+                        (lambda (_system mcp _model _effort &optional id hook)
+                          (cl-incf launches)
+                          (push id ids)
+                          (list :meta (append `((hookCommand . ,hook)
+                                                (fixtureSessionId . ,(if (= launches 1) "original" "replacement"))
+                                                (echoAllText . t))
+                                              (when (= launches 1)
+                                                `((toolBatches . [[((name . "Read") (id . "old-read")
+                                                                    (args . ((file_path . ,file))))]])))))))))
               (mevedel--insert-user-turn "Read this evidence")
               (mevedel--send-request "Read this evidence")
               (with-timeout (5 (ert-fail "Initial native turn did not settle"))
@@ -96,16 +135,12 @@
        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                     (lambda (_system mcp _model _effort &optional id _hook)
-                       (cl-incf launches)
-                       (push id ids)
-                       (list :command (executable-find "python3")
-                             :args (list mevedel-claude-code-recovery-test--peer)
-                             :cwd root :mcp mcp :session-id id
-                             :observe #'mevedel-claude-code--observe
-                             :check-context #'mevedel-claude-code-context-check
-                             :meta `((fixtureSessionId . ,(if (= launches 1) "original" "replacement"))
-                                     (echoAllText . t))))))
+                     (mevedel-engine-test--claude-launch
+                      (lambda (_system mcp _model _effort &optional id _hook)
+                        (cl-incf launches)
+                        (push id ids)
+                        (list :meta `((fixtureSessionId . ,(if (= launches 1) "original" "replacement"))
+                                      (echoAllText . t)))))))
             (mevedel-agent-control-spawn
              session "reader" "Keep CHILD RECOVERY EVIDENCE for later."
              (lambda (value) (setq record (plist-get value :record)))
@@ -198,21 +233,19 @@
          session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt "Summary recovery fixture" gptel-tools nil)
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                   (lambda (_system mcp _model _effort &optional id _hook)
-                     (cl-incf launches)
-                     (push id ids)
-                     (list :command (executable-find "python3")
-                           :args (list mevedel-claude-code-recovery-test--peer)
-                           :cwd root :mcp mcp :session-id id
-                           :meta `((echoAllText . t)
-                                   (compactionEvents .
-                                    ,(if (= launches 1)
-                                         [((sessionUpdate . "agent_message_chunk")
-                                           (content . ((type . "text") (text . "ARCHIVED ORIGINAL RESPONSE\n"))))
-                                          ((sessionUpdate . "compaction_update") (compactionId . "recover")
-                                           (status . "completed")
-                                           (summary . [((type . "text") (text . "RETAINED SUMMARY EVIDENCE"))]))]
-                                       [])))))))
+                   (mevedel-engine-test--claude-launch
+                    (lambda (_system mcp _model _effort &optional id _hook)
+                      (cl-incf launches)
+                      (push id ids)
+                      (list :meta `((echoAllText . t)
+                                    (compactionEvents .
+                                                      ,(if (= launches 1)
+                                                           [((sessionUpdate . "agent_message_chunk")
+                                                             (content . ((type . "text") (text . "ARCHIVED ORIGINAL RESPONSE\n"))))
+                                                            ((sessionUpdate . "compaction_update") (compactionId . "recover")
+                                                             (status . "completed")
+                                                             (summary . [((type . "text") (text . "RETAINED SUMMARY EVIDENCE"))]))]
+                                                         []))))))))
           (mevedel--insert-user-turn "Compact this evidence")
           (mevedel--send-request "Compact this evidence")
           (with-timeout (5 (ert-fail "Root summary did not settle"))

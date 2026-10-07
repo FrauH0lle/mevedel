@@ -11,7 +11,6 @@
 
 (require 'cl-lib)
 (require 'json)
-(require 'seq)
 (require 'subr-x)
 
 ;; `mevedel-utilities'
@@ -28,12 +27,19 @@
   "Private local server for one caller-owned tool scope."
   directory listener clients tools dispatch control rejected closed)
 
+(defun mevedel-mcp--encode (message)
+  "Return MESSAGE as one newline-terminated JSON line."
+  (concat (json-serialize message :null-object :null :false-object :json-false)
+          "\n"))
+
+(defun mevedel-mcp--write (client line)
+  "Write encoded LINE to live CLIENT."
+  (when (process-live-p client)
+    (process-send-string client line)))
+
 (defun mevedel-mcp--send (client message)
   "Send JSON MESSAGE to live CLIENT."
-  (when (process-live-p client)
-    (process-send-string
-     client (concat (json-serialize message :null-object :null
-                                    :false-object :json-false) "\n"))))
+  (mevedel-mcp--write client (mevedel-mcp--encode message)))
 
 (defun mevedel-mcp--error (client id code message)
   "Reply to CLIENT request ID with error CODE and MESSAGE."
@@ -41,6 +47,8 @@
    client (list :jsonrpc "2.0" :id id
                 :error (list :code code :message message))))
 
+;; Calls and hook controls share one pending table, so cancellation and
+;; disconnect retire whichever is still unanswered.
 (defun mevedel-mcp--cancel (client id)
   "Retire CLIENT request ID and cancel its pending work."
   (let* ((calls (process-get client 'mevedel-mcp-calls))
@@ -64,43 +72,52 @@
         (error nil))))
   (when (process-live-p client) (delete-process client)))
 
-(defun mevedel-mcp--call (server client id params)
-  "Dispatch SERVER tool PARAMS for CLIENT request ID."
-  (let ((name (plist-get params :name))
-        (args (plist-get params :arguments))
-        (calls (process-get client 'mevedel-mcp-calls)))
-    (cond
-     ((or (not (stringp name)) (not (listp args))
-          (not (seq-find (lambda (tool) (equal name (plist-get tool :name)))
-                         (funcall (mevedel-mcp-tools server)))))
-      (let ((message "Unknown tool or invalid arguments"))
-        (mevedel-mcp--error client id -32602 message)
-        (when (mevedel-mcp-rejected server)
-          (funcall (mevedel-mcp-rejected server) message))))
-     ((gethash id calls)
-      ;; Duplicate live IDs cannot identify which invocation is being answered.
-      (mevedel-mcp--disconnect client))
-     (t
+(defun mevedel-mcp--pending (client id start)
+  "Answer CLIENT request ID when asynchronous START completes.
+START receives a completion taking a result plist, or nil and an error
+message.  It may return a canceller for client cancellation or disconnect.
+Only the first completion of a still-pending request answers it."
+  (let ((calls (process-get client 'mevedel-mcp-calls)))
+    (if (gethash id calls)
+        ;; Duplicate live IDs cannot identify which invocation is being answered.
+        (mevedel-mcp--disconnect client)
       (let* ((cell (cons nil 'pending))
-             (finish
-              (lambda (result)
+             (complete
+              (lambda (result &optional failure)
                 (when (eq (gethash id calls) cell)
                   (remhash id calls)
                   (setcdr cell 'completed)
-                  (mevedel-mcp--send
-                   client (list :jsonrpc "2.0" :id id :result result))))))
+                  (if failure (mevedel-mcp--error client id -32603 failure)
+                    ;; Raw-byte text cannot be serialized; the call must still end.
+                    (if-let* ((line (ignore-errors
+                                      (mevedel-mcp--encode
+                                       (list :jsonrpc "2.0" :id id :result result)))))
+                        (mevedel-mcp--write client line)
+                      (mevedel-mcp--error client id -32603
+                                          "Result is not valid JSON")))))))
         (puthash id cell calls)
         (condition-case err
             (progn
-              (setcar cell (funcall (mevedel-mcp-dispatch server)
-                                   name args (plist-get params :_meta) finish))
+              (setcar cell (funcall start complete))
               (when (and (eq (cdr cell) 'cancelled) (functionp (car cell)))
                 (funcall (car cell))))
-          (error
-           (funcall finish
-                    (list :isError t :content
-                          (vector (list :type "text" :text
-                                        (error-message-string err))))))))))))
+          (error (funcall complete nil (error-message-string err))))))))
+
+(defun mevedel-mcp--call (server client id params)
+  "Dispatch SERVER tool PARAMS for CLIENT request ID."
+  (let ((name (plist-get params :name))
+        (args (plist-get params :arguments)))
+    (if (not (and (stringp name) (listp args)))
+        (let ((message "Invalid tool call parameters"))
+          (mevedel-mcp--error client id -32602 message)
+          (when (mevedel-mcp-rejected server)
+            (funcall (mevedel-mcp-rejected server) message)))
+      ;; The dispatcher checks NAME against its admitted roster.
+      (mevedel-mcp--pending
+       client id
+       (lambda (complete)
+         (funcall (mevedel-mcp-dispatch server)
+                  name args (plist-get params :_meta) complete))))))
 
 (defun mevedel-mcp--receive (server client message)
   "Handle one decoded MESSAGE from SERVER's CLIENT."
@@ -127,20 +144,14 @@
         (mevedel-mcp--send
          client (list :jsonrpc "2.0" :id id
                       :result '(:protocolVersion "2025-03-26"
-                                :capabilities (:tools (:listChanged t))
+                                :capabilities (:tools ())
                                 :serverInfo (:name "mevedel" :version "1"))))))
      ((equal method "ping")
       (mevedel-mcp--send client (list :jsonrpc "2.0" :id id :result '())))
      ((and (equal method "mevedel/control") (mevedel-mcp-control server))
-      (let (done)
-        (cl-labels ((complete (result &optional failure)
-                     (unless done
-                       (setq done t)
-                       (if failure (mevedel-mcp--error client id -32603 failure)
-                         (mevedel-mcp--send client (list :jsonrpc "2.0" :id id :result result))))))
-          (condition-case err
-              (funcall (mevedel-mcp-control server) params #'complete)
-            (error (complete nil (error-message-string err)))))))
+      (mevedel-mcp--pending
+       client id (lambda (complete)
+                   (funcall (mevedel-mcp-control server) params complete))))
      ((not (eq (process-get client 'mevedel-mcp-state) 'ready))
       (mevedel-mcp--error client id -32600 "Initialize the connection first"))
      ((equal method "tools/list")
@@ -153,27 +164,64 @@
      (t (mevedel-mcp--error client id -32601 "Unknown method")))))
 
 (defun mevedel-mcp--filter (client input)
-  "Consume newline-delimited JSON INPUT from CLIENT."
-  (let ((text (concat (process-get client 'mevedel-mcp-input) input)) end)
-    (while (and (process-live-p client) (setq end (string-search "\n" text)))
-      (let ((line (substring text 0 end)))
-        (setq text (substring text (1+ end)))
-        (if (> (string-bytes line) mevedel-mcp--max-message-bytes)
-            (mevedel-mcp--disconnect client)
+  "Consume newline-delimited JSON INPUT from CLIENT.
+Handling a line may wait and re-enter this filter, so unread input is stored
+on CLIENT before each line is handled.  Each input chunk is scanned once."
+  (let ((rest (process-get client 'mevedel-mcp-rest)))
+    (process-put client 'mevedel-mcp-rest
+                 (cons (if rest (concat (substring (car rest) (cdr rest)) input)
+                         input)
+                       0)))
+  (let (rest)
+    (while (and (process-live-p client)
+                (setq rest (process-get client 'mevedel-mcp-rest)))
+      (let* ((text (car rest))
+             (end (string-search "\n" text (cdr rest)))
+             (chunk (substring text (cdr rest) end))
+             (bytes (+ (process-get client 'mevedel-mcp-bytes) (string-bytes chunk)))
+             ;; Chunks of the unfinished line, newest first.
+             (partial (cons chunk (process-get client 'mevedel-mcp-partial))))
+        (process-put client 'mevedel-mcp-rest
+                     (and end (< (1+ end) (length text)) (cons text (1+ end))))
+        (cond
+         ((> bytes mevedel-mcp--max-message-bytes)
+          (mevedel-mcp--disconnect client))
+         ((not end)
+          (process-put client 'mevedel-mcp-partial partial)
+          (process-put client 'mevedel-mcp-bytes bytes))
+         (t
+          (process-put client 'mevedel-mcp-partial nil)
+          (process-put client 'mevedel-mcp-bytes 0)
           (condition-case err
-              (let ((message (json-parse-string line :object-type 'plist
-                                                :null-object :null
-                                                :false-object :json-false)))
-                (mevedel-mcp--receive
-                 (process-get client 'mevedel-mcp-server) client message))
+              (mevedel-mcp--receive
+               (process-get client 'mevedel-mcp-server) client
+               ;; gptel parses tool arguments with nil for JSON null.
+               (json-parse-string (apply #'concat (nreverse partial))
+                                  :object-type 'plist :null-object nil
+                                  :false-object :json-false))
             (json-parse-error
              (mevedel-mcp--error client :null -32700 "Invalid JSON"))
             (error
              (mevedel-mcp--error client :null -32603
-                                 (error-message-string err)))))))
-    (if (> (string-bytes text) mevedel-mcp--max-message-bytes)
-        (mevedel-mcp--disconnect client)
-      (process-put client 'mevedel-mcp-input text))))
+                                 (error-message-string err))))))))))
+
+(defun mevedel-mcp-socket-root ()
+  "Return the owner-only local directory holding every MCP server socket.
+One stable parent lets confinement mask all live servers at once."
+  (let* ((runtime (getenv "XDG_RUNTIME_DIR"))
+         (root (file-name-concat
+                (if (and runtime (file-directory-p runtime))
+                    runtime temporary-file-directory)
+                (format "mevedel-mcp-%d" (user-uid))))
+         attributes)
+    (with-file-modes #o700 (make-directory root t))
+    (setq attributes (file-attributes root 'integer))
+    ;; A shared temporary directory may hold a planted directory or symlink.
+    (unless (and (eq t (file-attribute-type attributes))
+                 (eql (user-uid) (file-attribute-user-id attributes)))
+      (error "MCP socket directory is not owned by this user: %s" root))
+    (set-file-modes root #o700)
+    root))
 
 (defun mevedel-mcp-start (tools dispatch &optional control rejected)
   "Start a private local MCP server using TOOLS and DISPATCH.
@@ -182,15 +230,19 @@ DISPATCH receives a tool name, argument plist, metadata plist and completion
 callback.  Metadata preserves the client's optional protocol extensions;
 it returns a cancellation function.  Completion takes an MCP result plist.
 Completion may be asynchronous, including after ordinary user interactions.
-The caller owns authorization and must reject obsolete request ownership.
+The caller owns authorization, must reject tools outside its roster and must
+reject obsolete request ownership.
 Optional CONTROL handles native hook events on the same private endpoint.
 It receives the event plist and a completion callback accepting the hook result
-and optional error string. Completion may be asynchronous; only its first call
-answers the hook. CONTROL is not exposed in discovery and cannot execute tools.
-Optional REJECTED receives a diagnostic when tool discovery or argument-shape
-validation rejects a call before dispatch.  It may retire a bounded workload."
+or nil and an error string.  Completion may be asynchronous; only its first
+call answers the hook.  CONTROL may return a canceller, called when the hook
+client disconnects before completion.  CONTROL is not exposed in discovery
+and cannot execute tools.
+Optional REJECTED receives a diagnostic when argument-shape validation
+rejects a call before dispatch.  It may retire a bounded workload."
   (let* ((default-directory temporary-file-directory)
-         (directory (make-temp-file "mevedel-mcp-" t))
+         (directory (make-temp-file
+                     (file-name-concat (mevedel-mcp-socket-root) "server-") t))
          (server (mevedel-mcp--create :directory directory
                                      :tools tools :dispatch dispatch :control control
                                      :rejected rejected)))
@@ -207,7 +259,7 @@ validation rejects a call before dispatch.  It may retire a bounded workload."
                                (mevedel-mcp--disconnect client)))
                  :log (lambda (_listener client _message)
                         (process-put client 'mevedel-mcp-server server)
-                        (process-put client 'mevedel-mcp-input "")
+                        (process-put client 'mevedel-mcp-bytes 0)
                         (process-put client 'mevedel-mcp-calls
                                      (make-hash-table :test #'equal))
                         (push client (mevedel-mcp-clients server)))))
@@ -228,16 +280,10 @@ validation rejects a call before dispatch.  It may retire a bounded workload."
   (let ((python (or (executable-find "python3")
                     (error "'python3' is required for the MCP bridge"))))
     `((name . "mevedel") (command . ,python)
-      (args . ,(vector (mevedel-mcp-bridge-file)
+      ;; Isolated mode ignores user site packages and PYTHON* variables.
+      (args . ,(vector "-I" (mevedel-mcp-bridge-file)
                        (file-name-concat (mevedel-mcp-directory server) "socket")))
       (env . []))))
-
-(defun mevedel-mcp-tools-changed (server)
-  "Notify initialized clients that SERVER's tool scope changed."
-  (dolist (client (mevedel-mcp-clients server))
-    (when (eq (process-get client 'mevedel-mcp-state) 'ready)
-      (mevedel-mcp--send
-       client '(:jsonrpc "2.0" :method "notifications/tools/list_changed")))))
 
 (defun mevedel-mcp-hook-command (server)
   "Return the shell command for native hook events on SERVER's private scope."

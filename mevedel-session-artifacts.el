@@ -72,6 +72,10 @@
   "mevedel-execution-target")
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
+;; `mevedel-file-state'
+(declare-function mevedel-session-forget-read-ranges "mevedel-file-state" (session))
+(autoload 'mevedel-session-forget-read-ranges "mevedel-file-state")
+
 ;; `mevedel-journal-capture'
 (declare-function mevedel-journal-capture-checkpoint "mevedel-journal-capture" (session buffer))
 (declare-function mevedel-journal-capture-seal-and-schedule
@@ -3086,6 +3090,7 @@ nil if SESSION is not yet materialized."
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'new-published
                  :new-segment (mevedel-session-current-segment session)))
+              (mevedel-session-forget-read-ranges session)
               (when telemetry-span
                 (mevedel-telemetry-finish
                  telemetry-span :outcome 'success))

@@ -937,7 +937,7 @@ FROZEN-CONTEXT is the materialized gptel context plist."
   (unless (and mevedel--session
                (mevedel-session-workspace mevedel--session))
     (user-error "No mevedel session in this buffer"))
-  (mevedel-engine-assert-local-history mevedel--session "/btw" gptel-backend)
+  (mevedel-engine-assert-local-history mevedel--session "/btw" gptel-backend t)
   (when (and mevedel--current-request
              (mevedel-request-directive-uuid mevedel--current-request))
     (user-error "/btw is unavailable during directive requests"))

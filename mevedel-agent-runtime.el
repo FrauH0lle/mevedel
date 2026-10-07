@@ -578,6 +578,11 @@ payload serves only request inspection and a decoding memo is rebuilt on
 demand, yet together they kept as much Lisp data alive as the transcript
 itself, making every later garbage collection slower.  A continuation
 builds a fresh request."
+  (when-let* ((context (mevedel-agent-invocation-runtime-context invocation)))
+    (when-let* ((start (plist-get context :mevedel-agent-prompt-start)))
+      (set-marker start nil))
+    (dolist (key '(:mevedel-agent-prompt :mevedel-agent-prompt-start))
+      (when (plist-get context key) (plist-put context key nil))))
   (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
@@ -896,11 +901,13 @@ plist carrying either `:turn' and `:start-hook-audits' or `:error'."
     (invocation buffer description prompt context-snapshot retained-p
                 &optional hook-audits)
   "Append PROMPT and optional CONTEXT-SNAPSHOT to INVOCATION's BUFFER.
-HOOK-AUDITS are hidden transcript records associated with this user turn."
+HOOK-AUDITS are hidden transcript records associated with this user turn.
+Return a marker at the start of the turn's Agent Task heading."
   (with-current-buffer buffer
     (let ((inhibit-read-only t)
           (start (point-max))
-          (was-modified (buffer-modified-p)))
+          (was-modified (buffer-modified-p))
+          heading)
       (goto-char (point-max))
       (when (and (not retained-p)
                  (stringp context-snapshot)
@@ -908,6 +915,7 @@ HOOK-AUDITS are hidden transcript records associated with this user turn."
         (insert context-snapshot)
         (unless (bolp) (insert "\n")))
       (unless (bobp) (insert "\n"))
+      (setq heading (point-marker))
       (insert (format "* Agent Task: %s\n" (or description "")))
       (unless retained-p
         (insert (format ":PROPERTIES:\n:%s: %s\n:END:\n"
@@ -925,7 +933,8 @@ HOOK-AUDITS are hidden transcript records associated with this user turn."
                 (set-buffer-modified-p was-modified)
                 (error "Retained agent conversation could not be persisted"))
             (mevedel-agent-runtime-abandon-persistence
-             invocation)))))))
+             invocation))))
+      heading)))
 
 (cl-defun mevedel-agent-runtime-dispatch
     (agent description prompt
@@ -1034,13 +1043,17 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
               (when start-hook-audits
                 (setf (mevedel-agent-invocation-hook-audits invocation)
                       start-hook-audits))
-              (mevedel-agent-runtime--insert-prompt
-               invocation buffer description (plist-get turn :prompt)
-               context-snapshot retained-p (plist-get turn :audits))
+              (setf (mevedel-engine-info invocation)
+                    (plist-put (mevedel-engine-info invocation)
+                               :mevedel-agent-prompt-start
+                               (mevedel-agent-runtime--insert-prompt
+                                invocation buffer description (plist-get turn :prompt)
+                                context-snapshot retained-p (plist-get turn :audits))))
               (setf (mevedel-engine-info invocation)
                     (plist-put (mevedel-engine-info invocation) :mevedel-agent-prompt
-                               (concat context-snapshot (when context-snapshot "\n\n")
-                                       (plist-get turn :prompt))))
+                               (if (and context-snapshot (not (string-empty-p context-snapshot)))
+                                   (concat context-snapshot "\n\n" (plist-get turn :prompt))
+                                 (plist-get turn :prompt))))
               (when (and pending-hook-context on-hook-context)
                 (funcall on-hook-context nil))
               (when (and on-settle
@@ -1081,11 +1094,14 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                         :error-details (error-message-string err))))
              (when (or (mevedel-agent-invocation-runtime-fsm invocation)
                        (mevedel-agent-invocation-runtime-cancel invocation))
+               ;; This handler owns settlement.  Mark it first so the abort a
+               ;; cancel delivers is accepted as a no-op, instead of being
+               ;; rejected as unpublished and left on a provider retry timer.
+               (setf (mevedel-agent-invocation-runtime-settled-p invocation) t)
                (when-let* ((cancel (mevedel-agent-invocation-runtime-cancel invocation)))
                  (funcall cancel))
                (mevedel-agent-runtime--finalize invocation 'error)
-               (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
-                     (mevedel-agent-invocation-runtime-fsm invocation) nil
+               (setf (mevedel-agent-invocation-runtime-fsm invocation) nil
                      (mevedel-agent-invocation-runtime-cancel invocation) nil))
              (unless retained-p
                (mevedel-agent-runtime-abandon-persistence invocation)

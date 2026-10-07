@@ -304,6 +304,14 @@ the range arguments and are stored to support read deduplication."
     (puthash key entry table)
     entry))
 
+(defun mevedel-session-forget-read-ranges (session)
+  "Stop SESSION's earlier Reads from counting as duplicates.
+Compaction removes their contents from the model's history, so a repeated
+Read must return the file again.  Read turns remain for compaction notices."
+  (maphash (lambda (_path entry)
+             (setf (mevedel-file-interaction-read-offset entry) 'compacted))
+           (mevedel-session-touched-files session)))
+
 (defun mevedel-session--session-directory-for (session path)
   "Return the mevedel session directory containing PATH, or nil.
 

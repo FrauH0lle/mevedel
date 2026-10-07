@@ -16,7 +16,7 @@
 
 ;; `mevedel-engine'
 (declare-function mevedel-engine-assert-local-history "mevedel-engine"
-                  (session operation &optional backend))
+                  (session operation &optional backend root-only))
 (autoload 'mevedel-engine-assert-local-history "mevedel-engine")
 
 ;; `mevedel-execution'
