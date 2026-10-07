@@ -320,11 +320,15 @@
                        root "a-still-running")
                       (test-mevedel-execution-remote-client--stage
                        "owner-marker-a-still-running")
+                      ;; The live mutation is what holds the granted
+                      ;; transfer back.  Once it stops, a transfer poll timer
+                      ;; can save, release, and replace BUFFER inside any
+                      ;; wait, so the owner's last words go in first.
+                      (with-current-buffer buffer
+                        (goto-char (point-max))
+                        (insert "Owner settled before transfer.\n"))
                       (test-mevedel-execution-remote-client--stop-long-mutation
                        session execution-id))
-                    (with-current-buffer buffer
-                      (goto-char (point-max))
-                      (insert "Owner settled before transfer.\n"))
                     (let ((state nil))
                       (with-timeout
                           (30 (ert-fail "Owner never released control"))
@@ -401,8 +405,11 @@
               (set-buffer-modified-p nil))
             (kill-buffer buffer))
           (let ((mevedel-session-durability--client-id client-id))
-            (when (and (mevedel-session-save-path session)
-                       (mevedel-session-durability-lease-owned-p session))
+            ;; Release checks the target's head itself.  One failed
+            ;; renewal binds this session `lost' while its record stays
+            ;; live there; skipping the release on that belief leaves the
+            ;; journey waiting out a 600-second lease.
+            (when (mevedel-session-save-path session)
               (ignore-errors
                 (mevedel-session-durability-lease-release
                  (mevedel-session-save-path session) session))))))))))
@@ -552,8 +559,7 @@
             (kill-buffer buffer))
           (let ((mevedel-session-durability--client-id client-id))
             (when (and (not crashed-p)
-                       (mevedel-session-save-path session)
-                       (mevedel-session-durability-lease-owned-p session))
+                       (mevedel-session-save-path session))
               (ignore-errors
                 (mevedel-session-durability-lease-release
                  (mevedel-session-save-path session) session)))))))))

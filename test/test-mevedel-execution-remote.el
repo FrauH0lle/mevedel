@@ -1674,7 +1674,11 @@ answer, so the known-dead clients are confirmed away."
                        (mevedel-session-save-path session)
                        "acceptance-reclaim" session)))
         (when (> (float-time) deadline)
-          (ert-fail "Journey never reclaimed its session lease"))
+          (ert-fail
+           (format "Journey never reclaimed its session lease from %S"
+                   (mevedel-session-durability--lease-head
+                    (mevedel-session-durability--lease-path
+                     (mevedel-session-save-path session))))))
         (accept-process-output nil 0.2)))))
 
 (defun test-mevedel-execution-remote--run-transfer-clients
