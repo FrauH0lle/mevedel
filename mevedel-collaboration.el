@@ -105,6 +105,11 @@
 (declare-function mevedel-collaboration-share-present
                   "mevedel-collaboration-share" (room))
 
+;; `mevedel-collaboration-recovery'
+(declare-function mevedel-collaboration-recovery-send
+                  "mevedel-collaboration-recovery" (room peer))
+(autoload 'mevedel-collaboration-recovery-send "mevedel-collaboration-recovery")
+
 ;; `mevedel-collaboration-task'
 (declare-function mevedel-collaboration--publish-tasks
                   "mevedel-collaboration-task" (room))
@@ -321,7 +326,11 @@ entry that is already gone."
     (condition-case nil
         (progn
           (mevedel-collaboration--publish-queue room)
-          (mevedel-collaboration--publish-status room))
+          (mevedel-collaboration--publish-status room)
+          (maphash (lambda (peer guest)
+                     (when (plist-get guest :ready)
+                       (mevedel-collaboration-recovery-send room peer)))
+                   (plist-get room :guests)))
       (error (mevedel-collaboration--observer-failure room)))))
 
 (defconst mevedel-collaboration-needs-host-message
@@ -715,6 +724,10 @@ room, and follows a rename, including an automatic title."
     (unless (equal status (plist-get room :status))
       (setq room (plist-put room :status status))
       (mevedel-collaboration--broadcast room status)
+      (maphash (lambda (peer guest)
+                 (when (plist-get guest :ready)
+                   (mevedel-collaboration-recovery-send room peer)))
+               (plist-get room :guests))
       (when (and (eq t (plist-get old :busy))
                  (eq :json-false (plist-get status :busy)))
         (mevedel-collaboration--transport-control
@@ -849,6 +862,7 @@ returning the live room."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
     (cl-return-from mevedel-collaboration--start room))
   (require 'mevedel-collaboration-guest)
+  (require 'mevedel-collaboration-task)
   (pcase-let* ((`(,ws-origin . ,web-origin)
                 (mevedel-collaboration--relay-origins))
                (room-id (mevedel-collaboration--base64url

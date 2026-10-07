@@ -1,5 +1,10 @@
 # Handoff: Claude subscription sessions through ACP (2026-10-06)
 
+Latest whole-branch review: [review and fix report](claude-code-engine-review-2026-10-07c.md).
+Fixes are on `review/claude-code-engine` in the sibling `claude-code-engine-review`
+worktree; the source feature worktree is unchanged. This report covers later
+loading, authentication and recovery commits as well as the engine integration.
+
 Status: implemented and verified on `feature/claude-code-engine`. See the
 [acceptance index](claude-code-engine-acceptance.md) for A01–A21, final tests and
 review results, and the [evidence log](claude-code-engine-progress.md) for
@@ -10,8 +15,10 @@ zero unexpected results, 24 conditional skips; 229 production files compile
 without warnings. The [review and fix report](claude-code-engine-review-2026-10-07.md)
 records all resolved findings, follow-up reviews, performance measurements,
 and final evidence. Live subscription checks used
-the existing Enterprise login, not a separate Pro/Max account. Session sidecars
-now require v0.5.9; older records are rejected without migration, not deleted.
+the existing Enterprise login, not a separate Pro/Max account. Current session
+sidecars require v0.5.10. The runtime rejects older records;
+the explicitly requested standalone converter copies v0.5.6/v0.5.9 records
+into the current format without changing originals.
 The strict Goal record additionally requires `:tokens-incomplete-p`; earlier
 development Goals missing it are dropped on normal restore. The standalone
 v0.5.6 converter preserves Goals by adding this field. No features were removed.

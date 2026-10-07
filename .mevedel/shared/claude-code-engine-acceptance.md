@@ -6,6 +6,13 @@ Worktree: `feature/claude-code-engine`, based on
 and verification evidence. The [progress log](claude-code-engine-progress.md)
 records individual runs, including failures and their resolutions.
 
+## Latest whole-branch review
+
+The [third review and fix report](claude-code-engine-review-2026-10-07c.md)
+covers the full branch through `2b4e30f` and fixes on
+`review/claude-code-engine`. It supersedes the aggregate validation counts below;
+prior live-model evidence remains historical, with its original limits.
+
 ## Review-fix verification (2026-10-07)
 
 The [review and fix report](claude-code-engine-review-2026-10-07.md) supersedes
@@ -79,10 +86,10 @@ have explicit unavailable paths. Cross-engine summary continuation and explicit
 history recovery are supported. Provider history stays local to the Claude
 installation. Unknown usage is not a zero-token estimate or subscription quota.
 
-The persisted session schema is now `v0.5.9`. The runtime rejects older
+The current persisted session schema is `v0.5.10`. The runtime rejects older
 sidecars and has no dual-format reader. At the user's explicit request, the
 standalone `scripts/migrate-session-v0.5.6.el` converter preserves selected
-pre-Claude sessions by converting a separate copy, including every retained
+v0.5.6/v0.5.9 sessions by converting a separate copy, including every retained
 publication sidecar and its manifest checksums. Older formats such as `v0.5.0`
 remain unsupported; the original files are not deleted.
 

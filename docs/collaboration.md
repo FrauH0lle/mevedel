@@ -73,6 +73,8 @@ than through the command allowlist:
   changes host-wide provider credentials; cancelling discards the challenge.
   Model/preset/history/input changes require idle turns and current session
   mutation authority. Preset replacement preserves permission and sandbox modes.
+  Choices refresh when session status or retained input changes; unchanged
+  updates preserve an in-progress login code and the composer draft.
 
 Owner authority is never granted alone: the owner link contains the write
 token, so a peer claiming the owner token without it is a forgery and is
@@ -323,8 +325,9 @@ startup has finished when it is installed from the init file, so the relay
 settings that follow it apply. The restarted lobby dials the same relay room,
 its links keep working, and browser tabs still within their reconnect window
 rejoin on their own. A lobby that cannot restart is reported as a warning and
-stays recorded for the next start; `/collab lobby stop` in that workspace
-removes the record. A recorded workspace whose directory no longer exists is
+stays recorded for the next start. Automatic restore never prompts, and a
+failed workspace probe does not prevent other lobbies from restarting.
+`/collab lobby stop` in that workspace removes the record. A recorded workspace whose directory no longer exists is
 forgotten with a warning.
 
 `/collab lobby stop` stops the lobby and removes the record, so it stays

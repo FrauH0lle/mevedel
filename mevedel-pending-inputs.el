@@ -1517,20 +1517,22 @@ first character of a real draft."
          (signal (car err) (cdr err)))))))
 
 (defun mevedel-pending-inputs-make-follow-up ()
-  "Convert the selected steering entry to a follow-up at the target tail."
+  "Convert steering or requeue a failed follow-up at the follow-up tail."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (item (mevedel-pending-inputs--selected))
          (entry (plist-get item :entry))
          (id (plist-get item :id)))
-    (unless (eq (plist-get item :category) 'steering)
+    (unless (or (eq (plist-get item :category) 'steering)
+                (eq (plist-get entry :state) 'failed-turn))
       (user-error "Pending input is already a follow-up"))
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (when-let* ((submission (plist-get entry :submission)))
       (mevedel-prompt-submission-restore submission))
     (let ((replacement
-           (list
+           (append
+            (list
             :id id
             :category 'follow-up
             :input (mevedel-pending-inputs--copy-input entry)
@@ -1542,9 +1544,19 @@ first character of a real draft."
               (mevedel-goal-id goal))
             :queued-at-turn
             (or (mevedel-session-turn-count session) 0)
-            :state 'pending)))
-      (mevedel-pending-inputs--move-between
-       session 'steering 'follow-up id replacement)
+            :state 'pending)
+            ;; Keep guest attribution, attachment ownership, directive scope,
+            ;; and skill restrictions when retrying retained input.
+            (cl-loop for key in mevedel-recovery--input-keys
+                     unless (memq key '(:id :category :input :dropped-file-grants
+                                        :queued-at-time :queued-at-goal-id
+                                        :queued-at-turn :state :request-id :blocked))
+                     when (plist-member entry key)
+                     append (list key (copy-tree (plist-get entry key)))))))
+      (mevedel-pending-inputs--set-queues
+       session 'steering (remq entry (mevedel-session-pending-steering session))
+       'follow-up (append (remq entry (mevedel-session-pending-follow-ups session))
+                          (list replacement)))
       (mevedel-pending-inputs--refresh id))))
 
 (defun mevedel-pending-inputs-mark-delete ()
@@ -1638,7 +1650,7 @@ first character of a real draft."
       (message "mevedel: cleared pending input"))))
 
 (defun mevedel-pending-inputs-resume-after-failure ()
-  "Clear failure pause after all failed-turn steering is resolved."
+  "Clear failure pause after all failed-turn input is resolved."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
@@ -1646,11 +1658,12 @@ first character of a real draft."
           (cl-remove-if-not
            (lambda (entry)
              (eq (plist-get entry :state) 'failed-turn))
-           (mevedel-session-pending-steering session))))
+           (append (mevedel-session-pending-steering session)
+                   (mevedel-session-pending-follow-ups session)))))
     (unless (mevedel-session-pending-input-failure-paused session)
       (user-error "Pending input is not paused after a turn failure"))
     (when failed
-      (user-error "Resolve %d failed-turn steering message%s first"
+      (user-error "Resolve %d failed-turn message%s first"
                   (length failed) (if (= 1 (length failed)) "" "s")))
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (mevedel-session-set-pending-input-failure-paused session nil)
@@ -1746,7 +1759,7 @@ cockpit whose banner and session disagree."
            ("M-<down>" "Move down within category"
             mevedel-pending-inputs-move-down)
            ("s" "Convert to steering" mevedel-pending-inputs-make-steering)
-           ("f" "Convert to follow-up" mevedel-pending-inputs-make-follow-up)
+           ("f" "Convert or requeue as follow-up" mevedel-pending-inputs-make-follow-up)
            ("d" "Mark for deletion" mevedel-pending-inputs-mark-delete)
            ("u" "Unmark deletion" mevedel-pending-inputs-unmark)
            ("x" "Delete marked pending input"

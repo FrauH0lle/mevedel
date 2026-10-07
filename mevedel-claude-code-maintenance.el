@@ -118,8 +118,14 @@ Return current state.  Concurrent sessions and hosts share an installation lock.
              (configured-cli mevedel-claude-code-executable)
              (configured-adapter mevedel-claude-code-adapter-executable)
              process timer buffer connection stopped candidate adapter stage)
-        (unless (file-locked-p lock)
-          (lock-file lock)
+        (when (let ((create-lockfiles t))
+                (condition-case nil
+                    (unless (file-locked-p lock)
+                      (cl-letf (((symbol-function 'ask-user-about-lock)
+                                 (lambda (&rest _) (error "Runtime update is locked"))))
+                        (lock-file lock))
+                      (eq t (file-locked-p lock)))
+                  (error nil)))
           (cl-labels
               ((clean ()
                  (when timer (cancel-timer timer))

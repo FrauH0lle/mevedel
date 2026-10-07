@@ -704,6 +704,28 @@ running lobby touches no real state."
       (should (equal (list broken root)
                      (mevedel-collaboration-lobby--intended)))))
 
+  :doc "an unavailable remote root cannot prompt or prevent later lobbies from restarting"
+  (mevedel-collaboration-lobby-test--with-root root
+    (let ((remote "/ssh:unavailable:/project/")
+          started captured
+          (directory-p (symbol-function 'file-directory-p)))
+      (mevedel-collaboration-lobby--set-intended remote t)
+      (mevedel-collaboration-lobby--set-intended root t)
+      (cl-letf (((symbol-function 'file-directory-p)
+                 (lambda (directory)
+                   (if (equal directory remote)
+                       (progn
+                         (should inhibit-interaction)
+                         (signal 'inhibited-interaction '("Remote authentication needed")))
+                     (funcall directory-p directory))))
+                ((symbol-function 'mevedel-collaboration-lobby-start)
+                 (lambda (directory) (push directory started))))
+        (mevedel-test--with-captured-diagnostics captured
+          (mevedel-collaboration-lobby-restore)))
+      (should (equal (list root) started))
+      (should (string-match-p "not restarted" captured))
+      (should (equal (list remote root) (mevedel-collaboration-lobby--intended)))))
+
   :doc "forgets a lobby whose directory is gone"
   (mevedel-collaboration-lobby-test--with-root root
     (let ((gone (file-name-as-directory (file-name-concat root "gone")))

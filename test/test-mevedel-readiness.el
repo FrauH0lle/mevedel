@@ -95,5 +95,50 @@
             (should-not (mevedel-recovery-blocker session))
             (should (mevedel-recovery-blocker other))))))))
 
+(mevedel-deftest mevedel-readiness-runtime-changed/fanout ()
+  (let* ((gptel--known-backends nil)
+	 (backend (mevedel-claude-code-register))
+	 buffers sessions saves notifications)
+    (unwind-protect
+	(progn
+	  (dotimes (_ 3)
+	    (let ((buffer (generate-new-buffer " *readiness-root*")))
+	      (push buffer buffers)
+	      (with-current-buffer buffer
+		(let ((session (mevedel-session--create :root-buffer buffer)))
+		  (push session sessions)
+		  (setq-local mevedel--session session gptel-backend backend
+			      mevedel-readiness--claude '(:state ready :time 0))
+		  (mevedel-recovery-report session "runtime" 'dependency "Install failed" nil)
+		  (mevedel-recovery-report session "authentication" 'authentication "Login required" t)))))
+	  (cl-letf (((symbol-function 'mevedel-recovery-save)
+		     (lambda (session) (push session saves)))
+		    ((symbol-function 'mevedel-collaboration-notify-request-changed)
+		     (lambda (buffer) (push buffer notifications))))
+	    (mevedel-readiness-runtime-changed '(:status "ready")))
+	  (should (= 3 (length saves)))
+	  (should (= 3 (length notifications)))
+	  (dolist (session sessions)
+	    (should (= 1 (cl-count session saves)))
+	    (should (equal "authentication" (plist-get (mevedel-recovery-blocker session) :id)))
+	    (should (= 1 (length (mevedel-session-recovery-issues session))))
+	    (should-not (buffer-local-value 'mevedel-readiness--claude
+					    (mevedel-session-root-buffer session)))))
+      (mapc #'kill-buffer buffers))))
+
+(mevedel-deftest mevedel-readiness-runtime-changed/draft ()
+  (mevedel-view-test--with-buffers
+    (let* ((gptel--known-backends nil)
+           (session (mevedel-session--create :root-buffer data-buf)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session gptel-backend (mevedel-claude-code-register)))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> retained draft\nsecond line" 4))
+      (cl-letf (((symbol-function 'mevedel-view--schedule-late-follow-up-drain) #'ignore))
+        (mevedel-readiness-runtime-changed '(:status "failed" :message "Update failed"))
+        (mevedel-readiness-runtime-changed '(:status "ready")))
+      (with-current-buffer view-buf
+        (should (equal "> retained draft\nsecond line" (mevedel-view--input-text)))))))
+
 (provide 'test-mevedel-readiness)
 ;;; test-mevedel-readiness.el ends here

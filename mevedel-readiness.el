@@ -24,52 +24,69 @@
 
 (defun mevedel-readiness-changed (backend state)
   "Revalidate sessions using BACKEND after safe authentication STATE changes."
-  (dolist (buffer (buffer-list))
-    (with-current-buffer buffer
-      (when-let* ((session (bound-and-true-p mevedel--session))
-                  ((eq buffer (mevedel-session-root-buffer session)))
-                  ((if (plist-get state :checked)
-                       (eq buffer (plist-get state :checked))
-                     (or (eq backend gptel-backend)
-                         (eq backend mevedel-auth--waiting-backend)
-                         (condition-case nil
-                             (equal (mevedel-auth--key backend)
-                                    (mevedel-auth--key (or mevedel-auth--waiting-backend gptel-backend)))
-                           (user-error nil))))))
-        (if (equal "ready" (plist-get state :status))
-            (progn
-              (setq mevedel-auth--waiting-backend nil)
-              (mevedel-recovery-clear session "authentication")
-              (mevedel-recovery-clear session "input")
-              (when (equal "authentication"
-                           (plist-get (cl-find "request" (mevedel-session-recovery-issues session)
-                                               :key (lambda (row) (plist-get row :id)) :test #'equal) :category))
-                (mevedel-recovery-clear session "request"))
-              (when (and (mevedel-claude-code-backend-p backend)
-                         (not (plist-get state :checked)))
-                (mevedel-readiness-stop))
-              (when (and (boundp 'mevedel--view-buffer) (buffer-live-p mevedel--view-buffer))
-                (with-current-buffer mevedel--view-buffer
-                  (mevedel-view--render-status buffer)
-                  (mevedel-view--schedule-late-follow-up-drain))))
-          (mevedel-recovery-report session "authentication" (or (plist-get state :category) 'authentication)
-                                   (or (plist-get state :message) "Provider login was cancelled") t))
-        (mevedel-recovery-save session)
-        (when (fboundp 'mevedel-collaboration-notify-request-changed)
-          (mevedel-collaboration-notify-request-changed buffer))))))
+  (dolist (buffer (if (plist-get state :checked)
+                      (list (plist-get state :checked))
+                    (buffer-list)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+	(when-let* ((session (bound-and-true-p mevedel--session))
+                    ((eq buffer (mevedel-session-root-buffer session)))
+                    ((if (plist-get state :checked)
+			 (eq buffer (plist-get state :checked))
+                       (or (eq backend gptel-backend)
+                           (eq backend mevedel-auth--waiting-backend)
+                           (condition-case nil
+                               (equal (mevedel-auth--key backend)
+                                      (mevedel-auth--key (or mevedel-auth--waiting-backend gptel-backend)))
+                             (user-error nil))))))
+          (if (equal "ready" (plist-get state :status))
+              (progn
+		(setq mevedel-auth--waiting-backend nil)
+		(mevedel-recovery-clear session "authentication")
+		(mevedel-recovery-clear session "input")
+		(when (equal "authentication"
+                             (plist-get (cl-find "request" (mevedel-session-recovery-issues session)
+						 :key (lambda (row) (plist-get row :id)) :test #'equal) :category))
+                  (mevedel-recovery-clear session "request"))
+		(when (and (mevedel-claude-code-backend-p backend)
+                           (not (plist-get state :checked)))
+                  (mevedel-readiness-stop))
+		(when (and (boundp 'mevedel--view-buffer) (buffer-live-p mevedel--view-buffer))
+                  (with-current-buffer mevedel--view-buffer
+                    (mevedel-view--render-status buffer)
+                    (mevedel-view--schedule-late-follow-up-drain))))
+            (mevedel-recovery-report session "authentication" (or (plist-get state :category) 'authentication)
+                                     (or (plist-get state :message) "Provider login was cancelled") t))
+          (mevedel-recovery-save session)
+          (when (fboundp 'mevedel-collaboration-notify-request-changed)
+            (mevedel-collaboration-notify-request-changed buffer)))))))
 
 (defun mevedel-readiness-runtime-changed (state)
-  "Publish safe installation STATE and wake previously unsent work."
+  "Publish safe installation STATE and wake previously unsent work.
+An installed runtime does not prove that the provider is authenticated."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when-let* ((session (bound-and-true-p mevedel--session))
                   ((eq buffer (mevedel-session-root-buffer session)))
                   ((mevedel-claude-code-backend-p gptel-backend)))
         (if (equal (plist-get state :status) "ready")
-            (progn (mevedel-recovery-clear session "runtime")
-                   (mevedel-readiness-changed gptel-backend '(:status "ready")))
+            (progn
+              (mevedel-recovery-clear session "runtime")
+              (mevedel-readiness-stop)
+              ;; Dependency failures are rechecked before the input is committed.
+              (dolist (issue (mevedel-session-recovery-issues session))
+                (when (equal "dependency" (plist-get issue :category))
+                  (mevedel-recovery-clear session (plist-get issue :id))
+                  (mevedel-recovery-clear session "input")))
+              (when (buffer-live-p mevedel--view-buffer)
+                (with-current-buffer mevedel--view-buffer
+                  (mevedel-view--render-status buffer)
+                  (mevedel-view--schedule-late-follow-up-drain)))
+              (when (fboundp 'mevedel-collaboration-notify-request-changed)
+                (mevedel-collaboration-notify-request-changed buffer)))
           (mevedel-recovery-report session "runtime" 'dependency
-                                   (plist-get state :message) nil)))))
+                                   (plist-get state :message) nil))
+        (mevedel-recovery-save session))))
   nil)
 
 (defun mevedel-readiness-assert (session)

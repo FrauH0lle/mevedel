@@ -120,5 +120,64 @@
     (make-directory gptel--openai-oauth-token-file)
     (should-not (mevedel-auth-codex-ready-p backend))))
 
+(mevedel-deftest mevedel-auth--http ()
+  ,test
+  (test)
+  :doc "a missing response buffer fails immediately and retires its timeout"
+  (let (result timer)
+    (cl-letf (((symbol-function 'url-retrieve) (lambda (&rest _) nil))
+	      ((symbol-function 'mevedel-transport-run-at-time)
+	       (lambda (seconds function &rest args)
+		 (setq timer (apply #'run-at-time seconds nil function args)))))
+      (unwind-protect
+	  (progn
+	    (funcall (mevedel-auth--http "https://example.invalid" nil nil
+					 (lambda (payload code) (setq result (list payload code)))))
+	    (should (equal result '(nil 0)))
+	    (should-not (memq timer timer-list)))
+	(when timer (cancel-timer timer)))))
+  :doc "a late cancelled HTTP callback cleans its response without publishing"
+  (let (callback cancel results response)
+    (unwind-protect
+	(cl-letf (((symbol-function 'url-retrieve)
+		   (lambda (_url complete &rest _)
+		     (setq callback complete response (generate-new-buffer " *auth-http*")))))
+	  (setq cancel (mevedel-auth--http "https://example.invalid" nil nil
+					   (lambda (&rest result) (push result results))))
+	  (funcall cancel)
+	  (should-not (buffer-live-p response))
+	  (setq response (generate-new-buffer " *auth-http-late*"))
+	  (with-current-buffer response (funcall callback nil))
+	  (should-not (buffer-live-p response))
+	  (should-not results))
+      (when cancel (funcall cancel))
+      (when (buffer-live-p response) (kill-buffer response)))))
+
+(mevedel-deftest mevedel-auth--lock (:quiet t)
+  ,test
+  (test)
+  :doc "credential path errors terminate login so the owner can retry"
+  (let* ((directory (make-temp-file "auth-lock-" t))
+         (gptel--openai-oauth-token-file (file-name-concat directory "blocked" "token"))
+         (gptel--known-backends nil)
+         (backend (gptel-make-openai-oauth "Lock test"))
+         (mevedel-auth--operations (make-hash-table :test #'equal))
+         (mevedel-auth-changed-hook nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat directory "blocked") (insert "Not a directory"))
+          (should-error (mevedel-auth-start backend) :type 'user-error)
+          (should (equal "failed" (plist-get (mevedel-auth-state backend) :status)))
+          (should-error (mevedel-auth-start backend) :type 'user-error))
+      (mevedel-auth-stop-all)
+      (delete-directory directory t)))
+  :doc "credential renewal owns its lock even with editor file locks disabled"
+  (mevedel-auth-test--with-provider 200
+                                    (let ((create-lockfiles nil))
+                                      (mevedel-auth-start backend)
+                                      (should (eq t (file-locked-p (concat gptel--openai-oauth-token-file ".mevedel-auth"))))
+                                      (mevedel-auth-cancel backend)
+                                      (should-not (file-locked-p (concat gptel--openai-oauth-token-file ".mevedel-auth"))))))
+
 (provide 'test-mevedel-auth)
 ;;; test-mevedel-auth.el ends here

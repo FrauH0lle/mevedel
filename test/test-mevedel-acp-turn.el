@@ -11,6 +11,7 @@
           "mevedel-engine-test-support"))
 (require 'mevedel-acp-turn)
 (require 'mevedel-claude-code)
+(require 'mevedel-view-render)
 
 (defconst mevedel-acp-turn-test--peer
   (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
@@ -353,6 +354,141 @@
               (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
         (advice-remove 'mevedel-mcp-start 'mevedel-acp-turn-test--capture)
         (advice-remove 'mevedel-acp-prompt 'mevedel-acp-turn-test--capture)))))
+
+(mevedel-deftest mevedel-acp-turn-start/tool-hooks (:quiet t)
+  ,test
+  (test)
+
+  :doc "post-tool stop prevents subsequent calls and preserves completed evidence"
+  (mevedel-engine-test--with-session
+    (let* ((path (file-name-concat root "source.txt"))
+           (calls 0)
+           (gptel-pre-tool-call-functions (list (lambda (_) (cl-incf calls) nil)))
+           (gptel-post-tool-call-functions
+            (list (lambda (_) '(:stop t :stop-reason "Stop after evidence")))))
+      (write-region "completed evidence" nil path nil 'silent)
+      (mevedel-acp-turn-start
+       request
+       (lambda (mcp _hook)
+         (list :command (executable-find "python3") :args (list mevedel-acp-turn-test--peer)
+               :cwd root :mcp mcp :tool-id-field :claudecode/toolUseId
+               :meta `((toolBatches . [[((name . "Read") (args . ((file_path . ,path))) (id . "first"))
+                                       ((name . "Read") (args . ((file_path . ,path))) (id . "second"))]]))))
+       [((type . "text") (text . "Read twice"))] (list (mevedel-tool-ensure "Read")))
+      (with-timeout (5 (ert-fail "Hook stop did not settle"))
+        (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01)))
+      (should (= 1 calls))
+      (should (string-search "completed evidence" (buffer-string)))
+      (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))))
+
+  :doc "post-tool replacement and blocking withhold original text and media from MCP and transcript"
+  (dolist (decision '((:result "redacted") (:block "withheld")))
+    (mevedel-engine-test--with-session
+      (let* ((path (file-name-concat root "source.txt"))
+             (tool (copy-mevedel-tool (mevedel-tool-ensure "Read")))
+             observed
+             (gptel-post-tool-call-functions
+              (list (lambda (_) decision)
+                    (lambda (call) (setq observed (plist-get call :result)) '(:block nil))))
+             payload
+             (capture (lambda (_client line)
+                        (let ((message (json-parse-string line :object-type 'plist
+                                                          :false-object :json-false)))
+                          (when (plist-get (plist-get message :result) :content)
+                            (setq payload (plist-get message :result)))))))
+        (write-region "PRIVATE EVIDENCE" nil path nil 'silent)
+        (setf (mevedel-tool-async-p tool) nil
+              (mevedel-tool-handler tool)
+              (lambda (_args)
+                '(:result "PRIVATE EVIDENCE" :media ((:mime "image/png" :data "QUJD")))))
+        (advice-add 'mevedel-mcp--write :before capture)
+        (unwind-protect
+            (progn
+              (mevedel-acp-turn-start
+               request
+               (lambda (mcp _hook)
+                 (list :command (executable-find "python3") :args (list mevedel-acp-turn-test--peer)
+                       :cwd root :mcp mcp :tool-id-field :fixtureToolId))
+               (vector `((type . "text") (text . ,(concat "read:" path))))
+               (list tool))
+              (with-timeout (5 (ert-fail "Hook replacement did not settle"))
+                (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01)))
+              (let ((expected (or (plist-get decision :result) (plist-get decision :block))))
+                (should (equal expected (plist-get (aref (plist-get payload :content) 0) :text)))
+                (should (= 1 (length (plist-get payload :content))))
+                (should (equal expected observed))
+                (should (eq (if (plist-get decision :block) t :json-false) (plist-get payload :isError)))
+                (should (string-search expected (buffer-string)))
+                (should-not (string-search "PRIVATE EVIDENCE" (buffer-string)))))
+          (advice-remove 'mevedel-mcp--write capture)))))
+
+  :doc "pre-tool arguments reach validation and later observers, while synthetic results skip execution"
+  (dolist (synthetic '(nil t))
+    (mevedel-engine-test--with-session
+      (let* ((path (file-name-concat root "source.txt"))
+             (replacement (list :file_path path))
+             observed
+             (gptel-pre-tool-call-functions
+              (list (lambda (_) (if synthetic '(:result "synthetic evidence")
+                                  (list :args replacement)))
+                    (lambda (call) (setq observed (plist-get call :args))))))
+        (write-region "replacement evidence" nil path nil 'silent)
+        (mevedel-acp-turn-start
+         request
+         (lambda (mcp _hook)
+           (list :command (executable-find "python3") :args (list mevedel-acp-turn-test--peer)
+                 :cwd root :mcp mcp :tool-id-field :fixtureToolId))
+         [((type . "text") (text . "read:/missing-original-file"))]
+         (list (mevedel-tool-ensure "Read")))
+        (with-timeout (5 (ert-fail "Pre-hook did not settle"))
+          (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01)))
+        (should (string-search (if synthetic "synthetic evidence" "replacement evidence") (buffer-string)))
+        (unless synthetic (should (equal replacement observed))))))
+
+  :doc "an asynchronous result publication error closes the turn instead of stranding MCP"
+  (mevedel-engine-test--with-session
+    (let* ((tool (copy-mevedel-tool (mevedel-tool-ensure "Read")))
+           (path (file-name-concat root "source.txt"))
+           complete)
+      (write-region "evidence" nil path nil 'silent)
+      (setf (mevedel-tool-async-p tool) t
+            (mevedel-tool-handler tool) (lambda (callback _args) (setq complete callback)))
+      (cl-letf (((symbol-function 'mevedel-acp-turn--tool-result)
+                 (lambda (&rest _) (error "Publication failed"))))
+        (mevedel-acp-turn-start
+         request
+         (lambda (mcp _hook)
+           (list :command (executable-find "python3") :args (list mevedel-acp-turn-test--peer)
+                 :cwd root :mcp mcp :tool-id-field :fixtureToolId))
+         (vector `((type . "text") (text . ,(concat "read:" path)))) (list tool))
+        (with-timeout (5 (ert-fail "Async call was not admitted"))
+          (while (not complete) (accept-process-output nil .01)))
+        (funcall complete '(:result "async evidence"))
+        (with-timeout (5 (ert-fail "Publication failure stranded the turn"))
+          (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01))))
+      (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))))
+
+  :doc "hook denials stay denied and unsupported controls fail before effects"
+  (dolist (decision '((:block "denied") (:confirm t) (:confirm nil) (:name "Other")))
+    (mevedel-engine-test--with-session
+      (let* ((tool (copy-mevedel-tool (mevedel-tool-ensure "Read")))
+             (calls 0)
+             (gptel-pre-tool-call-functions
+              (list (lambda (_) decision) (lambda (_) '(:block nil)))))
+        (setf (mevedel-tool-handler tool)
+              (lambda (&rest _) (cl-incf calls) '(:result "Forbidden execution")))
+        (mevedel-acp-turn-start
+         request
+         (lambda (mcp _hook)
+           (list :command (executable-find "python3") :args (list mevedel-acp-turn-test--peer)
+                 :cwd root :mcp mcp :tool-id-field :fixtureToolId))
+         [((type . "text") (text . "read:/missing-original-file"))] (list tool))
+        (with-timeout (5 (ert-fail "Hook denial did not settle"))
+          (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01)))
+        (should (= 0 calls))
+        (if (plist-get decision :block)
+            (should (string-search "denied" (buffer-string)))
+          (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome))))))))
 
 (provide 'test-mevedel-acp-turn)
 ;;; test-mevedel-acp-turn.el ends here

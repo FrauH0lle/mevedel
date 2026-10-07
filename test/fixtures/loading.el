@@ -36,6 +36,9 @@
                (mevedel-install)
                (should (functionp #'mevedel-create-directive))
                (should (commandp 'mevedel-compact))
+               (should (commandp 'mevedel-buddy-mode))
+               (should (commandp 'mevedel-buddy-global-mode))
+               (should-not (featurep 'mevedel-buddy))
                (should (commandp 'mevedel-claude-code-setup))
                (should (memq #'mevedel-journal-idle-session-opened mevedel-session-start-hook))
                (dolist (tool (mevedel-tool-all))
@@ -51,6 +54,37 @@
                (mevedel-uninstall)
                (dolist (feature mevedel-test-loading--deferred)
                  (should-not (featurep feature)))))
+            ((or 'directive-preview-implement 'directive-preview-discuss
+                 'directive-answer)
+             (mevedel-install)
+             (should-not (featurep 'mevedel-directive-request))
+             (with-temp-buffer
+               (insert "cold directive source")
+               (let* ((workspace (mevedel-workspace))
+                      (directive
+                       (mevedel--create-directive-in
+                        (current-buffer) (point-min) (point-max) nil
+                        "Explain the cold directive")))
+                 (goto-char (point-min))
+                 (if (eq scenario 'directive-answer)
+                     ;; No prior session or answer: load the session owner,
+                     ;; create its view, then report the absent answer.
+                     (should
+                      (equal '(user-error "Directive answer is not in the live transcript")
+                             (should-error
+                              (mevedel--ov-actions-show-answer directive)
+                              :type 'user-error)))
+                   (cl-letf (((symbol-function 'completing-read)
+                              (lambda (&rest _)
+                                (if (eq scenario 'directive-preview-discuss)
+                                    "discuss" "implement"))))
+                     (mevedel-preview-directive-prompt))
+                   (with-current-buffer "*mevedel-directive-preview*"
+                     (should (string-search "Explain the cold directive"
+                                            (buffer-string))))
+                   (kill-buffer "*mevedel-directive-preview*"))
+                 (should (featurep 'mevedel-directive-request))
+                 (should (mevedel-workspace-directives workspace)))))
             ('gptel
              (mevedel-install)
              (with-temp-buffer
@@ -60,9 +94,11 @@
                  (should (plist-get (gptel-fsm-info fsm) :data))))
              (dolist (feature '(acp mevedel-acp mevedel-mcp mevedel-claude-code))
                (should-not (featurep feature))))
-            ('chat
+            ((or 'chat 'chat-in-directory)
              (mevedel-install)
-             (mevedel)
+             (if (eq scenario 'chat-in-directory)
+                 (mevedel-in-directory default-directory)
+               (mevedel))
              (should (featurep 'mevedel-view))
              (should (cl-some (lambda (buffer)
                                 (with-current-buffer buffer
@@ -156,6 +192,26 @@
                  (with-timeout (5 (ert-fail "Claude workload fixture timed out"))
                    (while (not done) (accept-process-output nil 0.01)))
                  (should (equal "answer:workload" (apply #'concat (nreverse text)))))))
+            ('room
+             (mevedel-install)
+             (mevedel)
+             (require 'mevedel-collaboration)
+             (require 'mevedel-collaboration-transport)
+             (should-not (featurep 'mevedel-collaboration-task))
+             (let ((data (mevedel-collaboration--current-data-buffer)))
+               (should (buffer-live-p data))
+               (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                         ((symbol-function 'mevedel-collaboration--transport-open)
+                          (lambda (&rest _) (list :state 'down)))
+                         ((symbol-function 'mevedel-collaboration--transport-stop) #'ignore))
+                 (let ((room (car (mevedel-collaboration--room-or-start data))))
+                   (unwind-protect
+                       (progn
+                         (mevedel-collaboration--publish-timer data)
+                         (should (featurep 'mevedel-collaboration-task))
+                         (should (equal "tasks" (plist-get (plist-get room :tasks) :t)))
+                         (should (= 0 (plist-get (plist-get room :tasks) :total))))
+                     (mevedel-collaboration--stop-internal room 'user-stop))))))
             ('lobby
              (require 'mevedel-collaboration-lobby)
              (mevedel-collaboration-lobby-restore)

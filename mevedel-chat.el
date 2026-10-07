@@ -794,6 +794,7 @@ M-x mevedel-retry-plan-implementation resumes it")))
 
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
   "Set up chat buffer BUF in WORKSPACE with SESSION-NAME and WORKING-DIRECTORY."
+  (require 'mevedel-session-persistence)
   (with-current-buffer buf
     ;; The data buffer is locked to `org-mode' so the persistence layer
     ;; has a single format to round-trip via `gptel-org--save-state'.
