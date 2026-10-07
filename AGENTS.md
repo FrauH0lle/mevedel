@@ -30,6 +30,11 @@ it from the interface.
 - Prefer locality: an implementation fix should stay inside its owning module,
   without requiring new operating instructions across callers. Test behavior
   through the same interface callers use.
+- Defer loading and initialization to the feature boundary that needs them.
+  The owning module handles first use without caller-managed load order. Keep
+  cheap, unconditional dependencies eager when that is simpler; judge deferral
+  by startup cost, first-use latency, and correctness, not maximum laziness.
+  See [Loading and initialization](docs/development.md#loading-and-initialization).
 - Apply the deletion test to instructions and orchestration: if removing one
   loses nothing useful, delete it. If removing a module makes callers recreate
   its mechanics, it earns its place. Do not move obsolete prompt rituals into

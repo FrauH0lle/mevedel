@@ -4,6 +4,10 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-patch-registration)
+
+(require 'mevedel-tool-exec-registration)
+
 (require 'mevedel-structs)
 (require 'mevedel-agents)
 (require 'mevedel-pipeline)

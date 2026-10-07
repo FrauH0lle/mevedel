@@ -108,6 +108,7 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-turn-end-at-boundary "mevedel-turn" (fsm reason))
+(autoload 'mevedel-turn-end-at-boundary "mevedel-turn")
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-view-interaction'

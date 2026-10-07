@@ -28,7 +28,7 @@
 (declare-function mevedel-plan-mode-exit
                   "mevedel-plan-mode" (&optional session))
 (autoload 'mevedel-plan-mode-active-p "mevedel-plan-mode")
-(autoload 'mevedel-plan-mode-exit "mevedel-plan-mode")
+(autoload 'mevedel-plan-mode-exit "mevedel-plan-mode" nil t)
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-make-full-auto-mode

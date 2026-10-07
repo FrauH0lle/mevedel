@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-directive-plan)
 (require 'mevedel-session-persistence)
 (require 'mevedel-view)
 (require 'helpers

@@ -9,6 +9,10 @@
 
 (require 'mevedel-tool-registry)
 
+(autoload 'mevedel-skills--invoke-handler "mevedel-skills-invoke")
+(autoload 'mevedel-skills--list-handler "mevedel-skills-invoke")
+(autoload 'mevedel-skills--render-skill-tool "mevedel-skills-invoke")
+
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--invoke-handler
                   "mevedel-skills-invoke" (callback args))

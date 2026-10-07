@@ -27,7 +27,7 @@
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-status-toggle
                   "mevedel-view-agent" ())
-(autoload 'mevedel-view-agent-status-toggle "mevedel-view-agent")
+(autoload 'mevedel-view-agent-status-toggle "mevedel-view-agent" nil t)
 
 ;; `mevedel-view-audit'
 (declare-function mevedel-view-audit-toggle-hook-audit

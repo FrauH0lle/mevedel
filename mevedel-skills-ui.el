@@ -40,9 +40,9 @@
                   "mevedel-collaboration" nil)
 (declare-function mevedel-collaboration-view
                   "mevedel-collaboration" nil)
-(autoload 'mevedel-collaboration-status "mevedel-collaboration")
-(autoload 'mevedel-collaboration-stop "mevedel-collaboration")
-(autoload 'mevedel-collaboration-view "mevedel-collaboration")
+(autoload 'mevedel-collaboration-status "mevedel-collaboration" nil t)
+(autoload 'mevedel-collaboration-stop "mevedel-collaboration" nil t)
+(autoload 'mevedel-collaboration-view "mevedel-collaboration" nil t)
 
 ;; `mevedel-collaboration-lobby'
 (declare-function mevedel-collaboration-lobby
@@ -87,18 +87,18 @@
 (autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-format-header "mevedel-cockpit")
 (autoload 'mevedel-cockpit-open-surface "mevedel-cockpit")
-(autoload 'mevedel-cockpit-quit "mevedel-cockpit")
+(autoload 'mevedel-cockpit-quit "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-setup-tabulated-surface "mevedel-cockpit")
 (autoload 'mevedel-cockpit-show-help "mevedel-cockpit")
 (autoload 'mevedel-cockpit-surface-context "mevedel-cockpit")
-(autoload 'mevedel-cockpit-surface-details "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-details "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-surface-key-help-text "mevedel-cockpit")
-(autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
 
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact" (&optional aggressive instructions))
-(autoload 'mevedel-compact "mevedel-compact")
+(autoload 'mevedel-compact "mevedel-compact" nil t)
 
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-clear-baseline
@@ -126,7 +126,7 @@
 ;; `mevedel-executions-list'
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
-(autoload 'mevedel-executions-list-open "mevedel-executions-list")
+(autoload 'mevedel-executions-list-open "mevedel-executions-list" nil t)
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
@@ -184,7 +184,7 @@
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-mode-enter
                   "mevedel-plan-mode" (&optional session))
-(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode")
+(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode" nil t)
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-name
@@ -277,7 +277,7 @@
 
 ;; `mevedel-system'
 (declare-function mevedel-inspect-effective-prompt "mevedel-system" ())
-(autoload 'mevedel-inspect-effective-prompt "mevedel-system")
+(autoload 'mevedel-inspect-effective-prompt "mevedel-system" nil t)
 
 ;; `mevedel-turn'
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))

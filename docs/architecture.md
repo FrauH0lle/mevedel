@@ -45,6 +45,20 @@ authority, attachments, reconnects, notifications and lifecycle details;
 [ADR 0099](adr/0099-project-live-collaboration-from-host-authoritative-state.md)
 explains the boundary.
 
+## Loading boundaries
+
+`mevedel.el` loads foundational data and instruction restoration, and exposes
+commands through ordinary autoloads. Installation registers the complete tool
+catalog, presets, and integration hooks. Focus and theme callbacks act only on
+loaded views. Uninstall skips optional owners that have never loaded.
+
+Chat creation loads its session and view dependencies and wires journal
+scheduling before the session-start event. Pending Plan and directive proposals
+restore from session/workspace state, independent of whether their UI owner was
+previously loaded. Tool execution, saved-lobby startup, and Claude requests have
+separate implementation boundaries; see [tools](tools.md),
+[collaboration](collaboration.md), and [sessions](sessions.md).
+
 ## Key data structures
 
 Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:

@@ -10,7 +10,7 @@
 
 ;; `mevedel-claude-code'
 (declare-function mevedel-claude-code--prepare-launch "mevedel-claude-code" (checks cli environment ready failure))
-(declare-function mevedel-claude-code-backend-p "mevedel-claude-code" (object))
+(declare-function mevedel-claude-code-backend-p "mevedel-claude-code-backend" (object))
 (defvar mevedel-claude-code--api-environment)
 (defvar mevedel-claude-code-executable)
 

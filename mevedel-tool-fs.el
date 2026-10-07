@@ -58,6 +58,13 @@
                   "mevedel-tool-fs-search"
                   (name args result _render-data))
 
+(autoload 'mevedel-tool-fs-read "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-render "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-search-glob "mevedel-tool-fs-search")
+(autoload 'mevedel-tool-fs-search-grep "mevedel-tool-fs-search")
+(autoload 'mevedel-tool-fs-search-render-glob "mevedel-tool-fs-search")
+(autoload 'mevedel-tool-fs-search-render-grep "mevedel-tool-fs-search")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--executable-find
                   "mevedel-utilities" (name &optional remote))
@@ -230,8 +237,6 @@ whole PATH from inside gptel's curl sentinel."
 (defun mevedel-tool-fs--register ()
   "Register file system tools for mevedel."
   (require 'gptel)
-  (require 'mevedel-tool-fs-read)
-  (require 'mevedel-tool-fs-search)
 
   (mevedel-define-tool
     :name "Glob"

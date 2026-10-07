@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-web-registration)
+
 (require 'mevedel-tool-registry)
 (require 'mevedel-pipeline)
 (require 'mevedel-tools)

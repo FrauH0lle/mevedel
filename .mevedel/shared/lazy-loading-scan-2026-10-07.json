@@ -1,0 +1,997 @@
+{
+  "date": "2026-10-07",
+  "head": "108de8d0e81e16fa5c5585c9bc53c09fff1c6f75",
+  "master": "0f2024919b3962379477e10d42518005f4b05ebb",
+  "backup_branch": "backup/claude-code-engine-before-lazy-scan-rebase-20261007",
+  "scope": "Rescan after rebasing seven feature commits on master. No lazy-loading implementation changes.",
+  "method": {
+    "emacs": "31.1",
+    "samples_per_configuration": 5,
+    "processes": 20,
+    "environment": "Fresh emacs --batch -Q children under Eask test HOME/XDG isolation; empty user state and temporary working directory; local Eask dependencies; no provider calls.",
+    "compilation": "236 mevedel modules byte-compiled, copied to an ignored directory with source symlinks; workspace bytecode then cleaned through Eask.",
+    "timing": "In-process elapsed time around require and install, including GC; excludes process startup, prerequisite cl-lib/json loading and shutdown. Alternating source/compiled and gptel-preloaded/cold runs before the parallel suite.",
+    "gc_cons_threshold": 800000,
+    "gc_cons_percentage": 1.0,
+    "limits": [
+      "Not a reproduction of the configured interactive editor.",
+      "No first-session, remote-storage, existing-lobby, GUI or steady-state benchmark.",
+      "OS caches were not flushed.",
+      "One fully cold compiled installation took 175 ms; all sample ranges are retained.",
+      "No pre-rebase timing baseline, so these timings do not establish a regression."
+    ]
+  },
+  "static_counts": {
+    "root_mevedel_modules": 236,
+    "entry_top_level_requires": 103,
+    "literal_top_level_require_closure": 159,
+    "previous_scan": {
+      "modules": 228,
+      "requires": 102,
+      "closure": 156
+    }
+  },
+  "summary": [
+    {
+      "mode": "compiled",
+      "gptel_preloaded": false,
+      "phase": "install",
+      "samples": 5,
+      "median_ms": 39.055824279785156,
+      "min_ms": 38.15722465515137,
+      "max_ms": 175.26578903198242,
+      "loaded_mevedel_modules": 172,
+      "gc_median_ms": 13.154078999999996
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": false,
+      "phase": "require",
+      "samples": 5,
+      "median_ms": 186.1858367919922,
+      "min_ms": 184.27777290344238,
+      "max_ms": 230.149507522583,
+      "loaded_mevedel_modules": 159,
+      "gc_median_ms": 18.988467000000004
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": true,
+      "phase": "gptel",
+      "samples": 5,
+      "median_ms": 24.468183517456055,
+      "min_ms": 24.3070125579834,
+      "max_ms": 24.794816970825195,
+      "loaded_mevedel_modules": 0,
+      "gc_median_ms": 3.9834680000000002
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": true,
+      "phase": "install",
+      "samples": 5,
+      "median_ms": 39.46065902709961,
+      "min_ms": 38.999080657958984,
+      "max_ms": 40.94076156616211,
+      "loaded_mevedel_modules": 172,
+      "gc_median_ms": 13.852395
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": true,
+      "phase": "require",
+      "samples": 5,
+      "median_ms": 160.25710105895996,
+      "min_ms": 158.50353240966797,
+      "max_ms": 163.40875625610352,
+      "loaded_mevedel_modules": 159,
+      "gc_median_ms": 13.603395999999998
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": false,
+      "phase": "install",
+      "samples": 5,
+      "median_ms": 45.465946197509766,
+      "min_ms": 43.82181167602539,
+      "max_ms": 46.3407039642334,
+      "loaded_mevedel_modules": 172,
+      "gc_median_ms": 31.067542000000003
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": false,
+      "phase": "require",
+      "samples": 5,
+      "median_ms": 376.91617012023926,
+      "min_ms": 367.60759353637695,
+      "max_ms": 386.5389823913574,
+      "loaded_mevedel_modules": 159,
+      "gc_median_ms": 47.523863999999996
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": true,
+      "phase": "gptel",
+      "samples": 5,
+      "median_ms": 24.750471115112305,
+      "min_ms": 23.860931396484375,
+      "max_ms": 24.803876876831055,
+      "loaded_mevedel_modules": 0,
+      "gc_median_ms": 4.225456999999999
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": true,
+      "phase": "install",
+      "samples": 5,
+      "median_ms": 44.914960861206055,
+      "min_ms": 44.56591606140137,
+      "max_ms": 53.20096015930176,
+      "loaded_mevedel_modules": 172,
+      "gc_median_ms": 30.316076
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": true,
+      "phase": "require",
+      "samples": 5,
+      "median_ms": 346.12250328063965,
+      "min_ms": 342.75293350219727,
+      "max_ms": 360.49938201904297,
+      "loaded_mevedel_modules": 159,
+      "gc_median_ms": 40.995059
+    }
+  ],
+  "install_added_modules": [
+    "mevedel-collaboration-agent",
+    "mevedel-collaboration-artifact",
+    "mevedel-collaboration-artifact-comments",
+    "mevedel-collaboration-editing",
+    "mevedel-collaboration-files",
+    "mevedel-collaboration-guest",
+    "mevedel-collaboration-lobby",
+    "mevedel-collaboration-owner",
+    "mevedel-theme-faces",
+    "mevedel-tool-fs-read",
+    "mevedel-tool-fs-search",
+    "mevedel-tool-repair-gptel",
+    "mevedel-view"
+  ],
+  "dependencies": [
+    {
+      "name": "gptel",
+      "path": "/home/roland/Projekte/mevedel/.scratch/worktrees/claude-code-engine/.eask/31.1/elpa/gptel-20260906.334/gptel.elc",
+      "sha256": "9c0519dab47cc33eb61ee54cfa5c45b387ea7af615ec77920dae7dc6e45d0691"
+    },
+    {
+      "name": "gptel-request",
+      "path": "/home/roland/Projekte/mevedel/.scratch/worktrees/claude-code-engine/.eask/31.1/elpa/gptel-20260906.334/gptel-request.elc",
+      "sha256": "dddd60d37b54b261a15e8aff83bf4d14f5d5258681621978033b6ed008aae463"
+    },
+    {
+      "name": "acp",
+      "path": "/home/roland/Projekte/mevedel/.scratch/worktrees/claude-code-engine/.eask/31.1/elpa/acp-20260914.1318/acp.elc",
+      "sha256": "45319a119297e78c4e1fdb85423e2deeed55289b2ec0286e523e39f08700ea8a"
+    },
+    {
+      "name": "yaml",
+      "path": "/home/roland/Projekte/mevedel/.scratch/worktrees/claude-code-engine/.eask/31.1/elpa/yaml-20260605.834/yaml.elc",
+      "sha256": "d5745543161f5a1aab35d587e5d8107e700cf26cac574f0351a81f1a7d99342c"
+    },
+    {
+      "name": "orderless",
+      "path": "/home/roland/Projekte/mevedel/.scratch/worktrees/claude-code-engine/.eask/31.1/elpa/orderless-20260519.1029/orderless.elc",
+      "sha256": "de9e35240933cacd9e4fe9b81f4fb1a4a93bf6edf2e665e79526c6750735cd1d"
+    },
+    {
+      "name": "websocket",
+      "path": "/home/roland/Projekte/mevedel/.scratch/worktrees/claude-code-engine/.eask/31.1/elpa/websocket-20260301.157/websocket.elc",
+      "sha256": "2bd3413451bf6e8e35974db6e21da9693a16a447546c4bfd1f3540fe9f258f5f"
+    },
+    {
+      "name": "qrencode",
+      "path": "/home/roland/Projekte/mevedel/.scratch/worktrees/claude-code-engine/.eask/31.1/elpa/qrencode-20260802.2131/qrencode.elc",
+      "sha256": "1c636b24b35df1e5ff2a17127bca008eada69af8889ca073b2c1f21508765794"
+    }
+  ],
+  "findings": [
+    {
+      "priority": 1,
+      "location": "mevedel.el:44",
+      "finding": "Umbrella loading still defeats many internal autoload boundaries.",
+      "recommendation": "Start with optional command surfaces and trace transitive dependencies; keep cheap unconditional foundations eager."
+    },
+    {
+      "priority": 2,
+      "location": "mevedel.el:779; mevedel-collaboration-lobby.el:32,194",
+      "finding": "Installation loads lobby and guest/browser support before testing whether persisted lobby intent exists, even with empty state.",
+      "recommendation": "Keep the saved-intent check and automatic restoration contract; defer browser runtime dependencies until a lobby actually starts."
+    },
+    {
+      "priority": 3,
+      "location": "mevedel-tools.el:23,105; mevedel-tool-fs.el:230",
+      "finding": "Tool aggregator reaches 75 modules via literal top-level requires. Installation also loads filesystem implementations when registering schemas.",
+      "recommendation": "Keep complete discovery metadata while deferring handlers; reuse existing registrar/autoload mechanisms where useful rather than inventing a loader framework."
+    },
+    {
+      "priority": 4,
+      "location": "mevedel-claude-code.el:15; mevedel.el:58; mevedel-chat.el:30",
+      "finding": "Claude registration eagerly loads ACP, MCP and usage implementation before provider selection.",
+      "recommendation": "Consider a lightweight provider-discovery boundary. No Claude process was started by the measured load/install path."
+    },
+    {
+      "priority": 5,
+      "location": "mevedel-transport.el:471; mevedel-persistence.el:684; mevedel-tools.el:324; mevedel-skills-core.el:1695",
+      "finding": "Several integrations activate at library load time.",
+      "recommendation": "Preserve required hooks, automatic recovery and lifecycle behavior when changing loading; module count alone is not a correctness criterion."
+    }
+  ],
+  "preserve": [
+    "Auth, readiness, Claude maintenance and subscription-usage modules remained unloaded through measured install.",
+    "Journal idle scheduling is wired eagerly, but maintenance execution is session/lifecycle driven.",
+    "Shared-editor browser assets are loaded through the iframe created when opening an item.",
+    "Existing owner cold-load tests protect callable boundaries; retain those tests."
+  ],
+  "validation": {
+    "compilation": "237 root .el files including existing test-foo.el; no warnings or errors",
+    "measurement": "1 isolated ERT launcher passed; 20 fresh children",
+    "viewer_protocol": "passed",
+    "viewer_artifact_comments": "passed",
+    "full_suite": {
+      "total": 9636,
+      "passed": 9612,
+      "skipped": 23,
+      "unexpected": 1,
+      "wall_seconds": 155.82,
+      "failure": "mevedel-tool-ui--agent/test@1",
+      "diagnosis": "Existing master failure: test starts three agents and expects fourth admission to fail, while master 0f20249 raises the default capacity to ten. Reproduced in isolation on both rebased branch and archived master; no test or implementation changes made.",
+      "full_suite_report": ".scratch/test-suite-performance/20261007-104721/summary.json",
+      "master_reproduction": ".scratch/lazy-loading-scan/master-repro.log"
+    },
+    "git": "master 0f20249 is an ancestor of HEAD 108de8d; range diff checked; no conflict markers or whitespace errors in changed files; all three pre-rebase uncommitted files restored byte-for-byte."
+  },
+  "samples": [
+    {
+      "mode": "compiled",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.230149507522583,
+          "gc-seconds": 0.02028647,
+          "gcs": 3,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.17526578903198242,
+          "gc-seconds": 0.015095187999999999,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 2
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.1861858367919922,
+          "gc-seconds": 0.018765498,
+          "gcs": 3,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.039055824279785156,
+          "gc-seconds": 0.01303102,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.18427777290344238,
+          "gc-seconds": 0.016862809,
+          "gcs": 3,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.038934946060180664,
+          "gc-seconds": 0.013154078999999996,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.18547749519348145,
+          "gc-seconds": 0.019153888,
+          "gcs": 3,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.03815722465515137,
+          "gc-seconds": 0.012899471,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.18862438201904297,
+          "gc-seconds": 0.018988467000000002,
+          "gcs": 3,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.04282808303833008,
+          "gc-seconds": 0.013625125999999998,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.024468183517456055,
+          "gc-seconds": 0.004050748,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.16025710105895996,
+          "gc-seconds": 0.014352033000000002,
+          "gcs": 2,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.04094076156616211,
+          "gc-seconds": 0.015179099000000001,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.024794816970825195,
+          "gc-seconds": 0.004095138,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.16340875625610352,
+          "gc-seconds": 0.014637791000000002,
+          "gcs": 2,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.03927469253540039,
+          "gc-seconds": 0.013464667,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.0243070125579834,
+          "gc-seconds": 0.003983468,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.15850353240966797,
+          "gc-seconds": 0.013603395999999999,
+          "gcs": 2,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.03968000411987305,
+          "gc-seconds": 0.014510312000000004,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.02441239356994629,
+          "gc-seconds": 0.003768319000000001,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.1602332592010498,
+          "gc-seconds": 0.013245667,
+          "gcs": 2,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.038999080657958984,
+          "gc-seconds": 0.013689845999999999,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.024503469467163086,
+          "gc-seconds": 0.003924399,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.16192102432250977,
+          "gc-seconds": 0.012832741000000002,
+          "gcs": 2,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.03946065902709961,
+          "gc-seconds": 0.013852395,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.3745560646057129,
+          "gc-seconds": 0.047523864,
+          "gcs": 5,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.045465946197509766,
+          "gc-seconds": 0.031067542000000004,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.38321447372436523,
+          "gc-seconds": 0.046881897000000006,
+          "gcs": 5,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.04382181167602539,
+          "gc-seconds": 0.029292501,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.37691617012023926,
+          "gc-seconds": 0.048519717,
+          "gcs": 5,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.04602932929992676,
+          "gc-seconds": 0.031444120000000006,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.36760759353637695,
+          "gc-seconds": 0.043580603,
+          "gcs": 5,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.04518270492553711,
+          "gc-seconds": 0.030538344999999995,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": false,
+      "phases": [
+        {
+          "phase": "require",
+          "seconds": 0.3865389823913574,
+          "gc-seconds": 0.050441717,
+          "gcs": 5,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.0463407039642334,
+          "gc-seconds": 0.031414809,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.024634122848510742,
+          "gc-seconds": 0.004146818,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.34416961669921875,
+          "gc-seconds": 0.040995059,
+          "gcs": 4,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.045310020446777344,
+          "gc-seconds": 0.030738913999999992,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.024803876876831055,
+          "gc-seconds": 0.0042511070000000005,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.34612250328063965,
+          "gc-seconds": 0.039944084,
+          "gcs": 4,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.044914960861206055,
+          "gc-seconds": 0.030316075999999997,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.024764537811279297,
+          "gc-seconds": 0.0042254569999999984,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.34275293350219727,
+          "gc-seconds": 0.039882284000000004,
+          "gcs": 4,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.04456591606140137,
+          "gc-seconds": 0.029889558000000004,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.023860931396484375,
+          "gc-seconds": 0.003828439000000001,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.35648393630981445,
+          "gc-seconds": 0.044644769,
+          "gcs": 4,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.04474186897277832,
+          "gc-seconds": 0.03029309599999999,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    },
+    {
+      "mode": "source",
+      "gptel_preloaded": true,
+      "phases": [
+        {
+          "phase": "gptel",
+          "seconds": 0.024750471115112305,
+          "gc-seconds": 0.004240236999999999,
+          "gcs": 1,
+          "module-count": 0,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "require",
+          "seconds": 0.36049938201904297,
+          "gc-seconds": 0.047435063,
+          "gcs": 4,
+          "module-count": 159,
+          "process-count": 0,
+          "timer-count": 1
+        },
+        {
+          "phase": "install",
+          "seconds": 0.05320096015930176,
+          "gc-seconds": 0.037070958999999994,
+          "gcs": 1,
+          "module-count": 172,
+          "process-count": 0,
+          "timer-count": 1
+        }
+      ]
+    }
+  ],
+  "require_loaded_modules": [
+    "mevedel",
+    "mevedel-agent-control",
+    "mevedel-agent-conversation",
+    "mevedel-agent-runtime",
+    "mevedel-agents",
+    "mevedel-bash-analysis",
+    "mevedel-bash-policy",
+    "mevedel-buddy",
+    "mevedel-buddy-note",
+    "mevedel-chat",
+    "mevedel-claude-code",
+    "mevedel-claude-code-usage",
+    "mevedel-cockpit",
+    "mevedel-collaboration",
+    "mevedel-collaboration-artifact-projection",
+    "mevedel-collaboration-projection",
+    "mevedel-collaboration-task",
+    "mevedel-collaboration-transport",
+    "mevedel-compact",
+    "mevedel-compact-estimation",
+    "mevedel-compact-evidence",
+    "mevedel-compact-run",
+    "mevedel-compact-target",
+    "mevedel-context-delivery",
+    "mevedel-context-summary",
+    "mevedel-directive",
+    "mevedel-directive-activity",
+    "mevedel-directive-persistence",
+    "mevedel-directive-plan",
+    "mevedel-directive-request",
+    "mevedel-directive-source",
+    "mevedel-edit-diagnostics",
+    "mevedel-engine",
+    "mevedel-execution",
+    "mevedel-execution-process",
+    "mevedel-execution-scheduler",
+    "mevedel-execution-target",
+    "mevedel-execution-telemetry",
+    "mevedel-execution-transcript",
+    "mevedel-executions-list",
+    "mevedel-file-state",
+    "mevedel-goal",
+    "mevedel-gptel-bridge",
+    "mevedel-gptel-stream-bridge",
+    "mevedel-history",
+    "mevedel-hooks",
+    "mevedel-init",
+    "mevedel-instruction-registry",
+    "mevedel-interaction-prompt",
+    "mevedel-journal-idle",
+    "mevedel-journal-pins",
+    "mevedel-journal-store",
+    "mevedel-journal-worker",
+    "mevedel-mcp",
+    "mevedel-mention-bindings",
+    "mevedel-mentions",
+    "mevedel-menu",
+    "mevedel-models",
+    "mevedel-overlay-ui",
+    "mevedel-overlays",
+    "mevedel-pending-inputs",
+    "mevedel-permission-log",
+    "mevedel-permission-mode",
+    "mevedel-permission-persistence",
+    "mevedel-permission-prompt",
+    "mevedel-permission-queue",
+    "mevedel-permission-rules",
+    "mevedel-permissions",
+    "mevedel-persistence",
+    "mevedel-pipeline",
+    "mevedel-plan",
+    "mevedel-plan-handoff",
+    "mevedel-plan-mode",
+    "mevedel-plugin-lifecycle",
+    "mevedel-plugin-registry",
+    "mevedel-plugin-ui",
+    "mevedel-plugins",
+    "mevedel-presets",
+    "mevedel-prompt-submission",
+    "mevedel-ptc-interpreter",
+    "mevedel-queue",
+    "mevedel-recovery",
+    "mevedel-reminders",
+    "mevedel-report",
+    "mevedel-resource",
+    "mevedel-review",
+    "mevedel-sandbox",
+    "mevedel-session-artifacts",
+    "mevedel-session-codec",
+    "mevedel-session-control-fs",
+    "mevedel-session-control-transfer",
+    "mevedel-session-durability",
+    "mevedel-session-fork",
+    "mevedel-session-naming",
+    "mevedel-session-persistence",
+    "mevedel-session-publication",
+    "mevedel-session-recovery",
+    "mevedel-session-rewind",
+    "mevedel-session-save-as",
+    "mevedel-session-transfer",
+    "mevedel-shared-conversation",
+    "mevedel-shared-editing",
+    "mevedel-shared-library",
+    "mevedel-side-conversation",
+    "mevedel-skills-core",
+    "mevedel-skills-input",
+    "mevedel-skills-invoke",
+    "mevedel-skills-plan",
+    "mevedel-skills-preparation",
+    "mevedel-skills-prompt",
+    "mevedel-skills-syntax",
+    "mevedel-skills-ui",
+    "mevedel-structs",
+    "mevedel-system",
+    "mevedel-telemetry",
+    "mevedel-telemetry-usage",
+    "mevedel-tool-ask",
+    "mevedel-tool-code",
+    "mevedel-tool-editing",
+    "mevedel-tool-exec",
+    "mevedel-tool-exec-permission",
+    "mevedel-tool-fs",
+    "mevedel-tool-goal",
+    "mevedel-tool-introspect",
+    "mevedel-tool-media",
+    "mevedel-tool-patch",
+    "mevedel-tool-permission",
+    "mevedel-tool-ptc",
+    "mevedel-tool-registry",
+    "mevedel-tool-render-data",
+    "mevedel-tool-repair",
+    "mevedel-tool-skills",
+    "mevedel-tool-task",
+    "mevedel-tool-ui",
+    "mevedel-tool-web",
+    "mevedel-tools",
+    "mevedel-tools-list",
+    "mevedel-transcript",
+    "mevedel-transcript-audit",
+    "mevedel-transcript-restore",
+    "mevedel-transport",
+    "mevedel-turn",
+    "mevedel-utilities",
+    "mevedel-view-agent",
+    "mevedel-view-animation",
+    "mevedel-view-composer",
+    "mevedel-view-control-transfer",
+    "mevedel-view-disclosure",
+    "mevedel-view-fontify",
+    "mevedel-view-input-files",
+    "mevedel-view-interaction",
+    "mevedel-view-power",
+    "mevedel-view-prepare",
+    "mevedel-view-render",
+    "mevedel-view-segments",
+    "mevedel-view-stream",
+    "mevedel-view-zone",
+    "mevedel-workspace",
+    "mevedel-worktree"
+  ],
+  "reproduction_commands": [
+    "npx @emacs-eask/cli compile",
+    "npx @emacs-eask/cli clean elc",
+    "npx @emacs-eask/cli test ert .scratch/lazy-loading-scan/probe-test.el",
+    "npx @emacs-eask/cli run script test",
+    "node test/collaboration-viewer-test.js",
+    "node test/collaboration-viewer-artifact-comments-test.js",
+    "npx @emacs-eask/cli test ert test/test-mevedel-tool-ui.el",
+    "npx @emacs-eask/cli test ert .scratch/lazy-loading-scan/master-repro-test.el"
+  ]
+}

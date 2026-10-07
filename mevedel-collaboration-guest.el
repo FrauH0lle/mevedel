@@ -10,6 +10,7 @@
 
 ;;; Code:
 
+
 (autoload 'mevedel-collaboration-recovery-handle "mevedel-collaboration-recovery")
 (autoload 'mevedel-collaboration-recovery-send "mevedel-collaboration-recovery")
 (declare-function mevedel-collaboration-recovery-handle "mevedel-collaboration-recovery" (room peer frame))
@@ -63,6 +64,8 @@
 (defvar mevedel-collaboration-guest-skills)
 (defvar mevedel-collaboration-remote-interactions)
 (defvar mevedel-collaboration-unsafe-guest-commands)
+
+(defvar mevedel-collaboration-needs-host-message)
 
 ;; `mevedel-collaboration-agent'
 (declare-function mevedel-collaboration--agents-frame
@@ -136,6 +139,8 @@
 (autoload 'mevedel-model-candidates "mevedel-models")
 
 ;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs--set-queues
+                  "mevedel-pending-inputs" (session &rest replacements))
 (declare-function mevedel-view--refused-question "mevedel-pending-inputs" (err))
 (declare-function mevedel-view-enqueue-external-follow-up
                   "mevedel-pending-inputs"
@@ -181,7 +186,7 @@
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
 (declare-function mevedel-view-invocation-kind
                   "mevedel-view-composer" (name &optional session))
-(autoload 'mevedel-view-abort "mevedel-view-composer")
+(autoload 'mevedel-view-abort "mevedel-view-composer" nil t)
 (autoload 'mevedel-view-invocation-kind "mevedel-view-composer")
 
 ;; `mevedel-view-input-files'

@@ -4,6 +4,10 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-patch-registration)
+
+(require 'mevedel-tool-exec-registration)
+
 (require 'gptel)
 (require 'gptel-request)
 (require 'gptel-anthropic)

@@ -173,7 +173,7 @@
 (autoload 'mevedel--parent-instruction "mevedel-overlays")
 (autoload 'mevedel--reference-tags "mevedel-overlays")
 (autoload 'mevedel--topmost-instruction "mevedel-overlays")
-(autoload 'mevedel-delete-instructions "mevedel-overlays")
+(autoload 'mevedel-delete-instructions "mevedel-overlays" nil t)
 (autoload 'mevedel-get-directive-patch "mevedel-overlays")
 (defvar mevedel--default-instruction-priority)
 (defvar mevedel--highlighted-instruction)

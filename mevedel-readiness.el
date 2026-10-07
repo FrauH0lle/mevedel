@@ -3,10 +3,15 @@
 ;; Readiness runs before a prompt leaves the retained queue.  The same checks
 ;; power local sends and browser repair; no model request is retried here.
 ;;; Code:
-(require 'mevedel-acp)
 (require 'mevedel-auth)
 (require 'mevedel-models)
-(require 'mevedel-claude-code)
+(require 'mevedel-claude-code-backend)
+
+(autoload 'mevedel-acp-open "mevedel-acp")
+(autoload 'mevedel-acp-close "mevedel-acp")
+(autoload 'mevedel-claude-code-launch "mevedel-claude-code")
+(defvar mevedel-claude-code-executable)
+(defvar mevedel-claude-code-directory)
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--schedule-late-follow-up-drain "mevedel-pending-inputs" ())
@@ -77,6 +82,7 @@
       (mevedel-auth-refresh gptel-backend)
       (user-error "Codex login needs renewal; your input is retained")))
    ((mevedel-claude-code-backend-p gptel-backend)
+    (require 'mevedel-claude-code)
     (let ((key (list mevedel-claude-code-executable mevedel-claude-code-directory
                      (getenv "CLAUDE_CONFIG_DIR") (gptel--model-name gptel-model))))
       (unless (equal key (plist-get mevedel-readiness--claude :key))

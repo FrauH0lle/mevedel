@@ -30,15 +30,25 @@
   (require 'cl-lib))
 
 (require 'mevedel-collaboration)
-(require 'mevedel-collaboration-files)
-(require 'mevedel-collaboration-guest)
-(require 'mevedel-collaboration-owner)
-(require 'mevedel-collaboration-projection)
-(require 'mevedel-collaboration-transport)
+(require 'mevedel-workspace)
 
 ;; `mevedel-chat'
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
+
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--admit-hello
+                  "mevedel-collaboration-guest" (room peer frame))
+(declare-function mevedel-collaboration--model-labels
+                  "mevedel-collaboration-guest" ())
+(declare-function mevedel-collaboration--request-id-p
+                  "mevedel-collaboration-guest" (value))
+(declare-function mevedel-collaboration--workspace-key
+                  "mevedel-collaboration-guest" (room))
+
+;; `mevedel-collaboration-owner'
+(declare-function mevedel-collaboration--handle-new-session
+                  "mevedel-collaboration-owner" (room peer frame))
 
 ;; `mevedel-collaboration-share'
 (declare-function mevedel-collaboration-share-dismiss
@@ -47,6 +57,16 @@
                   "mevedel-collaboration-share" (room))
 (autoload 'mevedel-collaboration-share-dismiss "mevedel-collaboration-share")
 (autoload 'mevedel-collaboration-share-present "mevedel-collaboration-share")
+
+;; `mevedel-collaboration-transport'
+(declare-function mevedel-collaboration--transport-open
+                  "mevedel-collaboration-transport" (url key &rest callbacks))
+(declare-function mevedel-collaboration--transport-open-p
+                  "mevedel-collaboration-transport" (transport))
+(declare-function mevedel-collaboration--transport-send
+                  "mevedel-collaboration-transport" (transport peer frame))
+(declare-function mevedel-collaboration--transport-stop
+                  "mevedel-collaboration-transport" (transport))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-delete
@@ -485,6 +505,10 @@ carries the bearer links under `:link-view', `:link-full' and
 rotated.  The lobby is recorded as running, so
 `mevedel-collaboration-lobby-restore' restarts it in the next Emacs
 until it is stopped."
+  (require 'mevedel-collaboration-files)
+  (require 'mevedel-collaboration-guest)
+  (require 'mevedel-collaboration-owner)
+  (require 'mevedel-collaboration-projection)
   (require 'mevedel-collaboration-transport)
   (unless (require 'websocket nil t)
     (user-error "Collaboration requires the 'websocket' package; install it first"))

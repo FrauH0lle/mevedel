@@ -809,7 +809,7 @@ alist with mevedel-specific handlers added:
                               (unless mevedel--current-request
                                 (mevedel-request-begin
                                  mevedel--session
-                                 mevedel--current-directive-uuid))
+                                 (bound-and-true-p mevedel--current-directive-uuid)))
                               (when (and mevedel--current-request
                                          (fboundp 'mevedel-request-id))
                                 (setf (mevedel-request-fsm

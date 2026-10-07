@@ -80,7 +80,7 @@
 ;; `mevedel-executions-list'
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
-(autoload 'mevedel-executions-list-open "mevedel-executions-list")
+(autoload 'mevedel-executions-list-open "mevedel-executions-list" nil t)
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
@@ -94,7 +94,7 @@
 ;; `mevedel-gptel-bridge'
 (declare-function mevedel-gptel-bridge-open
                   "mevedel-gptel-bridge" (&optional context))
-(autoload 'mevedel-gptel-bridge-open "mevedel-gptel-bridge")
+(autoload 'mevedel-gptel-bridge-open "mevedel-gptel-bridge" nil t)
 
 ;; `mevedel-memory-list'
 (declare-function mevedel-memory-list-open "mevedel-memory-list" (&optional context))
@@ -143,7 +143,7 @@
 (declare-function mevedel-plan-mode-enter
                   "mevedel-plan-mode" (&optional session))
 (autoload 'mevedel-plan-approval-render "mevedel-plan-mode")
-(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode")
+(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode" nil t)
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugins-count-label "mevedel-plugin-registry"
@@ -177,7 +177,7 @@
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-redo "mevedel-session-rewind" ())
-(autoload 'mevedel-redo "mevedel-session-rewind")
+(autoload 'mevedel-redo "mevedel-session-rewind" nil t)
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-count-label "mevedel-skills-ui" (session))
@@ -258,14 +258,14 @@
                   "mevedel-view-control-transfer" ())
 (declare-function mevedel-view-control-transfer-keep
                   "mevedel-view-control-transfer" ())
-(autoload 'mevedel-refresh-session "mevedel-view-control-transfer")
-(autoload 'mevedel-release-control "mevedel-view-control-transfer")
-(autoload 'mevedel-take-control "mevedel-view-control-transfer")
-(autoload 'mevedel-toggle-follow "mevedel-view-control-transfer")
+(autoload 'mevedel-refresh-session "mevedel-view-control-transfer" nil t)
+(autoload 'mevedel-release-control "mevedel-view-control-transfer" nil t)
+(autoload 'mevedel-take-control "mevedel-view-control-transfer" nil t)
+(autoload 'mevedel-toggle-follow "mevedel-view-control-transfer" nil t)
 (autoload 'mevedel-view-control-transfer-grant
-  "mevedel-view-control-transfer")
+  "mevedel-view-control-transfer" nil t)
 (autoload 'mevedel-view-control-transfer-keep
-  "mevedel-view-control-transfer")
+  "mevedel-view-control-transfer" nil t)
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session-follow-published)
 
@@ -285,16 +285,16 @@
 (declare-function mevedel-view-previous-segment "mevedel-view-segments" ())
 (declare-function mevedel-view-segments-current-number
                   "mevedel-view-segments" ())
-(autoload 'mevedel-view-go-to-segment "mevedel-view-segments")
-(autoload 'mevedel-view-next-segment "mevedel-view-segments")
-(autoload 'mevedel-view-previous-segment "mevedel-view-segments")
+(autoload 'mevedel-view-go-to-segment "mevedel-view-segments" nil t)
+(autoload 'mevedel-view-next-segment "mevedel-view-segments" nil t)
+(autoload 'mevedel-view-previous-segment "mevedel-view-segments" nil t)
 (autoload 'mevedel-view-segments-current-number "mevedel-view-segments")
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-status-summary "mevedel-worktree"
                   (&optional context))
 (declare-function mevedel-worktree-status-open "mevedel-worktree" ())
-(autoload 'mevedel-worktree-status-open "mevedel-worktree")
+(autoload 'mevedel-worktree-status-open "mevedel-worktree" nil t)
 (autoload 'mevedel-worktree-status-summary "mevedel-worktree")
 
 (defconst mevedel-menu-help-buffer-name "*mevedel help*"

@@ -81,9 +81,9 @@
 (declare-function mevedel-view-historical-segment-p "mevedel-view-segments" ())
 (declare-function mevedel-view-return-to-latest-segment
                   "mevedel-view-segments" (&optional event))
-(autoload 'mevedel-view-go-to-segment "mevedel-view-segments")
+(autoload 'mevedel-view-go-to-segment "mevedel-view-segments" nil t)
 (autoload 'mevedel-view-historical-segment-p "mevedel-view-segments")
-(autoload 'mevedel-view-return-to-latest-segment "mevedel-view-segments")
+(autoload 'mevedel-view-return-to-latest-segment "mevedel-view-segments" nil t)
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-disclosure-data-substring

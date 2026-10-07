@@ -27,8 +27,9 @@
   (require 'mevedel-presets))
 
 (require 'mevedel-hooks)
+(require 'mevedel-journal-idle)
 (require 'mevedel-reminders)
-(require 'mevedel-claude-code)
+(require 'mevedel-claude-code-backend)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -80,8 +81,14 @@
 (declare-function mevedel-collaboration--safe-post-response
                   "mevedel-collaboration" (&rest positions))
 
+(autoload 'mevedel-collaboration--safe-accepted-prompt "mevedel-collaboration")
+(autoload 'mevedel-collaboration--safe-post-response "mevedel-collaboration")
+
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-cancel)
+
+;; `mevedel-directive-plan'
+(autoload 'mevedel-directive-plan-restore-pending "mevedel-directive-plan")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-acknowledge-unknown
@@ -132,6 +139,9 @@
 		  (start end))
 (declare-function mevedel-plan-mode-restore-pending-approval
 		  "mevedel-plan-mode" (&optional session chat-buffer))
+
+(autoload 'mevedel-plan-mode--post-response "mevedel-plan-mode")
+(autoload 'mevedel-plan-mode-restore-pending-approval "mevedel-plan-mode")
 
 ;; `mevedel-plugin-ui'
 (declare-function mevedel-plugins-notify-pending-consent
@@ -775,9 +785,9 @@ M-x mevedel-retry-plan-implementation resumes it")))
     ;; Create the companion view buffer
     (require 'mevedel-view)
     (mevedel-view--ensure buf)
-    (when (fboundp 'mevedel-plan-mode-restore-pending-approval)
+    (when (mevedel-session-plan-mode mevedel--session)
       (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
-    (when (fboundp 'mevedel-directive-plan-restore-pending)
+    (when (mevedel-workspace-directives workspace)
       (mevedel-directive-plan-restore-pending mevedel--session buf))
     (unless inspection-p
       (mevedel--run-session-start-hooks source))))

@@ -1,5 +1,13 @@
 # Tools
 
+Installation registers the complete built-in catalog, including schemas,
+prompts, groups, authority callbacks, and renderers. Execution, patch, and web
+registration live in `mevedel-tool-*-registration.el`; their handlers and
+callbacks autoload the implementation on first use. Filesystem registration
+likewise leaves Read and search implementations unloaded. Restoring a saved
+tool reference uses the same registrar mapping as discovery. Shared editing
+loads its host implementation when an editing entry point is called.
+
 ## Model-facing descriptions and manuals
 
 Native tool schemas own parameter names, types, required fields, and basic

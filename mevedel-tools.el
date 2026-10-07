@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Tool aggregator.  `require's every `mevedel-tool-*' module and exposes
+;; Tool aggregator.  Loads the complete registration catalog and exposes
 ;; `mevedel-tools-register' as the single initializer for the complete
 ;; built-in tool surface, including Skill and ListSkills.
 ;;
@@ -23,22 +23,20 @@
 (require 'mevedel-agents)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
-(require 'mevedel-interaction-prompt)
-(require 'mevedel-permission-prompt)
 (require 'mevedel-tool-ask)
 (require 'mevedel-tool-code)
-(require 'mevedel-tool-exec)
+(require 'mevedel-tool-exec-registration)
 (require 'mevedel-tool-fs)
 (require 'mevedel-tool-goal)
 (require 'mevedel-tool-introspect)
-(require 'mevedel-tool-patch)
+(require 'mevedel-tool-patch-registration)
 (require 'mevedel-tool-ptc)
 (require 'mevedel-goal)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-editing)
 (require 'mevedel-tool-ui)
-(require 'mevedel-tool-web)
+(require 'mevedel-tool-web-registration)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))

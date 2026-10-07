@@ -118,10 +118,10 @@ created as a side effect of registration and handles serialization."
      mevedel-tool-ui mevedel-tool-ui--register)
     ("Ask" mevedel-tool-ask mevedel-tool-ask-register)
     ("Bash" "Eval" "ListExecutions" "StopExecution" "WriteStdin"
-     mevedel-tool-exec mevedel-tool-exec--register)
+     mevedel-tool-exec-registration mevedel-tool-exec--register)
     ("Glob" "Grep" "Read"
      mevedel-tool-fs mevedel-tool-fs--register)
-    ("ApplyPatch" mevedel-tool-patch mevedel-tool-patch-register)
+    ("ApplyPatch" mevedel-tool-patch-registration mevedel-tool-patch-register)
     ("SharedCreate" "SharedEdit"
      mevedel-tool-editing mevedel-tool-editing--register)
     ("ToolCall" mevedel-tool-ptc mevedel-tool-ptc--register)
@@ -132,7 +132,7 @@ created as a side effect of registration and handles serialization."
     ("TaskCreate" "TaskGet" "TaskList" "TaskNote" "TaskUpdate"
      mevedel-tool-task mevedel-tool-task--register)
     ("WebFetch" "WebSearch"
-     mevedel-tool-web mevedel-tool-web--register))
+     mevedel-tool-web-registration mevedel-tool-web--register))
   "Built-in tool names followed by their feature and registrar.")
 
 (defun mevedel-tool-get (name &optional category)

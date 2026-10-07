@@ -86,6 +86,12 @@ authority. A hook whose client gave up is not run later. Retained native
 invocations use the same bounded acknowledgement; their runtime canceller
 defers terminal settlement until the connection completes it.
 
+Provider identity lives in `mevedel-claude-code-backend.el`: the backend type,
+model metadata, registration, and generic methods are available without ACP,
+MCP, or Claude usage execution. The methods call autoloaded runtime entry
+points. Setup and actual Claude requests load those implementations; native
+gptel discovery, chat creation, and readiness do not need them.
+
 ## Headless recovery and runtime maintenance
 
 Provider readiness belongs to the harness, before root input is committed.
@@ -207,3 +213,10 @@ not in this record.
   engines once history existed; the user rejected it. Effective native
   compaction segments and gptel's reasoning-safe projection provide a usable
   continuation boundary in both directions.
+
+### 2026-10-07: separate provider discovery from execution
+
+The loading scan showed that recognizing the Claude backend loaded ACP, MCP,
+and usage execution even for native gptel sessions. The backend now owns the
+small provider contract separately from setup and execution. Engine authority,
+model metadata, and persisted provider selection remain unchanged.

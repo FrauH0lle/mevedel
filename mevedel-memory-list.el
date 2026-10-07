@@ -16,7 +16,7 @@
 (require 'mevedel-report)
 
 ;; `mevedel-journal-jobs'
-(autoload 'mevedel-journal-jobs "mevedel-journal-jobs")
+(autoload 'mevedel-journal-jobs "mevedel-journal-jobs" nil t)
 
 (defvar-local mevedel-memory-list--view nil "Current memory table view.")
 (defvar-local mevedel-memory-list--positions nil "Selected row IDs by view.")
