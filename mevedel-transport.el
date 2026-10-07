@@ -152,23 +152,30 @@ is the default."
 ;;
 ;;; Busy predicate
 
+(defun mevedel-transport-target (path)
+  "Return PATH resolved for repeated busy checks, or nil when it is local.
+A caller asking about one target per event resolves it once with this and
+passes the result as PATH to `mevedel-transport-busy-p'."
+  (and (stringp path) (file-remote-p path) (tramp-dissect-file-name path)))
+
 (defun mevedel-transport--connection-locked-p (path)
   "Return non-nil when PATH's TRAMP connection holds its operation lock.
+PATH is a file name or a target from `mevedel-transport-target'.
 
 This catches a caller that reached the connection without going through the
 file-name handler, which is what TRAMP's own internal command senders do."
-  (when (and (stringp path) (file-remote-p path))
-    (when-let* ((process (tramp-get-connection-process
-                          (tramp-dissect-file-name path))))
-      (and (process-live-p process)
-           (tramp-get-connection-property process "locked")
-           t))))
+  (when-let* ((target (if (stringp path) (mevedel-transport-target path) path))
+              (process (tramp-get-connection-process target)))
+    (and (process-live-p process)
+         (tramp-get-connection-property process "locked")
+         t)))
 
 (defun mevedel-transport-busy-p (&optional path)
   "Return non-nil when starting a target operation now would nest.
 
-PATH names the target whose connection is examined; a local or absent PATH
-still consults the handler depth, because that covers every connection.
+PATH names the target whose connection is examined, as a file name or as
+resolved by `mevedel-transport-target'; a local or absent PATH still
+consults the handler depth, because that covers every connection.
 
 Two signals, with complementary blind spots.  The handler depth sees the whole
 of any operation this Emacs started through a file name, including operations

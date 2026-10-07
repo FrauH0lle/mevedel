@@ -125,6 +125,9 @@ Only the first completion of a still-pending request answers it."
         (method (plist-get message :method))
         (params (plist-get message :params)))
     (cond
+     ;; JSON-RPC never answers a response.
+     ((and (listp message) (not method)
+           (or (plist-member message :result) (plist-member message :error))))
      ((not (and (equal (plist-get message :jsonrpc) "2.0")
                 (stringp method)
                 (or (not (plist-member message :id))
@@ -192,36 +195,53 @@ on CLIENT before each line is handled.  Each input chunk is scanned once."
          (t
           (process-put client 'mevedel-mcp-partial nil)
           (process-put client 'mevedel-mcp-bytes 0)
-          (condition-case err
-              (mevedel-mcp--receive
-               (process-get client 'mevedel-mcp-server) client
-               ;; gptel parses tool arguments with nil for JSON null.
-               (json-parse-string (apply #'concat (nreverse partial))
-                                  :object-type 'plist :null-object nil
-                                  :false-object :json-false))
-            (json-parse-error
-             (mevedel-mcp--error client :null -32700 "Invalid JSON"))
-            (error
-             (mevedel-mcp--error client :null -32603
-                                 (error-message-string err))))))))))
+          (let ((line (apply #'concat (nreverse partial))))
+            (unless (string-blank-p line)
+              (pcase (condition-case nil
+                         ;; gptel parses tool arguments with nil for JSON null.
+                         (list (json-parse-string line :object-type 'plist
+                                                  :null-object nil
+                                                  :false-object :json-false))
+                       (json-parse-error nil))
+                ('nil (mevedel-mcp--error client :null -32700 "Invalid JSON"))
+                (`(,message)
+                 (condition-case err
+                     (mevedel-mcp--receive
+                      (process-get client 'mevedel-mcp-server) client message)
+                   (error
+                    (let ((id (plist-get message :id)))
+                      ;; Notifications are never answered.
+                      (when (or (stringp id) (integerp id))
+                        (mevedel-mcp--error client id -32603
+                                            (error-message-string err))))))))))))))))
 
-(defun mevedel-mcp-socket-root ()
+(defvar mevedel-mcp--socket-root nil
+  "Socket directory established for this Emacs, so every user agrees on it.")
+
+(defun mevedel-mcp-socket-root (&optional noerror)
   "Return the owner-only local directory holding every MCP server socket.
-One stable parent lets confinement mask all live servers at once."
-  (let* ((runtime (getenv "XDG_RUNTIME_DIR"))
-         (root (file-name-concat
-                (if (and runtime (file-directory-p runtime))
-                    runtime temporary-file-directory)
-                (format "mevedel-mcp-%d" (user-uid))))
-         attributes)
-    (with-file-modes #o700 (make-directory root t))
-    (setq attributes (file-attributes root 'integer))
-    ;; A shared temporary directory may hold a planted directory or symlink.
-    (unless (and (eq t (file-attribute-type attributes))
-                 (eql (user-uid) (file-attribute-user-id attributes)))
-      (error "MCP socket directory is not owned by this user: %s" root))
-    (set-file-modes root #o700)
-    root))
+One stable parent lets confinement mask all live servers at once.  The first
+success fixes the directory for this Emacs; ownership is checked every call.
+With NOERROR, return the directory last established, or nil, instead of
+signalling: no server can exist in a directory that was never established."
+  (condition-case err
+      (let* ((runtime (getenv "XDG_RUNTIME_DIR"))
+             (root (or mevedel-mcp--socket-root
+                       (file-name-concat
+                        (if (and runtime (file-directory-p runtime))
+                            runtime temporary-file-directory)
+                        (format "mevedel-mcp-%d" (user-uid)))))
+             attributes)
+        (with-file-modes #o700 (make-directory root t))
+        (setq attributes (file-attributes root 'integer))
+        ;; A shared temporary directory may hold a planted directory or symlink.
+        (unless (and (eq t (file-attribute-type attributes))
+                     (eql (user-uid) (file-attribute-user-id attributes)))
+          (error "MCP socket directory is not owned by this user: %s" root))
+        (set-file-modes root #o700)
+        (setq mevedel-mcp--socket-root root))
+    (error (if noerror mevedel-mcp--socket-root
+             (signal (car err) (cdr err))))))
 
 (defun mevedel-mcp-start (tools dispatch &optional control rejected)
   "Start a private local MCP server using TOOLS and DISPATCH.

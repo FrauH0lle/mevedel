@@ -128,8 +128,12 @@ ToolCall retain request authority with either a real gptel FSM or an external
 request. The private asynchronous MCP transport owns connection cleanup and
 pending call and hook-control cancellation. Every server socket lives under one
 owner-only directory, `$XDG_RUNTIME_DIR/mevedel-mcp-UID` (else under
-`temporary-file-directory`); local Bubblewrap confinement mounts an empty tmpfs
-over it, so confined children cannot call tools with a turn's authority.
+`temporary-file-directory`), fixed for the Emacs session once first created;
+local Bubblewrap confinement mounts an empty tmpfs over it, so confined
+children cannot call tools with a turn's authority. When that directory cannot
+be created no server can exist, and confinement runs without the mask.
+Internal failures answer the request's own id; blank lines and JSON-RPC
+responses get no reply.
 
 Retained invocations expose their native FSM context or their own external
 context through the shared engine accessor. Their ACP driver uses the same
@@ -140,10 +144,13 @@ publication, independently of root-request settlement.
 and MCP results through the canonical gptel renderers, and shares final patch
 capture and terminal settlement. Native Claude `PreToolUse`, `PostToolBatch`
 and `SessionStart(compact)` hooks query the same private endpoint for context
-and stop decisions; they are absent from tool discovery. Hook handlers complete asynchronously; the runner queues events, hook
-decisions and tool admission in arrival order until target transport is idle,
-and cancellation rejects queued work while still consuming events and terminal
-usage the agent already reported. [ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md)
+and stop decisions; they are absent from tool discovery. Hook handlers complete
+asynchronously; the runner queues events, hook decisions and tool admission
+until target transport is idle. Socket work is queued after every ACP frame
+Emacs can already read, not after frames still inside the adapter.
+Cancellation rejects queued work while still consuming events and terminal
+usage the agent already reported. A process exit reports the agent's last
+stderr output. [ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md)
 owns these connection-ordering and cancellation rules.
 Native tool calls run the data buffer's `gptel-pre-tool-call-functions` and
 `gptel-post-tool-call-functions` (tool repair already ran in the pipeline), so

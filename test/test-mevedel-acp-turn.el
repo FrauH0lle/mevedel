@@ -11,6 +11,7 @@
           "mevedel-engine-test-support"))
 (require 'mevedel-acp-turn)
 (require 'mevedel-claude-code)
+(require 'mevedel-view-render)
 
 (defconst mevedel-acp-turn-test--peer
   (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
@@ -244,6 +245,7 @@
                :tool-id-field :fixtureToolId
                :control #'mevedel-claude-code--control
                :normalize-outcome #'mevedel-claude-code--outcome
+               :complete-prompt #'mevedel-claude-code--complete-prompt
                :meta `((hookCommand . ,hook-command)
                        (promptResponse . ((stopReason . "end_turn")
                                           (usage . ((inputTokens . 100)
@@ -296,63 +298,81 @@
           (advice-remove 'gptel-curl--stream-insert-response
                          #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice))))))
 
+(defmacro mevedel-acp-turn-test--with-receipt-race (acknowledgement &rest body)
+  "Run BODY in a waiting Claude turn whose prompt ACKNOWLEDGEMENT is scripted.
+BODY delivers the receipt and a Read call through `connection', `content' and
+`dispatch'; the call must then succeed without failing the turn."
+  (declare (indent 1) (debug t))
+  `(mevedel-engine-test--with-session
+     (let ((gptel--known-backends nil)
+           (mevedel-claude-code-directory (file-name-concat root "claude"))
+           (file (file-name-concat root "evidence.txt"))
+           dispatch content connection tool-result)
+       (write-region "evidence" nil file nil 'silent)
+       (mevedel-claude-code-register)
+       (mevedel-model-set-session-provider
+        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+       (setq-local gptel-system-prompt "Order fixture"
+                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+       (advice-add 'mevedel-mcp-start :around
+                   (lambda (orig tools d &rest rest) (setq dispatch d) (apply orig tools d rest))
+                   '((name . mevedel-acp-turn-test--capture)))
+       (advice-add 'mevedel-acp-prompt :before
+                   (lambda (c input &rest _) (setq connection c content input))
+                   '((name . mevedel-acp-turn-test--capture)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                      (mevedel-engine-test--claude-launch
+                       (lambda (_system _mcp _model _effort &optional _id hook)
+                         (list :meta `((hookCommand . ,hook)
+                                       (promptAcknowledgement . ,,acknowledgement)))))))
+             (mevedel-session-enqueue-pending-reminder session "ORDER PENDING EVENT")
+             (mevedel-session-ensure-reminder session (mevedel-reminders-make-pending-events))
+             (mevedel--insert-user-turn "wait")
+             (mevedel--send-request "wait")
+             (with-timeout (5 (ert-fail "Turn did not start"))
+               (while (not (string-search "waiting" (buffer-string)))
+                 (accept-process-output nil 0.01)))
+             ,@body
+             (with-timeout (5 (ert-fail "Tool call was not answered"))
+               (while (not tool-result) (accept-process-output nil 0.01)))
+             (should (eq :json-false (plist-get tool-result :isError)))
+             (should-not (plist-get (mevedel-engine-info request) :error))
+             (mevedel-abort buffer)
+             (with-timeout (5 (ert-fail "Turn did not settle"))
+               (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+         (advice-remove 'mevedel-mcp-start 'mevedel-acp-turn-test--capture)
+         (advice-remove 'mevedel-acp-prompt 'mevedel-acp-turn-test--capture)))))
+
 (mevedel-deftest mevedel-acp-turn-start/mcp-after-acp-frames (:quiet t)
   ,test
   (test)
-  :doc "a tool call read in the same pass as an earlier ACP receipt runs after it"
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (file (file-name-concat root "evidence.txt"))
-          dispatch content connection tool-result)
-      (write-region "evidence" nil file nil 'silent)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-      (setq-local gptel-system-prompt "Order fixture"
-                  gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
-      (advice-add 'mevedel-mcp-start :around
-                  (lambda (orig tools d &rest rest) (setq dispatch d) (apply orig tools d rest))
-                  '((name . mevedel-acp-turn-test--capture)))
-      (advice-add 'mevedel-acp-prompt :before
-                  (lambda (c input &rest _) (setq connection c content input))
-                  '((name . mevedel-acp-turn-test--capture)))
-      (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                     (mevedel-engine-test--claude-launch
-                      (lambda (_system mcp _model _effort &optional id hook)
-                        (list :meta `((hookCommand . ,hook) (promptAcknowledgement . :false)))))))
-            (mevedel-session-enqueue-pending-reminder session "ORDER PENDING EVENT")
-            (mevedel-session-ensure-reminder session (mevedel-reminders-make-pending-events))
-            (mevedel--insert-user-turn "wait")
-            (mevedel--send-request "wait")
-            (with-timeout (5 (ert-fail "Turn did not start"))
-              (while (not (string-search "waiting" (buffer-string)))
-                (accept-process-output nil 0.01)))
-            (let ((process (alist-get :process (mevedel-acp-client connection))))
-              ;; One read pass: the ACP filter queues the receipt, then the MCP
-              ;; filter reads the tool call before any timer runs.
-              (funcall (process-filter process) process
-                       (concat (json-serialize
-                                `((jsonrpc . "2.0") (method . "_claude/sdkMessage")
-                                  (params . ((sessionId . "fixture-session")
-                                             (message . ((type . "user") (uuid . "u1")
-                                                         (parent_tool_use_id . :null)
-                                                         (message . ((role . "user")
-                                                                     (content . ,content)))))))))
-                               "\n"))
-              (funcall dispatch "Read" (list :file_path file)
-                       (list :claudecode/toolUseId "order-1")
-                       (lambda (result) (setq tool-result result))))
-            (with-timeout (5 (ert-fail "Tool call was not answered"))
-              (while (not tool-result) (accept-process-output nil 0.01)))
-            (should (eq :json-false (plist-get tool-result :isError)))
-            (should-not (plist-get (mevedel-engine-info request) :error))
-            (mevedel-abort buffer)
-            (with-timeout (5 (ert-fail "Turn did not settle"))
-              (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
-        (advice-remove 'mevedel-mcp-start 'mevedel-acp-turn-test--capture)
-        (advice-remove 'mevedel-acp-prompt 'mevedel-acp-turn-test--capture)))))
+  :doc "a tool call read in the same pass after an ACP receipt runs after it"
+  (mevedel-acp-turn-test--with-receipt-race :false
+    (let ((process (alist-get :process (mevedel-acp-client connection))))
+      ;; One read pass: the ACP filter queues the receipt, then the MCP
+      ;; filter reads the tool call before any timer runs.
+      (funcall (process-filter process) process
+               (concat (json-serialize
+                        `((jsonrpc . "2.0") (method . "_claude/sdkMessage")
+                          (params . ((sessionId . "fixture-session")
+                                     (message . ((type . "user") (uuid . "u1")
+                                                 (parent_tool_use_id . :null)
+                                                 (message . ((role . "user")
+                                                             (content . ,content)))))))))
+                       "\n"))
+      (funcall dispatch "Read" (list :file_path file)
+               (list :claudecode/toolUseId "order-1")
+               (lambda (result) (setq tool-result result)))))
+
+  :doc "a tool call read before an already written ACP receipt still runs after it"
+  (mevedel-acp-turn-test--with-receipt-race "late"
+    ;; Emacs is busy while the peer writes its receipt, so neither side is
+    ;; read; the socket is then read first.
+    (let ((end (+ (float-time) 0.5))) (while (< (float-time) end)))
+    (funcall dispatch "Read" (list :file_path file)
+             (list :claudecode/toolUseId "order-1")
+             (lambda (result) (setq tool-result result)))))
 
 (provide 'test-mevedel-acp-turn)
 ;;; test-mevedel-acp-turn.el ends here

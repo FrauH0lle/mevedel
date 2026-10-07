@@ -16,6 +16,7 @@
   "Run BODY with a private XDG runtime directory bound to `runtime'."
   (declare (indent 0) (debug t))
   `(let* ((runtime (make-temp-file "mevedel-mcp-test-" t))
+          (mevedel-mcp--socket-root nil)
           (process-environment (cons (concat "XDG_RUNTIME_DIR=" runtime)
                                      process-environment)))
      (unwind-protect (progn ,@body)
@@ -156,6 +157,22 @@
       (should (= -32602 (plist-get (plist-get (response 3) :error) :code)))
       (should (= calls 0))))
 
+  :doc "blank lines and responses get no reply; internal errors answer their request"
+  (mevedel-mcp-test--with-client
+      (lambda () (error "Schema build failed"))
+      #'ignore
+    (initialize)
+    (process-send-string client "\n  \n")
+    (send '(:jsonrpc "2.0" :id 8 :result ()))
+    (send '(:jsonrpc "2.0" :id 9 :error (:code 1 :message "Client failure")))
+    (send '(:jsonrpc "2.0" :id 2 :method "tools/list"))
+    (let ((error (plist-get (response 2) :error)))
+      (should (= -32603 (plist-get error :code)))
+      (should (equal "Schema build failed" (plist-get error :message))))
+    (send '(:jsonrpc "2.0" :id 3 :method "ping"))
+    (response 3)
+    (should (equal '(3 2 1) (mapcar (lambda (row) (plist-get row :id)) replies))))
+
   :doc "a dispatch waiting in the filter still reads split and later lines"
   (let (seen trigger)
     (mevedel-mcp-test--with-client
@@ -262,11 +279,20 @@
       (should (= #o700 (file-modes root)))
       (should (equal root (mevedel-mcp-socket-root)))))
 
+  :doc "the first established directory stays fixed for servers and confinement"
+  (mevedel-mcp-test--with-runtime
+    (let ((root (mevedel-mcp-socket-root))
+          (process-environment (cons (concat "XDG_RUNTIME_DIR="
+                                             temporary-file-directory)
+                                     process-environment)))
+      (should (equal root (mevedel-mcp-socket-root)))))
+
   :doc "a planted symlink in place of the directory is refused"
   (mevedel-mcp-test--with-runtime
     (make-symbolic-link runtime (file-name-concat
                                  runtime (format "mevedel-mcp-%d" (user-uid))))
-    (should-error (mevedel-mcp-socket-root))))
+    (should-error (mevedel-mcp-socket-root))
+    (should-not (mevedel-mcp-socket-root t))))
 
 (mevedel-deftest mevedel-mcp-hook-command ()
   ,test

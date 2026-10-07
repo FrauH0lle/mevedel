@@ -130,8 +130,10 @@ for it; duplicate or late continuations cannot start a cancelled turn."
          (admission (if root-p request (plist-get info :mevedel-request)))
          (dispatch-key (list 'acp-prompt (if root-p (mevedel-request-id request)
                                            (gensym "child"))))
-         (dispatch-directory (and (buffer-live-p buffer)
-                                  (buffer-local-value 'default-directory buffer)))
+         ;; Resolved once: every event and tool asks whether its target is busy.
+         (dispatch-target (and (buffer-live-p buffer)
+                               (mevedel-transport-target
+                                (buffer-local-value 'default-directory buffer))))
          (event-key (list 'acp-events dispatch-key))
          pending draining server connection configuration finished cancellation-held started terminal-pending)
     (unless (and (buffer-live-p buffer)
@@ -169,20 +171,26 @@ for it; duplicate or late continuations cannot start a cancelled turn."
              (setq pending (nconc pending (list (list terminal operation reject))))
              (unless draining
                (unless (mevedel-transport-run-when-idle
-                        event-key dispatch-directory #'drain
+                        event-key dispatch-target #'drain
                         (lambda () (finish '(:status interrupted))))
                  (kill-owner)))))
          (enqueue-later (operation &optional terminal reject)
-           ;; MCP sockets are read synchronously while ACP frames read in the
-           ;; same pass wait for the library's drain timer.  Queue behind it.
+           ;; Socket work is handled synchronously while ACP frames wait for
+           ;; the library's drain timer.  Read ACP output that is already
+           ;; available first, so its drain is armed before this timer.
+           (when-let* ((process (and connection
+                                     (alist-get :process (mevedel-acp-client connection))))
+                       ((process-live-p process)))
+             (accept-process-output process 0 nil 1))
            (mevedel-transport-run-at-time
             0 (lambda () (enqueue operation terminal reject))))
          (drain ()
+           ;; Only `mevedel-transport-run-when-idle' calls this, after its
+           ;; busy check; operations cannot leave the transport busy.
            (unless draining
              (setq draining t)
              (unwind-protect
-                 (while (and pending (not finished) (owned)
-                             (not (mevedel-transport-busy-p dispatch-directory)))
+                 (while (and pending (not finished) (owned))
                    (condition-case err
                        (let ((operation (pop pending)))
                          (if (or (car operation) (not (cancelled)))
@@ -195,7 +203,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                (if (not (owned))
                    (finish '(:status interrupted))
                  (unless (mevedel-transport-run-when-idle
-                          event-key dispatch-directory #'drain
+                          event-key dispatch-target #'drain
                           (lambda () (finish '(:status interrupted))))
                    (kill-owner))))))
          (prompt (input)
@@ -256,14 +264,6 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                         (eq 'interrupted (plist-get outcome :status)))
                                     'aborted (plist-get outcome :status))))
                    (setq info (plist-put info :mevedel-acp-outcome status))
-                   (when-let* ((tokens (plist-get outcome :tokens)))
-                     ;; The adapter has normalized the complete prompt total.
-                     ;; Replace reported counters instead of adding them. A
-                     ;; missing terminal counter cannot erase known progress.
-                     (let ((known (copy-sequence (plist-get info :tokens-full))))
-                       (while tokens
-                         (setq known (plist-put known (pop tokens) (pop tokens))))
-                       (setq info (plist-put info :tokens-full known))))
                    (when-let* ((message (plist-get outcome :message)))
                      (setq info (plist-put info :error
                                            (if (plist-get outcome :code)
@@ -433,7 +433,7 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                          (condition-case err
                                              (unless
                                                  (mevedel-transport-run-when-idle
-                                                  dispatch-key dispatch-directory
+                                                  dispatch-key dispatch-target
                                                   (lambda ()
                                                     (condition-case err
                                                         (if (or finished (not (owned)))
