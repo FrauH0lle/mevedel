@@ -17,7 +17,7 @@
 (declare-function mevedel-collaboration--guest
                   "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--observer-failure
-                  "mevedel-collaboration" (room))
+                  "mevedel-collaboration" (room &optional err))
 (declare-function mevedel-collaboration--publish
                   "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--room-for-session
@@ -234,9 +234,9 @@ refusal is answered to the sender."
   "Re-publish SESSION after its artifact folder changed on disk."
   (mevedel-collaboration--artifact-stat-invalidate)
   (when-let* ((room (mevedel-collaboration--room-for-session session)))
-    (condition-case nil
+    (condition-case err
         (mevedel-collaboration--publish room)
-      (error (mevedel-collaboration--observer-failure room)))))
+      (error (mevedel-collaboration--observer-failure room err)))))
 
 (provide 'mevedel-collaboration-artifact)
 ;;; mevedel-collaboration-artifact.el ends here

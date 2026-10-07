@@ -158,9 +158,7 @@ retained native history already holds that delivery."
         (cl-mapc (lambda (entry commit)
                    (let ((file (cdr (plist-get entry :type))))
                      (unless (equal (alist-get (list path file) hashes nil nil #'equal)
-                                    (plist-get (mevedel-tool-fs-read--workspace-instruction
-                                                scope path file)
-                                               :hash))
+                                    (plist-get entry :hash))
                        (push entry entries)
                        (push commit commits))))
                  (plist-get all :entries) (plist-get all :commits))

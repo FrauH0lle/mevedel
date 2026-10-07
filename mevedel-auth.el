@@ -12,7 +12,6 @@
 ;; `mevedel-claude-code'
 (declare-function mevedel-claude-code--prepare-launch "mevedel-claude-code" (checks cli environment ready failure))
 (defvar mevedel-claude-code--api-environment)
-(defvar mevedel-claude-code-executable)
 
 ;; `mevedel-transport'
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")

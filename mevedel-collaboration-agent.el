@@ -33,7 +33,7 @@
 (declare-function mevedel-collaboration--guest
                   "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--observer-failure
-                  "mevedel-collaboration" (room))
+                  "mevedel-collaboration" (room &optional err))
 (declare-function mevedel-collaboration--room-for-buffer
                   "mevedel-collaboration" (buffer))
 (declare-function mevedel-collaboration--room-for-session
@@ -140,9 +140,9 @@ transcript stays reachable from the viewer's finished-agents list."
 (defun mevedel-collaboration-notify-agents-changed (session)
   "Schedule SESSION's publication after retained agent state changed."
   (when-let* ((room (mevedel-collaboration--room-for-session session)))
-    (condition-case nil
+    (condition-case err
         (mevedel-collaboration--schedule-publish room)
-      (error (mevedel-collaboration--observer-failure room)))))
+      (error (mevedel-collaboration--observer-failure room err)))))
 
 (defun mevedel-collaboration--agent-frame-overhead (req-id path)
   "Return encoded agent-frame overhead for REQ-ID and PATH."

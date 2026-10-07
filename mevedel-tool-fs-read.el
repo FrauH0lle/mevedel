@@ -1630,7 +1630,9 @@ AGENTS.local.md after AGENTS.md.  Do not acknowledge them until delivery."
                       (string-lessp a-dir b-dir))))))
     (dolist (file files)
       (let ((instruction (mevedel-tool-fs-read--workspace-instruction scope owner file)))
-        (push (list :type (cons 'workspace-instructions file) :body (plist-get instruction :body)) entries)
+        (push (list :type (cons 'workspace-instructions file) :body (plist-get instruction :body)
+                    :hash (plist-get instruction :hash))
+              entries)
         (push (plist-get instruction :commit) commits)))
     (list :entries (nreverse entries) :commits (nreverse commits))))
 
