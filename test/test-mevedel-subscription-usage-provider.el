@@ -34,6 +34,17 @@
   :doc "null fields never become zero"
   (should (equal "Primary: Unavailable used; window: Unavailable; resets: Unavailable\n"
                  (mevedel-subscription-usage-provider--window "Primary" nil)))
+  :doc "known utilization has a twenty-cell bar, including small and full quotas"
+  (dolist (case '((0 . 0) (3 . 1) (50 . 10) (100 . 20) (125 . 20)))
+    (let* ((used (car case))
+           (filled (cdr case))
+           (text (mevedel-subscription-usage-provider--window
+                  "Primary" `((used_percent . ,used)))))
+      (should (string-match-p (regexp-quote (format "%s%% used" used)) text))
+      (should (string-suffix-p
+               (concat "\n" (make-string filled ?\u2588)
+                       (make-string (- 20 filled) ?\u2591) "\n\n")
+               text))))
   :doc "malformed values are rejected"
   (should-error (mevedel-subscription-usage-provider--window "Primary" '((used_percent . "secret")))))
 

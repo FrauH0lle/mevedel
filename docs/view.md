@@ -902,7 +902,9 @@ header, including its synchronous renewal preflight. The quota HTTP request to
 `https://chatgpt.com/backend-api/wham/usage` is asynchronous with a 30-second
 timeout. Primary, secondary and additional quota buckets use the HTTP schema's
 returned window durations, utilization and reset times; plan and credits appear
-when available. Errors omit credentials and raw response bodies.
+when available. Known utilization also has a 20-cell progress bar beneath each
+window; unavailable utilization has no bar. Errors omit credentials and raw
+response bodies.
 
 Claude Code uses a fresh isolated ACP inspection conversation with no retained
 coding history, tools, or MCP servers. Its launch enables native slash commands
