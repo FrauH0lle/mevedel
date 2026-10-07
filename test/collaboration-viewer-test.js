@@ -317,7 +317,7 @@ async function testTransportGiveUp() {
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
   const createTransport = () => window.mevedelViewerTransport.create({
-    roomId: 'roomroomroomroom', key: {}, giveUpMs: 100,
+    roomId: 'roomroomroomroom', key: {}, giveUpMs: 100, joinGraceMs: 10,
     hello: () => ({t: 'hello'}), onConnection() {}, onFrame() {},
     onGiveUp() { giveUps++; }, async onOpen() {},
   });
@@ -341,10 +341,21 @@ async function testTransportGiveUp() {
   assert.equal(giveUps, 1);
   assert.equal(sockets.length, 3);
 
+  // A first join retries a 4004 briefly: the host may still be dialing.
   retry = null;
-  const stale = createTransport();
-  stale.connect();
+  const fresh = createTransport();
+  fresh.connect();
   sockets[3].dispatch('close', {code: 4004});
+  assert.equal(giveUps, 1);
+  assert.equal(typeof retry, 'function');
+  retry();
+  now = 108;
+  sockets[4].dispatch('close', {code: 4004});
+  assert.equal(giveUps, 1);
+  retry();
+  now = 113;
+  retry = null;
+  sockets[5].dispatch('close', {code: 4004});
   assert.equal(giveUps, 2);
   assert.equal(retry, null);
 }

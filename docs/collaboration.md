@@ -837,9 +837,12 @@ and gone with the tab, which never enters history and so keeps the reason
 for the wipe: F5, or navigating away and back, rejoins the room for as
 long as the tab and the room live. On boot the URL fragment wins, then the
 tab's share, then the notification opt-in's persisted last share. That last store is refreshed only for a room whose notifications are on. On an initial connection the relay answers an unknown room with
-close code 4004, which the viewer treats as terminal: it shows "Room closed"
-at once and drops the stale stored share instead of retrying for three
-minutes. Code 4001 (room closed by the host) starts the bounded reconnect
+close code 4004. The host hands out a new room's links before its own relay
+dial settles, so a guest following one at once, as the lobby does, can
+arrive first; the viewer therefore retries a first-join 4004 for five
+seconds. A 4004 that outlasts that window is terminal: the viewer shows
+"Room closed" and drops the stale stored share instead of retrying for
+three minutes. Code 4001 (room closed by the host) starts the bounded reconnect
 window; a 4004 during that window stays retryable because the guest may have
 reached the relay before the host recreated the room.
 
