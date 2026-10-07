@@ -655,9 +655,9 @@
                         "Test:test-model"
                         (mevedel-session-reasoning-effort source) 'high
                         (mevedel-session-pending-steering source)
-                        '((:id 1 :input "steer"))
+				       '((:id 1 :category steering :input "steer"))
                         (mevedel-session-pending-follow-ups source)
-                        '((:id 2 :input "later"))
+				       '((:id 2 :category follow-up :input "later"))
                         (mevedel-session-pending-input-next-id source) 3
                         (mevedel-session-pending-input-paused source) t
                         (mevedel-session-pending-input-failure-paused source)
@@ -731,15 +731,11 @@
                          (mevedel-session-resource-grants session)))
           (should (equal "Hi" (plist-get result :first-user-message)))
           (should (equal "Later" (plist-get result :latest-user-message)))
-          (dolist (key '(:pending-steering :pending-follow-ups
-                         :pending-input-next-id :pending-input-paused
-                         :pending-input-failure-paused))
-            (should-not (plist-member plist key)))
-          (should-not (mevedel-session-pending-input-p session))
-          (should-not (mevedel-session-pending-input-next-id session))
-          (should-not (mevedel-session-pending-input-paused session))
-          (should-not
-           (mevedel-session-pending-input-failure-paused session))
+			 (should (equal "later" (plist-get (car (mevedel-session-pending-follow-ups session)) :input)))
+			 (should (eq 'failed-turn (plist-get (car (mevedel-session-pending-steering session)) :state)))
+			 (should (= 3 (mevedel-session-pending-input-next-id session)))
+			 (should (mevedel-session-pending-input-paused session))
+			 (should (mevedel-session-pending-input-failure-paused session))
           ;; touched-files / mentions-shown reset to empty hash tables
           (should (hash-table-p (mevedel-session-touched-files session)))
           (should (zerop (hash-table-count (mevedel-session-touched-files session))))

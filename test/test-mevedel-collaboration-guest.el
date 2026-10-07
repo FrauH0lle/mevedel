@@ -1043,7 +1043,7 @@
 ;;; Relay callbacks
 
 (mevedel-deftest mevedel-collaboration--on-frame
-  (:doc "dispatches known frames and stops the room on handler failure")
+  (:quiet t :doc "dispatches known frames and preserves the room on handler failure")
   (with-temp-buffer
     (let* ((room (list :data-buffer (current-buffer)
                        :guests (make-hash-table :test #'eql)
@@ -1098,7 +1098,7 @@
                 ((symbol-function 'display-warning) (lambda (&rest _) nil)))
         (mevedel-collaboration--on-frame (current-buffer) 5
                                          (list :t "prompt" :text "x"))
-        (should (eq 'observer-failure stopped)))
+		       (should-not stopped))
       ;; A handler that would ask in Emacs is refused to its sender, and
       ;; the room stays up.
       (let (sent (stopped nil))

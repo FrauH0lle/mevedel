@@ -11,6 +11,8 @@
 
 ;;; Code:
 
+(require 'mevedel-recovery)
+
 (require 'cl-lib)
 (require 'mevedel-engine)
 (eval-when-compile
@@ -973,6 +975,7 @@ The entry holds `:body' and a delivery `:commit'."
 
 (defun mevedel-goal--transient-failure-p (reason)
   "Return non-nil when REASON describes a retryable transport failure."
+  (and (eq (mevedel-recovery-category reason) 'request)
   (string-match-p
    (rx (or "timeout" "timed out" "temporar" "connection"
            "network" "unavailable" "502" "503" "504"
@@ -981,7 +984,7 @@ The entry holds `:body' and a delivery `:commit'."
            (seq "curl failed with exit code "
                 (or "6" "7" "18" "28" "35" "52" "55" "56")
                 word-end)))
-   (downcase reason)))
+	(downcase reason))))
 
 (defun mevedel-goal-settle-turn (fsm)
   "Charge successful Goal turn FSM."

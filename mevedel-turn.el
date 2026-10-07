@@ -9,8 +9,11 @@
 
 ;;; Code:
 
+(require 'mevedel-recovery)
+
 (require 'cl-lib)
 (require 'mevedel-engine)
+(require 'mevedel-models)
 (require 'mevedel-compact-estimation)
 (require 'mevedel-structs)
 (require 'mevedel-transport)
@@ -350,6 +353,7 @@ caller for telemetry.  Return non-nil when this call made the request."
       (mevedel-execution-target-refresh-incarnation target)))
   t)
 
+
 (defun mevedel-request-begin (session &optional directive-uuid)
   "Create a new request for SESSION, guarding against stale requests.
 
@@ -357,6 +361,8 @@ If `mevedel--current-request' is already set, log a warning and replace
 it.  Signal instead if yielding checks or cancellation callbacks transfer
 ownership or start deferred settlement.  Optional DIRECTIVE-UUID sets the
 directive being processed.  Return the new request struct."
+  (mevedel-recovery-assert-ready session)
+  (mevedel-recovery-clear session "request")
   (let ((entry-request mevedel--current-request))
     (when mevedel--turn-settlements-pending
       (user-error "Turn settlement is still pending"))
@@ -504,6 +510,8 @@ is returned here."
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
+      (when (bound-and-true-p mevedel--session)
+        (setf (mevedel-session-last-outcome mevedel--session) outcome))
       (when (and (bound-and-true-p mevedel--session)
                  (bound-and-true-p mevedel--current-request)
                  (fboundp 'mevedel-telemetry-record))
@@ -570,6 +578,20 @@ is returned here."
                    (condition-case nil
                        (gptel-backend-name backend)
                      (error nil)))))
+        (when (bound-and-true-p mevedel--session)
+          (let* ((text (or (mevedel--fsm-error-message fsm) "Provider request failed"))
+                 (category (mevedel-recovery-category text
+						      (and (listp error-data) (plist-get error-data :code)))))
+            (mevedel-recovery-report mevedel--session "request" category text
+                                     (not (eq category 'request)))
+            (when (and (eq category 'model)
+                       (eq chat-buffer (mevedel-session-root-buffer mevedel--session)))
+              (when-let* ((provider (mevedel-model-recover-provider
+                                     (format "%s:%s" backend-name
+                                             (gptel--model-name (or (plist-get info :model) gptel-model)))
+                                     mevedel--session t)))
+                (mevedel-model-set-session-provider mevedel--session provider chat-buffer)
+                (mevedel-recovery-clear mevedel--session "request")))))
         (mevedel-view--append-request-summary
          chat-buffer
          (plist-get info :position)
@@ -726,8 +748,10 @@ The terminal admission hold stays live between publication and this phase."
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
-      (when (and mevedel--session mevedel--current-request)
-        (let* ((request-id (mevedel-request-id mevedel--current-request))
+      (when mevedel--session
+        (let* ((request-id (if mevedel--current-request
+                               (mevedel-request-id mevedel--current-request)
+                             (plist-get info :mevedel-request-id)))
                (entries (mevedel-session-pending-steering mevedel--session))
                (failed nil)
                (updated
@@ -740,6 +764,7 @@ The terminal admission hold stays live between publication and this phase."
                                     :state 'failed-turn))
                      entry))
                  entries)))
+          (mevedel-session-set-pending-input-failure-paused mevedel--session t)
           (when failed
             (mevedel-session-set-pending-inputs
              mevedel--session 'steering updated)
@@ -951,6 +976,10 @@ available."
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
+      (when (bound-and-true-p mevedel--session)
+        (setf (mevedel-session-last-outcome mevedel--session) 'lost)
+        (mevedel-recovery-report mevedel--session "request" 'request
+                                 "Turn ownership was lost; review the transcript before continuing" nil))
       (when (and (bound-and-true-p mevedel--session)
                  (fboundp 'mevedel-telemetry-record))
         (mevedel-telemetry-record
@@ -974,6 +1003,7 @@ touch.  The buffer remains busy until this deferred chain finishes."
   (mevedel--defer-turn-steps
    fsm
    (list #'mevedel--turn-record-lost-settlement
+         #'mevedel--turn-fail-pending-input
          #'mevedel--turn-save
          #'mevedel--turn-checkpoint
          (lambda (machine)
@@ -1065,7 +1095,7 @@ also autosaves, and it reaches here from the same process sentinel."
                 (mevedel-goal-settle-failure machine status)))
         (and (eq status 'error)
              (list #'mevedel--turn-record-request-failure))
-        (list #'mevedel--turn-save #'mevedel--turn-checkpoint)
+        (list #'mevedel--turn-fail-pending-input #'mevedel--turn-save #'mevedel--turn-checkpoint)
         (list (lambda (machine)
                 (mevedel--run-turn-terminal-hook
                  machine 'StopFailure status)))

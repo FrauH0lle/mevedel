@@ -13,6 +13,8 @@
 
 ;;; Code:
 
+(require 'mevedel-recovery)
+
 (require 'mevedel-engine)
 
 (require 'mevedel-report)
@@ -293,21 +295,24 @@ mis-attributed.")
     (mevedel-session-pending-follow-ups sess)))
 
 (defun mevedel-pending-inputs-follow-up-changed (session)
-  "Notify observers that SESSION's follow-up queue changed."
+  "Persist SESSION's follow-up queue and notify observers."
+  (mevedel-recovery-save session)
   (when (fboundp 'mevedel-collaboration-notify-queue-changed)
     (mevedel-collaboration-notify-queue-changed session)))
 
 (defun mevedel-pending-inputs--set-queues (session &rest replacements)
   "Replace SESSION queue CATEGORY ENTRIES pairs and notify guests once."
-  (let (follow-up-changed)
+  (let ((before (list (mevedel-session-pending-steering session)
+                      (mevedel-session-pending-follow-ups session))))
+    (condition-case err
+        (progn
     (while replacements
-      (let ((category (pop replacements))
-            (entries (pop replacements)))
-        (when (eq category 'follow-up)
-          (setq follow-up-changed t))
-        (mevedel-session-set-pending-inputs session category entries)))
-    (when follow-up-changed
-      (mevedel-pending-inputs-follow-up-changed session))))
+            (mevedel-session-set-pending-inputs session (pop replacements) (pop replacements)))
+          (mevedel-pending-inputs-follow-up-changed session))
+      (error
+       (setf (mevedel-session-pending-steering session) (car before)
+             (mevedel-session-pending-follow-ups session) (cadr before))
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-view--next-follow-up (session)
   "Return SESSION's first follow-up eligible for its owning workflow.
@@ -325,10 +330,14 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
          queue)
       (car queue))))
 
+
 (defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION follow-ups should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (or (mevedel-session-pending-input-delivery-paused-p sess)
+    (or (mevedel-recovery-blocker sess)
+        (cl-find 'failed-turn (mevedel-session-pending-follow-ups sess)
+                 :key (lambda (entry) (plist-get entry :state)))
+        (mevedel-session-pending-input-delivery-paused-p sess)
         (mevedel-session-pending-plan-approval sess)
         (and (mevedel-session-directive-planning sess)
              (not (mevedel-view--next-follow-up sess)))
@@ -447,7 +456,7 @@ explicitly selected skills applied together, with the same admission recheck."
                                          paths " ")))
           (dolist (path paths)
             (mevedel-session-add-dropped-file-grant session path)))
-        (let ((entry (mevedel-session-enqueue-pending-input
+        (let ((entry (mevedel-recovery-enqueue
                       session 'follow-up
                       (list :input input
                             :guest-name guest-name
@@ -479,7 +488,8 @@ explicitly selected skills applied together, with the same admission recheck."
                             :queued-at-time (float-time)
                             :queued-at-turn
                             (or (mevedel-session-turn-count session) 0)))))
-          (mevedel-pending-inputs-follow-up-changed session)
+          (when (fboundp 'mevedel-collaboration-notify-queue-changed)
+            (mevedel-collaboration-notify-queue-changed session))
           (mevedel-view--interaction-rebuild)
           (mevedel-view--schedule-late-follow-up-drain)
           entry)))))
@@ -493,7 +503,7 @@ explicitly selected skills applied together, with the same admission recheck."
     (let* ((dropped-file-grants
             (mevedel-view--pop-dropped-file-grants-for-input input session))
            (entry
-            (mevedel-session-enqueue-pending-input
+            (mevedel-recovery-enqueue
              session 'follow-up
              (list :input input
                    :scope (mevedel-view--queued-scope)
@@ -516,7 +526,8 @@ explicitly selected skills applied together, with the same admission recheck."
       (mevedel-view-history-add input)
       (when (equal-including-properties (mevedel-view--input-text) input)
         (mevedel-view--clear-input))
-      (mevedel-pending-inputs-follow-up-changed session)
+      (when (fboundp 'mevedel-collaboration-notify-queue-changed)
+        (mevedel-collaboration-notify-queue-changed session))
       (mevedel-view--interaction-rebuild)
       (message "mevedel: queued follow-up for a separate turn")
       (mevedel-view--schedule-late-follow-up-drain)
@@ -611,7 +622,7 @@ When PRESERVE-DRAFT is non-nil, leave the composer untouched."
                (mevedel-view--prepare-steering-entry submission request))
               (session (mevedel-view--session))
               (entry
-               (mevedel-session-enqueue-pending-input
+               (mevedel-recovery-enqueue
                 session 'steering prepared)))
     (let ((input (plist-get entry :input)))
       (mevedel-view-history-add input)
@@ -808,6 +819,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                           (mevedel-session-active-dropped-file-grants
                            session)))
                         (delivered nil)
+                        (transcript-tick (buffer-chars-modified-tick data-buffer))
                         (before-send
                          (lambda ()
                            (mevedel-view--activate-dropped-file-grants
@@ -820,6 +832,13 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                         (release
                          (lambda ()
                            (plist-put entry :delivering nil)
+                           (unless delivered
+                             (if (and (= transcript-tick (buffer-chars-modified-tick data-buffer))
+                                      (not (mevedel-turn-busy-p data-buffer)))
+                                 (plist-put entry :state nil)
+                               (plist-put entry :state 'failed-turn)
+                               (mevedel-session-set-pending-input-failure-paused session t))
+                             (mevedel-recovery-save session))
                            (unless delivered
                              (mevedel-session--set-active-dropped-file-grants
                               session active-grants-before))
@@ -850,10 +869,18 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                                    (mevedel-goal-id
                                     (mevedel-session-goal session)))))
                            (setq delivered t)
-                           (mevedel-pending-inputs--set-queues
+                           (mevedel-session-set-pending-inputs
                             session 'follow-up
-                            (delq entry
-                                  (mevedel-view--pending-follow-ups session)))
+                            (remq entry (mevedel-view--pending-follow-ups session)))
+                           (condition-case err
+                               (mevedel-pending-inputs-follow-up-changed session)
+                             (error
+                              ;; The persisted dispatch marker prevents cold replay;
+                              ;; the live queue must also never restore a committed prompt.
+                              (mevedel-session-set-pending-input-failure-paused session t)
+                              (mevedel-recovery-report session "input" 'input
+                                                       "Prompt publication failed; review the transcript before continuing" t)
+                              (signal (car err) (cdr err))))
                            (mevedel-view--interaction-rebuild))))
                    ;; Consumed where the prompt and its hook audits are
                    ;; inserted; cleared on every blocked or failed path.
@@ -867,6 +894,8 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                    ;; until the transcript commit; the flag keeps a guest
                    ;; retraction from deleting attachment files an
                    ;; in-flight prompt is about to read.
+                   (plist-put entry :state 'dispatching)
+                   (mevedel-recovery-save session)
                    (plist-put entry :delivering t)
                    ;; A blocked dispatch reports through its own callback,
                    ;; but preparation and the submit hook re-signal instead,
@@ -885,8 +914,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (mevedel-view--refuse-guest-follow-up entry session err))
                      ((error quit)
                       (funcall release)
-                      ;; A refused guest entry left at the head would block
-                      ;; every later message; drop it and tell its sender.
+                      ;; Retain refused input and tell its sender recovery is needed.
                       (if (and (plist-get entry :guest-id) (not (eq 'quit (car err))))
                           (mevedel-view--refuse-guest-follow-up entry session err)
                         (signal (car err) (cdr err)))))))))))))))
@@ -899,34 +927,17 @@ removed only when the resulting prompt reaches its transcript commit boundary."
       "")))
 
 (defun mevedel-view--refuse-guest-follow-up (entry session &optional err)
-  "Drop guest ENTRY of SESSION, whose turn could not run.
-ERR is the `inhibited-interaction' signal, which may carry the question, or
-the error that refused the turn.  Its attachment files leave with it, as on
-a retraction; the host is warned and the guest told, rather than the queue
-retrying it forever.  Prompts and errors can name hosts and paths, so only
-the host sees the question or the error."
-  (mevedel-pending-inputs--set-queues
-   session 'follow-up (delq entry (mevedel-view--pending-follow-ups session)))
-  (dolist (path (plist-get entry :guest-paths))
-    (when (file-exists-p path)
-      (ignore-errors (delete-file path))))
+  "Retain unsent ENTRY and attachments until SESSION can recover from ERR."
+  (plist-put entry :delivering nil)
+  (plist-put entry :blocked t)
+  (ignore err)
+  (let ((reason "The host could not send this message; resolve the issue and retry"))
+    (mevedel-recovery-report session "input" 'input reason t)
+    (mevedel-recovery-save session)
   (mevedel-view--interaction-rebuild)
-  (let ((inhibited (or (null err) (eq 'inhibited-interaction (car err)))))
-    (display-warning
-     'mevedel
-     (format "A message from %s was not sent: %s"
-             (or (plist-get entry :guest-name) "a guest")
-             (if inhibited
-                 (concat "its turn needed a decision in Emacs"
-                         (mevedel-view--refused-question err))
-               (error-message-string err))))
     (when (fboundp 'mevedel-collaboration-notify-guest)
       (mevedel-collaboration-notify-guest
-       session (plist-get entry :guest-id)
-       (if inhibited
-           (concat mevedel-collaboration-needs-host-message
-                   "; your message was not sent")
-         "The host could not run your message; it was not sent")))))
+       session (plist-get entry :guest-id) (concat reason "; your message is retained")))))
 
 (defun mevedel-view--run-follow-up-drain (data-buffer)
   "Drain one pending follow-up for DATA-BUFFER if it is live.
@@ -1085,6 +1096,7 @@ first character of a real draft."
   (let ((session (mevedel-pending-inputs--session context))
         (view (mevedel-cockpit-context-view-buffer context)))
     (mevedel-session-set-pending-input-paused session t)
+    (mevedel-recovery-save session)
     (when (buffer-live-p view)
       (with-current-buffer view
         (mevedel-view--interaction-rebuild)))))
@@ -1642,6 +1654,7 @@ first character of a real draft."
                   (length failed) (if (= 1 (length failed)) "" "s")))
     (mevedel-session-artifacts-assert-new-mutation-authority session)
     (mevedel-session-set-pending-input-failure-paused session nil)
+    (mevedel-recovery-save session)
     (mevedel-pending-inputs--refresh)
     (message "mevedel: pending-input failure pause cleared")))
 
@@ -1667,6 +1680,7 @@ and only a transition back to WAIT releases it."
          (failure-paused
           (mevedel-session-pending-input-failure-paused session)))
     (mevedel-session-set-pending-input-paused session nil)
+    (mevedel-recovery-save session)
     (when (buffer-live-p view)
       (with-current-buffer view
         (mevedel-view--interaction-rebuild)))

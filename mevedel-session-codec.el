@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-recovery)
+
 (require 'cl-lib)
 
 (eval-when-compile
@@ -146,7 +148,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.9"
+(defconst mevedel-session-codec-format-version "v0.5.10"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -169,6 +171,8 @@ add more, and we don't want to act on actions we don't understand).")
     :worktree-base-commit
     :permission-mode :sandbox-mode :plan-mode :permission-rules :resource-grants
     :preset-name :model-provider :reasoning-effort :external-conversations
+	     :recovery-issues :pending-follow-ups :pending-steering :pending-input-next-id
+	     :pending-input-paused :pending-input-failure-paused
     :last-observed-date
     :agent-types-snapshot :workspace-instruction-hashes
     :additional-roots :tasks
@@ -590,6 +594,12 @@ The resulting plist is round-trippable via
    :permission-rules       (plist-get authority :rules)
    :resource-grants        (plist-get authority :resource-grants)
    :preset-name            (mevedel-session-preset-name session)
+     :recovery-issues        (copy-tree (mevedel-session-recovery-issues session))
+     :pending-follow-ups     (mevedel-recovery-persist-inputs session)
+     :pending-steering       (mevedel-recovery-persist-inputs session t)
+     :pending-input-next-id  (or (mevedel-session-pending-input-next-id session) 0)
+     :pending-input-paused   (mevedel-session-pending-input-paused session)
+     :pending-input-failure-paused (mevedel-session-pending-input-failure-paused session)
    :model-provider         (mevedel-session-model-provider session)
    :external-conversations (copy-tree (mevedel-session-external-conversations session))
    :reasoning-effort       (mevedel-session-reasoning-effort session)
@@ -721,6 +731,32 @@ session's sidecar, rewritten by every save."
            (plist-get plist :sandbox-mode)))
   (unless (booleanp (plist-get plist :plan-mode))
     (error "Invalid persisted Plan mode: %S" (plist-get plist :plan-mode)))
+  (unless (and (proper-list-p (plist-get plist :recovery-issues))
+               (proper-list-p (plist-get plist :pending-follow-ups))
+               (proper-list-p (plist-get plist :pending-steering))
+               (natnump (plist-get plist :pending-input-next-id))
+               (booleanp (plist-get plist :pending-input-paused))
+               (booleanp (plist-get plist :pending-input-failure-paused)))
+    (error "Invalid recovery records"))
+  (dolist (issue (plist-get plist :recovery-issues))
+    (unless (and (proper-list-p issue) (cl-evenp (length issue))
+                 (stringp (plist-get issue :id)) (stringp (plist-get issue :category))
+                 (stringp (plist-get issue :message))
+                 (memq (plist-get issue :blocking) '(nil t))
+                 (cl-loop for (key _) on issue by #'cddr
+                          always (memq key '(:id :category :message :blocking))))
+      (error "Invalid recovery issue")))
+  (dolist (entry (append (plist-get plist :pending-follow-ups)
+                         (plist-get plist :pending-steering)))
+    (unless (and (proper-list-p entry) (cl-evenp (length entry))
+                 (mevedel--plain-data-p entry)
+                 (stringp (plist-get entry :input))
+                 (integerp (plist-get entry :id))
+                 (memq (plist-get entry :category) '(follow-up steering))
+                 (memq (plist-get entry :guest-role) '(nil full owner))
+                 (cl-loop for (key _) on entry by #'cddr
+                          always (memq key mevedel-recovery--input-keys)))
+      (error "Invalid retained input")))
   (unless (or (null (plist-get plist :model-provider))
               (and (stringp (plist-get plist :model-provider))
                    (string-match-p
@@ -764,7 +800,7 @@ Only the current sidecar version is accepted.  Permission rules with
 unknown actions and task state with invalid agent owners are dropped via
 their hygiene filters."
   (unless (equal (plist-get plist :version)
-                mevedel-session-codec-format-version)
+                 mevedel-session-codec-format-version)
     (error "Unsupported session version: %s"
            (or (plist-get plist :version) "missing")))
   (mevedel-session-codec-validate-current-sidecar plist)
@@ -846,6 +882,25 @@ their hygiene filters."
                      :sandbox-mode     (plist-get plist :sandbox-mode)
                      :plan-mode        (plist-get plist :plan-mode)
                      :preset-name      (plist-get plist :preset-name)
+                     :recovery-issues  (copy-tree (plist-get plist :recovery-issues))
+                     :pending-follow-ups (mapcar (lambda (entry)
+                                                   (let ((copy (copy-tree entry)))
+                                                     (when (eq (plist-get copy :state) 'dispatching)
+                                                       (plist-put copy :state 'failed-turn))
+                                                     copy))
+						 (plist-get plist :pending-follow-ups))
+                     :pending-steering (mapcar (lambda (entry)
+                                                 (plist-put (copy-tree entry) :state 'failed-turn))
+                                               (plist-get plist :pending-steering))
+                     :pending-input-next-id (plist-get plist :pending-input-next-id)
+                     :pending-input-paused (plist-get plist :pending-input-paused)
+                     :pending-input-failure-paused (or (and (cl-find-if
+                                                             (lambda (entry) (memq (plist-get entry :state) '(dispatching failed-turn)))
+                                                             (plist-get plist :pending-follow-ups)) t)
+                                                       (and (memq (plist-get (cdr (assoc "root" (plist-get plist :external-conversations))) :state)
+                                                                  '(in-flight uncertain)) t)
+                                                       (and (plist-get plist :pending-steering) t)
+                                                       (plist-get plist :pending-input-failure-paused))
                      :model-provider   (plist-get plist :model-provider)
                      :external-conversations
                      (mapcar (lambda (entry)
@@ -905,10 +960,10 @@ their hygiene filters."
                       (plist-get plist :messages) "/root"))))
     (when-let* ((goal (mevedel-session-goal session))
                 ((eq (mevedel-goal-status goal) 'active)))
-        (setf (mevedel-goal-status goal) 'paused
-              (mevedel-goal-reason goal) "session resumed"
-              (mevedel-goal-updated-at goal)
-              (format-time-string "%FT%T%z")))
+      (setf (mevedel-goal-status goal) 'paused
+            (mevedel-goal-reason goal) "session resumed"
+            (mevedel-goal-updated-at goal)
+            (format-time-string "%FT%T%z")))
     (list :session             session
           :first-user-message  (plist-get plist :first-user-message)
           :latest-user-message latest-user-message

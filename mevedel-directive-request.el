@@ -46,6 +46,10 @@
 (defvar gptel-request--transitions)
 (defvar gptel-stream)
 
+;; `mevedel-auth'
+(declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(autoload 'mevedel-auth-assert-ready "mevedel-auth")
+
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel--chat-buffer
@@ -764,20 +768,21 @@ settling."
                              :mevedel-request-callback request-callback))
             (mevedel-claude-code-send prompt))
         (let ((fsm
-               (gptel-request
-                prompt :buffer chat-buffer :position response-start :stream gptel-stream
-                :transforms
-                (append gptel-prompt-transform-functions
-                        (and model-policy
-                             (list (lambda (_fsm)
-                                     (setq-local
-                                      gptel-backend (plist-get model-policy :backend)
-                                      gptel-model (plist-get model-policy :model)
-                                      gptel-reasoning-effort (plist-get model-policy :effort))))))
-                :fsm (gptel-make-fsm
-                      :table (mevedel-preset--build-transitions
-                              (copy-tree gptel-request--transitions))
-                      :handlers gptel-send--handlers))))
+	       (progn (mevedel-auth-assert-ready backend)
+		      (gptel-request
+                       prompt :buffer chat-buffer :position response-start :stream gptel-stream
+                       :transforms
+                       (append gptel-prompt-transform-functions
+                               (and model-policy
+				    (list (lambda (_fsm)
+					    (setq-local
+					     gptel-backend (plist-get model-policy :backend)
+					     gptel-model (plist-get model-policy :model)
+					     gptel-reasoning-effort (plist-get model-policy :effort))))))
+                       :fsm (gptel-make-fsm
+			     :table (mevedel-preset--build-transitions
+				     (copy-tree gptel-request--transitions))
+			     :handlers gptel-send--handlers)))))
           (setf (gptel-fsm-info fsm)
                 (plist-put (gptel-fsm-info fsm) :mevedel-request-callback request-callback))
           fsm)))))

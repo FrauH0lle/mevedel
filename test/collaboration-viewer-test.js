@@ -603,6 +603,7 @@ async function main() {
   const ids = ['transcript', 'history', 'connection', 'notice', 'live-button', 'assistant-working',
                'terminal-state', 'terminal-title', 'terminal-message',
                'composer', 'composer-input', 'composer-name',
+               'recovery-controls', 'recovery-actions', 'recovery-auth', 'recovery-issues',
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
@@ -1733,6 +1734,23 @@ async function main() {
   // The room key is the same room, not a new one.
   assert.ok(copies.every(link => link.includes(`#${roomId}.`)));
   nodes.invite.close('close');
+
+  // Recovery is a typed owner action; operational updates never replace a draft.
+  nodes['composer-input'].value = '> retained\nmultiline';
+  await deliver({t: 'status', busy: false, issues: [{id: 'authentication', message: 'Sign in to continue'}]});
+  assert.match(textOf(nodes['recovery-issues']), /Sign in to continue/);
+  assert.equal(nodes['composer-input'].value, '> retained\nmultiline');
+  await deliver({t: 'recovery', models: ['Test:available'], presets: ['default'], providers: ['Codex'], provider: 'Codex',
+                 auth: {id: 'login-1', status: 'login', url: 'https://auth.openai.com/codex/device', code: 'ABCD-1234'}});
+  assert.equal(nodes['recovery-controls'].hidden, false);
+  assert.match(textOf(nodes['recovery-auth']), /ABCD-1234/);
+  const signIn = nodes['recovery-actions'].children.find(node => node.textContent === 'Sign in');
+  const recoveryBefore = first.sent.length;
+  signIn.dispatch('click');
+  await waitFor(() => first.sent.length === recoveryBefore + 1, 'sealed recovery action');
+  assert.equal((await unseal(key, first.sent.at(-1))).action, 'login');
+  await deliver({t: 'recovery', models: [], presets: [], providers: [], auth: {status: 'ready', message: 'Login ready'}});
+  assert.doesNotMatch(textOf(nodes['recovery-auth']), /ABCD-1234/);
 
   // Cancelling never sends anything.
   const cancelBefore = first.sent.length;

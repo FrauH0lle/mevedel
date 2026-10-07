@@ -4,6 +4,9 @@
 
 ;;; Code:
 
+(defvar mevedel-claude-code-auto-update)
+(setq mevedel-claude-code-auto-update nil)
+
 (require 'cl-lib)
 (require 'gptel-request)
 
@@ -639,7 +642,7 @@ only report a failure the test never asked for."
              (setq-local mevedel-view--abort-function
                          #'mevedel-view-test--abort-interactions))
            (mevedel-view--setup view-buf data-buf)
-           ,@body)
+           (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)) ,@body))
        (when (buffer-live-p view-buf) (kill-buffer view-buf))
        (when (buffer-live-p data-buf) (kill-buffer data-buf))
        (when (file-directory-p mevedel-user-dir)

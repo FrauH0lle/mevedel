@@ -99,8 +99,8 @@
                      (lambda (&rest args) (push args warnings))))
             (run-hooks 'gptel-post-stream-hook)
             (run-hook-with-args 'gptel-post-response-functions 1 1)
-            (should (equal (make-list 2 (cons room 'observer-failure)) stopped))
-            (should (= 2 (length warnings))))))
+			  (should-not stopped)
+			  (should-not warnings))))
       (with-current-buffer view-buf
         (should (equal draft (mevedel-view--input-text)))
         (should (= 4 (- (point) (mevedel-view--input-start))))))))

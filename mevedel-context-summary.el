@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-recovery)
+
 (eval-when-compile
   (require 'cl-lib))
 
@@ -32,6 +34,10 @@
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest slots))
 (declare-function gptel-request "ext:gptel-request")
 (defvar gptel-request--handlers)
+
+;; `mevedel-auth'
+(declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(autoload 'mevedel-auth-assert-ready "mevedel-auth")
 
 ;; `mevedel-engine'
 (declare-function mevedel-engine-external-p "mevedel-engine" (backend))
@@ -291,6 +297,12 @@ continuation and handoff summaries."
           (lambda (result &optional info)
             (unless settled
               (setq settled t chunks nil)
+              (when (mevedel-session-p session)
+                (if (eq (plist-get result :outcome) 'success)
+                    (mevedel-recovery-clear session "context-summary")
+                  (when (eq (plist-get result :outcome) 'error)
+                    (mevedel-recovery-report session "context-summary" 'request
+                                             "Context summarization failed; the existing conversation is retained" nil))))
               (let* ((tokens (and (listp (plist-get info :tokens)) (plist-get info :tokens)))
                      (usage (list :input-tokens (plist-get tokens :input)
                                   :cached-tokens (plist-get tokens :cached)
@@ -437,38 +449,39 @@ continuation and handoff summaries."
                      (list :mevedel-context-summary t :purpose purpose
                            :mevedel-telemetry-session session
                            :mevedel-telemetry-workload 'context-summary))
-                  (gptel-request
-                   input
-                   :system system
-                   :buffer request-buffer
-                   :stream stream
-                   :transforms nil
-                   :context
-                   (list :mevedel-context-summary t :purpose purpose
-                         :mevedel-telemetry-session session
-                         :mevedel-telemetry-workload 'context-summary)
-                   :fsm
-                   (if (and (eq purpose 'digest) (plist-get policy :max-tokens))
-                       (gptel-make-fsm
-                        :handlers
-                        (cons
-                         (list
-                          'WAIT
-                          (lambda (fsm)
-                            (condition-case err
-                                (progn
-                                  (mevedel-context-summary--limit-digest-request
-                                   fsm (plist-get policy :max-tokens))
-                                  (gptel--handle-wait fsm))
-                              (error
-                               (funcall settle
-                                        (list :outcome 'error
-                                              :error-class 'provider
-                                              :error (error-message-string err)))))))
-                         (assq-delete-all 'WAIT
-                                          (copy-tree gptel-request--handlers))))
-                     (gptel-make-fsm))
-                   :callback provider-callback))))))
+                  (progn (mevedel-auth-assert-ready gptel-backend)
+			 (gptel-request
+			  input
+			  :system system
+			  :buffer request-buffer
+			  :stream stream
+			  :transforms nil
+			  :context
+			  (list :mevedel-context-summary t :purpose purpose
+				:mevedel-telemetry-session session
+				:mevedel-telemetry-workload 'context-summary)
+			  :fsm
+			  (if (and (eq purpose 'digest) (plist-get policy :max-tokens))
+			      (gptel-make-fsm
+                               :handlers
+                               (cons
+				(list
+				 'WAIT
+				 (lambda (fsm)
+				   (condition-case err
+                                       (progn
+					 (mevedel-context-summary--limit-digest-request
+					  fsm (plist-get policy :max-tokens))
+					 (gptel--handle-wait fsm))
+				     (error
+				      (funcall settle
+                                               (list :outcome 'error
+						     :error-class 'provider
+						     :error (error-message-string err)))))))
+				(assq-delete-all 'WAIT
+						 (copy-tree gptel-request--handlers))))
+			    (gptel-make-fsm))
+			  :callback provider-callback)))))))
       (error
        (funcall
         settle

@@ -19,6 +19,7 @@
 (require 'gptel)
 (require 'mevedel-structs)
 (require 'mevedel-models)
+(require 'mevedel-recovery)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-transport)
@@ -167,6 +168,9 @@ considered again until reset by clear."
                (report (outcome properties)
                  (unless reported
                    (setq reported t)
+                   (when (memq outcome '(provider-error timeout error invalid-response))
+                     (mevedel-recovery-report session "session-naming" 'request
+                                              "Automatic session naming failed; the existing name is retained" nil))
                    (apply #'mevedel-telemetry-record
                           session 'session-naming
                           :outcome outcome properties)))

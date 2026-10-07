@@ -11,6 +11,11 @@ viewer together. Rebuild the relay binary after viewer changes because the
 assets are embedded; reload browser tabs after updating. Tool presentation
 metadata does not change the relay's content-blind forwarding contract.
 
+Owner peers receive a sealed `recovery` snapshot with model/preset choices and
+safe ephemeral login state, and submit closed `recovery` actions. Shared `status`
+frames include persistent operational `issues` and the last turn `outcome`.
+Credentials never enter relay payloads; notification wakeups remain generic.
+
 ## Wire contract
 
 - `GET /` — the bundled viewer (`viewer/`, embedded via `go:embed`).

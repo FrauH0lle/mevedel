@@ -10,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-engine)
+(require 'mevedel-recovery)
 
 ;; `gptel-request'
 (declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
@@ -302,16 +303,56 @@ Nil selects the model's default effort."
     (mevedel-session-set-reasoning-effort session effort))
   effort)
 
+(defcustom mevedel-model-fallback-provider nil
+  "Provider used when a saved selection disappears.
+Nil uses the host's default backend and model.  Never searches other providers."
+  :type '(choice (const :tag "Host default" nil) string) :group 'mevedel)
+
+(defun mevedel-model-recover-provider (selector &optional session unavailable)
+  "Resolve saved SELECTOR, using the configured fallback for SESSION.
+Return nil when neither selection is available.  Explicit user selections
+must use `mevedel-model-resolve-provider' instead.
+UNAVAILABLE means live provider capabilities already rejected SELECTOR."
+  (or (when-let* (((not unavailable))
+                  (provider (mevedel-model-resolve-provider selector t)))
+        (when (and session (plist-get (mevedel-recovery-blocker session) :blocking))
+          (mevedel-recovery-clear session "model"))
+        provider)
+      (let* ((fallback (or mevedel-model-fallback-provider
+                           (when (and (default-value 'gptel-backend)
+                                      (default-value 'gptel-model))
+                             (mevedel-model--provider-label
+                              (list :backend (default-value 'gptel-backend)
+                                    :model (default-value 'gptel-model))))))
+             (provider (and fallback
+                            (not (and unavailable (equal fallback selector)))
+                            (mevedel-model-resolve-provider fallback t))))
+        (when session
+          (mevedel-recovery-report
+           session "model" 'model
+           (if provider (format "%s is unavailable; using %s" selector fallback)
+             (format "%s is unavailable; select a model" selector))
+           (not provider)))
+        provider)))
+
 (defun mevedel-model-apply-session-policy (session &optional buffer)
-  "Restore SESSION's model provider and effort into BUFFER."
+  "Restore SESSION into BUFFER without making unavailable history unreadable."
   (with-current-buffer (or buffer (current-buffer))
-    (when-let* ((selector (mevedel-session-model-provider session))
-                (provider (mevedel-model-resolve-provider selector)))
-      (setq-local gptel-backend (plist-get provider :backend))
-      (setq-local gptel-model (plist-get provider :model)))
-    (let ((effort (mevedel-session-reasoning-effort session)))
-      (mevedel-model-validate-effort gptel-model effort)
-      (setq-local gptel-reasoning-effort effort)))
+    (let* ((selector (mevedel-session-model-provider session))
+           (provider (and selector (mevedel-model-recover-provider selector session))))
+      (when provider
+        (setq-local gptel-backend (plist-get provider :backend)
+                    gptel-model (plist-get provider :model))
+        (mevedel-session-set-model-provider session (mevedel-model--provider-label provider)))
+      (let ((effort (mevedel-session-reasoning-effort session)))
+        (condition-case nil
+            (mevedel-model-validate-effort gptel-model effort)
+          (user-error
+           (mevedel-recovery-report session "effort" 'configuration
+                                    "Saved reasoning effort is unsupported; using the model default" nil)
+           (setq effort nil)))
+        (setq-local gptel-reasoning-effort effort)
+        (mevedel-session-set-reasoning-effort session effort))))
   session)
 
 
@@ -339,8 +380,10 @@ When NOERROR is non-nil, invalid configuration returns nil."
       (condition-case err
           (let* ((provider-spec (plist-get configured :provider))
                  (provider (and provider-spec
-                                (mevedel-model-resolve-provider
-                                 provider-spec noerror))))
+                                (mevedel-model-recover-provider
+                                 provider-spec (bound-and-true-p mevedel--session)))))
+            (when (and provider-spec (not provider))
+              (user-error "Provider %s is unavailable for tier %s" provider-spec tier))
             (list :backend (or (plist-get provider :backend) gptel-backend)
                   :model (or (plist-get provider :model) gptel-model)
                   :effort (if (plist-member configured :effort)
@@ -436,7 +479,8 @@ happens here only when the caller has established request ownership."
               (mevedel-model-tier-selector tier)))
            (provider-p
             (when-let* ((provider (plist-get spec :provider)))
-              (mevedel-model-resolve-provider provider)))
+              (or (mevedel-model-recover-provider provider (bound-and-true-p mevedel--session))
+                  (user-error "No available provider for skill %s" skill-name))))
            (model (mevedel-model-parse-selector model)))
           :effort
           (if (plist-member spec :effort)
@@ -475,7 +519,9 @@ the workload's tier, exact provider and effort, followed by explicit overrides."
                            :effort (and (boundp 'gptel-reasoning-effort)
                                         gptel-reasoning-effort))))
            (provider (and provider-spec
-                          (mevedel-model-resolve-provider provider-spec)))
+                          (or (mevedel-model-recover-provider provider-spec
+							      (bound-and-true-p mevedel--session))
+                              (user-error "Provider %s is unavailable for workload %s" provider-spec workload))))
            (explicit (and explicit-selector
                           (mevedel-model-resolve-selector explicit-selector))))
       (when provider
@@ -491,8 +537,16 @@ the workload's tier, exact provider and effort, followed by explicit overrides."
                                   (plist-get explicit :effort)))))
       (when explicit-effort
         (setq policy (plist-put policy :effort explicit-effort)))
-      (mevedel-model-validate-effort
-       (plist-get policy :model) (plist-get policy :effort))
+      (condition-case err
+          (mevedel-model-validate-effort
+           (plist-get policy :model) (plist-get policy :effort))
+        (user-error
+         (if explicit-effort
+             (signal (car err) (cdr err))
+           (setq policy (plist-put policy :effort nil))
+           (when (bound-and-true-p mevedel--session)
+             (mevedel-recovery-report mevedel--session "effort" 'configuration
+                                      "Inherited reasoning effort is unsupported; using the model default" nil)))))
       policy)))
 
 (defun mevedel-model-current-label (&optional buffer)

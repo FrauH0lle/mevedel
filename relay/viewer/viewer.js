@@ -102,6 +102,9 @@
     history.connection(className === 'connected');
     if (className !== 'connected') {
       state.connected = false;
+      recoverySignature = '';
+      const recoveryAuth = document.getElementById('recovery-auth');
+      if (recoveryAuth) recoveryAuth.replaceChildren();
       state.busy = null;
       editing.connection(false);
     }
@@ -262,6 +265,95 @@
     const folded = document.body.hasAttribute('data-reading');
     const next = folded ? distance >= 40 : distance > dock.offsetHeight + 80;
     if (next !== folded) document.body.toggleAttribute('data-reading', next);
+  }
+
+  // Recovery never replaces the composer or its draft. Auth challenges remain
+  // in memory only and arrive exclusively on the host's owner projection.
+  let recoverySignature = '';
+  function recoveryAction(action, value, extra = {}) {
+    send({t: 'recovery', action, value, ...extra});
+  }
+  function renderRecoveryIssues(issues) {
+    const node = document.getElementById('recovery-issues');
+    if (!node) return;
+    node.replaceChildren();
+    for (const issue of Array.isArray(issues) ? issues : []) {
+      if (typeof issue.message === 'string') node.append(el('p', 'recovery-issue', issue.message));
+    }
+    node.hidden = !node.children.length;
+  }
+  function renderRecovery(frame) {
+    if (!state.owner) return;
+    const signature = JSON.stringify(frame);
+    if (signature === recoverySignature) return;
+    recoverySignature = signature;
+    const controls = document.getElementById('recovery-controls');
+    const actions = document.getElementById('recovery-actions');
+    const auth = document.getElementById('recovery-auth');
+    if (!controls || !actions || !auth) return;
+    controls.hidden = false;
+    actions.replaceChildren();
+    auth.replaceChildren();
+    const button = (parent, text, action) => {
+      const node = el('button', 'btn quiet', text);
+      node.type = 'button'; node.addEventListener('click', action); parent.append(node);
+    };
+    const picker = (label, values, action) => {
+      const wrapper = el('label', '', label);
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', label);
+      for (const value of values || []) {
+        const option = el('option', '', value); option.value = value; option.selected = action === 'model' && value === frame.model; select.append(option);
+      }
+      wrapper.append(select); actions.append(wrapper);
+      button(actions, `Apply ${label.toLowerCase()}`, () => recoveryAction(action, select.value));
+    };
+    picker('Model', frame.models, 'model');
+    picker('Preset', frame.presets, 'preset');
+    button(actions, 'Retry retained input', () => recoveryAction('retry'));
+    for (const scope of frame.histories || []) {
+      button(actions, `Recover Claude history: ${scope}`, () => {
+        if (window.confirm(`Continue ${scope} from a transcript excerpt in a new Claude conversation?`)) recoveryAction('history', scope);
+      });
+    }
+    for (const entry of frame.steering || []) {
+      actions.append(el('p', '', `Input requiring review: ${entry.text}`));
+      button(actions, 'Queue as new message', () => recoveryAction('input-requeue', entry.id));
+      button(actions, 'Discard reviewed input', () => {
+        if (window.confirm('Discard this retained input?')) recoveryAction('input-discard', entry.id);
+      });
+    }
+    button(actions, 'Check updates', () => recoveryAction('update'));
+    if (frame.runtime && frame.runtime.message) actions.append(el('p', '', frame.runtime.message));
+    const provider = document.createElement('select');
+    provider.setAttribute('aria-label', 'Login provider');
+    for (const name of frame.providers || []) {
+      const option = el('option', '', name); option.value = name;
+      option.selected = name === frame.provider; provider.append(option);
+    }
+    actions.append(provider);
+    button(actions, 'Sign in', () => recoveryAction('login', null, {provider: provider.value}));
+    auth.append(el('p', '', 'Signing in changes the credentials used by this Emacs host.'));
+    if (frame.auth) {
+      auth.append(el('p', '', frame.auth.message || ''));
+      if (frame.auth.url && /^https:\/\/(auth\.openai\.com|claude\.ai|platform\.claude\.com)\//.test(frame.auth.url)) {
+        const link = el('a', '', 'Open provider login');
+        link.href = frame.auth.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; auth.append(link);
+      }
+      if (frame.auth.code) auth.append(el('p', '', `One-time code: ${frame.auth.code}`));
+      else if (frame.auth.status === 'login' && frame.auth.url) {
+        const input = document.createElement('input');
+        input.type = 'password'; input.autocomplete = 'off'; input.setAttribute('aria-label', 'Full authorization code');
+        auth.append(input);
+        button(auth, 'Complete login', () => {
+          const value = input.value.trim(); input.value = '';
+          recoveryAction('login-code', value, {provider: frame.provider, id: frame.auth.id});
+        });
+      }
+      if (['login', 'refreshing'].includes(frame.auth.status)) {
+        button(auth, 'Cancel login', () => recoveryAction('cancel-login', null, {provider: frame.provider}));
+      }
+    }
   }
 
   /* -- Status strip -------------------------------------------------- */
@@ -981,7 +1073,9 @@
 
   function handleFrame(frame) {
     if (!frame || typeof frame.t !== 'string') return;
-    if (frame.t === 'welcome') {
+    if (frame.t === 'recovery') {
+      renderRecovery(frame);
+    } else if (frame.t === 'welcome') {
       state.readOnly = frame.readOnly !== false;
       state.staging = {records: [], live: []};
       state.connected = true;
@@ -1068,8 +1162,10 @@
     } else if (frame.t === 'status') {
       if (state.busy === true && frame.busy !== true) {
         notifications.maybeNotify(
-          'Turn finished', 'The mevedel session is idle again.');
+          frame.outcome === 'error' ? 'Turn failed' : ['aborted', 'lost'].includes(frame.outcome) ? 'Turn interrupted' : 'Turn finished',
+          frame.outcome === 'error' ? 'Open the session for the failure and recovery actions.' : 'The mevedel session is idle again.');
       }
+      renderRecoveryIssues(frame.issues);
       state.busy = frame.busy === true;
       if (typeof frame.model === 'string') state.model = frame.model;
       if (typeof frame.mode === 'string') state.mode = frame.mode;

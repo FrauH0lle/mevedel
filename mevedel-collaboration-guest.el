@@ -10,6 +10,11 @@
 
 ;;; Code:
 
+(autoload 'mevedel-collaboration-recovery-handle "mevedel-collaboration-recovery")
+(autoload 'mevedel-collaboration-recovery-send "mevedel-collaboration-recovery")
+(declare-function mevedel-collaboration-recovery-handle "mevedel-collaboration-recovery" (room peer frame))
+(declare-function mevedel-collaboration-recovery-send "mevedel-collaboration-recovery" (room peer &optional backend))
+
 (eval-when-compile
   (require 'cl-lib))
 
@@ -90,6 +95,7 @@
   "mevedel-collaboration-history")
 
 ;; `mevedel-collaboration-owner'
+(declare-function mevedel-collaboration--owner "mevedel-collaboration-owner" (room peer))
 (declare-function mevedel-collaboration--handle-new-session
                   "mevedel-collaboration-owner" (room peer frame))
 (declare-function mevedel-collaboration--handle-set-mode
@@ -689,6 +695,8 @@ Authority comes only from the tokens FRAME proves it holds."
     (mevedel-collaboration--transport-send
      (plist-get room :transport) peer
      (mevedel-collaboration--status-frame room))
+    (when (plist-get guest :owner)
+      (mevedel-collaboration-recovery-send room peer))
     ;; The roster broadcast is latched on change, so a joining guest
     ;; is told the current one directly -- an empty roster included,
     ;; because a reconnecting viewer must clear stale rows.
@@ -1040,8 +1048,8 @@ the failed-enqueue cleanup."
                                  ;; is no longer the guest's to take back.
                                  (not (plist-get candidate :delivering))))
                           entries)))
-        (mevedel-session-set-pending-inputs
-         session 'follow-up (delq entry entries))
+        (mevedel-pending-inputs--set-queues
+         session 'follow-up (remq entry entries))
         (dolist (path (plist-get entry :guest-paths))
           (when (file-exists-p path)
             (ignore-errors (delete-file path))))
@@ -1070,7 +1078,7 @@ the failed-enqueue cleanup."
   "Dispatch decoded guest FRAME from PEER for DATA-BUFFER's room.
 
 Failure isolation mirrors the gptel observers: a fault in guest input
-handling stops the room instead of leaking into the session.  Guests act
+handling preserves the room and reports a safe notice.  Guests act
 while nobody may be at the keyboard, so frames run with
 `inhibit-interaction': a step that would ask in Emacs is refused to the
 sending guest instead of waiting for an answer."
@@ -1079,6 +1087,13 @@ sending guest instead of waiting for an answer."
         (condition-case err
             (let ((inhibit-interaction t))
               (mevedel-collaboration--dispatch-frame room peer frame))
+          (user-error
+           (mevedel-collaboration--transport-send
+            (plist-get room :transport) peer
+            (list :t "notice" :message
+                  (if (mevedel-collaboration--owner room peer)
+                      (error-message-string err)
+                    "The host could not complete this action; the owner can review session status"))))
           (inhibited-interaction
            (mevedel-collaboration--transport-send
             (plist-get room :transport) peer
@@ -1092,6 +1107,7 @@ sending guest instead of waiting for an answer."
 (defun mevedel-collaboration--dispatch-frame (room peer frame)
   "Handle guest FRAME from PEER in ROOM."
   (pcase (plist-get frame :t)
+    ("recovery" (mevedel-collaboration-recovery-handle room peer frame))
     ("hello" (mevedel-collaboration--handle-hello room peer frame))
     ("set-name"
      (when-let* ((guest (mevedel-collaboration--guest room peer))

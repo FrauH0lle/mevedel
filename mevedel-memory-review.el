@@ -18,6 +18,10 @@
 (require 'mevedel-models)
 (require 'mevedel-reminders)
 
+;; `mevedel-auth'
+(declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(autoload 'mevedel-auth-assert-ready "mevedel-auth")
+
 ;; `mevedel-structs'
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
@@ -431,8 +435,9 @@ its exact provider payload and per-step token usage are not exposed."
                            gptel-backend input system gptel-tools #'external-provider
                            #'external-before-tool #'external-boundary))
                     (when (and settled cancel-engine) (funcall cancel-engine)))
-                (gptel-request input :buffer buffer :system system :stream stream :transforms nil
-                               :fsm (machine) :callback #'provider))))
+                (progn (mevedel-auth-assert-ready gptel-backend)
+                       (gptel-request input :buffer buffer :system system :stream stream :transforms nil
+				      :fsm (machine) :callback #'provider)))))
         (error (finish 'error (error-message-string err))))
       (list :buffer buffer :cancel (lambda () (finish 'aborted))
             :report (lambda ()

@@ -70,6 +70,10 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
 		  "mevedel-agents" (cl-x) t)
 
+;; `mevedel-auth'
+(declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(autoload 'mevedel-auth-assert-ready "mevedel-auth")
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--safe-accepted-prompt
                   "mevedel-collaboration" (data-buffer))
@@ -1312,7 +1316,9 @@ The effective model and effort apply only to this request, not saved selection."
                  (assoc "root" (mevedel-session-external-conversations mevedel--session)))
         (mevedel-claude-code-release-history mevedel--session))
       (setq-local mevedel--pending-model-input model-input)
-      (unwind-protect (let ((mevedel--dispatching t)) (funcall local-send))
+      (unwind-protect (let ((mevedel--dispatching t))
+                        (mevedel-auth-assert-ready gptel-backend)
+                        (funcall local-send))
         (setq-local mevedel--pending-model-input nil)))))
 
 (defun mevedel--send-request (&optional model-input)

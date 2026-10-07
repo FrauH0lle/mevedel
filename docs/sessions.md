@@ -125,30 +125,13 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.9`, including required naming-state and external-conversation metadata.
-Other schemas are rejected by the runtime loader. An explicitly invoked,
-one-off converter is available for `v0.5.6` sessions from before the Claude
-integration. It adds empty external-conversation metadata and marks an
-existing Goal's token usage complete (`:tokens-incomplete-p nil`); it does not
-change transcripts, permissions, session identity or artifacts.
+The closed sidecar schema is `v0.5.10`, including recovery issues, retained input and pause state.
+Other schemas are rejected by the runtime loader; this change does not migrate
+older sessions. Recovery records contain safe issue messages, never credentials.
+Queued follow-ups retain text, attribution, scope and attachment grants. Live
+submission objects are excluded. Undelivered steering reloads as requiring review,
+with automatic delivery paused; a restart never resurrects a submitted request.
 
-Close the source session first, then run from the repository with Eask
-dependencies installed (the destination's parent must exist):
-
-```bash
-npx @emacs-eask/cli emacs --batch -L . \
-  -l scripts/migrate-session-v0.5.6.el \
-  -f mevedel-migrate-session-main -- /absolute/source/session /absolute/new/copy
-```
-
-The script leaves the source unchanged. It converts all retained publication
-sidecars, updates their manifest checksums, and checks the output schema.
-It refuses active ownership, unresolved recovery, corrupt artifacts, symlinks,
-remote paths and older unsupported schemas. Keep the source closed while
-converting. After checking the copy, move the original outside `.mevedel/sessions`
-as a backup and put the converted directory at the original path. Keep its
-original directory name and session ID, and do not open both copies as writable
-sessions. This targeted script does not relax the loader's single-format rule.
 
 ## Persistence flow
 
@@ -638,7 +621,7 @@ identity. Superseded sidecar shapes are not migrated during resume; the explicit
 `v0.5.6` conversion described above runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.9`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.10`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions

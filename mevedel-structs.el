@@ -215,6 +215,8 @@ workspace."
   preset-name       ; selected mevedel preset symbol
   model-provider    ; exact "BACKEND:MODEL" session selector or nil
   external-conversations ; scope -> native ownership, installed history and turn state
+  last-outcome      ; most recent terminal turn outcome for notifications
+  recovery-issues   ; durable, credential-free operational issues
   reasoning-effort  ; explicit session effort symbol or nil for default
   turn-count        ; integer: for reminder throttling
   reminders         ; list of active mevedel-reminder structs
@@ -228,11 +230,11 @@ workspace."
   (agent-root-activity 'idle) ; root roster activity: running or idle
   agent-root-waiter ; transient async WaitAgent callback and timer
   (agent-turn-capacity 10) ; maximum active non-root turns in this session tree
-  pending-steering ; transient FIFO of same-turn steering prompts
-  pending-follow-ups ; transient FIFO of prompts awaiting separate root turns
+  pending-steering ; durable unsent steering; restored for explicit review
+  pending-follow-ups ; durable FIFO of prompts awaiting separate root turns
   pending-input-next-id ; next session-local pending-input identity
   pending-input-paused ; non-nil while automatic delivery is user-paused
-  pending-input-failure-paused ; non-nil after undelivered steering loses its turn
+  pending-input-failure-paused ; non-nil after a submitted turn fails or aborts
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup

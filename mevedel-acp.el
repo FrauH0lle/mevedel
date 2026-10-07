@@ -63,7 +63,9 @@
 (defun mevedel-acp--fail (connection error)
   "Close CONNECTION after protocol or process ERROR."
   (mevedel-acp--shutdown
-   connection (list :status 'error :message
+   connection (list :status 'error
+                    :code (and (listp error) (alist-get 'code error))
+                    :message
                     (if (stringp error) error
                       (or (alist-get 'message error) (format "%S" error))))))
 
@@ -118,13 +120,18 @@ so a dead process fails the connection instead."
         (setf (mevedel-acp-state connection) 'idle)
         (funcall (mevedel-acp-ready connection) connection))))))
 
-(defun mevedel-acp--new-session (connection response)
+(cl-defun mevedel-acp--new-session (connection response)
   "Create or resume CONNECTION after initialization RESPONSE."
   (when (eq (mevedel-acp-state connection) 'starting)
     (if (not (equal 1 (alist-get 'protocolVersion response)))
         (mevedel-acp--fail connection "Unsupported ACP protocol version")
       (setf (mevedel-acp-capabilities connection)
             (alist-get 'agentCapabilities response))
+      (when (plist-get (mevedel-acp-launch connection) :initialize-only)
+        (mevedel-acp--cancel-timer connection)
+        (setf (mevedel-acp-state connection) 'idle)
+        (funcall (mevedel-acp-ready connection) connection)
+        (cl-return-from mevedel-acp--new-session nil))
       (let* ((launch (mevedel-acp-launch connection))
              (id (plist-get launch :session-id))
              (capabilities (mevedel-acp-capabilities connection))
@@ -174,6 +181,7 @@ continuation.  It must finish configuration before invoking the continuation;
 startup errors or timeout fail before any prompt is submitted.
 Optional :required-command waits for a session command advertisement before
 READY; missing support fails startup without sending a prompt.
+Optional :initialize-only checks the protocol without creating a conversation.
 Optional :compaction advertises support for retained session summaries.
 Optional :normalize-outcome translates adapter-specific terminal metadata and
 usage into an outcome plist; generic ACP cannot infer its accounting scope.
@@ -242,6 +250,7 @@ string if startup fails.  Return the runtime connection immediately."
                   connection initialize
                   (lambda (response) (mevedel-acp--new-session connection response)))
                  (when-let* ((process (alist-get :process client)))
+                   (process-put process 'mevedel-acp-launch launch)
                    (let ((sentinel (process-sentinel process)))
                      (set-process-sentinel
                       process (lambda (process event)

@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'gptel-openai-oauth)
+(require 'mevedel-auth)
 (require 'mevedel-claude-code)
 (require 'mevedel-acp-text)
 (require 'url-http)
@@ -86,7 +87,7 @@
 
 (defun mevedel-subscription-usage-provider--codex (backend callback)
   "Fetch BACKEND's Codex quotas, delivering CALLBACK; return a canceller.
-Keep gptel's private authentication API here, including synchronous renewal.
+Keep gptel's private authentication API here, renewing before HTTP dispatch.
 Neither authentication errors nor HTTP bodies are included in diagnostics."
   (let (response timer done headers)
     (cl-labels
@@ -104,6 +105,7 @@ Neither authentication errors nor HTTP bodies are included in diagnostics."
          (cancel () (setq done t) (cleanup)))
       (condition-case nil
           (let ((gptel-backend backend))
+            (mevedel-auth-assert-ready backend)
             (setq headers (gptel--openai-oauth-header nil)))
         (error (finish nil "Codex authentication failed. Run M-x gptel-openai-oauth-login and refresh.")))
       (unless done
@@ -111,7 +113,7 @@ Neither authentication errors nor HTTP bodies are included in diagnostics."
             (let ((url-request-method "GET")
                   (url-request-extra-headers headers)
                   (url-request-data nil)
-                  (url-show-status nil)
+                  (url-show-status nil) (url-request-noninteractive t)
                   (url-max-redirections 0))
               (setq timer (run-at-time 30 nil (lambda () (finish nil "Codex usage request timed out; refresh to retry."))))
               (setq response

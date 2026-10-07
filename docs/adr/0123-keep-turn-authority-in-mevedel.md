@@ -86,6 +86,40 @@ authority. A hook whose client gave up is not run later. Retained native
 invocations use the same bounded acknowledgement; their runtime canceller
 defers terminal settlement until the connection completes it.
 
+## Headless recovery and runtime maintenance
+
+Provider readiness belongs to the harness, before root input is committed.
+Saved provider selections may fall back to one configured provider or the host
+default, with a visible notice; explicit invalid selections remain errors. Missing
+presets require owner selection, without changing permission or sandbox authority.
+Authentication recovery uses asynchronous Codex refresh/device login and the
+Claude CLI's subscription login/status interfaces. Credentials remain local;
+owner peers receive ephemeral URL/code challenges. Unsent input is durable and
+may resume after repair, while submitted failure or interruption requires explicit
+continuation. Native history recovery still requires an idle conversation and
+preserves the transcript and effects.
+
+Queued input records a durable delivery intent before dispatch. A failed
+publication cannot put a committed prompt back into the runnable queue. On
+restart, interrupted delivery and uncertain native turns require explicit review
+before continuation. OAuth readiness also runs at each gptel sampling boundary,
+so expiry during a tool loop settles the turn without synchronous login.
+
+Stable CLI/adapter maintenance runs asynchronously behind an installation lock.
+Native CLI releases are pinned before installation can prune them; adapters are
+staged by version. Version checks and an initialization-only ACP handshake gate
+activation. Current, previous and active runtimes survive cleanup. A rejected pair
+waits for a new version or an explicit check. External installations are not
+replaced. Authentication failure is separate from runtime compatibility.
+
+### Decision history
+
+The initial integration required terminal login and an explicitly installed,
+pinned adapter. Headless browser use exposed inaccessible recovery prompts and
+stale installations. Owner-only typed recovery and automatic checked maintenance
+replace that setup policy while retaining the installed CLI's credential and
+conversation ownership.
+
 ## Rationale and consequences
 
 This boundary preserves the existing session workflow and the tested tool
