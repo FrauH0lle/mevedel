@@ -95,9 +95,9 @@
 ;;; Customization
 
 (defcustom mevedel-skill-dirs
-  '(".mevedel/skills/"
+  `(".mevedel/skills/"
     ".agents/skills/"
-    "~/.mevedel/skills/"
+    ,(file-name-concat mevedel-user-dir "skills/")
     "~/.agents/skills/")
   "Directories scanned for SKILL.md files.
 
@@ -840,7 +840,8 @@ configured root under which SOURCE-FILE was found."
     (let ((path (directory-file-name
                  (expand-file-name (substitute-in-file-name dir)))))
       (cond
-       ((string-match-p "\\(?:\\`\\|/\\)\\.mevedel/skills\\'" path)
+       ((or (equal path (expand-file-name "skills" mevedel-user-dir))
+            (string-match-p "\\(?:\\`\\|/\\)\\.mevedel/skills\\'" path))
         'mevedel)
        ((string-match-p "\\(?:\\`\\|/\\)\\.agents/skills\\'" path)
         'agents)))))

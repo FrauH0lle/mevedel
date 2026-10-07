@@ -41,7 +41,9 @@
 (defcustom mevedel-user-dir (expand-file-name "~/.mevedel/")
   "Global user state directory.
 
-Stores user-wide skills, global config, and local-target global permissions.
+Stores user-wide skills, memory, plugins, global config, and local-target
+global permissions.  The defaults of `mevedel-skill-dirs' and
+`mevedel-memory-dirs' derive from it when mevedel loads, so set it first.
 Remote global permissions live in the target user's ~/.mevedel/ instead.
 Project-level state goes in PROJECT/.mevedel/ instead.  Lookup functions
 check project dir first, then global."

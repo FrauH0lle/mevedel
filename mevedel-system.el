@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'mevedel-report)
+(require 'mevedel-structs)
 
 (eval-when-compile
   (require 'cl-lib)
@@ -92,9 +93,9 @@
   "Directory containing the mevedel source files.")
 
 (defcustom mevedel-memory-dirs
-  '(".mevedel/memory/"
+  `(".mevedel/memory/"
     ".agents/memory/"
-    "~/.mevedel/memory/"
+    ,(file-name-concat mevedel-user-dir "memory/")
     "~/.agents/memory/")
   "Directories scanned for persistent memory indexes.
 
@@ -314,7 +315,9 @@ round trip per file to discover."
          (path (directory-file-name
                 (expand-file-name (substitute-in-file-name dir))))
          (family (cond
-                  ((string-match-p "\\(?:\\`\\|/\\)\\.mevedel/memory\\'" path)
+                  ((or (and global
+                            (equal path (expand-file-name "memory" mevedel-user-dir)))
+                       (string-match-p "\\(?:\\`\\|/\\)\\.mevedel/memory\\'" path))
                    "mevedel")
                   ((string-match-p "\\(?:\\`\\|/\\)\\.agents/memory\\'" path)
                    "agents")))

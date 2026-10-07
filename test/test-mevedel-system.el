@@ -808,6 +808,19 @@
       (should (< local-agents-pos global-mevedel-pos))
       (should (< global-mevedel-pos global-agents-pos)))))
 
+(mevedel-deftest mevedel-system--memory-root ()
+  ,test
+  (test)
+  :doc "global memory under a relocated `mevedel-user-dir' keeps the mevedel alias"
+  (let ((mevedel-user-dir "/srv/state/mevedel/"))
+    (should (equal "global-mevedel"
+                   (plist-get (mevedel-system--memory-root
+                               nil "/srv/state/mevedel/memory/")
+                              :alias)))
+    (should (equal "global-agents"
+                   (plist-get (mevedel-system--memory-root nil "~/.agents/memory/")
+                              :alias)))))
+
 (mevedel-deftest mevedel-system--memory-context-prompt
   (:before-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
