@@ -147,8 +147,11 @@ schema, send-time binding, and dispatch branches.
   local temporary file for gptel and removed when the request ends.
   Supported media file types from the Read tool (`png`, `jpg`, `jpeg`,
   `gif`, `webp`, `pdf`) are attached through gptel context when the
-  active model advertises compatible media support; otherwise the mention
-  is rejected with an explanatory placeholder. Runs
+  active model advertises compatible media support. A model that takes
+  images but not PDF documents receives the PDF's leading pages as PNG images,
+  rendered synchronously with `pdftoppm` up to the Read page cap; a reminder
+  names the `pages` value that continues a longer document. Otherwise the
+  mention is rejected with an explanatory placeholder. Runs
   `mevedel-check-permission "Read"` first — any non-allow yields
   "permission denied". Missing and unreadable files are rejected.
 - **@agent:name** — asks main agent to delegate via

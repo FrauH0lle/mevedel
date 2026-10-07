@@ -94,8 +94,10 @@ image or document reached the model; unsupported delivery omits base64 content.
 
 PDF `pages` renders selected pages with `pdftoppm` from poppler-utils, then
 uses the image-delivery path. Supported selections include `"3"`, `"1-5"`, and
-`"3-"`, with at most 20 pages per request. Use this for selected pages or when
-full-document delivery is unsupported and images are supported:
+`"3-"`, with at most 20 pages per request. When the model takes images but not
+PDF documents, a Read without `pages` renders pages `"1-"` instead. A result
+that stops before the last page says which `pages` value continues. Use `pages`
+for selected pages:
 
 ```text
 Read(file_path="docs/design.pdf", pages="2-4")
