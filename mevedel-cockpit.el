@@ -222,6 +222,69 @@ LABEL is used in the owner error."
       (puthash (car entry) item mevedel-cockpit--row-items)
       entry)))
 
+(defun mevedel-cockpit--fit-format (format entries padding width)
+  "Return FORMAT with column widths fitted to ENTRIES within WIDTH.
+FORMAT's widths are the widths a column keeps when space is tight.  A
+column narrower than that shrinks to its widest cell or header, with room
+for a sort indicator.  Space left over grows columns whose cells would
+be truncated, while the last column, which takes whatever remains, keeps
+up to a third of the line.  PADDING is `tabulated-list-padding'."
+  (let* ((count (length format))
+         (last (1- count))
+         (natural
+          (vconcat
+           (cl-loop
+            for n below count
+            for column = (aref format n)
+            collect
+            (apply #'max (+ (string-width (car column))
+                            (if (nth 2 column) 2 0))
+                   (mapcar (lambda (entry)
+                             (let ((cell (aref (cadr entry) n)))
+                               (cond ((stringp cell) (string-width cell))
+                                     ((eq (car-safe cell) 'image) 1)
+                                     (t (string-width (car cell))))))
+                           entries)))))
+         (widths (vconcat (cl-loop for n below last
+                                   collect (min (aref natural n)
+                                                (nth 1 (aref format n))))))
+         (slack (- width padding
+                   (min (aref natural last) (/ (- width padding) 3))
+                   (cl-loop for n below last
+                            sum (+ (aref widths n)
+                                   (or (plist-get (nthcdr 3 (aref format n))
+                                                  :pad-right)
+                                       1)))))
+         (grew t))
+    (while (and (> slack 0) grew)
+      (setq grew nil)
+      (dotimes (n last)
+        (when (and (> slack 0) (< (aref widths n) (aref natural n)))
+          (cl-incf (aref widths n))
+          (cl-decf slack)
+          (setq grew t))))
+    (vconcat (cl-loop for n below count
+                      for (name width sort . props) = (aref format n)
+                      collect `(,name ,(if (< n last) (aref widths n) width)
+                                      ,sort ,@props)))))
+
+(defun mevedel-cockpit--fit-columns (window)
+  "Fit the cockpit columns to WINDOW.  Return non-nil when they changed."
+  (when (window-live-p window)
+    (let ((format (mevedel-cockpit--fit-format
+                   (plist-get mevedel-cockpit--surface :format)
+                   tabulated-list-entries tabulated-list-padding
+                   (window-max-chars-per-line window))))
+      (unless (equal format tabulated-list-format)
+        (setq tabulated-list-format format)
+        (tabulated-list-init-header)
+        t))))
+
+(defun mevedel-cockpit--refit (window)
+  "Reprint the cockpit when WINDOW's new size changes its columns."
+  (when (mevedel-cockpit--fit-columns window)
+    (tabulated-list-print t)))
+
 (defun mevedel-cockpit-surface-refresh (&optional selected-id)
   "Refresh the current tabulated cockpit, preserving SELECTED-ID."
   (interactive)
@@ -238,6 +301,7 @@ LABEL is used in the owner error."
            (lambda (item)
              (mevedel-cockpit--row-entry surface item context))
            mevedel-cockpit--items))
+    (mevedel-cockpit--fit-columns (get-buffer-window nil t))
     (tabulated-list-print t)
     (unless (equal selected (tabulated-list-get-id))
       (mevedel-cockpit-goto-id selected))
@@ -403,6 +467,9 @@ a help label are still valid bindings, but are omitted from generated help."
   (use-local-map
    (mevedel-cockpit--make-surface-keymap (plist-get surface :keys)))
   (tabulated-list-init-header)
+  ;; Also runs when a window first shows the buffer, which is how a
+  ;; surface rendered before display gets its first fit.
+  (add-hook 'window-size-change-functions #'mevedel-cockpit--refit nil t)
   (hl-line-mode 1))
 
 (defun mevedel-cockpit-quit (&optional label)

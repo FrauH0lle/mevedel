@@ -61,7 +61,7 @@
 
 (defun mevedel-cockpit-test--entry (item _context)
   "Return a tabulated row for ITEM."
-  (list item (vector item)))
+  (list item (vector item "")))
 
 (defun mevedel-cockpit-test--header (items _context)
   "Return a test header for ITEMS."
@@ -78,7 +78,7 @@
     :label "test cockpit"
     :row-label "test item"
     :mode mevedel-cockpit-test-mode
-    :format [("Name" 12 t)]
+    :format [("Name" 12 t) ("Note" 0 nil)]
     :sort-key ("Name" . nil)
     :collect mevedel-cockpit-test--collect
     :entry mevedel-cockpit-test--entry
@@ -356,11 +356,73 @@
     (unwind-protect
         (let ((buffer (mevedel-cockpit-test--open view-buffer data-buffer)))
           (with-current-buffer buffer
+            ;; Batch has no redisplay to run the fit on display.
+            (mevedel-cockpit-surface-refresh)
             (mevedel-cockpit-goto-id "b")
             (end-of-line)
             (let ((column (current-column)))
               (mevedel-cockpit-surface-refresh)
               (should (= column (current-column))))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+
+(mevedel-deftest mevedel-cockpit--fit-format ()
+  ,test
+  (test)
+
+  :doc "shrinks a column wider than its cells to its sortable header"
+  (should (equal [("Status" 8 t) ("Rest" 0 t)]
+                 (mevedel-cockpit--fit-format
+                  [("Status" 20 t) ("Rest" 0 t)]
+                  '((a ["indexed" "x"])) 2 80)))
+  :doc "grows a truncated column into unused width"
+  (should (equal [("Name" 13 t :pad-right 2) ("Rest" 0 nil)]
+                 (mevedel-cockpit--fit-format
+                  [("Name" 6 t :pad-right 2) ("Rest" 0 nil)]
+                  `((a [,(make-string 13 ?n) "x"])) 2 80)))
+  :doc "measures button and image cells"
+  (should (equal [("A" 5 nil) ("B" 1 nil) ("C" 0 nil)]
+                 (mevedel-cockpit--fit-format
+                  [("A" 10 nil) ("B" 10 nil) ("C" 0 nil)]
+                  '((a [("click" action ignore) (image :type png) "x"]))
+                  0 80)))
+  :doc "keeps a third of the line for a long last column"
+  ;; 2 padding + (4 + 1) + (14 + 1) = 22 used and (38 - 2) / 3 = 12 kept
+  ;; for the last column leave 38 - 22 - 12 = 4 for Title to grow.
+  (should (equal [("Id" 4 nil) ("Title" 18 nil) ("Path" 0 nil)]
+                 (mevedel-cockpit--fit-format
+                  [("Id" 4 nil) ("Title" 14 nil) ("Path" 0 nil)]
+                  `((a ["1234" ,(make-string 40 ?t) ,(make-string 36 ?p)]))
+                  2 38)))
+  :doc "keeps declared widths when the window is too narrow"
+  (should (equal [("Title" 10 nil) ("Path" 0 nil)]
+                 (mevedel-cockpit--fit-format
+                  [("Title" 10 nil) ("Path" 0 nil)]
+                  `((a [,(make-string 40 ?t) ,(make-string 40 ?p)]))
+                  2 12))))
+
+(mevedel-deftest mevedel-cockpit--refit ()
+  ,test
+  (test)
+
+  :doc "fits a displayed cockpit to its window and reprints on resize"
+  (let ((view-buffer (generate-new-buffer " *cockpit-refit-view*"))
+        (data-buffer (generate-new-buffer " *cockpit-refit-data*")))
+    (unwind-protect
+        (save-window-excursion
+          (let* ((long (make-string 30 ?n))
+                 (buffer (mevedel-cockpit-test--open
+                          view-buffer data-buffer nil (list long "b")))
+                 (window (selected-window)))
+            (delete-other-windows window)
+            (with-current-buffer buffer
+              (should (memq #'mevedel-cockpit--refit
+                            window-size-change-functions))
+              (mevedel-cockpit--refit window)
+              (should (equal [("Name" 30 t) ("Note" 0 nil)]
+                             tabulated-list-format))
+              (goto-char (point-min))
+              (should (search-forward long nil t))
+              (should-not (mevedel-cockpit--fit-columns window)))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-cockpit-surface-selected ()
