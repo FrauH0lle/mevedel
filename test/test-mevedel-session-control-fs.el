@@ -14,6 +14,39 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-session-control-fs--send-request-buffer
+  (:doc "sync and async carriers send bounded pieces without losing binary bytes or authority fencing")
+  (let* ((root (make-temp-file "mevedel-control-chunks-" t))
+         (path (file-name-concat root "payload"))
+         (binary (concat (make-string (* 128 1024) ?x) (unibyte-string 0 128 255)))
+         (mevedel-session-control-fs--pipe-local t)
+         (mevedel-session-control-fs--stage-local nil)
+         (send (symbol-function 'process-send-region)))
+    (unwind-protect
+        (dolist (async '(nil t))
+          (let ((writes 0) results failure done)
+            (cl-letf (((symbol-function 'process-send-region)
+                       (lambda (process start end)
+                         (should (<= (- end start) 1024))
+                         (should (mevedel-transport-busy-p))
+                         (cl-incf writes)
+                         (funcall send process start end))))
+              (let ((operations (list (list :op 'write :path path :content binary))))
+                (if async
+                    (mevedel-session-control-fs-run-program-async
+                     operations (lambda (value err) (setq results value failure err done t)))
+                  (setq results (mevedel-session-control-fs-run-program operations) done t)))
+              (with-timeout (10 (ert-fail "Chunked control request never settled"))
+                (while (not done) (accept-process-output nil 0.01))))
+            (should-not failure)
+            (should (eq 'ok (plist-get (car results) :status)))
+            (should (> writes 128))
+            (with-temp-buffer
+              (set-buffer-multibyte nil)
+              (insert-file-contents-literally path)
+              (should (equal binary (buffer-string))))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-control-fs--write-program-request ()
   ,test
   (test)
@@ -144,18 +177,18 @@
 
   :doc "reports a program that exits before its request is written as failed"
   (let ((mevedel-session-control-fs--pipe-local t)
-        (send (symbol-function 'process-send-string))
+        (send (symbol-function 'process-send-region))
         settled)
     (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
                (lambda (_) (cons "false" "stat")))
               ;; Busy-wait without servicing events so the program exits
               ;; before the write, as it can on a slow runner.
-              ((symbol-function 'process-send-string)
-               (lambda (process string)
+              ((symbol-function 'process-send-region)
+               (lambda (process start end)
                  (let ((process-id (process-id process)))
                    (with-timeout (5 (ert-fail "Program never exited"))
                      (while (file-exists-p (format "/proc/%d" process-id)))))
-                 (funcall send process string))))
+                 (funcall send process start end))))
       (mevedel-session-control-fs-run-program-async
        (list (list :op 'path-exists-p :path "/tmp"))
        (lambda (results error) (setq settled (list results error)))))
@@ -164,6 +197,32 @@
     (should-not (car settled))
     (should (eq 'file-error (car (nth 1 settled))))
     (should (equal "Portable control program failed" (nth 1 (nth 1 settled)))))
+
+  :doc "quitting during a streamed request releases the child and buffers before propagating quit"
+  (let ((mevedel-session-control-fs--pipe-local t)
+        (send (symbol-function 'process-send-region))
+        (spawn (symbol-function 'make-process))
+        (chunks 0) (callbacks 0) child buffers failure)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (setq child (apply spawn args)
+                       buffers (list (plist-get args :buffer) (plist-get args :stderr)))
+                 child))
+              ((symbol-function 'process-send-region)
+               (lambda (process start end)
+                 (when (= (cl-incf chunks) 2) (signal 'quit nil))
+                 (funcall send process start end))))
+      (should (eq 'quit
+                  (condition-case nil
+                      (mevedel-session-control-fs-run-program-async
+                       (list (list :op 'path-exists-p :path "/tmp"))
+                       (lambda (_results err) (cl-incf callbacks) (setq failure err)))
+                    (quit 'quit)))))
+    (should (= callbacks 1))
+    (should (eq 'file-error (car failure)))
+    (should-not (process-live-p child))
+    (should-not (cl-some #'buffer-live-p buffers))
+    (should-not (mevedel-transport-busy-p)))
 
   :doc "counts its dispatch as a remote operation, so work a filter starts defers"
   (let ((mevedel-session-control-fs--pipe-local t)

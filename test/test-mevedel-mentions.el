@@ -2403,6 +2403,48 @@ injector would once the payload exists."
                              gptel-context))
               (should (eq gptel-use-context 'system)))))
       (kill-buffer chat)
+      (delete-file tmp)))
+  :doc "PDF pages reach gptel in document order and expire with the request"
+  (let* ((tmp (make-temp-file "mevedel-media-" nil ".pdf" "%PDF-1.4\n"))
+         (model (make-symbol "mevedel-page-model"))
+         (ws (mevedel-workspace--create :type 'project :id "pages"
+                                        :root temporary-file-directory
+                                        :name "pages"))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create :id "pages" :session session))
+         (chat (generate-new-buffer " *mevedel-test-page-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat)))
+         staged)
+    (put model :capabilities '(media))
+    (put model :mime-types '("image/png"))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request))
+          (with-temp-buffer
+            (setq-local gptel-context nil)
+            (setq-local gptel-use-context nil)
+            (let ((gptel-model model))
+              (cl-letf (((symbol-function 'mevedel-tool-fs-read-pdf-page-count-now)
+                         (lambda (_path) 2))
+                        ((symbol-function 'mevedel-tool-fs-read-pdf-page-images-now)
+                         (lambda (_path _count) '("page one" "page two"))))
+                (insert (propertize (format "Read @file:%s" tmp) 'gptel 'prompt))
+                (mevedel--transform-expand-mentions fsm)
+                (setq staged (mapcar #'cadr (gptel-context--collect-media)))
+                (should
+                 (equal '("page one" "page two")
+                        (mapcar (lambda (path)
+                                  (with-temp-buffer
+                                    (insert-file-contents-literally path)
+                                    (buffer-string)))
+                                staged)))
+                (mevedel-request-drain-cancellers request)
+                (should-not gptel-context)
+                (should-not (seq-some #'file-exists-p staged))))))
+      (mevedel-request-drain-cancellers request)
+      (kill-buffer chat)
       (delete-file tmp))))
 
 (mevedel-deftest mevedel-mentions--valid-mention-context-p

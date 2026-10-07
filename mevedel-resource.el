@@ -305,6 +305,10 @@ MCP address."
     (let ((decoded
            (decode-coding-string
             (apply #'unibyte-string (nreverse bytes)) 'utf-8 t)))
+      ;; Emacs preserves malformed UTF-8 as raw-byte characters and can
+      ;; decode code points above Unicode's upper bound.
+      (when (string-match-p "[^\u0000-\U0010ffff]" decoded)
+        (signal 'mevedel-resource-error '("Invalid UTF-8 in resource address")))
       (when (or (string-empty-p decoded)
                 (mevedel-resource--has-control-character-p decoded)
                 (and (not allow-separator)
@@ -333,6 +337,8 @@ MCP address."
 
 FRAGMENT is the decoded URI fragment, not the raw address spelling.  The
 empty fragment selects the complete JSON value."
+  (when (string-match-p "[^\u0000-\U0010ffff]" fragment)
+    (signal 'mevedel-resource-error '("Invalid UTF-8 in JSON Pointer")))
   (when (mevedel-resource--has-control-character-p fragment)
     (signal 'mevedel-resource-error
             (list "JSON Pointer fragment contains a control character")))
@@ -417,7 +423,9 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
     (let* ((slash (string-match "/" tail))
            (head (if slash (substring tail 0 slash) tail))
            (alias-source
-            (cdr (assoc head mevedel-resource--skill-alias-sources))))
+            (and (not (string-search "@" head))
+                 (cdr (assoc (mevedel-resource--decode-component head)
+                             mevedel-resource--skill-alias-sources)))))
       (if alias-source
           (let* ((parts (mevedel-resource--parse-components tail))
                  (plugin-p (eq alias-source 'plugin))
@@ -476,20 +484,19 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
       (signal 'mevedel-resource-error
               (list "Memory address requires 'root', 'journal/', or a root key and path"))))))
 
-(defun mevedel-resource--parse-agent-history-tail (tail)
-  "Parse canonical retained-agent TAIL for agent or history resources."
-  (if (string-empty-p tail)
+(defun mevedel-resource--parse-agent-history-components (components)
+  "Validate retained-agent COMPONENTS for agent or history resources."
+  (if (null components)
       (list :components nil :dynamic-p t)
-    (let ((components (mevedel-resource--parse-components tail)))
-      (unless (and (> (length components) 1)
-                   (equal (car components) "root"))
-        (signal 'mevedel-resource-error
-                (list "Agent and history addresses require a retained /root path")))
-      (unless (mevedel-agent-path-p
-               (concat "/" (string-join components "/")))
-        (signal 'mevedel-resource-error
-                (list "Agent and history addresses require a canonical agent path")))
-      (list :components components :dynamic-p nil))))
+    (unless (and (> (length components) 1)
+                 (equal (car components) "root"))
+      (signal 'mevedel-resource-error
+              (list "Agent and history addresses require a retained /root path")))
+    (unless (mevedel-agent-path-p
+             (concat "/" (string-join components "/")))
+      (signal 'mevedel-resource-error
+              (list "Agent and history addresses require a canonical agent path")))
+    (list :components components :dynamic-p nil)))
 
 (defun mevedel-resource--parse-mcp-tail (tail)
   "Parse the MCP-specific TAIL and return its locator fields."
@@ -882,21 +889,22 @@ Physical resolution is intentionally not performed here."
               (pcase scheme
                 ('skill (mevedel-resource--parse-skill-tail tail))
                 ('history
-                 (cond
-                  ((equal tail "root")
-                   (list :components '("root") :dynamic-p nil))
-                  ((or (equal tail "saved") (string-prefix-p "saved/" tail))
-                   (let ((parts (mevedel-resource--parse-components tail)))
+                 (let ((parts (mevedel-resource--parse-components tail)))
+                   (cond
+                    ((equal parts '("root"))
+                     (list :components parts :dynamic-p nil))
+                    ((equal (car parts) "saved")
                      (unless (and (<= (length parts) 3)
                                   (or (< (length parts) 3)
                                       (mevedel-session-artifacts-segment-number (caddr parts))))
                        (signal 'mevedel-resource-error '("Saved history names a session and canonical segment")))
                      (list :components parts :dynamic-p (= (length parts) 1)
                            :locator-class (unless (= (length parts) 1)
-                                            'workspace-relative))))
-                  (t (mevedel-resource--parse-agent-history-tail tail))))
+                                            'workspace-relative)))
+                    (t (mevedel-resource--parse-agent-history-components parts)))))
                 ('agent
-                 (mevedel-resource--parse-agent-history-tail tail))
+                 (mevedel-resource--parse-agent-history-components
+                  (mevedel-resource--parse-components tail)))
                 ('memory (mevedel-resource--parse-memory-tail tail))
                 ('mcp (mevedel-resource--parse-mcp-tail tail))
                 (_ (list :components (mevedel-resource--parse-components tail)

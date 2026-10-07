@@ -694,6 +694,17 @@ for direct-async Bash."
             (mevedel-execution-target-create remote)))
     mevedel-session-control-fs--pipe-local))
 
+(defun mevedel-session-control-fs--send-request-buffer (process)
+  "Send the current request buffer to PROCESS in small pieces.
+Large pipe writes make Emacs wait repeatedly under backpressure.  Bounded
+writes preserve the existing framing and the caller's remote-operation guard."
+  (let ((start (point-min))
+        (limit (point-max)))
+    (while (< start limit)
+      (let ((end (min limit (+ start 1024))))
+        (process-send-region process start end)
+        (setq start end)))))
+
 (defun mevedel-session-control-fs--run-over-pipe
     (remote bash request output flags)
   "Run the program for REMOTE with BASH, streaming REQUEST's buffer on stdin.
@@ -722,13 +733,12 @@ as one remote operation for `mevedel-transport-busy-p'."
                                         flags)
                        :connection-type 'pipe :coding 'no-conversion
                        :file-handler t :noquery t :sentinel #'ignore))))
-             (process-send-string
-              process
-              (concat (encode-coding-string
-                       mevedel-session-control-fs--program-script 'utf-8-unix)
-                      "\0"))
+             (with-temp-buffer
+               (insert (encode-coding-string
+                        mevedel-session-control-fs--program-script 'utf-8-unix) 0)
+               (mevedel-session-control-fs--send-request-buffer process))
              (with-current-buffer request
-               (process-send-region process (point-min) (point-max)))
+               (mevedel-session-control-fs--send-request-buffer process))
              (process-send-eof process)
              (while (or (process-live-p process)
                         (accept-process-output process 0 nil 1))
@@ -1279,21 +1289,20 @@ target: callers serialize the ones that touch the same files."
                                                 "Portable control program failed"
                                                 (plist-get (car operations) :path)
                                                 (format "exit status %s" status)))))))))))
-               (process-send-string
-                process
-                (concat (encode-coding-string
-                         mevedel-session-control-fs--program-script 'utf-8-unix)
-                        "\0"))
+               (with-temp-buffer
+                 (insert (encode-coding-string
+                          mevedel-session-control-fs--program-script 'utf-8-unix) 0)
+                 (mevedel-session-control-fs--send-request-buffer process))
                (with-temp-buffer
                  (mevedel-session-control-fs--insert-program-request
                   (mapcar (lambda (op)
                             (mevedel-session-control-fs--program-fields
                              (mevedel-session-control-fs--inline-source op)))
                           operations))
-                 (process-send-region process (point-min) (point-max)))
+                 (mevedel-session-control-fs--send-request-buffer process))
                (process-send-eof process)
                process))
-          (error
+          ((error quit)
            (unless settled
              (setq settled t)
              (when (process-live-p process) (delete-process process))
@@ -1307,6 +1316,7 @@ target: callers serialize the ones that touch the same files."
                         (list 'file-error "Portable control program failed"
                               (plist-get (car operations) :path)
                               (error-message-string err)))))
+           (when (eq (car err) 'quit) (signal (car err) (cdr err)))
            nil))))))
 
 (defun mevedel-session-control-fs-physical-path (path)

@@ -56,8 +56,9 @@ Tool notifications are observations; only the MCP endpoint executes tools."
 (defun mevedel-acp-turn--run-tool-hooks (hook request call)
   "Run the current buffer's tool-call HOOK for REQUEST's CALL, as gptel does.
 Views, collaboration rooms and agent activity observe native calls through
-the same hooks.  Tool repair already ran inside the MCP pipeline.  Return
-the first hook result that stops the turn or blocks the call."
+the same hooks.  Tool repair runs inside the MCP pipeline.  Return merged
+hook decisions, passing changed arguments and results to subsequent hooks.
+A stop decision cannot be hidden by another hook's block decision."
   (let ((info (mevedel-engine-info request))
         verdict)
     (setq call (append call (list :buffer (buffer-name)
@@ -70,9 +71,23 @@ the first hook result that stops the turn or blocks the call."
                                 mevedel-tool-repair-post-tool-call))
          (let ((result (with-demoted-errors "Tool hook error: %S"
                          (funcall function (copy-sequence call)))))
-           (when (and (not verdict)
-                      (or (plist-get result :stop) (plist-get result :block)))
-             (setq verdict result))))
+           (when (and (eq hook 'gptel-pre-tool-call-functions)
+                      (or (plist-member result :confirm)
+                          (and (plist-member result :name)
+                               (not (equal (plist-get result :name) (plist-get call :name))))))
+             (setq result
+                   (list :stop t
+                         :stop-reason "ACP cannot apply hook :confirm or tool-name changes; use mevedel permission rules or a gptel provider")))
+           (when-let* ((block (plist-get result :block)))
+             (setq result (plist-put result :result
+                                     (if (stringp block) block
+                                       (format "Tool %s blocked" (plist-get call :name))))))
+           (dolist (key '(:args :result :block :stop :stop-reason))
+             (when (and (plist-member result key)
+                        (or (not (memq key '(:block :stop :result))) (plist-get result key)))
+               (setq verdict (plist-put verdict key (plist-get result key)))
+               (when (memq key '(:args :result))
+                 (setq call (plist-put call key (plist-get result key))))))))
        nil))
     verdict))
 
@@ -96,10 +111,7 @@ the first hook result that stops the turn or blocks the call."
      render-info)
     (dolist (key '(:tracking-marker :tool-marker))
       (setq info (plist-put info key (plist-get render-info key))))
-    (setf (mevedel-engine-info request) info)
-    (mevedel-acp-turn--run-tool-hooks
-     'gptel-post-tool-call-functions request
-     (list :id id :name (mevedel-tool-name tool) :args args :result result))))
+    (setf (mevedel-engine-info request) info)))
 
 (defun mevedel-acp-turn-start (request launch content tools &optional ready terminal settle prepare)
   "Run admitted REQUEST through ACP with CONTENT and registered TOOLS.
@@ -357,21 +369,40 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                  :message (or (plist-get verdict :stop-reason)
                                               (format "Tool %s stopped the turn" name))))
                    (error "The owning turn no longer accepts tools"))
-                 (when-let* ((block (plist-get verdict :block)))
-                   (let ((reason (if (stringp block) block (format "Tool %s blocked" name))))
-                     ;; Observers that saw the call start also see it end.
-                     (mevedel-acp-turn--run-tool-hooks
-                      'gptel-post-tool-call-functions request
-                      (list :id id :name name :args args :result reason))
-                     (error "%s" reason))))
-               (mevedel-mcp-tools-call
-                request buffer tool args id
-                (lambda (result outcome)
-                  (unwind-protect
-                      (when (and (owned) (not finished))
-                        (with-current-buffer buffer
-                          (mevedel-acp-turn--tool-result request tool args id outcome)))
-                    (funcall complete result))))))))
+                 (when (plist-member verdict :args)
+                   (setq args (plist-get verdict :args)))
+                 (cl-labels
+                     ((deliver (result outcome)
+                        (condition-case err
+                            (when (and (owned) (not finished))
+                              (with-current-buffer buffer
+                                (let* ((post (mevedel-acp-turn--run-tool-hooks
+                                              'gptel-post-tool-call-functions request
+                                              (list :id id :name name :args args
+                                                    :result (gptel--to-string (plist-get outcome :result)))))
+                                       (block (plist-get post :block)))
+                                  (when (or block (plist-member post :result))
+                                    ;; A replacement must not retain hidden media
+                                    ;; from the result the hook withheld.
+                                    (setq outcome (copy-sequence outcome))
+                                    (setq outcome (plist-put outcome :media nil))
+                                    (setq outcome (plist-put outcome :result (plist-get post :result)))
+                                    (when block (setq outcome (plist-put outcome :status 'error)))
+                                    (setq result nil))
+                                  (mevedel-acp-turn--tool-result request tool args id outcome)
+                                  (funcall complete (or result (mevedel-mcp-tools--result outcome)))
+                                  (when (plist-get post :stop)
+                                    (finish (list :status 'error
+                                                  :message (or (plist-get post :stop-reason)
+                                                               (format "Tool %s stopped the turn" name))))))))
+                          (error (finish (list :status 'error :message (error-message-string err)))))))
+                   (if (or (plist-get verdict :block) (plist-member verdict :result))
+                       (let ((block (plist-get verdict :block)))
+                         (deliver nil
+                                  (list :status (if block 'error 'success) :tool-use-id id
+                                        :result (plist-get verdict :result)))
+                         #'ignore)
+                     (mevedel-mcp-tools-call request buffer tool args id #'deliver))))))))
       (when admission (mevedel-request-push-canceller admission #'cancel))
       (unless root-p
         (setf (mevedel-agent-invocation-runtime-cancel request)

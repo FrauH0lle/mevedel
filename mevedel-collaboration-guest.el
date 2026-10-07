@@ -14,7 +14,7 @@
 (autoload 'mevedel-collaboration-recovery-handle "mevedel-collaboration-recovery")
 (autoload 'mevedel-collaboration-recovery-send "mevedel-collaboration-recovery")
 (declare-function mevedel-collaboration-recovery-handle "mevedel-collaboration-recovery" (room peer frame))
-(declare-function mevedel-collaboration-recovery-send "mevedel-collaboration-recovery" (room peer &optional backend))
+(declare-function mevedel-collaboration-recovery-send "mevedel-collaboration-recovery" (room peer))
 
 (eval-when-compile
   (require 'cl-lib))

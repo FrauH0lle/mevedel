@@ -152,6 +152,19 @@ installing anything else would silently move the user to another channel."
         "stable"
       "latest")))
 
+(defun mevedel-claude-code-maintenance--lock (lock)
+  "Take installation LOCK without prompting; return non-nil when held.
+`lock-file' does nothing while `create-lockfiles' is nil and would ask the
+user about a lock held elsewhere."
+  (let ((create-lockfiles t))
+    (condition-case nil
+        (unless (file-locked-p lock)
+          (cl-letf (((symbol-function 'ask-user-about-lock)
+                     (lambda (&rest _) (error "Runtime update is locked"))))
+            (lock-file lock))
+          (eq t (file-locked-p lock)))
+      (error nil))))
+
 (defun mevedel-claude-code-maintenance-check (&optional force)
   "Check updates asynchronously when due, or now with FORCE.
 The native CLI follows its own configured channel.
@@ -168,11 +181,10 @@ lock.  A forced check reports a running check and its result in the echo area."
     (when (and (or force mevedel-claude-code-auto-update)
                (not (file-remote-p directory))
                (or force (> (- (float-time) last) interval)))
-      (if (or (gethash directory mevedel-claude-code-maintenance--jobs) (file-locked-p lock))
+      (if (or (gethash directory mevedel-claude-code-maintenance--jobs)
+              (progn (make-directory directory t)
+                     (not (mevedel-claude-code-maintenance--lock lock))))
           (when force (message "mevedel: a Claude runtime update check is already running"))
-        (make-directory directory t)
-        ;; `lock-file' does nothing while `create-lockfiles' is nil.
-        (let ((create-lockfiles t)) (lock-file lock))
         (when force (message "mevedel: checking Claude runtime updates..."))
         (let* ((cli (executable-find mevedel-claude-code-executable))
                (npm (executable-find "npm"))

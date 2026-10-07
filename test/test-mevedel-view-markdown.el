@@ -182,6 +182,35 @@
                  (lambda (buffer id) (setq opened (list buffer id)))))
         (button-activate (button-at (point-min))))
       (should (equal (list (current-buffer) "ab12") opened))))
+  :doc "resource clicks decode the same identity as tool addresses"
+  (dolist (entry '(("agent://root/%72eview#/result" . "/root/review")
+                   ("history://root/%72eview/" . "/root/review")
+                   ("shared://%61b12/view.png" . "ab12")))
+    (with-temp-buffer
+      (insert (format "[Open](%s)" (car entry)))
+      (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+      (let (opened)
+        (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
+                   (lambda (path) (setq opened path)))
+                  ((symbol-function 'mevedel-collaboration-open-shared-item)
+                   (lambda (_buffer id) (setq opened id))))
+          (button-activate (button-at (point-min))))
+        (should (equal (cdr entry) opened)))))
+  :doc "malformed logical resource links fail before opening a destination"
+  (dolist (address '("agent://root/review/../other"
+                     "agent://root/review#/bad~2escape"
+                     "shared://ab12/../other"))
+    (with-temp-buffer
+      (insert (format "[Open](%s)" address))
+      (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+      (let (opened)
+        (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
+                   (lambda (&rest _) (setq opened t)))
+                  ((symbol-function 'mevedel-collaboration-open-shared-item)
+                   (lambda (&rest _) (setq opened t))))
+          (should-error (button-activate (button-at (point-min)))
+                        :type 'user-error))
+        (should-not opened))))
   :doc "bare resource addresses open their file, agent or item on click"
   (let ((file (make-temp-file "mevedel-resource-link-")))
     (unwind-protect

@@ -15,6 +15,9 @@ client_cache_home=${XDG_CACHE_HOME:-$client_home/.cache}
 client_config_home=${XDG_CONFIG_HOME:-$client_home/.config}
 client_data_home=${XDG_DATA_HOME:-$client_home/.local/share}
 client_state_home=${XDG_STATE_HOME:-$client_home/.local/state}
+# Podman must use the runtime that owns the provisioned containers, while
+# Emacs keeps its private XDG runtime directory for test sockets.
+client_runtime_dir=${XDG_RUNTIME_DIR:-}
 grammar_file=
 
 cleanup() {
@@ -58,6 +61,11 @@ export XDG_CACHE_HOME="$client_cache_home"
 export XDG_CONFIG_HOME="$client_config_home"
 export XDG_DATA_HOME="$client_data_home"
 export XDG_STATE_HOME="$client_state_home"
+if [ -n "$client_runtime_dir" ]; then
+    export XDG_RUNTIME_DIR="$client_runtime_dir"
+else
+    unset XDG_RUNTIME_DIR
+fi
 exec "$podman_path" "\$@"
 EOF
 chmod +x "$scratch/bin/podman"
