@@ -35,7 +35,10 @@
                 (should (equal 0 status))
                 (should (equal "" (buffer-string))))))
           (dolist (entry (list root compiled))
-            (dolist (scenario '(installation gptel chat tools renderers claude lobby))
+            (dolist (scenario '(installation gptel chat chat-in-directory
+                               tools renderers claude lobby room
+                               directive-preview-implement directive-preview-discuss
+                               directive-answer))
               (with-temp-buffer
                 (let ((status
                        (call-process

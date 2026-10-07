@@ -64,6 +64,8 @@
                   "mevedel-directive-request" (record workspace))
 (declare-function mevedel--directive-session-buffer
                   "mevedel-directive-request" (directive workspace))
+(autoload 'mevedel--directive-bound-session-buffer "mevedel-directive-request")
+(autoload 'mevedel--directive-session-buffer "mevedel-directive-request")
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction

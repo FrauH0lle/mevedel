@@ -1751,6 +1751,19 @@ async function main() {
   assert.equal((await unseal(key, first.sent.at(-1))).action, 'login');
   await deliver({t: 'recovery', models: [], presets: [], providers: [], auth: {status: 'ready', message: 'Login ready'}});
   assert.doesNotMatch(textOf(nodes['recovery-auth']), /ABCD-1234/);
+  const loginFrame = {t: 'recovery', models: [], presets: [], providers: ['Claude'], provider: 'Claude',
+    auth: {id: 'login-2', status: 'login', url: 'https://claude.ai/oauth/authorize?state=fixture'}};
+  await deliver(loginFrame);
+  const codeInput = nodes['recovery-auth'].children.find(node => node.tagName === 'input');
+  codeInput.value = 'unfinished#code';
+  await deliver({...loginFrame, steering: [{id: 1, text: 'retained steering'}]});
+  assert.match(textOf(nodes['recovery-actions']), /retained steering/);
+  assert.ok(nodes['recovery-auth'].children.includes(codeInput), 'queue changes preserve the login field');
+  assert.equal(codeInput.value, 'unfinished#code');
+  assert.equal(nodes['composer-input'].value, '> retained\nmultiline');
+  await deliver({...loginFrame, auth: {status: 'ready', message: 'Login ready'}});
+  assert.ok(!nodes['recovery-auth'].children.includes(codeInput), 'settlement discards the login code');
+
 
   // Cancelling never sends anything.
   const cancelBefore = first.sent.length;

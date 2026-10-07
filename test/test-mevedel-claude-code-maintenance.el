@@ -74,7 +74,15 @@
      (mevedel-claude-code-maintenance-check t)
      (await)
      (should (equal "ready" (plist-get (mevedel-claude-code-maintenance-state) :status)))
-     (should (file-exists-p (file-name-concat bin "npm"))))))
+     (should (file-exists-p (file-name-concat bin "npm")))))
+  :doc "runtime updates retain serialization when editor file locks are disabled"
+  (mevedel-maintenance-test--with-installation
+   (let ((create-lockfiles nil)
+         (lock (file-name-concat mevedel-claude-code-directory "runtime-update")))
+     (mevedel-claude-code-maintenance-check t)
+     (should (eq t (file-locked-p lock)))
+     (mevedel-claude-code-maintenance-stop)
+     (should-not (file-locked-p lock)))))
 
 (mevedel-deftest mevedel-claude-code-maintenance-stop (:quiet t)
   (mevedel-maintenance-test--with-installation

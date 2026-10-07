@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Publishes the retained-agent roster and serves projected live agent
-;; transcripts to collaboration guests.  Agent lookup is registry-only: a
-;; browser poll never hydrates cold state or starts target I/O.
+;; transcripts to collaboration guests.  Agent lookup is registry-only; cold
+;; conversation loading runs outside guest frame handlers.
 
 ;;; Code:
 
@@ -86,6 +86,10 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-for-tool
                   "mevedel-tool-render-data" (buffer tool-use-id))
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--agent-record-status
@@ -183,7 +187,7 @@ non-nil while the load is pending, nil for an unknown or failed agent."
       ('failed nil)
       ('pending t)
       (_ (mevedel-collaboration--set-agent-load room path 'pending)
-         (run-at-time 0 nil #'mevedel-collaboration--load-agent room path)
+         (mevedel-transport-run-at-time 0 #'mevedel-collaboration--load-agent room path)
          t))))
 
 (defun mevedel-collaboration--load-agent (room path)

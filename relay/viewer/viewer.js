@@ -103,6 +103,7 @@
     if (className !== 'connected') {
       state.connected = false;
       recoverySignature = '';
+      recoveryAuthSignature = '';
       const recoveryAuth = document.getElementById('recovery-auth');
       if (recoveryAuth) recoveryAuth.replaceChildren();
       state.busy = null;
@@ -269,7 +270,7 @@
 
   // Recovery never replaces the composer or its draft. Auth challenges remain
   // in memory only and arrive exclusively on the host's owner projection.
-  let recoverySignature = '';
+  let recoverySignature = '', recoveryAuthSignature = '';
   function recoveryAction(action, value, extra = {}) {
     send({t: 'recovery', action, value, ...extra});
   }
@@ -293,7 +294,6 @@
     if (!controls || !actions || !auth) return;
     controls.hidden = false;
     actions.replaceChildren();
-    auth.replaceChildren();
     const button = (parent, text, action) => {
       const node = el('button', 'btn quiet', text);
       node.type = 'button'; node.addEventListener('click', action); parent.append(node);
@@ -333,6 +333,10 @@
     }
     actions.append(provider);
     button(actions, 'Sign in', () => recoveryAction('login', null, {provider: provider.value}));
+    const authSignature = JSON.stringify([frame.provider, frame.auth]);
+    if (authSignature === recoveryAuthSignature) return;
+    recoveryAuthSignature = authSignature;
+    auth.replaceChildren();
     auth.append(el('p', '', 'Signing in changes the credentials used by this Emacs host.'));
     if (frame.auth) {
       auth.append(el('p', '', frame.auth.message || ''));

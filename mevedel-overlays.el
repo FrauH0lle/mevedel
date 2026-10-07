@@ -51,6 +51,8 @@
 (declare-function mevedel--discuss-directive-prompt
                   "mevedel-directive-request"
                   (content &optional directive message attempt-index))
+(autoload 'mevedel--directive-implementation-prompt "mevedel-directive-request")
+(autoload 'mevedel--discuss-directive-prompt "mevedel-directive-request")
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-has-activity-p

@@ -218,20 +218,21 @@ comes back with its links.  A lobby that cannot start is reported as a
 warning and stays recorded for the next start, unless its directory is
 gone, in which case it is forgotten."
   (dolist (root (mevedel-collaboration-lobby--intended))
-    (if (not (file-directory-p root))
-        (progn
-          (mevedel-collaboration-lobby--set-intended root nil)
-          (display-warning
-           'mevedel (format "Lobby of %s forgotten: the directory is gone"
-                            root)))
-      (condition-case err
-          (mevedel-collaboration-lobby-start root)
-        (error
-         (display-warning
-          'mevedel
-          (format (concat "Lobby of %s not restarted: %s "
-                          "(/collab lobby stop there ends the retries)")
-                  root (error-message-string err))))))))
+    (condition-case err
+        (let ((inhibit-interaction t))
+          (if (not (file-directory-p root))
+              (progn
+                (mevedel-collaboration-lobby--set-intended root nil)
+                (display-warning
+                 'mevedel (format "Lobby of %s forgotten: the directory is gone"
+                                  root)))
+            (mevedel-collaboration-lobby-start root)))
+      (error
+       (display-warning
+        'mevedel
+        (format (concat "Lobby of %s not restarted: %s "
+                        "(/collab lobby stop there ends the retries)")
+                root (error-message-string err)))))))
 
 
 ;;

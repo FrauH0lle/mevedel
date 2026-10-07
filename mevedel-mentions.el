@@ -1079,7 +1079,8 @@ conversation."
                         (buffer-local-value
                          'mevedel--current-request chat-buffer))))
       (let ((mevedel--current-request request))
-        (dolist (context (plist-get expansion :media-contexts))
+        ;; Context insertion prepends; retain mention and PDF page order.
+        (dolist (context (reverse (plist-get expansion :media-contexts)))
           (apply #'mevedel-mentions--add-media-context context)))
       (when fsm
         (dolist (item (plist-get expansion :reminder-items))

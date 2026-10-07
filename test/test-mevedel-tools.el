@@ -1331,7 +1331,17 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (should (equal '("Read" "ApplyPatch" "GetGoal")
                          (mapcar #'mevedel-tool-name (mevedel-tools-native-roster (cdr owner)))))
           (let ((gptel-tools (list (mevedel-tools-test--make-fake-gptel-tool "Unregistered"))))
-            (should-error (mevedel-tools-native-roster (cdr owner)))))
+            (should-error (mevedel-tools-native-roster (cdr owner))))
+          ;; A matching name alone cannot authorize a replaced tool object.
+          (let ((gptel-tools (list (mevedel-tools-test--make-fake-gptel-tool "Read"))))
+            (should-error (mevedel-tools-native-roster (cdr owner))))
+          ;; Equal names in separate categories retain the offered identity.
+          (let* ((tool (mevedel-tools-test--make-fake-gptel-tool "Read" "external"))
+                 (registered (mevedel-tool--create :name "Read" :category "external"
+                                                   :gptel-tool tool))
+                 (gptel-tools (list tool)))
+            (mevedel-tool-register registered)
+            (should (equal (list registered) (mevedel-tools-native-roster (cdr owner))))))
       (kill-buffer (car owner)))))
 
 

@@ -90,5 +90,76 @@
         (advice-remove 'mevedel-acp-open 'mevedel-claude-code-shared-test)
         (when (buffer-live-p view) (kill-buffer view))))))
 
+(mevedel-deftest mevedel-claude-code-send/shared-context (:quiet t)
+  (dolist (shared-first '(nil t))
+    (mevedel-engine-test--with-session
+      (mevedel-request-end)
+      (let* ((view (generate-new-buffer " *claude-item-context-view*"))
+             (gptel--known-backends nil)
+             (mevedel-claude-code-directory (file-name-concat root "claude"))
+             (directory (file-name-concat root "nested"))
+             (file (file-name-concat directory "evidence.txt"))
+             (instructions (file-name-concat directory "AGENTS.md"))
+             (prompt (format "Discuss @file:{%s}" file))
+             prompts)
+        (make-directory directory t)
+        (write-region "SHARED-MENTION-6392" nil file nil 'silent)
+        (write-region "SHARED-PATH-GUIDANCE-7315" nil instructions nil 'silent)
+        (unwind-protect
+            (progn
+              (mevedel-claude-code-register)
+              (mevedel-model-set-session-provider
+               session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+              (setq-local gptel-system-prompt "Item context fixture"
+                          gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+              (mevedel-chat-install-request-hooks)
+              (mevedel-view--setup view buffer)
+              (advice-add 'mevedel-acp-prompt :before
+                          (lambda (_connection input &rest _) (push input prompts))
+                          '((name . mevedel-claude-code-shared-context-test)))
+              (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                         (mevedel-engine-test--claude-launch
+                          (lambda (_system mcp _model _effort &optional id hook)
+                            (list :meta `((hookCommand . ,hook)
+                                          (responseText . "Completed")
+                                          (toolBatches . [[((name . "Read") (id . "read-evidence")
+                                                           (args . ((file_path . ,file))))]])))))))
+                (dolist (shared (list shared-first (not shared-first)))
+                  (if shared
+                      (progn
+                        (mevedel-agent-control--enqueue
+                         session "/root"
+                         (list :type 'RESULT :sender "/root/reader" :recipient "/root"
+                               :outcome 'completed :payload "ROOT-MAIL-9183" :timestamp (current-time)))
+                        (should (mevedel-view-enqueue-external-follow-up
+                                 buffer prompt :guest-name "Guest" :guest-id "g1" :guest-role 'full
+                                 :shared-question (list :questionId "q-context" :itemId "board-context"
+                                                        :title "Board" :revision 1 :scope "whole"
+                                                        :text prompt :fingerprint "context")))
+                        (mevedel-view--drain-follow-up buffer))
+                    (with-current-buffer view
+                      (mevedel-view--forward-input-now prompt)))
+                  (with-timeout (10 (ert-fail "Context turn did not settle"))
+                    (while (or (mevedel-turn-busy-p buffer)
+                               (mevedel-view--pending-follow-ups session))
+                      (accept-process-output nil 0.01)))
+                  ;; Both independent conversations receive the mention body.
+                  (should (string-search "SHARED-MENTION-6392" (format "%S" (car prompts))))
+                  (if shared
+                      (progn
+                        (should-not (string-search "ROOT-MAIL-9183" (format "%S" (car prompts))))
+                        (should (= 1 (length (mevedel-agent-control-context-mailbox session)))))
+                    (when shared-first
+                      (should (string-search "ROOT-MAIL-9183" (format "%S" (car prompts))))
+                      (should-not (mevedel-agent-control-context-mailbox session))))
+                  (when (and shared shared-first)
+                    (should (= 0 (hash-table-count (mevedel-session-mentions-shown session))))
+                    (should-not (mevedel-session-workspace-instruction-hashes session)))))
+              ;; Both Reads deliver their path guidance, independently of which
+              ;; conversation acknowledged it first.
+              (should (= 2 (mevedel-engine-test--count-evidence "SHARED-PATH-GUIDANCE-7315"))))
+          (advice-remove 'mevedel-acp-prompt 'mevedel-claude-code-shared-context-test)
+          (when (buffer-live-p view) (kill-buffer view)))))))
+
 (provide 'test-mevedel-claude-code-shared)
 ;;; test-mevedel-claude-code-shared.el ends here

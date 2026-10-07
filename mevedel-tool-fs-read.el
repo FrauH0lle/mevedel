@@ -1581,7 +1581,7 @@ Saved history returns a canceller while preparation continues asynchronously."
       "/root"))
 
 (defun mevedel-tool-fs-read--instruction-hashes (scope)
-  "Return acknowledged instruction hashes for session or directive SCOPE."
+  "Return acknowledged instruction hashes for session or request SCOPE."
   (if (mevedel-request-p scope)
       (mevedel-request-workspace-instruction-hashes scope)
     (mevedel-session-workspace-instruction-hashes scope)))
@@ -1613,7 +1613,7 @@ hash keeps that absence restorable until new instructions are discovered."
 
 (defun mevedel-tool-fs-read-workspace-context (scope owner)
   "Prepare current path instructions already learned by OWNER in SCOPE.
-SCOPE is the session, or the request for a fresh directive conversation.
+SCOPE is the session, or the request for a fresh isolated conversation.
 Return reminder entries and deferred commits, ordered broadest scope first and
 AGENTS.local.md after AGENTS.md.  Do not acknowledge them until delivery."
   (let ((files (cl-loop for (key . _hash) in (mevedel-tool-fs-read--instruction-hashes scope)
@@ -1651,7 +1651,9 @@ AGENTS.local.md after AGENTS.md.  Do not acknowledge them until delivery."
           (owner (mevedel-tool-fs-read--workspace-instruction-owner))
           (scope (if (and (not (bound-and-true-p mevedel--agent-invocation))
                           (bound-and-true-p mevedel--current-request)
-                          (mevedel-request-directive-uuid mevedel--current-request))
+                          (or (mevedel-request-directive-uuid mevedel--current-request)
+                              (plist-get (mevedel-request-context mevedel--current-request)
+                                         :mevedel-native-isolated)))
                      mevedel--current-request
                    session)))
       ;; Queue one event per instruction file, broadest scope first, so a

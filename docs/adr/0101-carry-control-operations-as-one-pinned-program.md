@@ -53,9 +53,13 @@ physical line, 96 KiB per field, and 512 KiB total. Wrapped content can span
 many short physical lines. Other requests travel as UTF-8 bytes on stdin of the
 same process. Where direct-async spawns qualify (single-hop ssh or scp), a
 private channel carries a short bootstrap command. Its stdin carries the
-NUL-terminated script, then the request. Elsewhere TRAMP copies an input file
-to the target. Delivery changes do not split a program into per-file calls. Whole-process failure invalidates cached interpreter paths for later
-lookup; an ordinary refused operation does not.
+NUL-terminated script, then the request; both use 1024-character pipe writes.
+Synchronous and asynchronous carriers share the same bounded-write seam under
+the existing remote-operation guard. Quitting an asynchronous dispatch tears
+down its child and buffers, reports the failed program, and propagates quit.
+Elsewhere TRAMP copies an input file to the target. Delivery changes do not split
+a program into per-file calls. Whole-process failure invalidates cached
+interpreter paths for later lookup; an ordinary refused operation does not.
 
 Two to 32 independent unbounded reads may use GNU tar in the same process, keeping
 all proved parents open, refusing symlink leaves, and disabling inherited
@@ -105,6 +109,16 @@ an optional read optimization with an ordinary-read fallback. No new caller
 protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
+
+- **Large pipe writes stalled remote image saves.** A provisioned SSH browser
+  acceptance run measured a 12.5-second median for individual image moves.
+  A smaller real-publication reproduction with a 1.4 MB image-bearing shared
+  state reproduced 5.7-9.9-second saves on the base commit and 9.4-9.8 seconds
+  on the reviewed branch; remote reads took only 0.2 seconds. Most time was
+  spent sending the two publication payloads through the pipe carrier.
+  Splitting each request into 1024-character writes, as the private editing
+  helper already does, reduced those saves to 0.65-0.99 seconds. The request
+  bytes, target program, completion checks, and mutation fences are unchanged.
 
 - **Local payloads paid a remote carrier's encoding.** After a sidecar
   shrank from 941 KB to 259 KB, a local save still spent 116 of 185 ms in six

@@ -9,16 +9,11 @@
 
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
+
+;; `mevedel-collaboration'
 (declare-function mevedel-collaboration-open-shared-item
                   "mevedel-collaboration" (data-buffer id))
 (autoload 'mevedel-collaboration-open-shared-item "mevedel-collaboration")
-(declare-function mevedel-resource-visit-path "mevedel-resource"
-                  (address &optional context))
-(autoload 'mevedel-resource-visit-path "mevedel-resource")
-(declare-function mevedel-view-open-agent-transcript "mevedel-view-agent"
-                  (agent-path))
-(autoload 'mevedel-view-open-agent-transcript "mevedel-view-agent")
-(defvar mevedel--data-buffer)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-expand-path
@@ -30,6 +25,13 @@
 (autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
 (autoload 'mevedel-execution-target-prefix "mevedel-execution-target")
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-parse-address "mevedel-resource" (address))
+(declare-function mevedel-resource-visit-path "mevedel-resource"
+                  (address &optional context))
+(autoload 'mevedel-resource-parse-address "mevedel-resource")
+(autoload 'mevedel-resource-visit-path "mevedel-resource")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-find-artifact-noselect
@@ -63,7 +65,13 @@
 (defvar mevedel--session)
 
 ;; `mevedel-view'
+(defvar mevedel--data-buffer)
 (defvar mevedel-view-inline-image-max-width)
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view-open-agent-transcript "mevedel-view-agent"
+                  (agent-path))
+(autoload 'mevedel-view-open-agent-transcript "mevedel-view-agent")
 
 ;; `mevedel-view-fontify'
 (declare-function mevedel-view--fontify-as "mevedel-view-fontify" (text mode))
@@ -251,6 +259,10 @@ Trailing sentence punctuation is not part of the address.")
 A shared item opens in the room, an agent address its transcript, and
 a file-backed address the file.  Resolution runs here, on click, never
 during a redraw."
+  (setq address
+        (condition-case err
+            (plist-get (mevedel-resource-parse-address address) :canonical)
+          (error (user-error "%s" (error-message-string err)))))
   (cond
    ((string-match "\\`shared://\\([0-9a-f]+\\)\\(?:/\\|\\'\\)" address)
     (mevedel-collaboration-open-shared-item

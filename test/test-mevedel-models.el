@@ -7,6 +7,7 @@
 (require 'gptel)
 (require 'gptel-openai)
 (require 'mevedel-models)
+(require 'mevedel-readiness)
 (require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
@@ -116,6 +117,26 @@
   (:quiet t)
   ,test
   (test)
+
+  :doc "model selection clears stale root model errors without releasing unrelated recovery holds"
+  (mevedel-models-test--with-backends
+    (with-temp-buffer
+      (let ((session (mevedel-session--create :pending-input-failure-paused t)))
+        (dolist (id '("model" "request" "authentication"))
+          (mevedel-recovery-report session id 'model "Unavailable model" t))
+        (mevedel-model-set-session-provider
+         session (mevedel-model-resolve-provider "Fast:fast-model"))
+        (should-not (mevedel-recovery-blocker session))
+        (mevedel-readiness-assert session)
+        (should (mevedel-session-pending-input-failure-paused session))
+        (dolist (issue '(("request" . history) ("input" . input)
+                         ("preset" . configuration) ("authentication" . authentication)))
+          (mevedel-recovery-report session (car issue) (cdr issue) "Needs recovery" t))
+        (let ((before (copy-tree (mevedel-session-recovery-issues session))))
+          (mevedel-model-set-session-provider
+           session (mevedel-model-resolve-provider "Balanced:balanced-model"))
+          (should (equal before (mevedel-session-recovery-issues session)))
+          (should-error (mevedel-readiness-assert session) :type 'user-error)))))
 
   :doc "stores an exact session provider and preserves supported effort"
   (mevedel-models-test--with-backends

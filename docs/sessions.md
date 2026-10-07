@@ -294,6 +294,11 @@ in the child transcript as a labelled `<task-background>` block before the
 authoritative Agent Task. The parent sidecar and tool result retain only
 provider/model/effort metadata, not the generated summary text.
 
+Selecting a session model clears retained root model-unavailable failures,
+including failures reported by request dispatch or native readiness. The next
+send validates the selected provider normally. Other recovery holds and the
+pending-input failure pause remain until their own recovery actions resolve them.
+
 ## External conversation references
 
 `M-x mevedel-claude-code-setup` checks the same local prerequisites and supported
@@ -569,9 +574,14 @@ guidance, active root Plan guidance, eligible accepted-plan references and the
 current contents of path instructions already learned by that conversation,
 broad to narrow with local overrides last. Removed files explicitly withdraw
 their guidance. Compaction clears the selected-context mark, so the next prompt
-re-sends selected images. Root, retained children and fresh directives keep
-separate path-instruction acknowledgements; a child never imports sibling or
-root scopes. An oversized restoration takes the continuation prompt above.
+re-sends selected images. Root, retained children, fresh directives and isolated
+shared-item turns keep separate path-instruction acknowledgements; a child
+never imports sibling or root scopes. Fresh directive and shared-item turns
+also expand mentions independently of the root's delivery history and do not
+acknowledge mention delivery for the root. An oversized restoration takes the
+continuation prompt above.
+Isolated shared-item turns leave root mailbox messages queued for the next root
+turn rather than consuming them into an unrelated item conversation.
 Retained-agent sample accounting at these boundaries is described under
 [agent turn limits](agents.md).
 

@@ -4,7 +4,6 @@
 ;; Login challenges are ephemeral and sent only to authenticated owner peers.
 ;;; Code:
 
-(declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
 (require 'mevedel-collaboration-owner)
 (require 'mevedel-readiness)
 (require 'mevedel-presets)
@@ -19,43 +18,73 @@
 (declare-function mevedel-collaboration--publish-queue "mevedel-collaboration" (room))
 (defvar mevedel-collaboration--rooms)
 
+;; `mevedel-collaboration-transport'
+(declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
+
 ;; `mevedel-turn'
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 
-(defun mevedel-collaboration-recovery-send (room peer &optional backend)
-  "Send owner PEER current ROOM recovery choices and BACKEND login state."
-  (when (mevedel-collaboration--owner room peer)
-    (when-let* ((buffer (mevedel-collaboration--room-data-buffer room)))
-      (with-current-buffer buffer
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (list :t "recovery" :models (vconcat (mapcar #'car (mevedel-model-candidates)))
-               :presets (vconcat (mapcar (lambda (row) (symbol-name (car row))) mevedel-preset--registry))
+(defun mevedel-collaboration-recovery-send (room peer)
+  "Send owner PEER changed ROOM recovery choices and selected login state."
+  (when-let* ((guest (mevedel-collaboration--owner room peer))
+              (buffer (mevedel-collaboration--room-data-buffer room)))
+    (unless (plist-member room :recovery-runtime)
+      (plist-put room :recovery-runtime (mevedel-claude-code-maintenance-state)))
+    (with-current-buffer buffer
+      (let* ((provider (or (plist-get guest :recovery-backend) gptel-backend))
+             (session (plist-get room :session))
+             (frame
+              (list
+               :t "recovery"
+               :models (vconcat (mapcar #'car (mevedel-model-candidates)))
+               :presets (vconcat (mapcar (lambda (row) (symbol-name (car row)))
+                                        mevedel-preset--registry))
                :model (mevedel-model-current-label buffer)
-               :provider (and (or backend gptel-backend) (gptel-backend-name (or backend gptel-backend)))
+               :provider (and provider (gptel-backend-name provider))
                :providers (vconcat (mapcar #'car gptel--known-backends))
-               :auth (condition-case nil (mevedel-auth-state (or backend gptel-backend)) (user-error nil))
-               :steering (vconcat (mapcar (lambda (entry)
-                                            (list :id (plist-get entry :id) :text (plist-get entry :input)))
-                                          (cl-remove-if-not
-                                           (lambda (entry) (eq 'failed-turn (plist-get entry :state)))
-                                           (append (mevedel-session-pending-steering (plist-get room :session))
-                                                   (mevedel-session-pending-follow-ups (plist-get room :session))))))
-               :histories (vconcat (mapcar #'car (mevedel-session-external-conversations (plist-get room :session))))
-               :runtime (let ((state (mevedel-claude-code-maintenance-state)))
-                          (list :status (plist-get state :status) :message (plist-get state :message)))))))))
+               :auth (condition-case nil (mevedel-auth-state provider) (user-error nil))
+               :steering
+               (vconcat
+                (mapcar (lambda (entry)
+                          (list :id (plist-get entry :id) :text (plist-get entry :input)))
+                        (cl-remove-if-not
+                         (lambda (entry) (eq 'failed-turn (plist-get entry :state)))
+                         (append (mevedel-session-pending-steering session)
+                                 (mevedel-session-pending-follow-ups session)))))
+               :histories (vconcat (mapcar #'car (mevedel-session-external-conversations session)))
+               :runtime (let ((state (plist-get room :recovery-runtime)))
+                          (list :status (plist-get state :status)
+                                :message (plist-get state :message))))))
+        (unless (equal frame (plist-get guest :recovery-state))
+          (when (mevedel-collaboration--transport-send
+                 (plist-get room :transport) peer frame)
+            (plist-put guest :recovery-state frame)))))))
 
 (defun mevedel-collaboration-recovery-auth-changed (backend _state)
-  "Publish BACKEND's current login challenge only to live owners."
+  "Publish BACKEND's login state to owners viewing its credential store."
   (when (boundp 'mevedel-collaboration--rooms)
-    (maphash (lambda (_buffer room)
-               (maphash (lambda (peer _guest) (mevedel-collaboration-recovery-send room peer backend))
-                        (plist-get room :guests)))
-             mevedel-collaboration--rooms)))
+    (maphash
+     (lambda (_buffer room)
+       (when-let* ((buffer (mevedel-collaboration--room-data-buffer room)))
+         (maphash
+          (lambda (peer guest)
+            (let ((selected (or (plist-get guest :recovery-backend)
+                                (buffer-local-value 'gptel-backend buffer))))
+              (when (or (null backend)
+                        (condition-case nil
+                            (equal (mevedel-auth--key backend) (mevedel-auth--key selected))
+                          (user-error nil)))
+                (mevedel-collaboration-recovery-send room peer))))
+          (plist-get room :guests))))
+     mevedel-collaboration--rooms)))
+
 (add-hook 'mevedel-auth-changed-hook #'mevedel-collaboration-recovery-auth-changed)
 
-(defun mevedel-collaboration-recovery-runtime-changed (_state)
-  "Publish current installation status to live owners."
+(defun mevedel-collaboration-recovery-runtime-changed (state)
+  "Publish current installation STATE to live owners without reading storage."
+  (when (boundp 'mevedel-collaboration--rooms)
+    (maphash (lambda (_buffer room) (plist-put room :recovery-runtime state))
+             mevedel-collaboration--rooms))
   (mevedel-collaboration-recovery-auth-changed nil nil))
 (add-hook 'mevedel-claude-code-maintenance-changed-hook #'mevedel-collaboration-recovery-runtime-changed)
 
@@ -77,6 +106,9 @@
           (when (or (mevedel-turn-busy-p buffer) (mevedel-agent-control-active-turn-p session))
             (user-error "Wait for or interrupt running turns before recovering the session"))
           (mevedel-session-artifacts-assert-new-mutation-authority session))
+        (when (and (plist-get frame :provider)
+                   (member action '("status" "login" "login-code" "cancel-login")))
+          (plist-put (mevedel-collaboration--owner room peer) :recovery-backend backend))
         (pcase action
           ("status" nil)
           ("model"
@@ -138,7 +170,7 @@
               (mevedel-view--schedule-late-follow-up-drain))))
         (mevedel-collaboration--publish-status room)
         (mevedel-collaboration--publish-queue room)
-        (mevedel-collaboration-recovery-send room peer backend)))))
+        (mevedel-collaboration-recovery-send room peer)))))
 
 (provide 'mevedel-collaboration-recovery)
 ;;; mevedel-collaboration-recovery.el ends here
