@@ -1407,8 +1407,9 @@ An error result is signalled, as a Read that failed before waiting does."
                          (lambda (k)
                            (mevedel-tool-fs-read--file (list :file_path link) k)))))
             (should (string-match-p "real content" result))))
-      (delete-file tmp)
-      (when (file-exists-p link) (delete-file link))))
+      ;; Remove the link while its target exists, or it tests as missing.
+      (when (file-exists-p link) (delete-file link))
+      (delete-file tmp)))
   :doc "does not re-resolve a path already canonicalized by the pipeline"
   (test-mevedel-tool-fs-read--with-file ".txt" "content\n"
     (cl-letf (((symbol-function 'file-truename)
@@ -1889,6 +1890,26 @@ An error result is signalled, as a Read that failed before waiting does."
          (plist (mevedel-tool-fs-read-render
                  "Read" '(:file_path "/tmp/a.el") body nil)))
     (should (string-match-p "5 lines" (plist-get plist :header)))))
+
+(mevedel-deftest mevedel-tool-fs-read--tool-results-dir ()
+  ,test
+  (test)
+  :doc "media read outside a session goes to a private directory deleted at exit"
+  (let ((mevedel-tool-fs-read--sessionless-results nil)
+        (kill-emacs-hook nil)
+        (mevedel--session nil))
+    (with-temp-buffer
+      (let ((dir (mevedel-tool-fs-read--tool-results-dir)))
+        (unwind-protect
+            (progn
+              (should (file-directory-p dir))
+              (should-not (equal dir (file-name-concat temporary-file-directory
+                                                       "mevedel-tool-results")))
+              (should (equal dir (mevedel-tool-fs-read--tool-results-dir)))
+              (should (memq #'mevedel-tool-fs-read--delete-sessionless-results kill-emacs-hook))
+              (run-hooks 'kill-emacs-hook)
+              (should-not (file-exists-p dir)))
+          (ignore-errors (delete-directory dir t)))))))
 
 (provide 'test-mevedel-tool-fs-read)
 ;;; test-mevedel-tool-fs-read.el ends here

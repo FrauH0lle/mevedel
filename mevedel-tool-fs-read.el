@@ -478,6 +478,7 @@ is deleted before returning."
         (unwind-protect
             (let* ((temporary-file-directory
                     (file-name-as-directory directory))
+                   (mevedel-tool-fs-read--scratch-directory directory)
                    (default-directory temporary-file-directory)
                    (mevedel--session nil)
                    (local (file-name-concat
@@ -488,8 +489,23 @@ is deleted before returning."
           (unless deferred
             (ignore-errors (delete-directory directory t)))))))))
 
+(defvar mevedel-tool-fs-read--sessionless-results nil
+  "This Emacs's private directory for media read outside a session.")
+
+(defvar mevedel-tool-fs-read--scratch-directory nil
+  "A caller's scratch directory for derived media, deleted by that caller.")
+
+(defun mevedel-tool-fs-read--delete-sessionless-results ()
+  "Delete media read outside a session; nothing retains it past this Emacs."
+  (when mevedel-tool-fs-read--sessionless-results
+    (ignore-errors (delete-directory mevedel-tool-fs-read--sessionless-results t))
+    (setq mevedel-tool-fs-read--sessionless-results nil)))
+
 (defun mevedel-tool-fs-read--tool-results-dir ()
-  "Return a writable directory for Read-generated media artifacts."
+  "Return a writable directory for Read-generated media artifacts.
+A session keeps them with its tool results.  Without one they go to the
+caller's `mevedel-tool-fs-read--scratch-directory', or else to a private
+directory that this Emacs deletes when it exits."
   (let* ((buffer (if (and (boundp 'mevedel--data-buffer)
                           mevedel--data-buffer
                           (buffer-live-p mevedel--data-buffer))
@@ -499,10 +515,19 @@ is deleted before returning."
                    (fboundp 'mevedel-pipeline-tool-results-dir)
                    (mevedel-pipeline-tool-results-dir
                     mevedel--session buffer))))
-    (unless dir
-      (setq dir (file-name-concat temporary-file-directory
-                                  "mevedel-tool-results")))
-    (make-directory dir t)
+    (cond
+     (dir (make-directory dir t))
+     (mevedel-tool-fs-read--scratch-directory
+      (setq dir (file-name-concat mevedel-tool-fs-read--scratch-directory
+                                  "mevedel-tool-results"))
+      (make-directory dir t))
+     (t
+      (unless (and mevedel-tool-fs-read--sessionless-results
+                   (file-directory-p mevedel-tool-fs-read--sessionless-results))
+        (setq mevedel-tool-fs-read--sessionless-results
+              (make-temp-file "mevedel-tool-results-" t))
+        (add-hook 'kill-emacs-hook #'mevedel-tool-fs-read--delete-sessionless-results))
+      (setq dir mevedel-tool-fs-read--sessionless-results)))
     dir))
 
 (defun mevedel-tool-fs-read--imagemagick-command ()
