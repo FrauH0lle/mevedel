@@ -27,14 +27,14 @@
         (t (error "Invalid quota value"))))
 
 (defun mevedel-subscription-usage-provider--window (label window)
-  "Format Codex WINDOW with LABEL, using its actual duration and reset time."
+  "Format Codex WINDOW with LABEL, a usage bar, duration and reset time."
   (let ((used (alist-get 'used_percent window))
         (seconds (alist-get 'limit_window_seconds window))
         (reset (alist-get 'reset_at window)))
     (dolist (value (list used seconds reset))
       (unless (or (null value) (and (numberp value) (>= value 0)))
         (error "Invalid quota window")))
-    (format "%s: %s used; window: %s; resets: %s\n"
+    (format "%s: %s used; window: %s; resets: %s\n%s"
             label
             (if used (format "%s%%" used) "Unavailable")
             (if seconds
@@ -44,7 +44,13 @@
                       (t (format "%s seconds" seconds)))
               "Unavailable")
             (if reset (format-time-string "%Y-%m-%d %H:%M:%S %Z" (seconds-to-time reset))
-              "Unavailable"))))
+              "Unavailable")
+            (if used
+                (let ((filled (if (zerop used) 0
+                                (min 20 (max 1 (round (/ used 5.0)))))))
+                  (concat "\n" (make-string filled ?\u2588)
+                          (make-string (- 20 filled) ?\u2591) "\n\n"))
+              ""))))
 
 (defun mevedel-subscription-usage-provider--codex-text (payload account)
   "Normalize the Codex HTTP PAYLOAD and selected ACCOUNT for display."
