@@ -16,9 +16,10 @@ that selected prompt. It does not resume previous hidden native directive
 history. The root retains its own native conversation. Directive provider
 selection remains request-local, and directive turns do not establish root
 model history. Native and ACP completion share the final patch, terminal
-callback, and publication sequence. An ACP directive identity is committed in
-the sidecar before dispatch, after publishing the preceding complete transcript;
-the new directive frame is published when its terminal boundary is available.
+callback, and publication sequence. An ACP directive turn persists no native
+identity ([ADR 0123](0123-keep-turn-authority-in-mevedel.md)); the preceding
+complete transcript is published before its boundary opens, and the new
+directive frame at its terminal boundary.
 
 One accepted request reserves one session turn identity for snapshots, attempt
 links, transcript metadata, and Rewind. The first accepted request binds the
@@ -73,9 +74,6 @@ recovery, and revision decisions remain independent.
 **ACP integration preserves selected directive evidence with isolated native
 requests.** gptel's directive path sends an explicitly selected prompt rather
 than the shared transcript. Reusing a native conversation would accumulate
-previous attempts beyond that selection. Workflow fixtures now exercise local
-discussion, scoped model overrides, denied discussion mutation, implementation
-patch capture, errors, cancellation and Plan approval while retaining the root
-conversation. Publishing the native ID through a full transcript save failed on
-the intentionally open directive boundary; a strict metadata commit preserves
-identity-before-effects without pretending the directive already completed.
+previous attempts beyond that selection. Directive native identities were first
+committed to the sidecar before dispatch; none was ever resumed, yet each one
+refused history operations for the whole session, so they are no longer stored.

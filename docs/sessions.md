@@ -84,9 +84,10 @@ Conversation and Worktree forks. Chooser labels include IDs so repeated titles
 remain distinguishable.
 
 The first accepted model-bound authored prompt starts one asynchronous title
-request using the `naming` workload, which defaults to the `fast` tier. It uses a
-private gptel request buffer, with no tools, conversation history, skill/file/hook
-expansion, or context injection. Directive-created sessions use the authored
+request using the `naming` workload, which defaults to the `fast` tier. It runs
+as an isolated text request in a private buffer (a short-lived native conversation
+for Claude), with no tools, conversation history, skill/file/hook expansion, or
+context injection. Directive-created sessions use the authored
 directive text. Local commands, rejected submissions, automatic continuations,
 retained agents, and transient conversations do not trigger naming.
 
@@ -297,25 +298,18 @@ provider/model/effort metadata, not the generated summary text.
 
 ## External conversation references
 
-`M-x mevedel-claude-code-setup` checks the same local prerequisites and supported
-subscription login as normal dispatch, without starting a model request. Its
-explicit installation action runs npm asynchronously after confirmation, pins
-the adapter release and retains output in a compilation buffer. It refuses a
-second concurrent installation and a managed install while a custom adapter
-override is selected. Ordinary sends never download dependencies. Setup and
-dispatch both reject an outdated ACP client, Node/Python runtime, unsupported
-CLI/adapter version, or non-subscription authentication. Setup also rejects a
-missing packaged bridge, which dispatch needs only for its tool connection.
-Dispatch prepares these checks asynchronously before starting the adapter, so
-slow status commands leave the editor responsive. Each status command has a
-ten-second timeout and is cancelled with its owning request. Successful version
-checks are reused while the resolved executable and its enclosing package
-metadata stay unchanged. Every dispatch still checks the current subscription
-login through `claude auth status --json` with inherited API billing routes
-removed; authentication is never cached. A logged-out status exits nonzero
-with valid JSON and still reports the login action.
-The explicit setup check waits for this same readiness result.
-See the [setup route](../README.md#claude-promax-subscriptions).
+Every Claude launch checks the ACP client, Node.js, Python, CLI and adapter
+versions and the subscription login before the adapter starts;
+`M-x mevedel-claude-code-setup` runs the same check, plus the packaged MCP
+bridge, without a model request. Installation, maintenance and user steps are
+in the [README](../README.md#claude-promax-subscriptions). Status commands run
+asynchronously, each with a ten-second timeout, and are cancelled with their
+owning request. Successful version checks are reused while the resolved
+executable and its enclosing package metadata stay unchanged. Every launch
+still checks the login through `claude auth status --json` with inherited API
+billing routes removed, and accepts only a first-party claude.ai Pro, Max, Team
+or Enterprise subscription; authentication is never cached. A logged-out status
+exits nonzero with valid JSON and still reports the login action.
 
 Composer sends check provider readiness before the prompt enters the transcript.
 Codex credentials are checked directly. Claude readiness is learned from root
@@ -422,18 +416,14 @@ rebases it to the retained summary and tail. Root boundaries use the numbered
 root segment. Editing a child does not mark the root or another child divergent.
 
 A native call identity is admitted once per turn; a repeated identity in the
-same turn is rejected before the pipeline. Call identities are not persisted.
-The conversation identity and `in-flight` state are durable before the prompt
-is sent, so a turn lost with its process restores as `uncertain`, and the next
-turn's acknowledged reconciliation notice precedes further tools. New calls remain
+same turn is rejected before the pipeline. Call identities are not persisted. New calls remain
 subject to ordinary permissions and current-state reconciliation; matching tool
 arguments or text alone is not evidence that two calls are the same event.
 No pending approval or operating-system process is resurrected by these records.
 
 Native root and child turns offer the same Plan and Goal tool visibility as
-gptel requests. The roster is fixed for the native turn, so both Goal mutators
-stay offered while either is available: creating or completing a Goal can
-enable the other before the turn ends. Calls still face current authority.
+gptel requests; the fixed native roster's Goal tools are described under
+[Goal tools](goals.md#goal-tools). Calls still face current authority.
 
 Public abort retains the existing settlement reservation until ACP acknowledges
 cancellation or its timeout ends the connection. This preserves the partial
@@ -627,8 +617,8 @@ A missing identity is an error.  An identity mismatch requires explicit
 confirmation; declining aborts resume, while accepting binds the conversation
 to the opened workspace and discards copied session permission rules, resource
 grants, and additional roots.  The next save records the opened workspace's
-identity. Superseded sidecar shapes are not migrated during resume; the explicit
-`v0.5.6` conversion described above runs separately.
+identity. Superseded sidecar shapes are not migrated during resume; the
+[explicit migration](#explicit-migration-to-v0510) runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
 `v0.5.10`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
@@ -1374,6 +1364,11 @@ the transcript; those entries need review in the Pending Inputs cockpit. The
 next root request clears a pause that no reviewable entry still justifies, and
 the pause banner shows only while entries remain.
 
+A saved model selection that no longer resolves uses
+`mevedel-model-fallback-provider`, or the host default when that option is nil,
+with a notice; without either, history stays readable while requests wait for a
+model choice.
+
 Recovery issues are informational unless an owner that re-checks them reports
 them as blocking: provider readiness, a missing preset (cleared by applying any
 preset) and a saved model with no available fallback (cleared by selecting a
@@ -1545,7 +1540,9 @@ npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-session-v0.5.6.el \
 
 The source remains unchanged. The converter preserves session identity,
 transcripts, artifacts, native-history references and all retained publication
-heads, updating sidecar checksums. New recovery fields start empty because older
+heads, updating sidecar checksums. A Goal saved before incomplete-usage
+tracking gains an explicit complete-usage flag; an invalid Goal refuses
+conversion instead of being dropped silently by the runtime loader. New recovery fields start empty because older
 formats did not persist queued input; previously unsaved queues cannot be recovered.
 Existing v0.5.10 sidecars retain their recovery state. Restoring an interrupted
 native conversation still requires explicit continuation through the current

@@ -112,10 +112,6 @@ spell. It also outlasts the relay's 40-second dead-host detection, so a
 redial normally finds the room collected rather than meeting the relay's
 second-host refusal.
 
-### 2026-10-07: defer the browser runtime until a lobby starts
-
 The loading scan found that empty-state installation loaded the browser runtime
-before checking whether any lobby was recorded. Moving those dependencies to
-lobby startup removes that cost without changing the persistent intent decision:
-valid records still restart automatically, failed starts retain retry intent,
-and explicit stop removes it.
+before checking whether any lobby was recorded. Those dependencies now load at
+lobby startup; the persistent intent decision is unchanged.

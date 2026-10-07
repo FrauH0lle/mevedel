@@ -145,22 +145,17 @@ and MCP results through the canonical gptel renderers, and shares final patch
 capture and terminal settlement. Native Claude `PreToolUse`, `PostToolBatch`
 and `SessionStart(compact)` hooks query the same private endpoint for context
 and stop decisions; they are absent from tool discovery. Hook handlers complete
-asynchronously; the runner queues events, hook decisions and tool admission
-until target transport is idle. Socket work is queued after every ACP frame
-Emacs can already read, not after frames still inside the adapter.
-Cancellation rejects queued work while still consuming events and terminal
-usage the agent already reported. A process exit reports the agent's last
-stderr output. [ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md)
-owns these connection-ordering and cancellation rules.
+asynchronously. Event, hook and tool-admission ordering and cancellation follow
+[ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md). A process exit reports
+the agent's last stderr output.
 Native tool calls run the data buffer's `gptel-pre-tool-call-functions` and
 `gptel-post-tool-call-functions` (tool repair already ran in the pipeline), so
 views, collaboration rooms and agent activity observe them as gptel calls; a
 hook's `:stop` ends the turn and `:block` refuses the call.
 The Claude Code provider routes ordinary root submissions through
-this runner. The adapter normalizes final prompt usage separately from context
-occupancy and model-level quota reports: normalized input includes cache
-creation, cached input contains cache reads, and output stays separate.
-Duplicate terminal replies cannot charge or publish the turn again.
+this runner. Its usage accounting is described under
+[Goals](goals.md#request-context-and-authority); duplicate terminal replies
+cannot charge or publish the turn again.
 
 Handler-owned cleanup registers before the outer pipeline canceller, so a
 compound async tool can cancel and audit its active children before its own
