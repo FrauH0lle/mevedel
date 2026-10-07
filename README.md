@@ -675,7 +675,7 @@ The model-facing `Agent` tool takes a lowercase `task_name`, a complete
 asynchronously and immediately returns its canonical path (for example
 `/root/spec_review`). Omit the role to inherit the delegator's effective
 configuration. Agents with delegation authority can create arbitrarily deep
-nested paths, while the complete session tree shares three active non-root
+nested paths, while the complete session tree shares ten active non-root
 turns by default. The child becomes idle when its turn settles, while its path
 and conversation remain retained.
 

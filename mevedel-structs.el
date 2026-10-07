@@ -226,7 +226,7 @@ workspace."
   agent-reservations ; transient alist of unpublished agent records
   (agent-root-activity 'idle) ; root roster activity: running or idle
   agent-root-waiter ; transient async WaitAgent callback and timer
-  (agent-turn-capacity 3) ; maximum active non-root turns in this session tree
+  (agent-turn-capacity 10) ; maximum active non-root turns in this session tree
   pending-steering ; transient FIFO of same-turn steering prompts
   pending-follow-ups ; transient FIFO of prompts awaiting separate root turns
   pending-input-next-id ; next session-local pending-input identity
