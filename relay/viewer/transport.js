@@ -58,6 +58,7 @@
     let reconnectTimer = null;
     let backoffMs = 1000;
     let downSince = null;
+    let joinSince = null;
     let inbound = Promise.resolve();
     let outbound = Promise.resolve();
     let sending = 0;
@@ -119,16 +120,17 @@
 
     // The relay garbage-collects the room the moment the host connection
     // drops, so a reconnect may briefly find no room before the host recreates
-    // it. Give up only after the retry window.
-    function scheduleReconnect() {
+    // it. Give up only after the retry window. JOINING retries a first
+    // join, which has its own window and does not open this one.
+    function scheduleReconnect(joining) {
       if (ended || reconnectTimer) return;
-      if (!downSince) downSince = Date.now();
-      if (Date.now() - downSince > options.giveUpMs) {
+      if (!joining && !downSince) downSince = Date.now();
+      if (!joining && Date.now() - downSince > options.giveUpMs) {
         ended = true;
         options.onGiveUp();
         return;
       }
-      options.onConnection('Reconnecting…');
+      options.onConnection(joining ? 'Connecting…' : 'Reconnecting…');
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null;
         connect();
@@ -171,6 +173,7 @@
           if (ended || socket !== nextSocket) return;
           if (frame) {
             downSince = null;
+            joinSince = null;
             backoffMs = 1000;
             options.onFrame(frame);
           }
@@ -180,12 +183,19 @@
       });
       nextSocket.addEventListener('close', event => {
         if (socket !== nextSocket || ended) return;
-        // An initial 4004 identifies a stale stored link. During an existing
-        // reconnect window it can instead mean the guest beat the host back
-        // to the relay, so keep retrying within the ordinary bound.
+        // An initial 4004 that outlasts the short join window identifies a
+        // stale stored link.  Within it, a link handed out with a new room
+        // may simply have beaten the host's own dial to the relay.  During
+        // an existing reconnect window the guest may likewise have beaten
+        // the host back, so keep retrying within the ordinary bound.
         if (event && event.code === 4004 && !downSince) {
-          ended = true;
-          options.onGiveUp();
+          if (!joinSince) joinSince = Date.now();
+          if (Date.now() - joinSince > options.joinGraceMs) {
+            ended = true;
+            options.onGiveUp();
+            return;
+          }
+          scheduleReconnect(true);
           return;
         }
         scheduleReconnect();

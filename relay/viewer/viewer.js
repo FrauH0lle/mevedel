@@ -36,6 +36,8 @@
 
   const PROTO = 3;
   const GIVE_UP_MS = 3 * 60 * 1000;
+  // Covers the host's relay dial after it hands out a new room's link.
+  const JOIN_GRACE_MS = 5 * 1000;
   const MAX_PROMPT_BYTES = 256 * 1024;
 
   const state = {
@@ -1391,6 +1393,7 @@
         roomId: credentials.roomId,
         key,
         giveUpMs: GIVE_UP_MS,
+        joinGraceMs: JOIN_GRACE_MS,
         hello: () => {
           const hello = {t: 'hello', proto: PROTO, name: guestName(),
                          guestId: guestId()};
