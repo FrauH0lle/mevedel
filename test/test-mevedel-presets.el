@@ -4,6 +4,8 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-exec-registration)
+
 (require 'gptel)
 (require 'gptel-anthropic)
 (require 'mevedel-permission-rules)

@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-exec-registration)
+
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -27,6 +29,7 @@
                    "mevedel-pipeline.el"
                    "mevedel-tool-exec-permission.el"
                    "mevedel-tool-exec.el"
+                   "mevedel-tool-exec-registration.el"
                    "mevedel-tool-fs-read.el"
                    "mevedel-tool-fs-search.el"
                    "mevedel-tool-fs.el"
@@ -153,7 +156,7 @@
                    (delete-directory root t)))
                (unless
                    (string-suffix-p
-                    "mevedel-tool-exec.elc"
+                    "mevedel-tool-exec-registration.elc"
                     (or (symbol-file 'mevedel-tool-exec--register 'defun)
                         ""))
                  (error "Execution tool behavior has the wrong owner"))))

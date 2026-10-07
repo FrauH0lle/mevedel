@@ -30,7 +30,10 @@ stopped, its workspace root is recorded in the user directory while it runs,
 and an Emacs exit leaves that record, so the next `mevedel-install` restarts
 the lobby on the same relay room. Stopping the lobby removes the record.
 Rotating the credentials, not stopping the lobby, is its revocation
-operation. The rooms a lobby opens follow the ordinary share lifecycle and
+operation. Saved-intent inspection loads only lobby and workspace foundations;
+starting a recorded lobby loads guest, artifact, file, editing, and transport
+implementations. An absent, empty, or malformed intent record starts none of
+those features. This preserves startup timing, warning and retry behavior. The rooms a lobby opens follow the ordinary share lifecycle and
 end with Emacs; the lobby hands out a fresh link to each one on request, so
 they need no persistence of their own.
 
@@ -108,3 +111,11 @@ judging, because Emacs runs due timers before reading output after a busy
 spell. It also outlasts the relay's 40-second dead-host detection, so a
 redial normally finds the room collected rather than meeting the relay's
 second-host refusal.
+
+### 2026-10-07: defer the browser runtime until a lobby starts
+
+The loading scan found that empty-state installation loaded the browser runtime
+before checking whether any lobby was recorded. Moving those dependencies to
+lobby startup removes that cost without changing the persistent intent decision:
+valid records still restart automatically, failed starts retain retry intent,
+and explicit stop removes it.

@@ -184,8 +184,8 @@
                   (&optional session))
 (declare-function mevedel-plan-mode-exit "mevedel-plan-mode"
                   (&optional session))
-(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode")
-(autoload 'mevedel-plan-mode-exit "mevedel-plan-mode")
+(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode" nil t)
+(autoload 'mevedel-plan-mode-exit "mevedel-plan-mode" nil t)
 
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-accept
@@ -258,9 +258,11 @@
   "mevedel-session-rewind")
 
 ;; `mevedel-side-conversation'
+(declare-function mevedel-side-conversation-close "mevedel-side-conversation" ())
+(autoload 'mevedel-side-conversation-close "mevedel-side-conversation" nil t)
 (declare-function mevedel-side-conversation-send
                   "mevedel-side-conversation" ())
-(autoload 'mevedel-side-conversation-send "mevedel-side-conversation")
+(autoload 'mevedel-side-conversation-send "mevedel-side-conversation" nil t)
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill "mevedel-skills-core"

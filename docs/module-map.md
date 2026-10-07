@@ -2,7 +2,7 @@
 
 ```
 Entry point
-  mevedel.el                  top-level loader, install/uninstall, directives
+  mevedel.el                  foundational data, command autoloads, install/uninstall, directives
 
 Data model
   mevedel-structs.el          passive workspace/session/request/task data shapes and invariants
@@ -210,6 +210,7 @@ Turn engines (Claude Code through ACP and MCP)
   mevedel-acp-workload.el     scoped background MCP tools and native batch-boundary guards
   mevedel-acp-turn.el         admitted ACP turns, MCP tool scope, streaming and shared settlement
   mevedel-acp-compaction.el   native summary lifecycle, transcript rotation and retained tails
+  mevedel-claude-code-backend.el provider type, model catalog and autoloaded engine dispatch
   mevedel-claude-code.el      guided setup, managed adapter installation, subscription login and isolated ACP launch
   mevedel-claude-code-session.el root, directive and shared-item sends and persisted external conversation references
   mevedel-claude-code-agent.el retained-child subscription dispatch, sample limits and native history references
@@ -224,11 +225,14 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-fs.el          filesystem tool registration and shared path/resource primitives
   mevedel-tool-fs-read.el     Read text/media decoding and bounded output
   mevedel-tool-fs-search.el   Glob/Grep execution and resource-output privacy
-  mevedel-tool-patch.el       ApplyPatch parse/match/apply engine + tool
+  mevedel-tool-patch-registration.el ApplyPatch catalog and callback autoloads
+  mevedel-tool-patch.el       ApplyPatch parse/match/apply engine and rendering
   mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
   mevedel-tool-exec-permission.el Bash/Eval authority and prompt adapters
-  mevedel-tool-exec.el        Bash/Eval lifecycle, rendering, registration
-  mevedel-tool-web.el         WebSearch, WebFetch
+  mevedel-tool-exec-registration.el Bash/Eval/execution-control catalog and callback autoloads
+  mevedel-tool-exec.el        Bash/Eval lifecycle and rendering
+  mevedel-tool-web-registration.el WebSearch/WebFetch catalog and callback autoloads
+  mevedel-tool-web.el         WebSearch/WebFetch execution and rendering
   mevedel-interaction-prompt.el  shared interaction overlay lifecycle
   mevedel-permission-prompt.el   generic, Bash, Eval, and execution-authority prompt UI
   mevedel-tool-ask.el         Ask handler, result renderer, registration

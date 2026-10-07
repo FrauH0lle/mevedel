@@ -194,18 +194,6 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
   filesystem path components.
 - **Provide**: each file ends with `(provide 'mevedel-MODNAME)` and
   `;;; mevedel-MODNAME.el ends here`
-- **Minimize explicit runtime `require`s**: prefer actual autoloaded entry
-  points. Use `declare-function` and `defvar` for byte-compiler declarations
-  only; they do not load libraries, and variable access does not trigger
-  autoloading.
-- **Load dependencies at feature boundaries**: when a runtime dependency is
-  not autoloaded or otherwise guaranteed to be loaded, `require` it once in a
-  cold command/setup entry point, or at top level when it is unconditional
-  and acyclic. Use `eval-when-compile` only for compile-time dependencies.
-- **Never call `require` on a hot path**: code reached per segment, chunk,
-  redraw tick, or guest step must rely on an earlier load boundary. Avoid
-  circular dependencies through module direction rather than scattering
-  lazy `require`s through helpers.
 - **ASCII in code, unicode only in UI-facing strings**: comments,
   identifiers, and non-UI strings stay ASCII (use `->` not `→`,
   `lambda`/`fn` not `λ`). Unicode is fine in `propertize`, overlays,
@@ -224,6 +212,39 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
   `(message "mevedel: stale request found, replacing")`. Output goes
   to `*Messages*` where there's no backtrace, so the prefix earns its
   keep.
+
+## Loading and initialization
+
+Prefer deferral at meaningful feature boundaries, not maximum laziness. Keep
+cheap, unconditional, acyclic dependencies eager when that makes ownership
+clearer. Loading and first-use setup belong to the implementation; callers
+must not need a load-order recipe.
+
+- **Use real autoloaded entry points**. `declare-function` and `defvar` are
+  byte-compiler declarations; they do not load libraries, and variable access
+  does not trigger autoloading. Use `eval-when-compile` only for compile-time
+  dependencies.
+- **Load dependencies at feature boundaries**. When a runtime dependency is
+  not autoloaded or otherwise guaranteed to be loaded, `require` it once in a
+  cold command/setup entry point, or at top level when it is unconditional
+  and acyclic. Trace transitive loads through aggregators: an autoload gains
+  nothing if the package entry point already loads its implementation.
+- **Defer optional runtime work with its feature**. Start processes,
+  connections, watchers, scans, and expensive resource hydration when their
+  owning feature needs them. Keep discovery metadata available when needed
+  without unnecessarily initializing execution. Deferral must preserve
+  permission checks, recovery, visible failures, and teardown.
+- **Never call `require` on a hot path**. Code reached per segment, chunk,
+  redraw tick, or guest step must rely on an earlier load boundary. Avoid
+  circular dependencies through module direction rather than scattering
+  lazy `require`s through helpers.
+- **Verify cold first use and the tradeoff**. Exercise changed boundaries
+  through caller entry points in a fresh isolated Emacs, including compiled
+  code; preloaded fixtures can hide missing dependencies. Check that optional
+  features remain unloaded or inactive until needed. Measure package load,
+  installation, first use, and steady-state work separately before claiming
+  performance gains. Moving a pause to the first interaction is not by itself
+  an improvement.
 
 ## Testing conventions
 

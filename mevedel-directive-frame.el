@@ -66,7 +66,7 @@
 (declare-function mevedel-view-back-to-chat "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-scope-label
                   "mevedel-view-composer" (&optional scope))
-(autoload 'mevedel-view-back-to-chat "mevedel-view-composer")
+(autoload 'mevedel-view-back-to-chat "mevedel-view-composer" nil t)
 (autoload 'mevedel-view-composer-scope-label "mevedel-view-composer")
 (defvar mevedel-view--composer-scope)
 

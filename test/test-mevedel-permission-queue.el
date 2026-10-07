@@ -14,6 +14,8 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-exec-registration)
+
 (require 'ert)
 (require 'cl-lib)
 (require 'gptel)

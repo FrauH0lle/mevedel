@@ -11,8 +11,10 @@
 ;;; Code:
 
 (require 'mevedel-tool-registry)
-(require 'mevedel-shared-editing)
-(require 'mevedel-shared-library)
+(autoload 'mevedel-shared-editing--json "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
+(autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
+(autoload 'mevedel-shared-library-text "mevedel-shared-library")
 
 ;; `mevedel-agent-conversation'
 (defvar mevedel--agent-invocation)

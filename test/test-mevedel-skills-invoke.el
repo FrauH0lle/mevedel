@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-exec-registration)
+
 (require 'helpers
          (file-name-concat
           (file-name-directory

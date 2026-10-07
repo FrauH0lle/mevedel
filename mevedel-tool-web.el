@@ -57,8 +57,9 @@
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
 
-;; `mevedel-view'
-(declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
+;; `mevedel-view-render'
+(declare-function mevedel-view-data-buffer-major-mode "mevedel-view-render" ())
+(autoload 'mevedel-view-data-buffer-major-mode "mevedel-view-render")
 
 ;; `url-http'
 (defvar url-http-data)
@@ -884,51 +885,6 @@ buffer's major mode (see `mevedel-tool-web--render-fetch' for why)."
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
             :initially-collapsed-p t))))
-
-
-;;
-;;; Tool registration
-
-;;;###autoload
-(defun mevedel-tool-web--register ()
-  "Register mevedel's native web tools."
-
-  (mevedel-define-tool
-    :name "WebSearch"
-    :description "Search the web with DuckDuckGo for titled result links and snippets."
-    :summary "Search the web for the top results to a query."
-    :prompt-file "prompts/tools/websearch.md"
-    :handler #'mevedel-tool-web--websearch
-    :args ((query string :required
-                  "The natural language search query, can be multiple words.")
-           (allowed_domains array :optional
-                            "Only return results on these domains or their subdomains."
-                            :items (:type string))
-           (blocked_domains array :optional
-                            "Never return results on these domains or their subdomains."
-                            :items (:type string)))
-    :async-p t
-    :category "mevedel-web"
-    :groups (web)
-    :read-only-p t
-    :render-transform #'mevedel-tool-web--render-transform
-    :renderer '((success . mevedel-tool-web--render-search)))
-
-  (mevedel-define-tool
-    :name "WebFetch"
-    :description "Fetch a URL as readable text, or an image or PDF it serves."
-    :summary "Fetch and read the contents of a URL."
-    :prompt-file "prompts/tools/webfetch.md"
-    :handler #'mevedel-tool-web--fetch
-    :args ((url string :required "The URL to fetch."))
-    :async-p t
-    :category "mevedel-web"
-    :groups (web)
-    :read-only-p t
-    :max-result-size 50000
-    :get-domain (lambda (args)
-                  (mevedel-tool-web--url-host (plist-get args :url)))
-    :renderer '((success . mevedel-tool-web--render-fetch))))
 
 (provide 'mevedel-tool-web)
 ;;; mevedel-tool-web.el ends here

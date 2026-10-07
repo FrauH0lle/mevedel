@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-web-registration)
+
 (require 'helpers
          (file-name-concat
           (file-name-directory

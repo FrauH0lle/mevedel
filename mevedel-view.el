@@ -73,7 +73,7 @@
 ;; `mevedel-executions-list'
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
-(autoload 'mevedel-executions-list-open "mevedel-executions-list")
+(autoload 'mevedel-executions-list-open "mevedel-executions-list" nil t)
 
 ;; `mevedel-journal-capture'
 (declare-function mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture"

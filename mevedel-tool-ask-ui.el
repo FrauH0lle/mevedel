@@ -15,7 +15,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
-(autoload 'mevedel-abort "mevedel-chat")
+(autoload 'mevedel-abort "mevedel-chat" nil t)
 
 ;; `mevedel-directive-frame'
 (defvar mevedel--child-frame-parameters)

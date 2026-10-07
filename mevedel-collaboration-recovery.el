@@ -3,6 +3,8 @@
 ;; Closed browser actions reuse host model, preset, login and history APIs.
 ;; Login challenges are ephemeral and sent only to authenticated owner peers.
 ;;; Code:
+
+(declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
 (require 'mevedel-collaboration-owner)
 (require 'mevedel-readiness)
 (require 'mevedel-presets)

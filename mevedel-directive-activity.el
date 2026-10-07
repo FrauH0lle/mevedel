@@ -165,8 +165,8 @@
 (declare-function mevedel-view-zone-reconcile
                   "mevedel-view-zone" (zone start end fragments))
 (autoload 'mevedel-view-zone-forget "mevedel-view-zone")
-(autoload 'mevedel-view-zone-next "mevedel-view-zone")
-(autoload 'mevedel-view-zone-previous "mevedel-view-zone")
+(autoload 'mevedel-view-zone-next "mevedel-view-zone" nil t)
+(autoload 'mevedel-view-zone-previous "mevedel-view-zone" nil t)
 (autoload 'mevedel-view-zone-reconcile "mevedel-view-zone")
 
 ;; `mevedel-workspace'

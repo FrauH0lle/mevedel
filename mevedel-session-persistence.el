@@ -192,7 +192,7 @@
 (declare-function mevedel-rename-session "mevedel-session-naming" (new-name))
 (declare-function mevedel-session-naming-cancel "mevedel-session-naming" ())
 (declare-function mevedel-session-naming-normalize "mevedel-session-naming" (name))
-(autoload 'mevedel-rename-session "mevedel-session-naming")
+(autoload 'mevedel-rename-session "mevedel-session-naming" nil t)
 (autoload 'mevedel-session-naming-cancel "mevedel-session-naming")
 (autoload 'mevedel-session-naming-normalize "mevedel-session-naming")
 

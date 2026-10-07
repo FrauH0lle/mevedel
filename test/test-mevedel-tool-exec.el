@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-exec-registration)
+
 (require 'mevedel-tool-exec)
 (require 'cl-lib)
 (require 'seq)

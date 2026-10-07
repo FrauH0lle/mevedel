@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'mevedel-tool-patch-registration)
+
 (require 'gptel-request)
 (require 'mevedel-pipeline)
 (require 'mevedel-reminders)

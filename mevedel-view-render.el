@@ -45,7 +45,7 @@
 (declare-function mevedel-open-directive-activity
                   "mevedel-directive-activity"
                   (&optional directive workspace))
-(autoload 'mevedel-open-directive-activity "mevedel-directive-activity")
+(autoload 'mevedel-open-directive-activity "mevedel-directive-activity" nil t)
 
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-refresh-filter

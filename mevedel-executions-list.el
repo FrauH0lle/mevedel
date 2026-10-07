@@ -35,10 +35,10 @@
 (autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-format-header "mevedel-cockpit")
 (autoload 'mevedel-cockpit-open-surface "mevedel-cockpit")
-(autoload 'mevedel-cockpit-quit "mevedel-cockpit")
+(autoload 'mevedel-cockpit-quit "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-setup-tabulated-surface "mevedel-cockpit")
 (autoload 'mevedel-cockpit-surface-context "mevedel-cockpit")
-(autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
 
 ;; `mevedel-execution'

@@ -45,7 +45,7 @@
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open "mevedel-menu" (area))
-(autoload 'mevedel-menu-open "mevedel-menu")
+(autoload 'mevedel-menu-open "mevedel-menu" nil t)
 
 ;; `mevedel-plugin-lifecycle'
 (declare-function mevedel-plugins-install

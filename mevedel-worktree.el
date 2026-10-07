@@ -89,7 +89,7 @@
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
-(autoload 'mevedel-menu "mevedel-menu")
+(autoload 'mevedel-menu "mevedel-menu" nil t)
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-within-root-p

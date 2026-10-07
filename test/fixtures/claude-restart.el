@@ -77,7 +77,9 @@
               (let ((owner (mevedel--send-request (format "Root turn %d" phase))))
                 (with-timeout (10 (ert-fail "Restart root turn timed out"))
                   (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
-                (should (eq 'success (plist-get (mevedel-engine-info owner) :mevedel-acp-outcome))))
+                (unless (eq 'success (plist-get (mevedel-engine-info owner) :mevedel-acp-outcome))
+                  (error "Request outcome: %S; diagnostics: %S"
+                         (plist-get (mevedel-engine-info owner) :error) mevedel-test--captured)))
               (if (= phase 1)
                   (mevedel-agent-control-spawn
                    session "reader" "Read the evidence."

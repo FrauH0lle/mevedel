@@ -151,6 +151,7 @@
          callbacks
          invocations
          launches)
+    (setf (mevedel-session-agent-turn-capacity session) 3)
     (unwind-protect
         (with-current-buffer parent
           (setq-local mevedel--session session)

@@ -230,17 +230,17 @@
               ((symbol-function 'mevedel-view--resume-attended-views)
                (lambda (&rest _) (cl-incf resumed))))
       (mevedel-install)
-      (should (advice-member-p #'mevedel-view--refresh-animation-on-face
+      (should (advice-member-p #'mevedel--refresh-animation-on-face
                                'set-face-attribute))
       (funcall after-focus-change-function)
       (should (= 1 resumed))
       (mevedel-uninstall)
-      (should-not (advice-member-p #'mevedel-view--refresh-animation-on-face
+      (should-not (advice-member-p #'mevedel--refresh-animation-on-face
                                    'set-face-attribute))
       (funcall after-focus-change-function)
       (should (= 1 resumed))
       (mevedel-install)
-      (should (advice-member-p #'mevedel-view--refresh-animation-on-face
+      (should (advice-member-p #'mevedel--refresh-animation-on-face
                                'set-face-attribute))
       (funcall after-focus-change-function)
       (should (= 2 resumed))

@@ -15,6 +15,9 @@
 ;; compiles to a call to a function that does not exist.
 (eval-when-compile (require 'mevedel-structs))
 (require 'mevedel-engine)
+(require 'mevedel-presets)
+(require 'mevedel-plan-mode)
+(require 'mevedel-directive-request)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
