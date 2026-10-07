@@ -1061,6 +1061,8 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                                (mevedel-agent-runtime--insert-prompt
                                 invocation buffer description (plist-get turn :prompt)
                                 context-snapshot retained-p (plist-get turn :audits))))
+              (when (and pending-hook-context on-hook-context)
+                (funcall on-hook-context nil))
               ;; Only an external engine sends the turn as one text; gptel
               ;; reads it from the buffer, so skip the transcript-sized copy.
               (when (mevedel-engine-external-p
@@ -1074,8 +1076,6 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                                      (concat context-snapshot "\n\n"
                                              (plist-get turn :prompt))
                                    (plist-get turn :prompt)))))
-              (when (and pending-hook-context on-hook-context)
-                (funcall on-hook-context nil))
               (when (and on-settle
                          (not
                           (mevedel-agent-invocation-transcript-relative-path

@@ -182,7 +182,10 @@ bindings, including the absence of one."
            (mevedel-session-set-pending-input-failure-paused session nil)
            ;; A provider known to be failing is checked again; its success
            ;; wakes the queue.
-           (condition-case nil (mevedel-readiness-assert session) (user-error nil)))
+           (condition-case nil (mevedel-readiness-assert session) (user-error nil))
+           (when (and (mevedel-claude-code-backend-p gptel-backend)
+                      (eq 'failed (plist-get mevedel-readiness--claude :state)))
+             (mevedel-readiness-check)))
           (_ (user-error "Unknown recovery action")))
         (when session-action
           (mevedel-recovery-save session)

@@ -421,12 +421,10 @@ MODEL-POLICY may supply a tuple already validated before spawn admission."
 
 (defun mevedel-agent-exec-refresh-provider (invocation)
   "Return INVOCATION's frozen configuration, bound to a live provider.
-The configuration is copied onto INVOCATION before any change."
+A changed provider is written to a copy, so the agent record keeps its own."
   (let ((frozen (mevedel-agent-invocation-frozen-configuration invocation)))
     (unless (mevedel-agent-configuration-p frozen)
       (error "Agent request configuration is not frozen"))
-    (setq frozen (copy-mevedel-agent-configuration frozen))
-    (setf (mevedel-agent-invocation-frozen-configuration invocation) frozen)
     ;; A frozen backend that is still the registered one keeps its frozen
     ;; model, which gptel accepts even when the backend does not list it.
     ;; Only a backend replaced or removed since freezing is re-resolved by
@@ -447,7 +445,9 @@ The configuration is copied onto INVOCATION before any change."
             (mevedel-model-validate-effort (plist-get provider :model)
                                            (alist-get 'gptel-reasoning-effort locals))
           (user-error (setf (alist-get 'gptel-reasoning-effort locals) nil)))
-        (setf (mevedel-agent-configuration-request-locals frozen) locals)))
+        (setq frozen (copy-mevedel-agent-configuration frozen))
+        (setf (mevedel-agent-configuration-request-locals frozen) locals
+              (mevedel-agent-invocation-frozen-configuration invocation) frozen)))
     frozen))
 
 (cl-defun mevedel-agent-exec-run (main-cb agent-type description

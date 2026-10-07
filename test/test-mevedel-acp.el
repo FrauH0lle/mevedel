@@ -97,18 +97,22 @@
         (await (lambda () outcome))
         (should (eq 'success (plist-get outcome :status))))))
 
-  :doc "process loss fails the active prompt with the agent's stderr, without restarting"
+  :doc "process loss fails the active prompt, warns the host with stderr, without restarting"
   (mevedel-acp-test--with-connection nil
-    (let (outcomes)
-      (mevedel-acp-prompt connection [((type . "text") (text . "crash"))]
-                          #'ignore (lambda (outcome) (push outcome outcomes)))
-      ;; Busy Emacs: the stderr text and the exit are both pending at once.
-      (let ((end (+ (float-time) 0.2))) (while (< (float-time) end)))
-      (await (lambda () outcomes))
+    (let (outcomes warnings)
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (_type text &rest _) (push text warnings))))
+        (mevedel-acp-prompt connection [((type . "text") (text . "crash"))]
+                            #'ignore (lambda (outcome) (push outcome outcomes)))
+        ;; Busy Emacs: the stderr text and the exit are both pending at once.
+        (let ((end (+ (float-time) 0.2))) (while (< (float-time) end)))
+        (await (lambda () outcomes)))
       (should (= 1 (length outcomes)))
       (should (eq 'error (plist-get (car outcomes) :status)))
-      (should (string-search "fixture crash: native binary missing"
-                             (plist-get (car outcomes) :message)))
+      ;; Host logs stay out of the classified, shared outcome message.
+      (should-not (string-search "fixture crash: native binary missing"
+                                 (plist-get (car outcomes) :message)))
+      (should (string-search "fixture crash: native binary missing" (car warnings)))
       (should-error
        (mevedel-acp-prompt connection [((type . "text") (text . "again"))]
                            #'ignore #'ignore))))

@@ -1,7 +1,7 @@
 ;;; test-mevedel-readiness.el --- Shared readiness and replay boundaries -*- lexical-binding: t -*-
 ;;; Commentary:
-;; Readiness refuses only on a known failure or an in-flight check, clears
-;; only the issues it owns, and never re-imposes saved model policy.
+;; Readiness never refuses a Claude send, clears only the issues it owns,
+;; and never re-imposes saved model policy.
 ;;; Code:
 (require 'helpers (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-readiness)
@@ -65,29 +65,30 @@
                (lambda (&rest _) (ert-fail "No check expected"))))
       (mevedel-readiness-assert session)
       (should-not mevedel-readiness--claude)))
-  :doc "a known failure refuses with its cause and a successful check resumes"
+  :doc "a known failure is informational and a successful check resumes"
   (test-mevedel-readiness--with-claude
     (let ((peer (expand-file-name "test/fixtures/acp-agent.py" default-directory))
           messages)
-      (mevedel-readiness-record nil "Install Claude Code and run `claude auth login'")
+      (mevedel-readiness-record nil "Install Claude Code and run `claude auth login'" t)
+      (should-not (mevedel-recovery-blocker session))
       (should (equal "Install Claude Code and run `claude auth login'"
-                     (plist-get (mevedel-recovery-blocker session) :message)))
+                     (plist-get (car (mevedel-session-recovery-issues session)) :message)))
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
 		 (lambda (&rest _) (list :command (executable-find "python3")
 					 :args (list peer) :cwd temporary-file-directory)))
                 ((symbol-function 'message)
                  (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
-	(should (string-search "Install Claude Code"
-                               (cadr (should-error (mevedel-readiness-assert session)
-                                                   :type 'user-error))))
+        ;; The next send is the retry; only an explicit check probes.
+        (mevedel-readiness-assert session)
+        (should (eq 'failed (plist-get mevedel-readiness--claude :state)))
+        (mevedel-readiness-check)
         (should (eq 'checking (plist-get mevedel-readiness--claude :state)))
-        (should-error (mevedel-readiness-assert session) :type 'user-error)
 	(with-timeout (5 (ert-fail "Native readiness did not settle"))
 	  (while (eq 'checking (plist-get mevedel-readiness--claude :state))
 	    (accept-process-output nil 0.01)))
 	(should (eq 'ready (plist-get mevedel-readiness--claude :state)))
         (should-not (mevedel-recovery-blocker session))
-        (should (cl-find-if (lambda (text) (string-search "send your retained input again" text))
+        (should (cl-find-if (lambda (text) (string-search "Claude is ready" text))
                             messages))
 	(mevedel-readiness-assert session)
 	(should (string-empty-p (buffer-string))))))
@@ -108,8 +109,8 @@
         (mevedel-readiness-record-turn (list :backend backend) 'error "Claude Code 2.1.290 is required")
         (should (eq 'failed (plist-get mevedel-readiness--claude :state)))
         (should (string-search "2.1.290 is required" echoed))
-        (should (equal "Claude Code 2.1.290 is required"
-                       (plist-get (mevedel-recovery-blocker session) :message)))
+        ;; The failed turn's own request issue reports it; no second issue.
+        (should-not (mevedel-session-recovery-issues session))
         ;; Reaching the prompt proves readiness, whatever the outcome.
         (mevedel-readiness-record-turn (list :backend backend :mevedel-acp-prompted t) 'error "Later")
         (should (eq 'ready (plist-get mevedel-readiness--claude :state)))

@@ -89,6 +89,8 @@
 ;; instead of exercising the persistence path they mean to cover.
 (with-eval-after-load 'gptel
   (unless (default-value 'gptel-backend)
+    ;; Package autoloads are absent in `emacs -Q' child processes.
+    (require 'gptel-openai)
     (setq-default gptel-backend
                   (gptel-make-openai "mevedel-test"
                                      :key "test"

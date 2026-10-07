@@ -690,7 +690,7 @@ reached TOOL and could dispatch the next call from inside the cleanup."
 (mevedel-deftest mevedel-telemetry-usage--dispatch ()
   ,test
   (test)
-  :doc "cold dispatch needs neither the umbrella module nor an agent variable binding"
+  :doc "cold dispatch needs neither the umbrella module nor the agent modules"
   (let ((emacs (expand-file-name invocation-name invocation-directory)))
     (with-temp-buffer
       (let ((status
@@ -700,8 +700,9 @@ reached TOOL and could dispatch the next call from inside the cleanup."
                `(progn
                   (setq load-path ',load-path)
                   (require 'mevedel-telemetry-usage)
-                  (when (or (featurep 'mevedel) (featurep 'mevedel-agents)
-                            (boundp 'mevedel--agent-invocation))
+                  ;; Structs own the agent buffer variable; the agent modules
+                  ;; themselves must stay unloaded.
+                  (when (or (featurep 'mevedel) (featurep 'mevedel-agents))
                     (error "Cold dispatch must start without agent setup"))
                   (let ((session (mevedel-session--create
                                   :name "cold" :session-id "cold-session" :turn-count 1))
@@ -728,8 +729,7 @@ reached TOOL and could dispatch the next call from inside the cleanup."
                                    (eq 'root (plist-get (car events) :workload))
                                    (eq 'success (plist-get (cadr events) :outcome)))
                         (error "Cold dispatch failed to capture root call"))))
-                  (when (or (featurep 'mevedel) (featurep 'mevedel-agents)
-                            (boundp 'mevedel--agent-invocation))
+                  (when (or (featurep 'mevedel) (featurep 'mevedel-agents))
                     (error "Root observation must not load agent setup")))))))
         (ert-info ((buffer-string))
           (should (equal 0 status))
