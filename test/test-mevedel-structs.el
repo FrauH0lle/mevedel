@@ -289,7 +289,7 @@
             (should (null (mevedel-session-agent-registry session)))
             (should (null (mevedel-session-agent-reservations session)))
             (should (eq 'idle (mevedel-session-agent-root-activity session)))
-            (should (= 3 (mevedel-session-agent-turn-capacity session)))
+            (should (= 10 (mevedel-session-agent-turn-capacity session)))
             (should (null (mevedel-session-tasks session)))
             (should (null (mevedel-session-reminders session)))
             (should (eq 'ask (mevedel-session-permission-mode session)))

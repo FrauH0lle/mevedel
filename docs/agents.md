@@ -114,9 +114,10 @@ Every named role receives `SendMessage` and `ListAgents`. Possession of
 complete `Agent`, `FollowupAgent`, `WaitAgent`, and `InterruptAgent` control
 bundle. Worker and explorer therefore orchestrate recursively; reviewer and
 verifier are communicating leaves without those control tools. The complete
-root-session tree shares the session's active-turn capacity (three non-root
-turns by default), regardless of path depth. Waiting and human-blocked turns
-remain active and continue consuming their existing slot.
+root-session tree shares the session's active-turn capacity (ten non-root
+turns by default), regardless of path depth. The root does not consume a slot,
+allowing eleven active agents in total. Waiting and human-blocked turns remain
+active and continue consuming their existing slot.
 
 Before the first sample, the WAIT boundary injects only the caller's direct
 children as compact path and role references. Later WAIT boundaries add a
