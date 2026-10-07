@@ -11,10 +11,11 @@ without warnings. The [review and fix report](claude-code-engine-review-2026-10-
 records all resolved findings, follow-up reviews, performance measurements,
 and final evidence. Live subscription checks used
 the existing Enterprise login, not a separate Pro/Max account. Session sidecars
-now require v0.5.9; older records are rejected without migration, not deleted.
-The strict Goal record additionally requires `:tokens-incomplete-p`; earlier
-development Goals missing it are dropped on normal restore. The standalone
-v0.5.6 converter preserves Goals by adding this field. No features were removed.
+now require v0.5.10; the runtime loader rejects older records without deleting
+them, and `scripts/migrate-session-v0.5.6.el` explicitly converts v0.5.6 and
+v0.5.9 copies. The strict Goal record additionally requires
+`:tokens-incomplete-p`; earlier development Goals missing it are dropped on
+normal restore. The converter preserves Goals by adding this field. No features were removed.
 
 A second independent review on 2026-10-07 found and fixed further transport,
 security, collaboration and gptel-path defects; see the

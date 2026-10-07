@@ -130,32 +130,14 @@ only for input it left undelivered or uncertain. Refused guest input is dropped
 with a notice rather than held. OAuth readiness also runs at each gptel sampling boundary,
 so expiry during a tool loop settles the turn without synchronous login.
 
-Stable CLI/adapter maintenance runs asynchronously behind an installation lock.
-Native CLI releases are pinned before installation can prune them; adapters are
-staged by version. Version checks and an initialization-only ACP handshake gate
-activation. Current, previous and active runtimes survive cleanup. A rejected pair
+Stable CLI/adapter maintenance runs asynchronously behind an installation lock,
+which holds even when `create-lockfiles` is nil. Launches start a due check; an
+explicit check reports progress and its result in the echo area. Native CLI
+releases are pinned before installation can prune them; adapters are staged by
+version. Version checks and an initialization-only ACP handshake gate
+activation. Current, previous, rejected and active runtimes survive cleanup. A rejected pair
 waits for a new version or an explicit check. External installations are not
 replaced. Authentication failure is separate from runtime compatibility.
-
-### Decision history
-
-The initial integration required terminal login and an explicitly installed,
-pinned adapter. Headless browser use exposed inaccessible recovery prompts and
-stale installations. Owner-only typed recovery and automatic checked maintenance
-replace that setup policy while retaining the installed CLI's credential and
-conversation ownership.
-
-The first recovery layer blocked a session on any classified request failure,
-checked Claude readiness with a full native session whose result expired after
-30 seconds, paused delivery after every failed or aborted turn, held refused
-guest input with a blocking issue, and saved the full session on every queue
-change. Review reproduced the consequences. Regexes over provider text, such as
-"upgrade" in a billing message, persisted blocking issues no Emacs action
-cleared. Most Claude sends were refused once and started Claude twice. A single
-abort stopped follow-up delivery indefinitely. A refused `/compact` from a guest
-locked out the host. Queue saves cost about 70 ms each on a 400 KB transcript.
-Blocking state now belongs to owners that re-check it, readiness to turn startup,
-the pause to affected input, and queue durability to the sidecar.
 
 ## Rationale and consequences
 
@@ -174,14 +156,6 @@ The installed adapter exposes the SDK's user-message echoes and hook lifecycle
 messages, which make delivery observable without a second history store.
 Receipt establishes SDK acceptance, not model understanding or retention
 through later compaction.
-
-The choice was validated through real ACP/MCP permission waits, reviewed
-patches, compaction and context restoration, independent conversations and
-same-machine restart, plus deterministic session and failure tests. The bounded
-live runs used an existing Enterprise subscription login through the same
-supported login path; they do not establish Pro/Max-specific allowance or
-performance claims. Run evidence is kept in the working-material progress log,
-not in this record.
 
 ## Decision history
 
@@ -248,10 +222,23 @@ not in this record.
   engines once history existed; the user rejected it. Effective native
   compaction segments and gptel's reasoning-safe projection provide a usable
   continuation boundary in both directions.
-
-### 2026-10-07: separate provider discovery from execution
-
-The loading scan showed that recognizing the Claude backend loaded ACP, MCP,
-and usage execution even for native gptel sessions. The backend now owns the
-small provider contract separately from setup and execution. Engine authority,
-model metadata, and persisted provider selection remain unchanged.
+- **Setup and maintenance:** the initial integration required terminal login
+  and an explicitly installed, pinned adapter. Headless browser use exposed
+  inaccessible recovery prompts and stale installations. Owner-only typed
+  recovery and automatic checked maintenance replaced that setup policy while
+  retaining the installed CLI's credential and conversation ownership.
+- **Recovery scope:** the first recovery layer blocked a session on any
+  classified request failure, checked Claude readiness with a full native
+  session whose result expired after 30 seconds, paused delivery after every
+  failed or aborted turn, held refused guest input with a blocking issue, and
+  saved the full session on every queue change. Regexes over provider text,
+  such as "upgrade" in a billing message, persisted blocking issues no Emacs
+  action cleared. Most Claude sends were refused once and started Claude twice.
+  A single abort stopped follow-up delivery indefinitely. A refused `/compact`
+  from a guest locked out the host. Queue saves cost about 70 ms each on a
+  400 KB transcript. Blocking state now belongs to owners that re-check it,
+  readiness to turn startup, the pause to affected input, and queue durability
+  to the sidecar.
+- **Provider discovery:** recognizing the Claude backend first loaded ACP, MCP
+  and usage execution, even for native gptel sessions. The backend module now
+  owns the small provider contract separately from setup and execution.

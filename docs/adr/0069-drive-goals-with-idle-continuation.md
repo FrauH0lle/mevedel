@@ -31,17 +31,12 @@ idle work when its last pending interaction closes, and the composer offers
 queued follow-ups when an edit empties the draft that held them. Every offered
 path rechecks its own gates, so a spurious offer is harmless.
 
-The lifecycle is shared by gptel and native ACP turns. Claude's SDK reports
-usage for each model sample before its post-tool hook; message identities let
-the engine merge cumulative deltas and duplicate assistant snapshots without
-double charging. Its final prompt totals replace reported counters, while
-missing fields preserve earlier known usage. Existing Goal accounting and
-acknowledged budget reminders consume those normalized counters. No separate
+The lifecycle is shared by gptel and native ACP turns. Native turns charge
+Claude's per-sample usage through the existing Goal accounting and budget
+reminders ([Goals](../goals.md#request-context-and-authority)); no separate
 native Goal controller or final-turn-only budget mode is needed. Missing native
-input or output totals persist as incomplete accounting with the known lower
-bound. Unbudgeted continuation remains available; bounded continuation stops
-until the user removes the limit or starts a new Goal. Inspection exposes null
-total and remaining usage instead of presenting an unsupported count.
+totals persist as incomplete accounting with the known lower bound, which stops
+bounded continuation.
 
 ## Decision history
 
@@ -62,15 +57,10 @@ be reconstructed into a reliable estimate. Explicit durable incompleteness
 replaces that fallback for native requests and their attributed children.
 The existing gptel request estimate remains unchanged.
 
-The subscription integration initially had only final prompt totals, leaving
-within-turn budget reminders unproven. A bounded native probe observed three
-sample identities whose summed usage exactly matched the final prompt total.
-A second probe delivered the 100% reminder at the first tool boundary and
-Claude wrapped up without the next planned read. This establishes the existing
-reminder and settlement semantics; it does not establish a server token cap or
-subscription quota measurement. Workflow tests also exercise automatic
-continuation, queued-input priority, pause/resume and independent completion
-verification through ACP and the real MCP pipeline.
+The subscription integration initially had only final prompt totals, so
+within-turn budget reminders could not fire. A native probe showed that the
+SDK's per-sample usage, keyed by message identity, sums exactly to the final
+prompt total, so native turns now charge per sample like gptel calls.
 
 Initially creation was a user command or accepted-plan handoff, and the model
 could only complete or block an existing Goal. The requested natural-language

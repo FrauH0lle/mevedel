@@ -43,9 +43,9 @@ earlier Reads from counting as duplicates; if touched-file contents were
 omitted, the re-read reminder is enqueued on the pending FIFO for the next
 prompt, since no gptel request exists to stage it on.
 
-The ACP runner processes native events, hooks and tool admission in order when
-the execution target's transport is idle. Cancellation fences queued work;
-late callbacks cannot rotate a replacement request's transcript. Isolated text
+Native event ordering and cancellation follow
+[ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md); late callbacks cannot
+rotate a replacement request's transcript. Isolated text
 workloads have no transcript segments and do not advertise this capability.
 
 ## Compaction flow

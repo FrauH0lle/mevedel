@@ -361,7 +361,7 @@ view-render trace.
 ## Prompt-cache efficiency
 
 Ordinary telemetry records `provider-call` events with `:stage start` and at
-most one `:stage finish` per actual provider dispatch. A `:call-id` identifies
+most one `:stage finish` per actual gptel provider dispatch. A `:call-id` identifies
 the HTTP call, unlike `:request-id`, which can span a whole tool-loop turn.
 Both events retain the dispatch-time session turn, request identity, agent
 path (when applicable), backend name and concrete `:backend-type`, model,
@@ -369,6 +369,11 @@ and workload (`root`, `agent`, `naming`, or `context-summary`). Context
 summaries also retain their categorical purpose. Helpers write into the owning
 session; sessionless journal/memory work keeps its separate workspace stream.
 Transient `/btw` conversational calls do not create per-call events.
+Only gptel dispatch is observed. Claude Code requests run through ACP and emit
+no `provider-call` events: root and child turns, and isolated text and workload
+requests such as naming, context summaries, permission review, buddy and
+memory review, are absent from prompt-cache analysis. Root and child turn usage
+still reaches Goal accounting.
 
 Normal completion observes gptel's per-call `:tokens` at streaming transport
 cleanup or non-streaming response parsing, before callbacks can tear down a

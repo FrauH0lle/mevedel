@@ -59,9 +59,8 @@ Interruption drains that request's cancellers and queued prompts, including
 while its parent is waiting. Final prompt usage is attached to the RESULT and charged to the
 owning Goal once. Adapter failures settle as errors; interrupted/failed native
 histories retain an uncertain marker. Follow-up recovery guidance requires the
-native user-message echo before tools continue. Each child's conversation
-identity is durable before its prompt; a lost turn restores as uncertain and
-requires acknowledged reconciliation before more tools.
+native user-message echo before tools continue. A lost turn restores as
+uncertain and requires acknowledged reconciliation before more tools.
 
 When a child's native history is unavailable, the user can select its canonical
 path with `M-x mevedel-claude-code-recover-history` in the session. Recovery

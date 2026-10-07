@@ -139,69 +139,38 @@ Run `mevedel-uninstall` to deactivate `mevedel`.
 
 ### Claude Pro/Max subscriptions
 
-Run `M-x mevedel-claude-code-setup` to check the local installation and open the
-guided setup screen. It requires Claude Code 2.1.290+, Node.js 22+, Python 3.8+,
-and acp.el 0.15.2+. Install the unmodified Claude CLI using its
-[official instructions](https://code.claude.com/docs/en/setup), then run
-`claude auth login` in a terminal with your Claude Pro or Max account.
+Install the unmodified Claude CLI using its
+[official instructions](https://code.claude.com/docs/en/setup) and run
+`claude auth login` in a terminal with your Claude Pro or Max account (Team and
+Enterprise logins also work). Then run `M-x mevedel-claude-code-setup`: it
+checks Claude Code 2.1.290+, Node.js 22+, Python 3.8+, acp.el 0.15.2+ and the
+subscription login without starting a model request. Subscription selection
+rejects API authentication and does not enable paid overflow.
 
-Mevedel maintains the stable native CLI and managed ACP adapter automatically.
-It checks at first Claude use and periodically afterward, stages adapter releases,
-and validates versions and the ACP handshake before selecting the new runtime.
-Active invocations keep their selected executable paths; failed checks retain the
-previous working runtime. **Install/update adapter** requests an immediate check.
-Set `mevedel-claude-code-auto-update` to nil to disable automatic checks.
-Externally managed CLI binaries and custom adapters remain host-managed.
+Mevedel keeps the native CLI and its managed ACP adapter on the stable release.
+A Claude launch starts a background check when one is due (daily, hourly after
+a failure). A new runtime is selected only after its versions and ACP handshake
+pass; running invocations keep their executables, and a failed check keeps the
+previous runtime. **Install/update adapter** in the setup buffer, or
+`M-x mevedel-claude-code-install-adapter`, checks now and reports progress and
+the result in the echo area; it refuses while another check holds the
+installation lock. Set `mevedel-claude-code-auto-update` to nil to disable
+automatic checks. Package-manager CLI binaries and a custom
+`mevedel-claude-code-adapter-executable` are validated, never replaced. Keep
+`mevedel-claude-code-directory` stable: it holds the managed runtimes and the
+conversation directory used for resume. Claude runs on the Emacs host, also for
+remote project tools.
 
-Start a mevedel session and select `Claude Code:sonnet`, `Claude Code:opus`,
-`Claude Code:fable`, or `Claude Code:haiku` in the ordinary model menu. The
-installed CLI owns login and model history; mevedel supplies its tools automatically over MCP. No API
-key or manual MCP configuration is needed. Subscription selection rejects API
-authentication and does not enable paid overflow. Existing Team and Enterprise
-logins are accepted too.
-
-Session startup adds Claude's reported models to the picker and refreshes the
-selected model's effort choices. Sonnet, Opus and Fable offer documented effort
-choices before connection; Haiku has no effort control. Startup applies the
-selected level before the first prompt, falling back to Claude's default if
-unsupported. Disappeared saved selections use `mevedel-model-fallback-provider`,
-or the host default when that option is nil, and show a notice. If that fallback
-is unavailable, history stays readable while execution waits for a model choice.
-
-Use mevedel's model menu for model and effort, and its tools menu for tool
-selection. The gptel HTTP request-controls menu is unavailable in Claude Code
-sessions; settings such as its temperature and output limit do not control the
-external agent.
-
-You can switch an existing root conversation between Claude Code and an API
-provider. API continuation uses the current transcript segment, including a
-retained Claude compaction summary when present. Returning to Claude starts a
-new native conversation from a labelled excerpt, then resumes that conversation
-on later turns.
-
-If Claude's native history is missing or belongs to another installation, run
-`M-x mevedel-claude-code-recover-history` in the session and choose `root` or
-a retained child's path. After running turns have settled and any active Goal
-is paused, this detaches that native reference. The next send starts a new
-conversation from a labelled transcript excerpt. The command preserves the
-transcript and applied effects, starts no request, and does not resume a Goal.
-
-Keep `mevedel-claude-code-directory` stable: it holds the managed adapter and
-neutral conversation directory used for resume. Set
-`mevedel-claude-code-adapter-executable` only to use an independently installed
-adapter; setup then directs you to that setting instead of installing an unused
-managed copy. Claude runs on the Emacs host, including for remote project tools.
-In the collaboration browser, an owner can use **Recovery** to select a model or
-replacement preset, sign in, recover native history, and request an update check.
-Codex tokens refresh asynchronously; rejected renewal requires device login.
-Claude login uses the CLI's URL and full authorization code and verifies the
-subscription afterward. Credentials stay on the host; signing in affects all
-sessions using that credential store. Unsent input and attachments remain queued.
-Failed submitted turns require explicit continuation and are never replayed.
-Interrupted queued delivery requires review before discarding it or explicitly
-queuing it as a new message.
-See [session lifecycle and current restrictions](docs/sessions.md) before using
-history operations such as Fork or Rewind with this provider.
+Select `Claude Code:sonnet`, `Claude Code:opus`, `Claude Code:fable` or
+`Claude Code:haiku` in a session's model menu. Mevedel supplies its tools over
+MCP; no API key or MCP configuration is needed. Use mevedel's model and tools
+menus; gptel's HTTP request-controls menu is unavailable. The model picker also
+switches an existing root conversation between Claude Code and an API provider.
+If Claude's native history is missing or diverged,
+`M-x mevedel-claude-code-recover-history` continues from a labelled transcript
+excerpt. In the collaboration browser, owners repair these through **Recovery**.
+Read [session lifecycle and restrictions](docs/sessions.md#external-conversation-references)
+before using Fork, Rewind or Save As with this provider.
 
 ## Usage
 
