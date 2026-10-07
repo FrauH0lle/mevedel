@@ -133,9 +133,11 @@ only for input it left undelivered or uncertain. Refused guest input is dropped
 with a notice rather than held. OAuth readiness also runs at each gptel sampling boundary,
 so expiry during a tool loop settles the turn without synchronous login.
 
-Stable CLI/adapter maintenance runs asynchronously behind an installation lock,
+CLI/adapter maintenance runs asynchronously behind an installation lock,
 which holds even when `create-lockfiles` is nil. Launches start a due check; an
-explicit check reports progress and its result in the echo area. Native CLI
+explicit check reports progress and its result in the echo area. The native CLI
+updates on its configured `autoUpdatesChannel` (default `latest`): `claude install`
+saves the channel it installs, so a fixed channel would silently move users. Native CLI
 releases are pinned before installation can prune them; adapters are staged by
 version. Version checks and an initialization-only ACP handshake gate
 activation. Current, previous, rejected and active runtimes survive cleanup. A rejected pair
