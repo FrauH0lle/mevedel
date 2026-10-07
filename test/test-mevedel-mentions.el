@@ -909,7 +909,7 @@ Returns (buffer . overlay)."
                            :capture media-fixed
                            :session session
                            :workspace-root remote-root)))
-                   (context (plist-get result :media-context))
+                   (context (car (plist-get result :media-contexts)))
                    (request
                     (mevedel-request--create
                      :id "mention-media" :session session)))
@@ -958,6 +958,56 @@ Returns (buffer . overlay)."
           (should (null (plist-get result :hash))))
       (delete-file tmp)))
 
+  :doc "PDF mention attaches page images when the model lacks document input"
+  (let ((tmp (make-temp-file "mevedel-file-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel--model-capable-p)
+                   (lambda (cap &optional _model) (eq cap 'media)))
+                  ((symbol-function 'gptel--model-mime-capable-p)
+                   (lambda (mime &optional _model) (equal mime "image/png")))
+                  ((symbol-function 'mevedel-tool-fs-read-pdf-page-count-now)
+                   (lambda (_path) 25))
+                  ((symbol-function 'mevedel-tool-fs-read-pdf-page-images-now)
+                   (lambda (_path page-count)
+                     (should (eql 25 page-count))
+                     (list "page one" "page two"))))
+          (let ((result (mevedel--handle-file-mention
+                         (list :match-text (concat "@file:" tmp)
+                               :capture tmp
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "PDF pages attached as images"
+                                    (plist-get result :placeholder)))
+            (should (equal (list (list (concat tmp ".page-1.png") "image/png"
+                                       "page one")
+                                 (list (concat tmp ".page-2.png") "image/png"
+                                       "page two"))
+                           (plist-get result :media-contexts)))
+            (should (string-match-p "Only pages 1-2 of 25"
+                                    (plist-get result :reminder)))
+            (should (string-match-p (regexp-quote "pages=\"3-\"")
+                                    (plist-get result :reminder)))
+            (should (equal (mevedel-mentions--file-content-hash tmp)
+                           (plist-get result :hash)))))
+      (delete-file tmp)))
+
+  :doc "PDF page-image fallback failure yields a graceful placeholder"
+  (let ((tmp (make-temp-file "mevedel-file-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel--model-capable-p)
+                   (lambda (cap &optional _model) (eq cap 'media)))
+                  ((symbol-function 'gptel--model-mime-capable-p)
+                   (lambda (mime &optional _model) (equal mime "image/png")))
+                  ((symbol-function 'mevedel-tool-fs-read-pdf-page-count-now)
+                   (lambda (_path) nil)))
+          (let ((result (mevedel--handle-file-mention
+                         (list :match-text (concat "@file:" tmp)
+                               :capture tmp
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "Cannot determine the page count"
+                                    (plist-get result :placeholder)))
+            (should-not (plist-get result :media-contexts))))
+      (delete-file tmp)))
+
   :doc "large PDF media mention emits bounded-page reminder"
   (let ((tmp (make-temp-file "mevedel-file-" nil ".pdf" "%PDF-1.4\n")))
     (unwind-protect
@@ -980,8 +1030,8 @@ Returns (buffer . overlay)."
                                :workspace-root temporary-file-directory))))
             (should (string-match-p "media attached"
                                     (plist-get result :placeholder)))
-            (should (equal (list tmp "application/pdf")
-                           (plist-get result :media-context)))
+            (should (equal (list (list tmp "application/pdf"))
+                           (plist-get result :media-contexts)))
             (should (string-match-p "large PDF guidance"
                                     (plist-get result :reminder)))))
       (delete-file tmp)))
@@ -1921,7 +1971,7 @@ injector would once the payload exists."
            (list "@asset" nil
                  (lambda (_info)
                    '(:placeholder "[asset -- attached]"
-                     :media-context ("/tmp/asset.png" "image/png")
+                     :media-contexts (("/tmp/asset.png" "image/png"))
                      :key (asset . "/tmp/asset.png")
                      :hash "asset-hash")))))
          expansion)
@@ -1949,17 +1999,17 @@ injector would once the payload exists."
             (:key text :hash "second" :reminder "text duplicate")
             (:key prior :hash "known" :reminder "already delivered")
             (:key media :hash "one" :reminder "media first"
-             :media-context ("one.png" "image/png"))
+             :media-contexts (("one.png" "image/png")))
             (:key media :hash "two" :reminder "media duplicate"
-             :media-context ("two.png" "image/png"))
+             :media-contexts (("two.png" "image/png")))
             (:reminder "anonymous first")
             (:reminder "anonymous second")
             (:key denied :reminder "unavailable")
             (:key empty :hash "nothing delivered")
             (:key prior :hash "known" :reminder "already delivered"
-             :media-context ("known.png" "image/png"))
-            (:key unhashed :media-context ("unhashed.png" "image/png"))
-            (:media-context ("anonymous.png" "image/png"))))
+             :media-contexts (("known.png" "image/png")))
+            (:key unhashed :media-contexts (("unhashed.png" "image/png")))
+            (:media-contexts (("anonymous.png" "image/png")))))
          (mevedel-mention-handlers
           (list (list "@item:\\([0-9]+\\)" nil
                       (lambda (info)

@@ -143,6 +143,8 @@
                   "mevedel-tool-fs-read" (path &optional max-entries))
 (declare-function mevedel-tool-fs-read-pdf-page-count-now
                   "mevedel-tool-fs-read" (path))
+(declare-function mevedel-tool-fs-read-pdf-page-images-now
+                  "mevedel-tool-fs-read" (path page-count))
 (declare-function mevedel-tool-fs-read-media-mime-type
                   "mevedel-tool-fs-read" (filename))
 (declare-function mevedel-tool-fs-read-pdf-media-p
@@ -157,6 +159,7 @@
 (autoload 'mevedel-tool-fs-read-large-pdf-p "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-list-directory-now "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-pdf-page-count-now "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-pdf-page-images-now "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-media-mime-type "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-pdf-media-p "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-session-artifact "mevedel-tool-fs-read")
@@ -366,7 +369,7 @@ Each handler is called with a plist containing:
 Handlers return a plist with these keys:
   :placeholder  inline replacement text for the raw mention
   :reminder     content to emit as a <system-reminder> block, or nil
-  :media-context (PATH MIME &optional BYTES) gptel media attachment, or nil
+  :media-contexts list of (PATH MIME &optional BYTES) gptel media attachments
   :key          (KIND . KEY) identifier used for deduplication
   :hash         content hash used for deduplication, or nil
   :warning      nonblocking user-facing warning text, or nil
@@ -820,6 +823,36 @@ gitignore-filtered):\n\n```\n%s\n```%s"
         (cond
          ((or offset limit)
           (funcall deny-placeholder "line ranges are not supported for media"))
+         ((and (not artifact-logical)
+               (mevedel-tool-fs-read-pdf-media-p expanded)
+               (not (mevedel-mentions--media-supported-p mime))
+               (mevedel-mentions--media-supported-p "image/png"))
+          ;; A model without document input sees the leading pages as
+          ;; images, as a Read of the whole PDF would give it.
+          (condition-case err
+              (let* ((page-count (mevedel-tool-fs-read-pdf-page-count-now
+                                  expanded))
+                     (pages (mevedel-tool-fs-read-pdf-page-images-now
+                             expanded page-count)))
+                (list :placeholder
+                      (format "[file:%s -- PDF pages attached as images]"
+                              display-path)
+                      :reminder
+                      (when (< (length pages) page-count)
+                        (format "Only pages 1-%d of %d of `%s` are attached. \
+Use Read(file_path=%S, pages=\"%d-\") for the rest."
+                                (length pages) page-count path
+                                expanded (1+ (length pages))))
+                      :media-contexts
+                      (cl-loop for bytes in pages
+                               for page from 1
+                               collect (list (format "%s.page-%d.png"
+                                                     expanded page)
+                                             "image/png" bytes))
+                      :key dedup-key
+                      :hash (mevedel-mentions--file-content-hash expanded)))
+            (error
+             (funcall deny-placeholder (error-message-string err)))))
          ((not (mevedel-mentions--media-supported-p mime))
           (funcall deny-placeholder
                    (format "model does not support %s media" mime)))
@@ -849,10 +882,10 @@ gitignore-filtered):\n\n```\n%s\n```%s"
             (list :placeholder
                   (format "[file:%s -- media attached]" display-path)
                   :reminder reminder
-                  :media-context
-                  (if artifact-logical
-                      (list expanded mime artifact-bytes)
-                    (list expanded mime))
+                  :media-contexts
+                  (list (if artifact-logical
+                            (list expanded mime artifact-bytes)
+                          (list expanded mime)))
                   :key dedup-key
                   :hash (if artifact-logical
                             (secure-hash 'sha1 artifact-bytes)
@@ -973,7 +1006,7 @@ Dispatches per `mevedel-mention-handlers'."
                        (result (funcall handler info))
                        (placeholder (plist-get result :placeholder))
                        (reminder (plist-get result :reminder))
-                       (media-context (plist-get result :media-context))
+                       (media (plist-get result :media-contexts))
                        (key (plist-get result :key))
                        (hash (plist-get result :hash))
                        (warning (plist-get result :warning))
@@ -991,11 +1024,11 @@ Dispatches per `mevedel-mention-handlers'."
                    match-beg match-end placeholder)
                   (when warning
                     (push warning warnings))
-                  (when media-context
-                    (push media-context media-contexts))
+                  (dolist (context media)
+                    (push context media-contexts))
                   (when fresh-reminder-p
                     (push (list :key key :body reminder) reminder-items))
-                  (when (or fresh-reminder-p media-context)
+                  (when (or fresh-reminder-p media)
                     (when key
                       (puthash key t seen-this-pass))
                     (when (and key hash)

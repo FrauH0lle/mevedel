@@ -179,6 +179,22 @@ An error result is signalled, as a Read that failed before waiting does."
   (should-not (mevedel-tool-fs-read-media-mime-type "archive.zip"))
   (should-not (mevedel-tool-fs-read-media-mime-type "readme.md")))
 
+(mevedel-deftest mevedel-tool-fs-read--pdf-page-images-only-p ()
+  ,test
+  (test)
+  :doc "applies to a model that takes images but not PDF documents"
+  (cl-letf (((symbol-function 'gptel--model-mime-capable-p)
+             (lambda (mime &optional _model) (equal mime "image/png"))))
+    (should (mevedel-tool-fs-read--pdf-page-images-only-p)))
+  :doc "does not apply when the model takes PDF documents"
+  (cl-letf (((symbol-function 'gptel--model-mime-capable-p)
+             (lambda (_mime &optional _model) t)))
+    (should-not (mevedel-tool-fs-read--pdf-page-images-only-p)))
+  :doc "does not apply when the model takes no images either"
+  (cl-letf (((symbol-function 'gptel--model-mime-capable-p)
+             (lambda (_mime &optional _model) nil)))
+    (should-not (mevedel-tool-fs-read--pdf-page-images-only-p))))
+
 (mevedel-deftest mevedel-tool-fs-read--parse-pages ()
   ,test
   (test)
@@ -465,7 +481,73 @@ An error result is signalled, as a Read that failed before waiting does."
                                  (plist-get media :path)))))))
           (dolist (path transient-paths)
             (should-not (file-exists-p path))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+  :doc "tells the model how to continue when pages remain after the range"
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name &optional _remote)
+                 (and (member name '("pdfinfo" "pdftoppm")) name)))
+              ((symbol-function 'gptel--model-capable-p)
+               (lambda (cap &optional _model) (eq cap 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (mime &optional _model) (equal mime "image/png")))
+              ((symbol-function 'mevedel-execution-start-helper)
+               (test-mevedel-tool-fs-read--as-start-helper
+                (lambda (_name command &rest _)
+                  (pcase (car command)
+                    ("pdfinfo" '(:exit-code 0 :output "Pages: 25\n"))
+                    ("pdftoppm"
+                     (test-mevedel-tool-fs-read--write-bytes
+                      (concat (car (last command)) ".png")
+                      test-mevedel-tool-fs-read--png-bytes)
+                     '(:exit-code 0 :output ""))
+                    (_ '(:exit-code 1 :output "unexpected")))))))
+      (let ((body (plist-get (test-mevedel-tool-fs-read--settle
+                              (lambda (k)
+                                (mevedel-tool-fs-read--pdf-pages tmp "1-2" nil k)))
+                             :result)))
+        (should (string-match-p "Rendered pages 1-2 of 25" body))
+        (should (string-match-p (regexp-quote "pages=\"3-\"") body))))))
+
+(mevedel-deftest mevedel-tool-fs-read-pdf-page-images-now ()
+  ,test
+  (test)
+  :doc "renders at most the page cap and removes its output directory"
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (let (pages directories)
+      (cl-letf (((symbol-function 'executable-find)
+                 (lambda (name &optional _remote) (equal name "pdftoppm")))
+                ((symbol-function 'mevedel-execution-run-helper)
+                 (lambda (_name command read-paths writable-roots &rest _)
+                   (should (equal (list tmp) read-paths))
+                   (push (car writable-roots) directories)
+                   (push (string-to-number (nth 2 command)) pages)
+                   (test-mevedel-tool-fs-read--write-bytes
+                    (concat (car (last command)) ".png")
+                    test-mevedel-tool-fs-read--png-bytes)
+                   '(:exit-code 0 :output ""))))
+        (let ((images (mevedel-tool-fs-read-pdf-page-images-now tmp 25)))
+          (should (= mevedel-tool-fs-read--max-pages (length images)))
+          (should (equal test-mevedel-tool-fs-read--png-bytes (car images)))
+          (should (equal (number-sequence 1 mevedel-tool-fs-read--max-pages)
+                         (nreverse pages)))
+          (should-not (file-exists-p (car directories)))))))
+  :doc "errors without a page count"
+  (should-error (mevedel-tool-fs-read-pdf-page-images-now "/tmp/x.pdf" nil)
+                :type 'error)
+  :doc "errors when rendered pages exceed the media size limit"
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (let ((mevedel-tool-fs-read-media-max-bytes 1))
+      (cl-letf (((symbol-function 'executable-find)
+                 (lambda (name &optional _remote) (equal name "pdftoppm")))
+                ((symbol-function 'mevedel-execution-run-helper)
+                 (lambda (_name command &rest _)
+                   (test-mevedel-tool-fs-read--write-bytes
+                    (concat (car (last command)) ".png")
+                    test-mevedel-tool-fs-read--png-bytes)
+                   '(:exit-code 0 :output ""))))
+        (should-error (mevedel-tool-fs-read-pdf-page-images-now tmp 2)
+                      :type 'error)))))
 
 ;;
 ;;; Blocked device detection
@@ -894,6 +976,37 @@ An error result is signalled, as a Read that failed before waiting does."
                    :type 'error)))
         (should (string-match-p "does not support media type application/pdf"
                                 (cadr err))))))
+  :doc "reads a whole PDF as page images when the model lacks document input"
+  (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
+    (let (rendered)
+      (cl-letf (((symbol-function 'gptel--model-capable-p)
+                 (lambda (cap &optional _model) (eq cap 'media)))
+                ((symbol-function 'gptel--model-mime-capable-p)
+                 (lambda (mime &optional _model) (equal mime "image/png")))
+                ((symbol-function 'executable-find)
+                 (lambda (name &optional _remote)
+                   (and (member name '("pdfinfo" "pdftoppm")) name)))
+                ((symbol-function 'mevedel-execution-start-helper)
+                 (test-mevedel-tool-fs-read--as-start-helper
+                  (lambda (_name command &rest _)
+                    (pcase (car command)
+                      ("pdfinfo" '(:exit-code 0 :output "Pages: 2\n"))
+                      ("pdftoppm"
+                       (push (string-to-number (nth 2 command)) rendered)
+                       (test-mevedel-tool-fs-read--write-bytes
+                        (concat (car (last command)) ".png")
+                        test-mevedel-tool-fs-read--png-bytes)
+                       '(:exit-code 0 :output ""))
+                      (_ '(:exit-code 1 :output "unexpected")))))))
+        (let ((result (test-mevedel-tool-fs-read--settle
+                       (lambda (k)
+                         (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
+          (should (equal '(1 2) (nreverse rendered)))
+          (should (equal '("image/png" "image/png")
+                         (mapcar (lambda (media) (plist-get media :mime))
+                                 (plist-get result :media))))
+          (should-not (string-match-p "Rendered pages"
+                                      (plist-get result :result)))))))
   :doc "adds bounded-page reminder when reading a large PDF without pages"
   (test-mevedel-tool-fs-read--with-file ".pdf" "%PDF-1.4\n"
     (cl-letf (((symbol-function 'gptel--model-capable-p)

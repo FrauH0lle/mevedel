@@ -196,11 +196,13 @@ could not run, and any error K raises, settle the Read as an error."
                (signal (car err) (cdr err))))))))
      name command read-paths writable-roots)))
 
-(defun mevedel-tool-fs-read--helper-now (name command read-paths)
+(defun mevedel-tool-fs-read--helper-now
+    (name command read-paths &optional writable-roots)
   "Run helper COMMAND as NAME to completion, returning (EXIT-CODE . OUTPUT).
+READ-PATHS and WRITABLE-ROOTS authorize the helper's file access.
 Only for mention expansion, which still builds its text synchronously."
   (let* ((result (mevedel-execution-run-helper
-                  name command read-paths nil
+                  name command read-paths writable-roots
                   :session (bound-and-true-p mevedel--session)
                   :owner (mevedel-current-origin)))
          (error-data (plist-get result :error)))
@@ -363,6 +365,12 @@ neither may reuse or poison the parent conversation's Read history."
   (when (and mime (fboundp 'gptel--model-mime-capable-p)
              (not (gptel--model-mime-capable-p mime)))
     (error "Current model does not support media type %s" mime)))
+
+(defun mevedel-tool-fs-read--pdf-page-images-only-p ()
+  "Return non-nil when the current model takes page images but not PDFs."
+  (and (fboundp 'gptel--model-mime-capable-p)
+       (not (gptel--model-mime-capable-p "application/pdf"))
+       (gptel--model-mime-capable-p "image/png")))
 
 (defun mevedel-tool-fs-read--file-bytes-at-p (path offset expected)
   "Return non-nil when PATH has EXPECTED byte string at OFFSET."
@@ -533,6 +541,50 @@ Synchronous, for mention expansion; the Read tool waits asynchronously."
                     (mevedel-tool-fs-read--helper-now
                      "mevedel-pdfinfo" (list "pdfinfo" local) (list local))))
          (mevedel-tool-fs-read--pdfinfo-page-count exit-code output))))))
+
+(defun mevedel-tool-fs-read-pdf-page-images-now (path page-count)
+  "Return PNG bytes for PDF PATH's leading pages, one string per page.
+PAGE-COUNT is PATH's page count.  At most `mevedel-tool-fs-read--max-pages'
+pages are rendered.  Synchronous, for mention expansion; the Read tool
+renders pages asynchronously."
+  (unless page-count
+    (error "Cannot determine the page count of %s"
+           (mevedel-tool-fs-read--visible-path path)))
+  (unless (executable-find "pdftoppm")
+    (error "'pdftoppm' not installed; install 'poppler-utils' to read PDF pages as images"))
+  (mevedel-tool-fs-read--with-local-media-source
+   path
+   (lambda (local)
+     (let ((directory (make-temp-file "mevedel-pdf-pages-" t))
+           (total 0)
+           pages)
+       (unwind-protect
+           (dotimes (index (min page-count mevedel-tool-fs-read--max-pages))
+             (let* ((page (1+ index))
+                    (prefix (file-name-concat directory (format "page-%d" page))))
+               (pcase-let ((`(,exit-code . ,output)
+                            (mevedel-tool-fs-read--helper-now
+                             "mevedel-pdftoppm"
+                             (list "pdftoppm"
+                                   "-f" (number-to-string page)
+                                   "-l" (number-to-string page)
+                                   "-singlefile" "-png" local prefix)
+                             (list local) (list directory))))
+                 (unless (eql 0 exit-code)
+                   (error "'pdftoppm' failed while rendering page %d of %s%s"
+                          page (mevedel-tool-fs-read--visible-path path)
+                          (if (string-empty-p output) "" (concat ": " output)))))
+               (let ((bytes (with-temp-buffer
+                              (set-buffer-multibyte nil)
+                              (insert-file-contents-literally (concat prefix ".png"))
+                              (buffer-string))))
+                 (when (> (cl-incf total (length bytes))
+                          mevedel-tool-fs-read-media-max-bytes)
+                   (error "Rendered PDF pages exceed media size limit (%d bytes)"
+                          mevedel-tool-fs-read-media-max-bytes))
+                 (push bytes pages))))
+         (delete-directory directory t))
+       (nreverse pages)))))
 
 (defun mevedel-tool-fs-read-large-pdf-p (path page-count)
   "Return non-nil when PDF PATH should get bounded-page guidance.
@@ -792,7 +844,12 @@ Call K with a media result plist once every page is rendered."
                 ((render (page)
                    (if (> page (cdr range))
                        (funcall k (mevedel-tool-fs-read--media-read-result
-                                   (mapconcat #'identity (nreverse results) "\n\n")
+                                   (concat
+                                    (mapconcat #'identity (nreverse results) "\n\n")
+                                    (when (and page-count (< (cdr range) page-count))
+                                      (format "\n\nRendered pages %d-%d of %d. Use Read(file_path=%S, pages=\"%d-\") to continue."
+                                              (car range) (cdr range) page-count
+                                              model-path (1+ (cdr range)))))
                                    (nreverse media)))
                      (let* ((prefix (make-temp-name
                                      (file-name-concat
@@ -1265,6 +1322,12 @@ returning; media reads may continue from helper callbacks."
              (mevedel-tool-fs-read--visible-path filename)))
     (if (mevedel-tool-fs-read-media-mime-type filename)
         (progn
+          ;; A model without document input reads a whole PDF as its
+          ;; leading page images; the result says how to continue.
+          (when (and (mevedel-tool-fs-read-pdf-media-p filename)
+                     (null (plist-get args :pages))
+                     (mevedel-tool-fs-read--pdf-page-images-only-p))
+            (setq args (plist-put args :pages "1-")))
           ;; Strict tool schemas make models fill every field, so a media
           ;; read arrives with whatever offset and limit they chose.  A line
           ;; range means nothing for media; ignore it rather than fail.
