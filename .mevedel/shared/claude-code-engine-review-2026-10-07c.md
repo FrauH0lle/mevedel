@@ -104,10 +104,10 @@ Fix commits: `be48e65..901a0c4` (11 commits). No features were removed.
 
 ## Decisions for the user
 
-1. **Daily `claude install stable`** (`mevedel-claude-code-auto-update`, default on)
-   runs against the user's own native CLI install and can move a `latest`-channel
-   user back to stable. Kept as a feature; options: follow the configured channel, or
-   default auto-update off.
+1. **Resolved (`1e66eca`):** maintenance ran `claude install stable`, and the CLI
+   saves the installed channel to the user's settings, so the first check would have
+   moved a default-`latest` user to `stable` permanently. It now installs the
+   configured `autoUpdatesChannel` (default `latest`).
 2. **Sidecars written by branch builds `12fada2..04bc103`** that retain `:blocked`
    inputs no longer open, and a persisted blocking "input"/"request" issue from those
    builds is never cleared. The local store has none (51 sessions, all v0.5.4-v0.5.6).
@@ -115,9 +115,17 @@ Fix commits: `be48e65..901a0c4` (11 commits). No features were removed.
 3. **Working material**: `.mevedel/shared/lazy-loading-scan-2026-10-07.json` (997
    lines, unreferenced), `loading-2026-10-07/results.json` (16.9k lines of raw
    samples) and the superseded 2026-10-06 review handoff could be deleted.
-4. **Per-turn process cost** (architecture): every Claude turn spawns the adapter, the
-   CLI and `claude auth status`; every tool call spawns a `PreToolUse` hook process
-   (~15-19 ms). Narrowing needs a live check.
+4. **Per-turn process cost:** the launch preflight (versions, `claude auth status`)
+   now overlaps the agent's startup instead of preceding it (`a4ed962`): a real launch
+   to session ready fell from 500 to 380 ms warm and 690 to 424 ms cold. The remaining
+   ~380 ms is the adapter and CLI startup itself; keeping a connection across turns
+   would conflict with the per-turn system prompt refresh and turn-owned tool scope.
+   The per-tool `PreToolUse` hook (~15-19 ms) is kept: it is the only stop before a
+   tool after an oversized compaction restoration.
+7. **One-time transition:** the user's installed adapter lives in the removed legacy
+   `<directory>/node_modules` layout. The first launch asks to run setup;
+   `M-x mevedel-claude-code-install-adapter` (or the automatic check) stages it in
+   `runtimes/<version>`.
 5. **Claude telemetry gap**: ACP turns emit no provider-call telemetry (now
    documented in `docs/telemetry.md`).
 6. Viewer changes need `go build` in `relay/` and a redeploy.
@@ -129,3 +137,6 @@ skips**, 154.5 s, all eight workers exit 0
 (`.scratch/test-suite-performance/20261007-141527`). Baseline before the fixes was
 9,637 tests, 0 unexpected, but several branch files then passed only through test
 order. Byte compilation: 241 files, 0 warnings. No paid model calls were made.
+
+After the follow-ups (`1e66eca..`): full suite 9,678 tests, 0 unexpected, 23
+skipped; compile 0 warnings.
