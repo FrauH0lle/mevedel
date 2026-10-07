@@ -614,7 +614,10 @@ async function main() {
   const ids = ['transcript', 'history', 'connection', 'notice', 'live-button', 'assistant-working',
                'terminal-state', 'terminal-title', 'terminal-message',
                'composer', 'composer-input', 'composer-name',
-               'recovery-controls', 'recovery-actions', 'recovery-auth', 'recovery-issues',
+               'settings', 'settings-attention', 'settings-issues', 'settings-model', 'settings-mode',
+               'settings-mode-help', 'settings-preset', 'settings-preset-apply', 'settings-account',
+               'settings-account-title', 'settings-account-actions',
+               'recovery-actions', 'recovery-auth', 'recovery-issues',
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
@@ -1626,21 +1629,6 @@ async function main() {
   assert.equal(nodes['session-label'].textContent, 'Pipeline diagram');
   assert.equal(document.title, 'Pipeline diagram · mevedel');
 
-  // Owner link: the permission mode becomes a picker in the strip, and
-  // the strip keeps reporting the mode the session is actually in until
-  // the host's status frame says otherwise.
-  const picker = nodes.modeline.children.find(
-    child => child.className === 'ml mode-picker');
-  assert.ok(picker, 'owner mode picker');
-  assert.equal(picker.value, 'edits');
-  const modeBefore = first.sent.length;
-  picker.value = 'full-auto';
-  picker.dispatch('change');
-  assert.equal(picker.value, 'edits');
-  await waitFor(() => first.sent.length === modeBefore + 1, 'sealed set-mode');
-  assert.deepEqual(await unseal(key, first.sent[modeBefore]),
-                   {t: 'set-mode', mode: 'full-auto'});
-
   // Owner link: requesting a separate session. The sheet collects the
   // name and optional prompt; the request travels as its own frame.
   nodes['new-session-button'].dispatch('click');
@@ -1751,17 +1739,23 @@ async function main() {
   await deliver({t: 'status', busy: false, issues: [{id: 'authentication', message: 'Sign in to continue'}]});
   assert.match(textOf(nodes['recovery-issues']), /Sign in to continue/);
   assert.equal(nodes['composer-input'].value, '> retained\nmultiline');
+  // Before the owner's recovery frame there is nothing to set.
+  const settingsButton = () => nodes.modeline.children.find(
+    child => child.className.startsWith('ml settings-button'));
+  assert.equal(settingsButton(), undefined);
   await deliver({t: 'recovery', models: ['Test:available'], presets: ['default'], providers: ['Codex'], provider: 'Codex',
                  auth: {id: 'login-1', status: 'login', url: 'https://auth.openai.com/codex/device', code: 'ABCD-1234'}});
-  assert.equal(nodes['recovery-controls'].hidden, false);
+  assert.equal(nodes['settings-account'].hidden, false);
+  assert.equal(nodes['settings-account-title'].textContent, 'Account · Codex');
   assert.match(textOf(nodes['recovery-auth']), /ABCD-1234/);
-  const signIn = nodes['recovery-actions'].children.find(node => node.textContent === 'Sign in');
+  const signIn = nodes['settings-account-actions'].children.find(node => node.textContent === 'Sign in');
+  assert.match(signIn.title, /Sign this Emacs host in/);
   const recoveryBefore = first.sent.length;
   signIn.dispatch('click');
   await waitFor(() => first.sent.length === recoveryBefore + 1, 'sealed recovery action');
   assert.equal((await unseal(key, first.sent.at(-1))).action, 'login');
   // Runtime updates are offered only for sessions that report a runtime.
-  const hasButton = text => nodes['recovery-actions'].children.some(node => node.textContent === text);
+  const hasButton = text => nodes['settings-account-actions'].children.some(node => node.textContent === text);
   assert.equal(hasButton('Check updates'), false);
   // A partly typed authorization code survives unrelated recovery updates,
   // and owners see the host's issue details.
@@ -1784,7 +1778,7 @@ async function main() {
   assert.match(textOf(nodes['recovery-issues']), /Install Claude Code first/);
   assert.doesNotMatch(textOf(nodes['recovery-issues']), /Claude is not ready/);
   // The chosen login provider survives unrelated recovery updates.
-  const loginProvider = () => nodes['recovery-actions'].children.find(
+  const loginProvider = () => nodes['settings-account-actions'].children.find(
     node => node.attributes && node.attributes['aria-label'] === 'Login provider');
   await deliver({t: 'recovery', models: [], presets: [], providers: ['Codex', 'Claude Code'], provider: 'Claude Code'});
   assert.equal(loginProvider().value, 'Claude Code');
@@ -1794,7 +1788,7 @@ async function main() {
                  issues: [{id: 'model', message: 'Select a model'}]});
   assert.equal(loginProvider().value, 'Codex');
   const providerBefore = first.sent.length;
-  nodes['recovery-actions'].children.find(node => node.textContent === 'Sign in').dispatch('click');
+  nodes['settings-account-actions'].children.find(node => node.textContent === 'Sign in').dispatch('click');
   await waitFor(() => first.sent.length === providerBefore + 1, 'sealed login with chosen provider');
   assert.equal((await unseal(key, first.sent.at(-1))).provider, 'Codex');
   await deliver({t: 'recovery', models: [], presets: [], providers: [], auth: {status: 'ready', message: 'Login ready'}});
@@ -1811,6 +1805,50 @@ async function main() {
   assert.equal(nodes['composer-input'].value, '> retained\nmultiline');
   await deliver({...loginFrame, auth: {status: 'ready', message: 'Login ready'}});
   assert.ok(!nodes['recovery-auth'].children.includes(queuedCodeInput), 'settlement discards the login code');
+
+  // Owner link: the strip's Settings button, model and mode open the
+  // session settings.  Mode and model apply on pick, and the sheet keeps
+  // reporting what the session actually uses until the host confirms.
+  const settled = {t: 'recovery', models: ['Codex:gpt-6-astra', 'Codex:gpt-6-luna'],
+                   model: 'Codex:gpt-6-luna', presets: ['default'], providers: [], paused: false};
+  await deliver(settled);
+  assert.equal(settingsButton().textContent, 'Settings');
+  assert.equal(nodes['settings-attention'].hidden, true);
+  // No provider with a browser login: nothing to sign in to.
+  assert.equal(nodes['settings-account'].hidden, true);
+  nodes.modeline.children.find(child => child.className === 'ml ml-link'
+                               && child.textContent === 'edits').dispatch('click');
+  assert.equal(nodes.settings.open, true);
+  const modeButton = label => nodes['settings-mode'].children.find(child => child.textContent === label);
+  assert.equal(modeButton('Edits').attributes['aria-pressed'], 'true');
+  assert.match(modeButton('Full auto').title, /No sandbox/);
+  assert.match(nodes['settings-mode-help'].textContent, /sandboxed/);
+  const modeBefore = first.sent.length;
+  modeButton('Full auto').dispatch('click');
+  assert.equal(modeButton('Edits').attributes['aria-pressed'], 'true');
+  await waitFor(() => first.sent.length === modeBefore + 1, 'sealed set-mode');
+  assert.deepEqual(await unseal(key, first.sent[modeBefore]),
+                   {t: 'set-mode', mode: 'full-auto'});
+  assert.equal(nodes['settings-model'].value, 'Codex:gpt-6-luna');
+  const modelBefore = first.sent.length;
+  nodes['settings-model'].value = 'Codex:gpt-6-astra';
+  nodes['settings-model'].dispatch('change');
+  assert.equal(nodes['settings-model'].value, 'Codex:gpt-6-luna');
+  await waitFor(() => first.sent.length === modelBefore + 1, 'sealed model choice');
+  assert.deepEqual(await unseal(key, first.sent[modelBefore]),
+                   {t: 'recovery', action: 'model', value: 'Codex:gpt-6-astra'});
+  // A model the host no longer offers stays shown instead of the first option.
+  await deliver({...settled, model: 'Gone:old'});
+  assert.equal(nodes['settings-model'].value, 'Gone:old');
+  assert.match(textOf(nodes['settings-model'].children[0]), /unavailable/);
+  // Recovery actions appear only when they apply, and flag the strip.
+  const attention = () => nodes['recovery-actions'].children.map(textOf);
+  assert.deepEqual(attention(), []);
+  await deliver({...settled, paused: true, histories: ['root']});
+  assert.equal(settingsButton().textContent, 'Needs attention');
+  assert.equal(nodes['settings-attention'].hidden, false);
+  assert.deepEqual(attention(), ['Resume queue', 'Continue from transcript']);
+  nodes.settings.close('close');
 
 
   // Cancelling never sends anything.

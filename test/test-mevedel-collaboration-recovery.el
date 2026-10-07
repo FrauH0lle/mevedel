@@ -120,7 +120,8 @@ BODY sees ROOM, SESSION, BUFFER and SENT, the frames sent to peers."
           (list (list :id 4 :category 'steering :state 'failed-turn :input "lost")
                 (list :id 5 :category 'steering :input "pending"))
           (mevedel-session-external-conversations session)
-          (list (list "root" :engine 'claude-code) (list "/root/pruned" :engine 'claude-code)))
+          (list (list "root" :engine 'claude-code :id "native" :state 'diverged)
+                (list "/root/pruned" :engine 'claude-code :id "child" :state 'diverged)))
     (setq sent nil)
     ;; Reporting the issue refreshes the owner; an unchanged frame is not resent.
     (mevedel-recovery-report session "authentication" 'dependency "Searching for program: /opt/claude" t)
@@ -131,6 +132,10 @@ BODY sees ROOM, SESSION, BUFFER and SENT, the frames sent to peers."
       (should (equal [(:id 4 :text "lost")] (plist-get frame :steering)))
       ;; A pruned child's history cannot be recovered, so it is not offered.
       (should (equal ["root"] (plist-get frame :histories)))
+      ;; The queue is not paused, and an API-key provider has no browser login.
+      (should (eq :json-false (plist-get frame :paused)))
+      (should (equal [] (plist-get frame :providers)))
+      (should-not (plist-get frame :provider))
       (should (string-search "/opt/claude" (prin1-to-string (plist-get frame :issues))))
       (should (member "Recovery:second" (append (plist-get frame :models) nil)))
       ;; The current model is named as the picker offers it.
@@ -175,7 +180,7 @@ BODY sees ROOM, SESSION, BUFFER and SENT, the frames sent to peers."
         (mevedel-collaboration-notify-queue-changed session)
         (should-not sent)
         (setf (mevedel-session-external-conversations session)
-              (list (cons "root" (list :native-session-id "fixture"))))
+              (list (cons "root" (list :engine 'claude-code :id "fixture" :start-failed t))))
         (mevedel-recovery-report session "history" 'history "Recover history" t)
         (let ((frames (cl-remove-if-not
                        (lambda (entry) (equal "recovery" (plist-get (cdr entry) :t))) sent)))

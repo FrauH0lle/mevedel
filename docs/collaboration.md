@@ -55,9 +55,9 @@ than through the command allowlist:
   `mevedel-collaboration-unsafe-guest-commands` for every guest: that
   refusal protects the allowlist from becoming an escalation path, and says
   nothing about a credential the host handed out for this purpose. The
-  viewer renders the mode as a native picker in the status strip, and the
-  strip keeps showing the mode the session is actually in until the host's
-  status frame confirms the change.
+  viewer offers the mode in its session settings, and keeps showing the mode
+  the session is actually in until the host's status frame confirms the
+  change.
 - `new-session` creates a session. The request itself needs only write
   authority -- every full-control guest gets the button -- and the owner
   token decides what happens next: an owner link is granted it outright,
@@ -80,10 +80,24 @@ than through the command allowlist:
   changes host-wide provider credentials; cancelling discards the challenge.
   Model/preset/history/input changes require idle turns and current session
   mutation authority. Preset replacement preserves the session's and data
-  buffer's permission and sandbox modes. Only histories that can still be
-  recovered are offered. Choices refresh when session status or retained input
-  changes and are sent only when they changed; unchanged updates preserve an
-  in-progress login code and the composer draft.
+  buffer's permission and sandbox modes. The frame names the current model as
+  the same `BACKEND:MODEL` label the offered models use. Only providers with a
+  browser login (Codex and Claude Code) are offered for sign-in, defaulting to
+  the session's own. Queue retry is offered only while a failed turn paused
+  delivery, and native-history recovery only for a history Claude cannot or did
+  not resume: one edited after Claude received it, one another machine or
+  installation retained, or one whose resume failed to start. Choices refresh
+  when session status or retained input changes and are sent only when they
+  changed; unchanged updates preserve an in-progress login code and the
+  composer draft.
+
+  The viewer gathers these choices and the permission mode in a **Session
+  settings** sheet, opened from the status strip's Settings button or its
+  model and mode, which only owner links can do. The button reads **Needs
+  attention** while an issue, paused queue, input awaiting review or
+  recoverable history is pending; those actions head the sheet. Model and
+  mode apply on pick, a preset after confirmation. Every control carries a
+  tooltip and, since phones have no hover, a visible explanation.
 
 Owner authority is never granted alone: the owner link contains the write
 token, so a peer claiming the owner token without it is a forgery and is
@@ -204,7 +218,7 @@ session gets the default chat preset first and the picked model second, because
 a preset may name a model of its own that would otherwise replace the guest's
 choice. Only the lead model changes: the preset's model tiers and workloads,
 and so its agents, stay as configured. The choice is stored like `/model`'s and
-survives resume. The owner Recovery panel also permits registered preset replacement; it preserves
+survives resume. An owner's session settings also permit registered preset replacement; it preserves
 permission and sandbox modes because a preset carries
 tools, agents and arbitrary settings, not just a model. An approval prompt
 shows the requested model, or `default`.

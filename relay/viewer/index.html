@@ -285,12 +285,48 @@
           </menu>
         </form>
       </dialog>
+      <dialog id="settings" class="sheet settings" aria-labelledby="settings-title">
+        <form method="dialog" class="sheet-form">
+          <h2 id="settings-title" class="sheet-title">Session settings</h2>
+          <section id="settings-attention" class="settings-attention" hidden>
+            <h3 class="settings-heading">Needs attention</h3>
+            <div id="settings-issues"></div>
+            <div id="recovery-actions" class="settings-actions"></div>
+          </section>
+          <section class="settings-group">
+            <label class="settings-heading" for="settings-model">Model</label>
+            <select id="settings-model" class="sheet-input"
+                    title="Model for this session's next turns"></select>
+            <p class="settings-help">Used from the next turn. Agents keep their own models.</p>
+          </section>
+          <section class="settings-group">
+            <h3 id="settings-mode-title" class="settings-heading">Permissions</h3>
+            <div id="settings-mode" class="settings-actions" role="group"
+                 aria-labelledby="settings-mode-title"></div>
+            <p id="settings-mode-help" class="settings-help"></p>
+          </section>
+          <section class="settings-group">
+            <label class="settings-heading" for="settings-preset">Preset</label>
+            <div class="settings-row">
+              <select id="settings-preset" class="sheet-input"
+                      title="A host preset bundles a model, tools and agents"></select>
+              <button id="settings-preset-apply" class="btn quiet" type="button"
+                      title="Replace this session's model, tools and agents with the preset's">Apply preset</button>
+            </div>
+            <p class="settings-help">Replaces the model, tools and agents. Permissions stay.</p>
+          </section>
+          <section id="settings-account" class="settings-group" hidden>
+            <h3 id="settings-account-title" class="settings-heading">Account</h3>
+            <div id="settings-account-actions" class="settings-actions"></div>
+            <div id="recovery-auth" aria-live="polite"></div>
+            <p class="settings-help">Signing in changes the credentials this Emacs host uses.</p>
+          </section>
+          <menu class="sheet-actions">
+            <button value="close" class="btn quiet" type="submit">Done</button>
+          </menu>
+        </form>
+      </dialog>
       <section id="recovery-issues" aria-live="polite" hidden></section>
-      <details id="recovery-controls" hidden>
-        <summary>Provider and recovery</summary>
-        <div id="recovery-actions"></div>
-        <div id="recovery-auth" aria-live="polite"></div>
-      </details>
       <p id="modeline" class="modeline" role="status">
         <span id="connection" class="conn">Connecting…</span>
       </p>

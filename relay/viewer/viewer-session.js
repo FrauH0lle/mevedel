@@ -1,8 +1,7 @@
-/* viewer-session.js -- permission mode, new-session and invite controls */
+/* viewer-session.js -- new-session and invite controls */
 'use strict';
 
 (() => {
-  const MODES = ['ask', 'edits', 'full-auto'];
 
   // Every tier's secret is a prefix of the next, so a holder can derive
   // any tier at or below its own by truncating the secret it already
@@ -152,26 +151,6 @@
         : bytes;
       return `${window.location.origin}${window.location.pathname}`
         + `#${entry.roomId || entry.room}.${encode(capped)}`;
-    }
-
-    function modePicker() {
-      const picker = el('select', 'ml mode-picker');
-      picker.title = 'Permission mode';
-      picker.setAttribute('aria-label', 'Permission mode');
-      MODES.forEach(mode => {
-        const option = el('option', null, mode);
-        option.value = mode;
-        picker.append(option);
-      });
-      picker.value = state.mode;
-      picker.addEventListener('change', () => {
-        // The host answers with a status frame; until it does the strip
-        // must keep reporting the mode the session is actually in.
-        const wanted = picker.value;
-        picker.value = state.mode;
-        send({t: 'set-mode', mode: wanted});
-      });
-      return picker;
     }
 
     /* -- Requesting a session ------------------------------------------ */
@@ -452,7 +431,7 @@
       });
     }
 
-    return Object.freeze({modePicker, setVisible, setInviteVisible,
+    return Object.freeze({setVisible, setInviteVisible,
                           showResult, offerRoom, useCredentials, setWorkspace,
                           rememberCurrent, openNewSession: open});
   }

@@ -28,21 +28,82 @@
   }
 }
 
-.modeline .mode-picker {
+/* An owner's model and mode open the settings that change them. */
+.modeline .ml-link,
+.modeline .settings-button {
   font: inherit;
   color: inherit;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  padding: 0 .4rem;
+  background: none;
+  border: 0;
+  padding: 0;
   cursor: pointer;
 }
 
-.modeline .mode-picker:hover,
-.modeline .mode-picker:focus-visible {
+.modeline .ml-link:hover,
+.modeline .ml-link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.modeline .settings-button {
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  padding: .1rem .55rem;
+}
+
+.modeline .settings-button:hover,
+.modeline .settings-button:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+.modeline .settings-button.attention {
+  color: var(--failed);
+  border-color: var(--failed);
+  font-weight: 600;
+}
+
+/* Session settings: an owner's choices, each with its own explanation,
+   since a phone has no hover to show a tooltip. */
+.settings-group { padding: .9rem 0; }
+.settings-group + .settings-group { border-top: 1px solid var(--line); }
+.settings-heading {
+  display: block;
+  margin: 0 0 .45rem;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.settings-help {
+  margin: .45rem 0 0;
+  font-size: .8rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.settings-row,
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+}
+.settings-row .sheet-input { flex: 1 1 12rem; width: auto; min-width: 0; }
+.settings-actions .sheet-input { width: auto; }
+.settings-attention {
+  margin: .4rem 0 .3rem;
+  padding: .8rem .9rem;
+  border: 1px solid color-mix(in srgb, var(--failed) 45%, transparent);
+  border-radius: .5rem;
+  background: color-mix(in srgb, var(--failed) 6%, transparent);
+}
+.settings-attention .settings-heading { color: var(--failed); }
+.settings-issue, .settings-input { margin: 0 0 .5rem; font-size: .85rem; }
+.settings-input { flex-basis: 100%; overflow-wrap: anywhere; }
+#recovery-auth p { margin: .5rem 0 0; font-size: .85rem; }
+#recovery-auth input { max-width: 100%; }
 
 /* The sheets wear the panel idiom rather than inventing a second one:
    the same accent title, muted note, hairline, and rem sizes

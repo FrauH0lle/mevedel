@@ -17,6 +17,10 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
 
+;; `mevedel-claude-code-history'
+(declare-function mevedel-claude-code-history-unresumable-p "mevedel-claude-code-history" (record))
+(autoload 'mevedel-claude-code-history-unresumable-p "mevedel-claude-code-history")
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--publish-queue "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--publish-status "mevedel-collaboration" (room))
@@ -38,7 +42,9 @@ The selected provider is the one this owner last chose, else the session's."
   (when-let* ((guest (mevedel-collaboration--owner room peer))
               (buffer (mevedel-collaboration--room-data-buffer room)))
     (with-current-buffer buffer
-      (let* ((provider (or (plist-get guest :recovery-backend) gptel-backend))
+      (let* ((provider (or (plist-get guest :recovery-backend)
+                           (and (mevedel-auth-supported-p gptel-backend)
+                                gptel-backend)))
              (session (plist-get room :session))
              (frame
               (list
@@ -48,8 +54,14 @@ The selected provider is the one this owner last chose, else the session's."
                ;; BACKEND:MODEL pairs; a bare name matches none of them.
                :model (mevedel-model-current-provider-label buffer)
                :provider (and provider (gptel-backend-name provider))
-               :providers (vconcat (mapcar #'car gptel--known-backends))
-               :auth (condition-case nil (mevedel-auth-state provider) (user-error nil))
+               ;; Only providers with a browser login can be signed in to.
+               :providers (vconcat (cl-loop for (name . backend) in gptel--known-backends
+                                            when (mevedel-auth-supported-p backend)
+                                            collect name))
+               :auth (and provider
+                          (condition-case nil (mevedel-auth-state provider) (user-error nil)))
+               ;; Resuming the queue is offered only while a failure paused it.
+               :paused (if (mevedel-session-pending-input-failure-paused session) t :json-false)
                :issues (vconcat (mevedel-session-recovery-issues session))
                :steering (vconcat (mapcar (lambda (entry)
                                             (list :id (plist-get entry :id) :text (plist-get entry :input)))
@@ -57,10 +69,12 @@ The selected provider is the one this owner last chose, else the session's."
                                            (lambda (entry) (eq 'failed-turn (plist-get entry :state)))
                                            (append (mevedel-session-pending-steering session)
                                                    (mevedel-session-pending-follow-ups session)))))
-               ;; Only histories `mevedel-claude-code-recover-history' accepts.
-               :histories (vconcat (cl-loop for (scope . _) in (mevedel-session-external-conversations session)
-                                            when (or (equal scope "root")
-                                                     (assoc scope (mevedel-session-agent-registry session)))
+               ;; Only histories `mevedel-claude-code-recover-history' accepts,
+               ;; and only once Claude cannot or did not resume them.
+               :histories (vconcat (cl-loop for (scope . record) in (mevedel-session-external-conversations session)
+                                            when (and (or (equal scope "root")
+                                                          (assoc scope (mevedel-session-agent-registry session)))
+                                                      (mevedel-claude-code-history-unresumable-p record))
                                             collect scope))
                ;; Runtime maintenance and its update check exist only for Claude.
                :runtime (when (mevedel-claude-code-backend-p gptel-backend)
