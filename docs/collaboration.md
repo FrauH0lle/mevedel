@@ -70,12 +70,12 @@ than through the command allowlist:
   native-history recovery, retained-input retry, reviewed input requeue/discard,
   provider login and, in Claude Code sessions, runtime update checks. Login
   challenges go only to owner peers of rooms whose session uses that provider or
-  whose owner started that login. Codex uses device authorization (URL and
+  whose owner started that login, until it settles. Codex uses device authorization (URL and
   user code); Claude runs the CLI's login, shows its authorization URL, takes
   the full returned code and then verifies the subscription. Codex tokens also
   refresh asynchronously without a challenge. Tokens never enter shared transcript or
-  recovery state. Owners see recovery issues with the host's details; other
-  readers see readiness and runtime issues only by category, since host
+  recovery state. Owners see each recovery issue once, with the host's details;
+  other readers see readiness and runtime issues only by category, since host
   diagnostics can name local paths. Signing in changes host-wide provider
   credentials; cancelling discards the challenge. Model/preset/history/input
   changes require idle turns and current session mutation authority. Preset

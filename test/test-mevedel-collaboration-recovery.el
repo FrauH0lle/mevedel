@@ -142,7 +142,28 @@ BODY sees ROOM, SESSION, BUFFER and SENT, the frames sent to peers."
       (should-not sent)
       (setq room (plist-put room :recovery-login other))
       (mevedel-collaboration-recovery-auth-changed other '(:status "login"))
-      (should (equal "Other" (plist-get (cdr (assq 1 sent)) :provider))))))
+      (should (equal "Other" (plist-get (cdr (assq 1 sent)) :provider)))
+      ;; While pending, issue refreshes and a reconnect's hello agree.
+      (setq sent nil)
+      (mevedel-collaboration-recovery-refresh buffer)
+      (mevedel-collaboration-recovery-send room 1)
+      (should (equal '("Other" "Other") (mapcar (lambda (row) (plist-get (cdr row) :provider)) sent)))
+      ;; A settled login stops routing; every frame reports the session again.
+      (dolist (settled '((:status "ready") nil))
+        (setq room (plist-put room :recovery-login other))
+        (mevedel-collaboration-recovery-auth-changed other settled)
+        (should-not (plist-get room :recovery-login))
+        (setq sent nil)
+        (mevedel-collaboration-recovery-refresh buffer)
+        (mevedel-collaboration-recovery-send room 1)
+        (should (equal '("Recovery" "Recovery")
+                       (mapcar (lambda (row) (plist-get (cdr row) :provider)) sent))))
+      ;; Only a login that actually started is followed.
+      (dolist (case '(("failed" . nil) ("login" . t)))
+        (cl-letf (((symbol-function 'mevedel-auth-start)
+                   (lambda (_backend) (list :status (car case)))))
+          (mevedel-collaboration-recovery-handle room 1 '(:action "login" :provider "Other")))
+        (should (eq (cdr case) (and (plist-get room :recovery-login) t)))))))
 
 (provide 'test-mevedel-collaboration-recovery)
 ;;; test-mevedel-collaboration-recovery.el ends here
