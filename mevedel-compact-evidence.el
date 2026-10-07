@@ -427,7 +427,7 @@ reconstructed into a child conversation."
     ('none "")
     ('all (buffer-substring (point-min) (point-max)))
     ((pred (lambda (value) (and (integerp value) (> value 0))))
-     (let* ((agent-p (bound-and-true-p mevedel--agent-invocation))
+     (let* ((agent-p mevedel--agent-invocation)
             (summary (if agent-p
                          (mevedel-compact-evidence-agent-summary-bounds)
                        (mevedel-session-artifacts-segment-summary-bounds)))
@@ -447,8 +447,7 @@ reconstructed into a child conversation."
   "Return frozen parent evidence excluding TOOL-USE-ID's tool segment."
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (agent-path
-          (if-let* ((invocation (and (boundp 'mevedel--agent-invocation)
-                                     mevedel--agent-invocation)))
+          (if-let* ((invocation mevedel--agent-invocation))
               (mevedel-agent-invocation-require-path invocation)
             "/root"))
          ranges)
@@ -611,7 +610,7 @@ The path property distinguishes the current task from ancestor task headings
 copied into the transcript by a context fork.  INVOCATION defaults to the
 current agent buffer's invocation."
   (when-let* ((invocation (or invocation
-                              (bound-and-true-p mevedel--agent-invocation)))
+                              mevedel--agent-invocation))
               (path (mevedel-agent-invocation-require-path invocation)))
     (require 'org)
     (org-find-property mevedel-agent-task-path-property path)))

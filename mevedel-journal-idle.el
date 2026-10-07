@@ -170,7 +170,7 @@ Also ensure the maintenance timer runs while this session is open."
         (when (and session
                    (eq buffer (mevedel-session-root-buffer session))
                    (not (with-current-buffer buffer
-                          (bound-and-true-p mevedel--agent-invocation))))
+                          mevedel--agent-invocation)))
           (let* ((workspace (mevedel-session-workspace session))
                  (root (and (mevedel-workspace-p workspace)
                             (mevedel-workspace-root workspace))))
@@ -226,7 +226,7 @@ Stop when no root session remains."
 Work sealed while no session was open, such as at exit, is recovered and
 processed without waiting for a turn.  Only queues; nothing runs here."
   (when-let* ((session (bound-and-true-p mevedel--session))
-              ((not (bound-and-true-p mevedel--agent-invocation)))
+              ((not mevedel--agent-invocation))
               ((not mevedel-journal-idle--inhibit-scheduling))
               (workspace (mevedel-session-workspace session))
               ((mevedel-workspace-p workspace)))

@@ -21,13 +21,8 @@
       (should-error (gptel--request-data backend nil) :type 'user-error))))
 
 (mevedel-deftest mevedel--send-request/claude (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          launches)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+  (mevedel-engine-test--with-claude-session
+    (let (launches)
       (setq-local gptel-system-prompt "Session system fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                  (mevedel-engine-test--claude-launch
@@ -36,8 +31,8 @@
                     nil))))
         (insert "hello")
         (mevedel--send-request "hello")
-        (with-timeout (5 (ert-fail "Selected subscription turn did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "Selected subscription turn did not settle"
+          (not (mevedel-turn-busy-p buffer)))
         (should (string-search "answer:hello" (buffer-string)))
         (should-not (mevedel-request-fsm request))
         (should (= 1 (mevedel-session-turn-count session)))
@@ -53,24 +48,19 @@
         (goto-char (point-max))
         (insert "\nagain")
         (mevedel--send-request "again")
-        (with-timeout (5 (ert-fail "Retained subscription turn did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "Retained subscription turn did not settle"
+          (not (mevedel-turn-busy-p buffer)))
         (should (= 2 (mevedel-session-turn-count session)))
         (should (equal "opus" (cadar launches)))
         (should (equal "fixture-session" (nth 3 (car launches))))
         (should (string-search "answer:again" (buffer-string)))))))
 
 (mevedel-deftest mevedel-view--forward-input-now/claude (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
-    (let ((view (generate-new-buffer " *claude-composer*"))
-          (gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude")))
+    (let ((view (generate-new-buffer " *claude-composer*")))
       (unwind-protect
           (progn
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq-local gptel-system-prompt "Composer fixture" gptel-tools nil)
             (mevedel-chat-install-request-hooks)
             (mevedel-view--setup view buffer)
@@ -82,8 +72,8 @@
                 (mevedel-view--forward-input-now "hello composer")
                 (goto-char (mevedel-view--input-start))
                 (insert "> Keep this draft\nand its second line"))
-              (with-timeout (5 (ert-fail "Composer subscription request did not settle"))
-                (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+              (mevedel-test--await 5 "Composer subscription request did not settle"
+                (not (mevedel-turn-busy-p buffer))))
             (should (= 1 (mevedel-session-turn-count session)))
             (should (string-search "answer:hello composer" (buffer-string)))
             (with-current-buffer view
@@ -117,13 +107,8 @@
           (plist-put (copy-tree encoded) :external-conversations invalid)))))))
 
 (mevedel-deftest mevedel--send-request/claude-publication (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (busy t))
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+  (mevedel-engine-test--with-claude-session
+    (let ((busy t))
       (setq-local gptel-system-prompt "Publication fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (_path) busy))
                 ((symbol-function 'mevedel-claude-code-launch)
@@ -131,52 +116,47 @@
                   (lambda (_system mcp _model _effort &optional id _hook)
                     nil))))
         (mevedel--send-request "hello")
-        (with-timeout (5 (ert-fail "History publication was not deferred"))
-          (while (not (gethash (list 'acp-prompt (mevedel-request-id request))
-                               mevedel-transport--pending))
-            (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "History publication was not deferred"
+          (gethash (list 'acp-prompt (mevedel-request-id request))
+                   mevedel-transport--pending))
         (should (equal '(("root" :engine claude-code :state unstarted))
                        (mevedel-session-external-conversations session)))
         (should-not (string-search "answer:hello" (buffer-string)))
         (setq busy nil)
-        (with-timeout (5 (ert-fail "Deferred subscription prompt did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "Deferred subscription prompt did not settle"
+          (not (mevedel-turn-busy-p buffer)))
         (should (string-search "answer:hello" (buffer-string)))
         (should (eq 'ready (plist-get (cdar (mevedel-session-external-conversations session)) :state)))))))
 
 (mevedel-deftest mevedel-engine-assert-local-history (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
-    (let ((gptel--known-backends nil))
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-      (setf (mevedel-session-turn-count session) 1
-            (mevedel-session-external-conversations session)
-            (list (list "root" :engine 'claude-code :id "retained" :host (system-name)
-                        :directory root :state 'ready)))
-      (should-error (mevedel-session-rewind-assert-stable-source session buffer "Rewind")
-                    :type 'user-error)
-      (should-error (mevedel-session-save-as-run session buffer "copy" "copy-id"
-                                               (file-name-concat root "copy"))
-                    :type 'user-error)
-      (should-not (file-exists-p (file-name-concat root "copy")))
-      (should-error (mevedel-side-conversation-open "side question") :type 'user-error)
-      (mevedel-model-set-session-provider
-       session (list :backend (gptel--make-backend :name "API" :models '(api)) :model 'api) buffer)
-      (should-not (mevedel-claude-code-backend-p gptel-backend))
-      (should (equal "API:api" (mevedel-session-model-provider session)))
-      ;; Unstarted and released markers hold no native history.
-      (setf (mevedel-session-external-conversations session)
-            (list (list "root" :engine 'claude-code :state 'unstarted)
-                  (list "/root/reader" :engine 'claude-code :state 'unstarted)))
-      (should-not (mevedel-engine-assert-local-history session "Transfer"))
-      ;; A retained child blocks whole-session operations, not root-only ones.
-      (setf (mevedel-session-external-conversations session)
-            (list (list "/root/reader" :engine 'claude-code :id "child" :host (system-name)
-                        :directory root :state 'ready)))
-      (should-error (mevedel-engine-assert-local-history session "Transfer") :type 'user-error)
-      (should-not (mevedel-engine-assert-local-history session "/btw" nil t)))))
+    (setf (mevedel-session-turn-count session) 1
+          (mevedel-session-external-conversations session)
+          (list (list "root" :engine 'claude-code :id "retained" :host (system-name)
+                      :directory root :state 'ready)))
+    (should-error (mevedel-session-rewind-assert-stable-source session buffer "Rewind")
+                  :type 'user-error)
+    (should-error (mevedel-session-save-as-run session buffer "copy" "copy-id"
+                                             (file-name-concat root "copy"))
+                  :type 'user-error)
+    (should-not (file-exists-p (file-name-concat root "copy")))
+    (should-error (mevedel-side-conversation-open "side question") :type 'user-error)
+    (mevedel-model-set-session-provider
+     session (list :backend (gptel--make-backend :name "API" :models '(api)) :model 'api) buffer)
+    (should-not (mevedel-claude-code-backend-p gptel-backend))
+    (should (equal "API:api" (mevedel-session-model-provider session)))
+    ;; Unstarted and released markers hold no native history.
+    (setf (mevedel-session-external-conversations session)
+          (list (list "root" :engine 'claude-code :state 'unstarted)
+                (list "/root/reader" :engine 'claude-code :state 'unstarted)))
+    (should-not (mevedel-engine-assert-local-history session "Transfer"))
+    ;; A retained child blocks whole-session operations, not root-only ones.
+    (setf (mevedel-session-external-conversations session)
+          (list (list "/root/reader" :engine 'claude-code :id "child" :host (system-name)
+                      :directory root :state 'ready)))
+    (should-error (mevedel-engine-assert-local-history session "Transfer") :type 'user-error)
+    (should-not (mevedel-engine-assert-local-history session "/btw" nil t))))
 
 (mevedel-deftest mevedel-engine-external-history-p ()
   (let ((session (mevedel-session--create)))
@@ -194,13 +174,8 @@
 
 (mevedel-deftest mevedel-engine-record-history-edit/no-output (:quiet t)
   (dolist (phase '(active reopened))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-claude-code-directory (file-name-concat root "claude"))
-            receipt restored restored-session)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+    (mevedel-engine-test--with-claude-session
+      (let (receipt restored restored-session)
         (setq-local gptel-system-prompt "Silent fixture" gptel-tools nil)
         (unwind-protect
             (progn
@@ -212,8 +187,7 @@
                                                (setq receipt t))))))))
                 (insert "wait-silent")
                 (mevedel--send-request "wait-silent")
-                (with-timeout (5 (ert-fail "No submitted-input receipt"))
-                  (while (not receipt) (accept-process-output nil 0.01))))
+                (mevedel-test--await 5 "No submitted-input receipt" receipt))
               ;; Normal metadata saves may remove and replace properties.
               ;; They are not edits to the prompt retained by Claude.
               (gptel--save-state)
@@ -226,8 +200,8 @@
               (should-not (eq 'diverged (plist-get (cdr (assoc "root" (mevedel-session-external-conversations session))) :state)))
               (when (eq phase 'reopened)
                 (mevedel-abort buffer)
-                (with-timeout (5 (ert-fail "Silent abort did not settle"))
-                  (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+                (mevedel-test--await 5 "Silent abort did not settle"
+                  (not (mevedel-turn-busy-p buffer)))
                 (let ((path (mevedel-session-save-path session)))
                   (test-mevedel-session-persistence--release-and-kill buffer session)
                   (setq restored (mevedel-session-persistence-restore path nil nil workspace)
@@ -240,8 +214,8 @@
                 (should (eq 'diverged (plist-get (cdr (assoc "root" (mevedel-session-external-conversations mevedel--session))) :state)))
                 (when (mevedel-turn-busy-p (current-buffer))
                   (mevedel-abort (current-buffer))
-                  (with-timeout (5 (ert-fail "Edited turn did not settle"))
-                    (while (mevedel-turn-busy-p (current-buffer)) (accept-process-output nil 0.01))))
+                  (mevedel-test--await 5 "Edited turn did not settle"
+                    (not (mevedel-turn-busy-p (current-buffer)))))
                 (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                            (lambda (&rest _) (ert-fail "Diverged history launched an agent"))))
                   (should (string-search "recover-history"
@@ -251,13 +225,8 @@
             (test-mevedel-session-persistence--release-and-kill restored restored-session)))))))
 
 (mevedel-deftest mevedel--send-request/claude-reopen (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          ids restored-buffer restored-session)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+  (mevedel-engine-test--with-claude-session
+    (let (ids restored-buffer restored-session)
       (setq-local gptel-system-prompt "Reopen fixture" gptel-tools nil)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -267,8 +236,8 @@
                         nil))))
             (insert "hello")
             (mevedel--send-request "hello")
-            (with-timeout (5 (ert-fail "First persisted turn did not finish"))
-              (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "First persisted turn did not finish"
+              (not (mevedel-turn-busy-p buffer)))
             (let ((path (mevedel-session-save-path session)))
               (test-mevedel-session-persistence--release-and-kill buffer session)
               (setq restored-buffer (mevedel-session-persistence-restore path nil nil workspace)))
@@ -282,8 +251,8 @@
               (delete-char -1)
               (insert "p")
               (mevedel--send-request "follow-up")
-              (with-timeout (5 (ert-fail "Reopened external history did not finish"))
-                (while (mevedel-turn-busy-p restored-buffer) (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "Reopened external history did not finish"
+                (not (mevedel-turn-busy-p restored-buffer)))
               (should (string-search "answer:follow-up" (buffer-string)))
               (should (= 2 (mevedel-session-turn-count restored-session)))
               ;; Editing displayed evidence cannot silently rewrite native history.
@@ -309,15 +278,10 @@
 
 (mevedel-deftest mevedel--send-request/claude-startup-retry (:quiet t)
   (pcase-dolist (`(,failure ,reopen) '((abort nil) (abort t) (startup nil) (startup t)))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-claude-code-directory (file-name-concat root "claude"))
-            (file (file-name-concat root "selected.txt"))
+    (mevedel-engine-test--with-claude-session
+      (let ((file (file-name-concat root "selected.txt"))
             (first t) ids late-context restored restored-session)
         (write-region "Selected context" nil file nil 'silent)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt "Retry fixture" gptel-tools nil
                     gptel-use-context (and (eq failure 'abort) 'user)
                     gptel-context (list file)
@@ -334,8 +298,8 @@
               (mevedel--insert-user-turn "First attempt")
               (mevedel--send-request "First attempt")
               (when (eq failure 'abort) (mevedel-abort buffer))
-              (with-timeout (5 (ert-fail "Failed startup did not settle"))
-                (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "Failed startup did not settle"
+                (not (mevedel-turn-busy-p buffer)))
               (setq first nil)
               (when reopen
                 (let ((path (mevedel-session-save-path session)))
@@ -350,9 +314,8 @@
                 ;; A preparation callback from the old request cannot launch
                 ;; or affect the replacement, including after buffer teardown.
                 (when late-context (funcall late-context "Late context"))
-                (with-timeout (5 (ert-fail "Startup retry did not settle"))
-                  (while (mevedel-turn-busy-p (current-buffer))
-                    (accept-process-output nil 0.01)))
+                (mevedel-test--await 5 "Startup retry did not settle"
+                  (not (mevedel-turn-busy-p (current-buffer))))
                 (let* ((text (buffer-string)) (answer (string-search "answer:" text)))
                   (should answer)
                   (should (string-search "Retry after failed startup" (substring text answer))))
@@ -367,69 +330,52 @@
   (test)
 
   :doc "turn totals normalize cache writes and ignore duplicate terminal replies"
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude")))
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-      (setq-local gptel-system-prompt "Usage fixture" gptel-tools nil)
-      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (mevedel-engine-test--claude-launch
-                  (lambda (_system mcp _model _effort &optional id _hook)
-                    (list :meta '((promptResponse .
-                                                  ((stopReason . "end_turn")
-                                                   (usage . ((inputTokens . 100) (outputTokens . 23)
-                                                             (cachedReadTokens . 1000) (cachedWriteTokens . 17)
-                                                             (totalTokens . 1140)))
-                                                   (_meta . ((quota . ((token_count . ((totalTokens . 1140)))
-                                                                       (model_usage . [((token_count . ((totalTokens . 8000))))])))))))))))))
-        (mevedel--send-request "hello")
-        (with-timeout (5 (ert-fail "Usage turn did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
-        (should (equal '(:input 117 :output 23 :cached 1000 :cache 17)
-                       (plist-get (mevedel-engine-info request) :tokens-full)))
-        (should (= 1 (mevedel-session-turn-count session)))))))
+  (mevedel-engine-test--with-claude-session
+    (setq-local gptel-system-prompt "Usage fixture" gptel-tools nil)
+    (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+               (mevedel-engine-test--claude-launch
+                (lambda (_system mcp _model _effort &optional id _hook)
+                  (list :meta '((promptResponse .
+                                                ((stopReason . "end_turn")
+                                                 (usage . ((inputTokens . 100) (outputTokens . 23)
+                                                           (cachedReadTokens . 1000) (cachedWriteTokens . 17)
+                                                           (totalTokens . 1140)))
+                                                 (_meta . ((quota . ((token_count . ((totalTokens . 1140)))
+                                                                     (model_usage . [((token_count . ((totalTokens . 8000))))])))))))))))))
+      (mevedel--send-request "hello")
+      (mevedel-test--await 5 "Usage turn did not settle" (not (mevedel-turn-busy-p buffer)))
+      (should (equal '(:input 117 :output 23 :cached 1000 :cache 17)
+                     (plist-get (mevedel-engine-info request) :tokens-full)))
+      (should (= 1 (mevedel-session-turn-count session))))))
 
 (mevedel-deftest mevedel--send-request/claude-prompt (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude")))
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-      (setq-local gptel-system-prompt "Projection fixture" gptel-tools nil)
-      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                 (mevedel-engine-test--claude-launch
-                  (lambda (_system mcp _model _effort &optional id _hook)
-                    nil))))
-        (insert "hello"
-                (mevedel-tool-render-data-format '(:type prompt-summary :body "display-only"))
-                (mevedel--format-hook-audit-record '(:type guest-prompt :name "audit-only")))
-        (mevedel--send-request)
-        (with-timeout (5 (ert-fail "Prompt projection did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
-        ;; Publication rewrites the Org property drawer, so inspect the
-        ;; canonical response span rather than a pre-publication offset.
-        (save-excursion
-          (goto-char (point-min))
-          (let* ((span (text-property-search-forward 'gptel 'response t))
-                 (answer (buffer-substring-no-properties
-                          (prop-match-beginning span) (prop-match-end span))))
-            (should (string-search "answer:hello" answer))
-            (should-not (string-search "display-only" answer))
-            (should-not (string-search mevedel--hook-audit-open answer))))))))
+  (mevedel-engine-test--with-claude-session
+    (setq-local gptel-system-prompt "Projection fixture" gptel-tools nil)
+    (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+               (mevedel-engine-test--claude-launch
+                (lambda (_system mcp _model _effort &optional id _hook)
+                  nil))))
+      (insert "hello"
+              (mevedel-tool-render-data-format '(:type prompt-summary :body "display-only"))
+              (mevedel--format-hook-audit-record '(:type guest-prompt :name "audit-only")))
+      (mevedel--send-request)
+      (mevedel-test--await 5 "Prompt projection did not settle" (not (mevedel-turn-busy-p buffer)))
+      ;; Publication rewrites the Org property drawer, so inspect the
+      ;; canonical response span rather than a pre-publication offset.
+      (save-excursion
+        (goto-char (point-min))
+        (let* ((span (text-property-search-forward 'gptel 'response t))
+               (answer (buffer-substring-no-properties
+                        (prop-match-beginning span) (prop-match-end span))))
+          (should (string-search "answer:hello" answer))
+          (should-not (string-search "display-only" answer))
+          (should-not (string-search mevedel--hook-audit-open answer)))))))
 
 (mevedel-deftest mevedel-session-naming-consider/claude (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
-    (let ((gptel--known-backends nil)
-          (mevedel-model-workloads '((naming :provider "Claude Code:haiku" :effort nil)))
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
+    (let ((mevedel-model-workloads '((naming :provider "Claude Code:haiku" :effort nil)))
           systems models tool-rosters)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Root-only secret policy"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
       (setf (mevedel-session-naming-state session) 'pending)
@@ -440,8 +386,8 @@
                     (should-not id)
                     nil))))
         (mevedel-session-naming-consider session "Fix parsing")
-        (with-timeout (5 (ert-fail "Subscription naming did not settle"))
-          (while mevedel-session-naming--cancel (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "Subscription naming did not settle"
+          (not mevedel-session-naming--cancel))
         (should (equal "answer:Fix parsing" (mevedel-session-name session)))
         (should (equal '("haiku") models))
         (should (equal '([]) tool-rosters))
@@ -452,15 +398,10 @@
 
 (mevedel-deftest mevedel-permission-review-start/claude (:quiet t)
   (dolist (valid '(t nil))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-permission-reviewer 'auto)
+    (mevedel-engine-test--with-claude-session
+      (let ((mevedel-permission-reviewer 'auto)
             (mevedel-model-workloads '((guardian :provider "Claude Code:haiku" :effort nil)))
-            (mevedel-claude-code-directory (file-name-concat root "claude"))
             models systems results fallback)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setf (mevedel-session-permission-mode session) 'edits)
         (setq-local gptel-system-prompt "Root-only secret policy")
         (insert "Evaluate (+ 1 2) in this Emacs session.\n")
@@ -478,8 +419,8 @@
                  :expression "(+ 1 2)" :mode "live" :permission-via 'mode
                  :callback (lambda (outcome) (push outcome results)))
            (lambda () (setq fallback t)))
-          (with-timeout (5 (ert-fail "Subscription guardian did not settle"))
-            (while mevedel-permission-review--pending (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Subscription guardian did not settle"
+            (not mevedel-permission-review--pending))
           (should (equal '("haiku") models))
           (should-not (string-search "Root-only secret policy" (car systems)))
           (should-not (mevedel-session-permission-rules session))
@@ -492,15 +433,10 @@
 
 (mevedel-deftest mevedel-context-summary-generate/claude (:quiet t)
   (dolist (valid '(t nil))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-model-context-limit 64000)
+    (mevedel-engine-test--with-claude-session
+      (let ((mevedel-model-context-limit 64000)
             (mevedel-model-workloads '((journal :provider "Claude Code:haiku" :effort nil)))
-            (mevedel-claude-code-directory (file-name-concat root "claude"))
             models results)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt "Root-only secret policy")
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                    (mevedel-engine-test--claude-launch
@@ -518,8 +454,7 @@
            "Frozen source evidence" 'digest
            (lambda (result) (should (eq buffer (current-buffer))) (push result results))
            :session session)
-          (with-timeout (5 (ert-fail "Subscription digest did not settle"))
-            (while (not results) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Subscription digest did not settle" results)
           (should (equal '("haiku") models))
           (should (= 1 (length results)))
           (should (eq (if valid 'success 'error) (plist-get (car results) :outcome)))
@@ -530,25 +465,20 @@
           (should-not (mevedel-session-external-conversations session)))))))
 
 (mevedel-deftest mevedel--start-directive-discussion/claude (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
     (let* ((file (file-name-concat root "directive.txt"))
            (source (find-file-noselect file))
-           (gptel--known-backends nil)
            (mevedel-show-chat-buffer nil)
            (inhibit-interaction t)
            (gptel--known-presets (copy-tree gptel--known-presets))
            (mevedel-preset--registry (copy-tree mevedel-preset--registry))
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
            (prompt-response '((stopReason . "end_turn")))
            launches directive record batches (callbacks 0))
       (unwind-protect
           (progn
             (mevedel-tools-register)
             (mevedel--define-presets)
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq-local gptel-system-prompt "Directive fixture" gptel-tools nil)
             (with-current-buffer source
               (setq-local mevedel--workspace workspace)
@@ -565,9 +495,8 @@
                           (list :meta `((hookCommand . ,hook) (toolBatches . ,batches)
                                         (promptResponse . ,prompt-response)))))))
               (cl-labels ((wait ()
-                            (with-timeout (5 (ert-fail "Directive ACP turn did not settle"))
-                              (while (mevedel-turn-busy-p buffer)
-                                (accept-process-output nil 0.01))))
+                            (mevedel-test--await 5 "Directive ACP turn did not settle"
+                              (not (mevedel-turn-busy-p buffer))))
                           (done (err owner)
                             (should-not err)
                             (should (mevedel-request-p owner))
@@ -687,23 +616,18 @@
       (should (eq api gptel-backend)))))
 
 (mevedel-deftest mevedel-directive-plan-start/claude (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
     (let* ((source (find-file-noselect (file-name-concat root "planned.txt")))
            (view (generate-new-buffer " *claude-directive-plan*"))
-           (gptel--known-backends nil)
            (gptel--known-presets (copy-tree gptel--known-presets))
            (mevedel-preset--registry (copy-tree mevedel-preset--registry))
            (mevedel-show-chat-buffer nil) (inhibit-interaction t)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
            (proposal "<proposed_plan>\n# Local plan\n\nChange the captured expression, then run its tests.\n</proposed_plan>")
            (launches 0) directive record result)
       (unwind-protect
           (progn
             (mevedel-tools-register) (mevedel--define-presets)
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (mevedel-view--setup view buffer)
             (with-current-buffer view
               (goto-char (mevedel-view--input-start))
@@ -723,9 +647,8 @@
                           (should (equal (if (= launches 1) "haiku" "sonnet") model))
                           (list :meta (and (= launches 1) `((responseText . ,proposal))))))))
               (cl-labels ((wait ()
-                            (with-timeout (5 (ert-fail "Directive Plan ACP turn did not settle"))
-                              (while (mevedel-turn-busy-p buffer)
-                                (accept-process-output nil 0.01)))))
+                            (mevedel-test--await 5 "Directive Plan ACP turn did not settle"
+                              (not (mevedel-turn-busy-p buffer)))))
                 (with-current-buffer source
                   (mevedel-directive-plan-start
                    directive 'implement #'mevedel--implement-directive-prompt
@@ -757,14 +680,9 @@
           (kill-buffer source))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (file (file-name-concat root "child-evidence.txt"))
+  (mevedel-engine-test--with-claude-session
+    (let ((file (file-name-concat root "child-evidence.txt"))
           record invocation outcome launches)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "ROOT PRIVATE INSTRUCTIONS")
       (dolist (name '("Read" "SendMessage" "ListAgents"))
         (mevedel-tool-ensure name))
@@ -790,9 +708,8 @@
              :on-invocation (lambda (value) (setq invocation value)))
             (should-not (plist-get outcome :error))
             (should (eq 'success (plist-get outcome :outcome)))
-            (with-timeout (5 (ert-fail "Claude child did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Claude child did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (eq 'idle (mevedel-agent-record-activity record)))
             (should (equal "Child completed" (mevedel-agent-record-settled-result record)))
             (should-not (mevedel-agent-invocation-runtime-fsm invocation))
@@ -812,9 +729,8 @@
             (setq-local gptel-model 'haiku gptel-system-prompt "CHANGED ROOT")
             (mevedel-agent-control-followup session "/root/reader" "Inspect again.")
             (setq invocation (mevedel-agent-record-invocation record))
-            (with-timeout (5 (ert-fail "Claude child follow-up did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Claude child follow-up did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (eq 'idle (mevedel-agent-record-activity record)))
             (should (equal "Child completed" (mevedel-agent-record-settled-result record)))
             (should (equal "sonnet" (cadar launches)))
@@ -823,14 +739,12 @@
             (should (= 2 (length (mevedel-agent-control-context-mailbox session))))
             (mevedel-agent-control-followup session "/root/reader" "wait")
             (setq invocation (mevedel-agent-record-invocation record))
-            (with-timeout (5 (ert-fail "Claude child did not begin waiting"))
-              (while (not (with-current-buffer (mevedel-agent-invocation-buffer invocation)
-                            (string-search "waiting" (buffer-string))))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Claude child did not begin waiting"
+              (with-current-buffer (mevedel-agent-invocation-buffer invocation)
+                (string-search "waiting" (buffer-string))))
             (mevedel-agent-control-interrupt session "/root/reader")
-            (with-timeout (5 (ert-fail "Claude child cancellation did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Claude child cancellation did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (eq 'idle (mevedel-agent-record-activity record)))
             (let ((mail (mevedel-agent-control-context-mailbox session)))
@@ -841,17 +755,15 @@
             (should (= 0 (mevedel-session-turn-count session)))
             (mevedel-agent-control-followup session "/root/reader" "crash")
             (setq invocation (mevedel-agent-record-invocation record))
-            (with-timeout (5 (ert-fail "Child transport death did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Child transport death did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (let ((mail (mevedel-agent-control-context-mailbox session)))
               (should (= 4 (length mail)))
               (should (eq 'errored (plist-get (car (last mail)) :outcome))))
             (mevedel-agent-control-followup session "/root/reader" "Inspect after the crash.")
             (setq invocation (mevedel-agent-record-invocation record))
-            (with-timeout (5 (ert-fail "Child recovery did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Child recovery did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (equal "Child completed" (mevedel-agent-record-settled-result record)))
             (with-current-buffer (mevedel-agent-record-conversation-buffer record)
               (should (= 2 (mevedel-engine-test--count-evidence "Reconcile current state before continuing"))))
@@ -875,10 +787,8 @@
 
 (mevedel-deftest mevedel-agent-control-followup/claude-mail (:quiet t)
   (dolist (acknowledge '(t nil "foreign" "mismatch" "error" "malformed" "oversized" "initial" "initial-large"))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-claude-code-directory (file-name-concat root "claude"))
-            (file (file-name-concat root "mail-evidence.txt"))
+    (mevedel-engine-test--with-claude-session
+      (let ((file (file-name-concat root "mail-evidence.txt"))
             (mail (concat "Steer this child only."
                           (when (member acknowledge '("oversized" "initial-large"))
                             (make-string 5000 #x1f600))))
@@ -888,9 +798,6 @@
             (oversized (equal acknowledge "oversized"))
             (delivered (or (eq acknowledge t) (member acknowledge '("initial" "initial-large" "oversized"))))
             record outcome)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (dolist (name '("Read" "SendMessage" "ListAgents")) (mevedel-tool-ensure name))
         (write-region "mail fixture\n" nil file nil 'silent)
         (unwind-protect
@@ -922,9 +829,8 @@
                  (when initial
                    (mevedel-agent-control-followup session "/root/reader" mail))))
               (should-not (plist-get outcome :error))
-              (with-timeout (5 (ert-fail "Mail delivery child did not settle"))
-                (while (mevedel-agent-control-active-turn-p session)
-                  (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "Mail delivery child did not settle"
+                (not (mevedel-agent-control-active-turn-p session)))
               (ert-info ((format "acknowledge=%S" acknowledge))
                 (should (equal "Child completed" (mevedel-agent-record-settled-result record))))
               (should (= (cond (oversized 0) (delivered 1) (t 2))
@@ -941,47 +847,40 @@
 
 (mevedel-deftest mevedel--send-request/claude-initial-mail (:quiet t)
   (dolist (acknowledge '(t nil "foreign" "mismatch" "nested"))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-claude-code-directory (file-name-concat root "claude")))
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-        (setq-local gptel-system-prompt "Session instructions" gptel-tools nil)
-        (mevedel-agent-control-send-message
-         session "/root" (concat "Large initial mail " (make-string 12000 ?x) " END-MAIL"))
-        (cl-letf (((symbol-function 'mevedel-claude-code-launch)
-                   (mevedel-engine-test--claude-launch
-                    (lambda (_system mcp _model _effort &optional id _hook)
-                      (list :meta `((promptAcknowledgement . ,(or acknowledge :false))
-                                    (responseText . "Complete")))))))
-          (insert "Process my mail")
-          (mevedel--send-request "Process my mail")
-          (with-timeout (5 (ert-fail "Initial mail turn did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
-          (should (= (if (eq acknowledge t) 0 1) (length (mevedel-session-messages session))))
-          (should (= (if (eq acknowledge t) 1 0)
-                     (how-many "Large initial mail" (point-min) (point-max))))
-          (should (= (if (eq acknowledge t) 1 0)
-                     (how-many "END-MAIL" (point-min) (point-max))))
-          (unless acknowledge
-            ;; A fresh turn must be able to deliver mail whose earlier receipt
-            ;; was lost, without inheriting that turn's pending receipt state.
-            (setq acknowledge t)
-            (goto-char (point-max))
-            (insert "\nTry my mail again")
-            (mevedel--send-request "Try my mail again")
-            (with-timeout (5 (ert-fail "Retried mail turn did not settle"))
-              (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
-            (should-not (mevedel-session-messages session))
-            (should (= 1 (how-many "END-MAIL" (point-min) (point-max))))))))))
+    (mevedel-engine-test--with-claude-session
+      (setq-local gptel-system-prompt "Session instructions" gptel-tools nil)
+      (mevedel-agent-control-send-message
+       session "/root" (concat "Large initial mail " (make-string 12000 ?x) " END-MAIL"))
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (_system mcp _model _effort &optional id _hook)
+                    (list :meta `((promptAcknowledgement . ,(or acknowledge :false))
+                                  (responseText . "Complete")))))))
+        (insert "Process my mail")
+        (mevedel--send-request "Process my mail")
+        (mevedel-test--await 5 "Initial mail turn did not settle"
+          (not (mevedel-turn-busy-p buffer)))
+        (should (= (if (eq acknowledge t) 0 1) (length (mevedel-session-messages session))))
+        (should (= (if (eq acknowledge t) 1 0)
+                   (how-many "Large initial mail" (point-min) (point-max))))
+        (should (= (if (eq acknowledge t) 1 0)
+                   (how-many "END-MAIL" (point-min) (point-max))))
+        (unless acknowledge
+          ;; A fresh turn must be able to deliver mail whose earlier receipt
+          ;; was lost, without inheriting that turn's pending receipt state.
+          (setq acknowledge t)
+          (goto-char (point-max))
+          (insert "\nTry my mail again")
+          (mevedel--send-request "Try my mail again")
+          (mevedel-test--await 5 "Retried mail turn did not settle"
+            (not (mevedel-turn-busy-p buffer)))
+          (should-not (mevedel-session-messages session))
+          (should (= 1 (how-many "END-MAIL" (point-min) (point-max)))))))))
 
 (mevedel-deftest mevedel--send-request/claude-context-updates (:quiet t)
   (dolist (receipt '(t nil mismatch unchanged compact revert final pending-mail))
-    (mevedel-engine-test--with-session
-      (let* ((gptel--known-backends nil)
-             (mevedel-claude-code-directory (file-name-concat root "claude"))
-             (mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
+    (mevedel-engine-test--with-claude-session
+      (let* ((mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
              (mevedel-system-retained-components '(memory))
              (state "Original memory")
              (changed (if (eq receipt 'unchanged) state "UPDATED-MEMORY-6492"))
@@ -991,9 +890,6 @@
               (mevedel-system-prompt-component--create
                :name 'memory :producer (lambda (_context) state)))
         (write-region "Evidence" nil file nil 'silent)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt "Context update fixture"
                     gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
         (when (eq receipt 'pending-mail)
@@ -1020,8 +916,8 @@
                                                                '("before-update" "changed" "after-update")))))))))))
           (insert "Read with current context")
           (mevedel--send-request "Read with current context")
-          (with-timeout (5 (ert-fail "Context update turn did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Context update turn did not settle"
+            (not (mevedel-turn-busy-p buffer)))
           (ert-info ((format "receipt=%S" receipt))
             (should (eq (if (memq receipt '(t unchanged compact revert)) 'success 'error)
                         (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
@@ -1033,10 +929,8 @@
                        (mevedel-engine-test--count-evidence "Original memory")))))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-context-updates (:quiet t)
-  (mevedel-engine-test--with-session
-    (let* ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
-           (mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
+  (mevedel-engine-test--with-claude-session
+    (let* ((mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
            (mevedel-system-retained-components '(memory active-goal))
            (state "Original child memory")
            (file (file-name-concat root "evidence.txt"))
@@ -1046,9 +940,6 @@
             (alist-get 'active-goal mevedel-system--prompt-components)
             (mevedel-system-prompt-component--create :name 'active-goal :producer (lambda (_) "ROOT-ONLY-GOAL")))
       (write-region "Evidence" nil file nil 'silent)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (mevedel-tool-ensure "Read")
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -1071,8 +962,8 @@
                                           :tools '(Read) :context-components '(memory)
                                           :system-prompt "Child instructions"))
             (should-not (plist-get outcome :error))
-            (with-timeout (5 (ert-fail "Context update child did not settle"))
-              (while (mevedel-agent-control-active-turn-p session) (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Context update child did not settle"
+              (not (mevedel-agent-control-active-turn-p session)))
             (should (equal "Child completed" (mevedel-agent-record-settled-result record)))
             (with-current-buffer (mevedel-agent-record-conversation-buffer record)
               (should (= 1 (mevedel-engine-test--count-evidence "CHILD-MEMORY-7258")))
@@ -1083,19 +974,14 @@
 
 (mevedel-deftest mevedel--send-request/claude-path-instructions (:quiet t)
   (dolist (receipt '(t nil late))
-    (mevedel-engine-test--with-session
-      (let* ((gptel--known-backends nil)
-             (mevedel-claude-code-directory (file-name-concat root "claude"))
-             (directory (file-name-concat root "lib"))
+    (mevedel-engine-test--with-claude-session
+      (let* ((directory (file-name-concat root "lib"))
              (file (file-name-concat directory "evidence.txt"))
              (instructions (file-name-concat directory "AGENTS.md"))
              (late-commits 0) queued)
         (make-directory directory)
         (write-region "Evidence" nil file nil 'silent)
         (write-region "PATH-GUIDANCE-4319" nil instructions nil 'silent)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt "Path instructions fixture"
                     gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -1118,8 +1004,8 @@
                                                     [((name . "Read") (id . "second-read") (args . ((file_path . ,file))))]])))))))
           (insert "Read with applicable instructions")
           (mevedel--send-request "Read with applicable instructions")
-          (with-timeout (5 (ert-fail "Path instructions turn did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Path instructions turn did not settle"
+            (not (mevedel-turn-busy-p buffer)))
           (ert-info ((format "receipt=%S" receipt))
             (should (eq (if receipt 'success 'error)
                         (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
@@ -1131,10 +1017,8 @@
 
 (mevedel-deftest mevedel--send-request/claude-compaction (:quiet t)
   (dolist (receipt '(t nil unchanged final))
-    (mevedel-engine-test--with-session
-      (let* ((gptel--known-backends nil)
-             (mevedel-claude-code-directory (file-name-concat root "claude"))
-             (mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
+    (mevedel-engine-test--with-claude-session
+      (let* ((mevedel-system--prompt-components (copy-tree mevedel-system--prompt-components))
              (mevedel-system-retained-components '(memory))
              (state "Original memory")
              (changed (if (eq receipt 'unchanged) state "CURRENT-CONTEXT-3726"))
@@ -1144,9 +1028,6 @@
               (mevedel-system-prompt-component--create
                :name 'memory :producer (lambda (_context) state)))
         (write-region "Evidence" nil file nil 'silent)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt (concat (make-string 12000 ?x) " LARGE-SYSTEM-END")
                     gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -1168,8 +1049,8 @@
                                                                  (args . ((file_path . ,file))))))])))))))
           (insert "Read before and after compaction")
           (mevedel--send-request "Read before and after compaction")
-          (with-timeout (5 (ert-fail "Compaction turn did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Compaction turn did not settle"
+            (not (mevedel-turn-busy-p buffer)))
           (should (string-search "LARGE-SYSTEM-END" captured-system))
           (should (string-search "Original memory" captured-system))
           (should (eq (if (memq receipt '(t unchanged)) 'success 'error)
@@ -1181,15 +1062,10 @@
                      (mevedel-engine-test--count-evidence "CURRENT-CONTEXT-3726"))))))))
 
 (mevedel-deftest mevedel--send-request/claude-recovery (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (file (file-name-concat root "effects.txt"))
+  (mevedel-engine-test--with-claude-session
+    (let ((file (file-name-concat root "effects.txt"))
           (crash t) (receipt t) (call-id "mutate-once")
           restored restored-session)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Recovery fixture"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Bash"))))
       (unwind-protect
@@ -1204,8 +1080,8 @@
                                                                                      (shell-quote-argument file))))))]])))))))
             (insert "Append one line")
             (mevedel--send-request "Append one line")
-            (with-timeout (5 (ert-fail "Crashing turn did not settle"))
-              (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Crashing turn did not settle"
+              (not (mevedel-turn-busy-p buffer)))
             (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
             (should (equal "effect\n" (with-temp-buffer (insert-file-contents file) (buffer-string))))
             (let* ((path (mevedel-session-save-path session))
@@ -1226,8 +1102,8 @@
                 (goto-char (point-max))
                 (insert "\nInspect previous effects before continuing")
                 (let ((owner (mevedel--send-request "Inspect previous effects before continuing")))
-                  (with-timeout (5 (ert-fail "Recovery turn did not settle"))
-                    (while (mevedel-turn-busy-p restored) (accept-process-output nil 0.01)))
+                  (mevedel-test--await 5 "Recovery turn did not settle"
+                    (not (mevedel-turn-busy-p restored)))
                   (ert-info ((format "ack=%S history=%S pending=%S" ack
                                      (mevedel-session-external-conversations restored-session)
                                      (plist-get (mevedel-engine-info owner) :mevedel-claude-context-pending)))
@@ -1243,18 +1119,14 @@
           (test-mevedel-session-persistence--release-and-kill restored restored-session))))))
 
 (mevedel-deftest mevedel--send-request/claude-initial-reminder-after-fork-point (:quiet t)
-  (mevedel-engine-test--with-session
-    (let* ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
-           (nested (file-name-concat root "nested"))
+  (mevedel-engine-test--with-claude-session
+    (let* ((nested (file-name-concat root "nested"))
            (instructions (file-name-concat nested "AGENTS.md"))
            (file (file-name-concat nested "source.txt"))
            (turn 0))
       (make-directory nested t)
       (write-region "FIRST GUIDANCE" nil instructions nil 'silent)
       (write-region "source contents" nil file nil 'silent)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Root reminder reproduction"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -1267,15 +1139,13 @@
                                                           (args . ((file_path . ,file))))]] []))))))))
         (mevedel--insert-user-turn "Read my source and follow its guidance.")
         (mevedel--send-request "Read my source and follow its guidance.")
-        (with-timeout (5 (ert-fail "First turn did not finish"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "First turn did not finish" (not (mevedel-turn-busy-p buffer)))
         (should (= 1 (mevedel-engine-test--count-evidence "FIRST GUIDANCE")))
         (write-region "SECOND GUIDANCE RESTORED" nil instructions nil 'silent)
         (goto-char (point-max))
         (mevedel--insert-user-turn "Continue using my changed guidance.")
         (let ((second (mevedel--send-request "Continue using my changed guidance.")))
-          (with-timeout (5 (ert-fail "Second turn did not finish"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Second turn did not finish" (not (mevedel-turn-busy-p buffer)))
           (should (eq 'success (plist-get (mevedel-engine-info second) :mevedel-acp-outcome))))
         ;; Context was acknowledged by the native peer and is trusted audit data.
         (should (equal (secure-hash 'sha256 "SECOND GUIDANCE RESTORED")

@@ -427,8 +427,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
              (mevedel-tool-exec-permission-current-context
               "Bash" args session)))
            (invocation
-            (and (boundp 'mevedel--agent-invocation)
-                 mevedel--agent-invocation))
+            mevedel--agent-invocation)
            (owner (mevedel-current-origin))
            (yield-time-ms
             (unless (plist-get args :wait-for-completion-p)

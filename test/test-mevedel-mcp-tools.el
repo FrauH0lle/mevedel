@@ -42,8 +42,7 @@
        request buffer (mevedel-tool-ensure "Read")
        (list :file_path path) "toolu_read"
        (lambda (result outcome) (setq delivered (list result outcome))))
-      (with-timeout (3 (ert-fail "Read did not finish"))
-        (while (not delivered) (accept-process-output nil 0.01)))
+      (mevedel-test--await 3 "Read did not finish" delivered)
       (should (eq :json-false (plist-get (car delivered) :isError)))
       (should (string-match-p "mcp fixture line"
                               (plist-get (aref (plist-get (car delivered)
@@ -80,8 +79,7 @@
         :handler (lambda (_args) (cl-incf calls) '(:result "bad")))
        nil "toolu_denied"
        (lambda (result outcome) (setq delivered (list result outcome))))
-      (with-timeout (3 (ert-fail "Refusal did not finish"))
-        (while (not delivered) (accept-process-output nil 0.01)))
+      (mevedel-test--await 3 "Refusal did not finish" delivered)
       (should (= calls 0))
       (should (eq t (plist-get (car delivered) :isError)))
       (should (eq 'permission-denied (plist-get (cadr delivered) :reason)))))
@@ -105,8 +103,7 @@
              invocation child (mevedel-tool-ensure "Read")
              (list :file_path path) "toolu_child"
              (lambda (result outcome) (setq delivered (list result outcome))))
-            (with-timeout (3 (ert-fail "Child Read did not finish"))
-              (while (not delivered) (accept-process-output nil 0.01)))
+            (mevedel-test--await 3 "Child Read did not finish" delivered)
             (should (eq 'success (plist-get (cadr delivered) :status)))
             (should (string-match-p "child-owned evidence"
                                     (plist-get (aref (plist-get (car delivered)
@@ -123,8 +120,7 @@
                            path))
              "toolu_child_patch"
              (lambda (result outcome) (setq delivered (list result outcome))))
-            (with-timeout (3 (ert-fail "Child Plan refusal did not finish"))
-              (while (not delivered) (accept-process-output nil 0.01)))
+            (mevedel-test--await 3 "Child Plan refusal did not finish" delivered)
             (should (eq 'permission-denied (plist-get (cadr delivered) :reason)))
             (should (equal "child-owned evidence\n"
                            (with-temp-buffer
@@ -168,8 +164,7 @@
               (mevedel-mcp-tools-call
                invocation child tool nil "toolu_obsolete_child"
                (lambda (result outcome) (setq delivered (list result outcome))))
-              (with-timeout (3 (ert-fail "Ownership refusal did not finish"))
-                (while (not delivered) (accept-process-output nil 0.01)))
+              (mevedel-test--await 3 "Ownership refusal did not finish" delivered)
               (should (= 0 calls))
               (should (eq t (plist-get (car delivered) :isError)))
               (should (eq 'obsolete-request (plist-get (cadr delivered) :reason)))
@@ -189,8 +184,7 @@
                      :media ((:kind image :mime "image/png" :data "QUJD")))))
        nil "toolu_image"
        (lambda (result outcome) (setq delivered (list result outcome))))
-      (with-timeout (3 (ert-fail "Image did not finish"))
-        (while (not delivered) (accept-process-output nil 0.01)))
+      (mevedel-test--await 3 "Image did not finish" delivered)
       (let ((content (plist-get (car delivered) :content)))
         (should (= 2 (length content)))
         (should (equal '(:type "text" :text "Image result") (aref content 0)))
@@ -211,8 +205,7 @@
        request buffer (mevedel-tool-ensure "CreateGoal")
        '(:objective "Fix the fixture" :token_budget 100) "toolu_goal"
        (lambda (result outcome) (setq delivered (list result outcome))))
-      (with-timeout (3 (ert-fail "Goal creation did not finish"))
-        (while (not delivered) (accept-process-output nil 0.01)))
+      (mevedel-test--await 3 "Goal creation did not finish" delivered)
       (should (eq 'success (plist-get (cadr delivered) :status)))
       (let ((goal (mevedel-session-goal session)))
         (should (equal "Fix the fixture" (mevedel-goal-objective goal)))

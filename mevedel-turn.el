@@ -325,7 +325,7 @@ caller for telemetry.  Return non-nil when this call made the request."
   (or (and (bound-and-true-p mevedel--current-request)
            (mevedel-request-p mevedel--current-request)
            (mevedel-request-origin mevedel--current-request))
-      (and-let* ((inv (bound-and-true-p mevedel--agent-invocation))
+      (and-let* ((inv mevedel--agent-invocation)
                  ((fboundp 'mevedel-agent-invocation-p))
                  ((mevedel-agent-invocation-p inv)))
         (mevedel-agent-invocation-require-path inv))
@@ -372,7 +372,7 @@ A root request is the user's retry: blocking recovery issues refuse it, and
 it clears the previous attempt's informational issues and a failure pause no
 failed input still justifies.  A retained agent's admission leaves the root's
 recovery state alone."
-  (unless (bound-and-true-p mevedel--agent-invocation)
+  (unless mevedel--agent-invocation
     (mevedel-recovery-assert-ready session))
   (let ((entry-request mevedel--current-request))
     (when mevedel--turn-settlements-pending
@@ -395,7 +395,7 @@ recovery state alone."
     (user-error "Turn settlement is still pending"))
   (when mevedel--current-request
     (user-error "Another request was admitted during cancellation"))
-  (unless (bound-and-true-p mevedel--agent-invocation)
+  (unless mevedel--agent-invocation
     (mevedel-recovery-clear-informational session)
     (unless (cl-find 'failed-turn
                      (append (mevedel-session-pending-steering session)
@@ -422,8 +422,7 @@ recovery state alone."
                             (mevedel-session-directive-planning session)
                             :phase)
                            'planning)
-                       (and (boundp 'mevedel--agent-invocation)
-                            mevedel--agent-invocation
+                       (and mevedel--agent-invocation
                             (mevedel-agent-invocation-plan-read-only
                              mevedel--agent-invocation)))
                    :started-at (current-time)
@@ -714,7 +713,7 @@ The terminal admission hold stays live between publication and this phase."
       (with-current-buffer chat-buffer
         (let* ((workspace (mevedel-session-workspace mevedel--session))
                (root-p (and (eq chat-buffer (mevedel-session-root-buffer mevedel--session))
-                            (not (bound-and-true-p mevedel--agent-invocation)))))
+                            (not mevedel--agent-invocation))))
           (condition-case err
               (progn
                 (require 'mevedel-journal-capture)

@@ -14,6 +14,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-editing)
+(require 'mevedel-shared-library)
 
 (mevedel-deftest mevedel-tool-editing--call
 		 (:doc "The real tool pipeline commits authorized edits and fences cancelled work" :quiet t)

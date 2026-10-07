@@ -9,6 +9,7 @@
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-session-test-support"))
+(require 'mevedel-pipeline)
 (require 'mevedel-tools)
 
 (mevedel-deftest mevedel-pipeline-run-tool-outcome/provider (:quiet t)
@@ -36,8 +37,7 @@
           (mevedel-pipeline-run-tool-outcome
            tool (lambda (outcome) (setq delivered outcome)) nil
            '(:tool-use-id "toolu_provider" :source mcp :projection provider))
-          (with-timeout (3 (ert-fail "Tool completion was not delivered"))
-            (while (not delivered) (accept-process-output nil 0.01)))
+          (mevedel-test--await 3 "Tool completion was not delivered" delivered)
           (should (eq 'success (plist-get delivered :status)))
           (should (equal "toolu_provider" (plist-get delivered :tool-use-id)))
           (should (equal text (plist-get delivered :raw-result)))

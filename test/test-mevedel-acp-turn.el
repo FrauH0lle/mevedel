@@ -13,10 +13,6 @@
 (require 'mevedel-claude-code)
 (require 'mevedel-view-render)
 
-(defconst mevedel-acp-turn-test--peer
-  (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                    "fixtures" "acp-agent.py"))
-
 (mevedel-deftest mevedel-acp-turn-start (:quiet t)
   ,test
   (test)
@@ -36,13 +32,12 @@
          request
          (lambda (mcp _hook-command)
            (list :command (executable-find "python3")
-                 :args (list mevedel-acp-turn-test--peer) :cwd root
+                 :args (list mevedel-test--acp-peer) :cwd root
                  :mcp mcp :tool-id-field :fixtureToolId))
          (vector `((type . "text") (text . ,(concat "read:" path))))
          (list (mevedel-tool-ensure "Read"))
          (lambda (id) (setq retained-id id)))
-        (with-timeout (5 (ert-fail "External turn did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+        (mevedel-test--await 5 "External turn did not settle" (not (mevedel-turn-busy-p buffer))))
       (should (equal "fixture-session" retained-id))
       (should-not (mevedel-request-fsm request))
       (should (= 1 (mevedel-session-turn-count session)))
@@ -64,14 +59,13 @@
      request
      (lambda (mcp _hook-command)
        (list :command (executable-find "python3")
-             :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp))
+             :args (list mevedel-test--acp-peer) :cwd root :mcp mcp))
      [((type . "text") (text . "wait"))] nil)
-    (with-timeout (5 (ert-fail "External stream did not start"))
-      (while (not (string-search "waiting" (buffer-string)))
-        (accept-process-output nil 0.01)))
+    (mevedel-test--await 5 "External stream did not start"
+      (string-search "waiting" (buffer-string)))
     (mevedel-abort buffer)
-    (with-timeout (5 (ert-fail "External interruption did not settle"))
-      (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+    (mevedel-test--await 5 "External interruption did not settle"
+      (not (mevedel-turn-busy-p buffer)))
     (should (string-search "waiting" (buffer-string)))
     (should-not mevedel--current-request)
     (should-not mevedel--turn-settlements-pending)
@@ -86,7 +80,7 @@
        request
        (lambda (mcp _hook)
          (list :command (executable-find "python3")
-               :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp
+               :args (list mevedel-test--acp-peer) :cwd root :mcp mcp
                :observe #'mevedel-claude-code-usage-observe
                :complete-prompt (lambda (owner outcome)
                                   (cl-incf completed)
@@ -103,13 +97,10 @@
                                           (usage . ((inputTokens . 40) (outputTokens . 20)
                                                     (cachedReadTokens . 3) (cachedWriteTokens . 5))))))))
        [((type . "text") (text . "wait"))] nil)
-      (with-timeout (5 (ert-fail "Waiting peer did not start"))
-        (while (not (string-search "waiting" (buffer-string)))
-          (accept-process-output nil .01)))
+      (mevedel-test--await 5 "Waiting peer did not start" (string-search "waiting" (buffer-string)))
       (should (= 10 (plist-get (plist-get (mevedel-engine-info request) :tokens-full) :input)))
       (mevedel-abort buffer)
-      (with-timeout (5 (ert-fail "Cancelled turn did not settle"))
-        (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01)))
+      (mevedel-test--await 5 "Cancelled turn did not settle" (not (mevedel-turn-busy-p buffer)))
       (should (eq 'interrupted (plist-get native-outcome :status)))
       (should (equal (plist-get native-outcome :tokens)
                      (plist-get (mevedel-engine-info request) :tokens-full)))
@@ -131,7 +122,7 @@
        invocation
        (lambda (mcp _hook)
          (list :command (executable-find "python3")
-               :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp
+               :args (list mevedel-test--acp-peer) :cwd root :mcp mcp
                :complete-prompt #'mevedel-claude-code--complete-prompt
                :normalize-outcome #'mevedel-claude-code--outcome
                :meta '((cancelResponse . ((stopReason . "cancelled")
@@ -142,15 +133,12 @@
          (cl-incf settled)
          (setq terminal-status status)
          (setf (mevedel-agent-invocation-runtime-settled-p invocation) t)))
-      (with-timeout (5 (ert-fail "Native child did not start"))
-        (while (not (string-search "waiting" (buffer-string)))
-          (accept-process-output nil .01)))
+      (mevedel-test--await 5 "Native child did not start" (string-search "waiting" (buffer-string)))
       (mevedel-agent-runtime-interrupt invocation "stop child")
       (mevedel-agent-runtime-interrupt invocation "stop child again")
       (should (= 0 settled))
       (should mevedel--turn-settlements-pending)
-      (with-timeout (5 (ert-fail "Native child interruption did not settle"))
-        (while (= 0 settled) (accept-process-output nil .01)))
+      (mevedel-test--await 5 "Native child interruption did not settle" (not (= 0 settled)))
       (should (= 1 settled))
       (should (eq 'aborted terminal-status))
       (should (= 43 (plist-get (plist-get (mevedel-engine-info invocation) :tokens-full) :input)))
@@ -165,7 +153,7 @@
              request
              (lambda (mcp _hook)
                (list :command (executable-find "python3")
-                     :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp
+                     :args (list mevedel-test--acp-peer) :cwd root :mcp mcp
                      :complete-prompt #'mevedel-claude-code--complete-prompt
                      :normalize-outcome (lambda (outcome)
                                           (setq native-outcome (mevedel-claude-code--outcome outcome)))
@@ -173,22 +161,19 @@
                                                 (usage . ((inputTokens . 41) (outputTokens . 9)
                                                           (cachedReadTokens . 0) (cachedWriteTokens . 0))))))))
              [((type . "text") (text . "wait"))] nil)))
-      (with-timeout (5 (ert-fail "Waiting peer did not start"))
-        (while (not (string-search "waiting" (buffer-string)))
-          (accept-process-output nil .01)))
+      (mevedel-test--await 5 "Waiting peer did not start" (string-search "waiting" (buffer-string)))
       (mevedel-acp-cancel connection)
       ;; Queue the native drain before a different target operation begins.
       (should (accept-process-output
                (alist-get :process (mevedel-acp-client connection)) 2 nil 0))
       (mevedel-transport-call-as-remote-operation
        (lambda ()
-         (with-timeout (5 (ert-fail "Native acknowledgement did not arrive"))
-           (while (not native-outcome) (accept-process-output nil .01)))
+         (mevedel-test--await 5 "Native acknowledgement did not arrive" native-outcome)
          (should-not (mevedel-acp-active connection))
          (should (mevedel-turn-busy-p buffer))
          (mevedel-abort buffer)))
-      (with-timeout (5 (ert-fail "Queued interruption did not settle"))
-        (while (mevedel-turn-busy-p buffer) (accept-process-output nil .01)))
+      (mevedel-test--await 5 "Queued interruption did not settle"
+        (not (mevedel-turn-busy-p buffer)))
       (should (= 41 (plist-get (plist-get (mevedel-engine-info request) :tokens-full) :input)))
       (should (= 9 (plist-get (plist-get (mevedel-engine-info request) :tokens-full) :output)))
       (should (= 1 (mevedel-session-turn-count session)))
@@ -203,10 +188,10 @@
          request
          (lambda (mcp _hook-command)
            (list :command (executable-find "python3")
-                 :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp))
+                 :args (list mevedel-test--acp-peer) :cwd root :mcp mcp))
          [((type . "text") (text . "hello"))] nil)
-        (with-timeout (5 (ert-fail "Observer failure stranded settlement"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+        (mevedel-test--await 5 "Observer failure stranded settlement"
+          (not (mevedel-turn-busy-p buffer))))
       (should (string-search "Observer broke" diagnostics))
       (should (= 1 (mevedel-session-turn-count session)))
       (should-not mevedel--current-request)))
@@ -217,10 +202,9 @@
      request
      (lambda (mcp _hook-command)
        (list :command (executable-find "python3")
-             :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp))
+             :args (list mevedel-test--acp-peer) :cwd root :mcp mcp))
      [((type . "text") (text . "crash"))] nil)
-    (with-timeout (5 (ert-fail "Crashed turn did not settle"))
-      (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+    (mevedel-test--await 5 "Crashed turn did not settle" (not (mevedel-turn-busy-p buffer)))
     (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
     (should (string-search "process"
 					 (plist-get (plist-get (mevedel-engine-info request) :error) :message)))
@@ -241,7 +225,7 @@
        request
        (lambda (mcp hook-command)
          (list :command (executable-find "python3")
-               :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp
+               :args (list mevedel-test--acp-peer) :cwd root :mcp mcp
                :tool-id-field :fixtureToolId
                :control #'mevedel-claude-code--control
                :normalize-outcome #'mevedel-claude-code--outcome
@@ -254,8 +238,7 @@
                                                     (cachedWriteTokens . 17))))))))
        (vector `((type . "text") (text . ,(concat "read:" path))))
        (list (mevedel-tool-ensure "Read")))
-      (with-timeout (5 (ert-fail "Paused Goal did not settle"))
-        (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+      (mevedel-test--await 5 "Paused Goal did not settle" (not (mevedel-turn-busy-p buffer)))
       (should (= 1 calls))
       (should (string-search "goal-paused" (buffer-string)))
       (should (eq 'paused (mevedel-goal-status (mevedel-session-goal session))))
@@ -278,10 +261,9 @@
              request
              (lambda (mcp _hook-command)
                (list :command (executable-find "python3")
-                     :args (list mevedel-acp-turn-test--peer) :cwd root :mcp mcp))
+                     :args (list mevedel-test--acp-peer) :cwd root :mcp mcp))
              [((type . "text") (text . "hello"))] nil)
-            (with-timeout (5 (ert-fail "Batched turn did not settle"))
-              (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Batched turn did not settle" (not (mevedel-turn-busy-p buffer)))
             (should (string-search "answer:hello" (buffer-string)))
             (should (string-search
                      "answer:hello"
@@ -303,15 +285,10 @@
 BODY delivers the receipt and a Read call through `connection', `content' and
 `dispatch'; the call must then succeed without failing the turn."
   (declare (indent 1) (debug t))
-  `(mevedel-engine-test--with-session
-     (let ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
-           (file (file-name-concat root "evidence.txt"))
+  `(mevedel-engine-test--with-claude-session
+     (let ((file (file-name-concat root "evidence.txt"))
            dispatch content connection tool-result)
        (write-region "evidence" nil file nil 'silent)
-       (mevedel-claude-code-register)
-       (mevedel-model-set-session-provider
-        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
        (setq-local gptel-system-prompt "Order fixture"
                    gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
        (advice-add 'mevedel-mcp-start :around
@@ -330,17 +307,13 @@ BODY delivers the receipt and a Read call through `connection', `content' and
              (mevedel-session-ensure-reminder session (mevedel-reminders-make-pending-events))
              (mevedel--insert-user-turn "wait")
              (mevedel--send-request "wait")
-             (with-timeout (5 (ert-fail "Turn did not start"))
-               (while (not (string-search "waiting" (buffer-string)))
-                 (accept-process-output nil 0.01)))
+             (mevedel-test--await 5 "Turn did not start" (string-search "waiting" (buffer-string)))
              ,@body
-             (with-timeout (5 (ert-fail "Tool call was not answered"))
-               (while (not tool-result) (accept-process-output nil 0.01)))
+             (mevedel-test--await 5 "Tool call was not answered" tool-result)
              (should (eq :json-false (plist-get tool-result :isError)))
              (should-not (plist-get (mevedel-engine-info request) :error))
              (mevedel-abort buffer)
-             (with-timeout (5 (ert-fail "Turn did not settle"))
-               (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+             (mevedel-test--await 5 "Turn did not settle" (not (mevedel-turn-busy-p buffer))))
          (advice-remove 'mevedel-mcp-start 'mevedel-acp-turn-test--capture)
          (advice-remove 'mevedel-acp-prompt 'mevedel-acp-turn-test--capture)))))
 

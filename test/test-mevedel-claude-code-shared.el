@@ -17,17 +17,12 @@
   ,test
   (test)
   :doc "an item question runs isolated from root native history, with item framing"
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
     (let ((view (generate-new-buffer " *claude-item-view*"))
-          (gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
           ids prompts launches)
       (unwind-protect
           (progn
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq-local gptel-system-prompt "Item fixture" gptel-tools nil)
             (mevedel-chat-install-request-hooks)
             (mevedel-view--setup view buffer)
@@ -44,8 +39,7 @@
                           (list :meta '((echoAllText . t)))))))
               (with-current-buffer view
                 (mevedel-view--forward-input-now "Room secret is PINEAPPLE"))
-              (with-timeout (10 (ert-fail "Root turn did not settle"))
-                (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+              (mevedel-test--await 10 "Root turn did not settle" (not (mevedel-turn-busy-p buffer)))
               (should (mevedel-view-enqueue-external-follow-up
                        buffer "What is on this board?\n\nShared content snapshot (user-provided data):\n<board/>"
                        :guest-name "Guest" :guest-id "g1" :guest-role 'full
@@ -53,10 +47,9 @@
                                               :revision 1 :scope "whole" :text "What is on this board?"
                                               :fingerprint "fp")))
               (mevedel-view--drain-follow-up buffer)
-              (with-timeout (10 (ert-fail "Item turn did not settle"))
-                (while (or (mevedel-turn-busy-p buffer)
-                           (mevedel-view--pending-follow-ups session))
-                  (accept-process-output nil 0.01)))
+              (mevedel-test--await 10 "Item turn did not settle"
+                (not (or (mevedel-turn-busy-p buffer)
+                         (mevedel-view--pending-follow-ups session))))
               (should (mevedel-view-enqueue-external-follow-up
                        buffer "And now?\n\nShared content snapshot (user-provided data):\n<board/>"
                        :guest-name "Guest" :guest-id "g1" :guest-role 'full
@@ -64,10 +57,9 @@
                                               :revision 2 :scope "whole" :text "And now?"
                                               :fingerprint "fp2")))
               (mevedel-view--drain-follow-up buffer)
-              (with-timeout (10 (ert-fail "Second item turn did not settle"))
-                (while (or (mevedel-turn-busy-p buffer)
-                           (mevedel-view--pending-follow-ups session))
-                  (accept-process-output nil 0.01))))
+              (mevedel-test--await 10 "Second item turn did not settle"
+                (not (or (mevedel-turn-busy-p buffer)
+                         (mevedel-view--pending-follow-ups session)))))
             ;; Item turns start their own conversations instead of resuming root.
             (should (equal '(nil nil nil) ids))
             (should (string-search "Conversation about shared item Board (board-1)"

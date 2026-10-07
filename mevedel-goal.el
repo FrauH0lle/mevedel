@@ -848,8 +848,7 @@ a `:commit' that records delivery once the injector reaches the payload."
 In an agent's buffer this is the owner its invocation inherited; otherwise it
 is BUFFER's running root request when that request is charged to a Goal."
   (with-current-buffer (or buffer (current-buffer))
-    (if-let* ((invocation (and (boundp 'mevedel--agent-invocation)
-                               mevedel--agent-invocation)))
+    (if-let* ((invocation mevedel--agent-invocation))
         (mevedel-agent-invocation-goal-owner invocation)
       (when-let* ((request (and (boundp 'mevedel--current-request)
                                 mevedel--current-request))

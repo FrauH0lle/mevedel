@@ -451,7 +451,7 @@ Do not acknowledge or consume the captured context until the returned commits."
   (when-let* ((buffer (plist-get (mevedel-engine-info owner) :buffer))
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
-      (let* ((invocation (bound-and-true-p mevedel--agent-invocation))
+      (let* ((invocation mevedel--agent-invocation)
              (context (or invocation (bound-and-true-p mevedel--session)))
              (mevedel-reminders--current-chat-buffer buffer))
         (when context
@@ -540,8 +540,7 @@ the current chat buffer has no request-local agent roster yet."
 (defun mevedel-reminders-turn-owner (&optional buffer)
   "Return the active model-turn owner for BUFFER."
   (with-current-buffer (or buffer (current-buffer))
-    (or (and (boundp 'mevedel--agent-invocation)
-             (mevedel-agent-invocation-p mevedel--agent-invocation)
+    (or (and (mevedel-agent-invocation-p mevedel--agent-invocation)
              (not (mevedel-agent-invocation-runtime-settled-p
                    mevedel--agent-invocation))
              mevedel--agent-invocation)
@@ -780,8 +779,7 @@ FSM is mandatory for the same arity-dispatch reason as
               ((buffer-live-p buffer))
               (invocation
                (with-current-buffer buffer
-                 (and (boundp 'mevedel--agent-invocation)
-                      (mevedel-agent-invocation-p mevedel--agent-invocation)
+                 (and (mevedel-agent-invocation-p mevedel--agent-invocation)
                       mevedel--agent-invocation))))
     (let ((mevedel-reminders--current-chat-buffer buffer))
       (let ((staged (mevedel-reminders-collect fsm)))

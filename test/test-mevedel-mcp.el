@@ -182,8 +182,7 @@
           (when (eql 1 (plist-get args :n))
             ;; A nested wait re-enters the filter with the next message.
             (funcall trigger)
-            (with-timeout (5 (ert-fail "Nested message was not read"))
-              (while (not (memql 2 seen)) (accept-process-output nil 0.01))))
+            (mevedel-test--await 5 "Nested message was not read" (memql 2 seen)))
           (funcall complete '(:content []))
           #'ignore)
       (initialize)
@@ -193,10 +192,9 @@
                         (send '(:jsonrpc "2.0" :id 11 :method "tools/call"
                                 :params (:name "T" :arguments (:n 2))))))
         (process-send-string client (substring first 0 20))
-        (with-timeout (5 (ert-fail "Partial line was not read"))
-          (while (not (process-get (car (mevedel-mcp-clients server))
-                                   'mevedel-mcp-partial))
-            (accept-process-output nil 0.01)))
+        (mevedel-test--await 5 "Partial line was not read"
+          (process-get (car (mevedel-mcp-clients server))
+                       'mevedel-mcp-partial))
         (process-send-string client (concat (substring first 20) "\n")))
       (should-not (plist-get (response 11) :error))
       (should-not (plist-get (response 10) :error))
@@ -209,8 +207,7 @@
         (lambda (_name _args _metadata complete) (setq finish complete) #'ignore)
       (initialize)
       (send '(:jsonrpc "2.0" :id 2 :method "tools/call" :params (:name "T")))
-      (with-timeout (5 (ert-fail "Call was not dispatched"))
-        (while (not finish) (accept-process-output nil 0.01)))
+      (mevedel-test--await 5 "Call was not dispatched" finish)
       (funcall finish (list :content (vector (list :type "text" :text "a\377b"))))
       (should (= -32603 (plist-get (plist-get (response 2) :error) :code))))))
 
@@ -340,8 +337,8 @@
                                            :command (list "sh" "-c" command)))
                        (process-send-string process "{\"hook_event_name\":\"PostToolBatch\"}\n")
                        (process-send-eof process)
-                       (with-timeout (5 (ert-fail "Hook bridge did not return"))
-                         (while (process-live-p process) (accept-process-output nil 0.01)))
+                       (mevedel-test--await 5 "Hook bridge did not return"
+                         (not (process-live-p process)))
                        (should (= 0 (process-exit-status process)))
                        (with-current-buffer output
                          (json-parse-string (buffer-string) :object-type 'plist
@@ -373,11 +370,9 @@
                   :service (aref (alist-get 'args (mevedel-mcp-configuration server)) 2)))
            (process-send-string
             connection "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"mevedel/control\",\"params\":{}}\n")
-           (with-timeout (5 (ert-fail "Control was not received"))
-             (while (not answer) (accept-process-output nil 0.01)))
+           (mevedel-test--await 5 "Control was not received" answer)
            (delete-process connection)
-           (with-timeout (5 (ert-fail "Control was not cancelled"))
-             (while (= 0 cancelled) (accept-process-output nil 0.01)))
+           (mevedel-test--await 5 "Control was not cancelled" (not (= 0 cancelled)))
            (funcall answer '(:continue t))
            (should (= 1 cancelled)))
        (when (process-live-p connection) (delete-process connection))

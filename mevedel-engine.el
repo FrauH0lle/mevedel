@@ -97,7 +97,7 @@ Continuation must reconcile divergence instead of resuming hidden history."
   (when (and (not inhibit-read-only)
              (bound-and-true-p mevedel--session)
              (mevedel-session-external-conversations mevedel--session))
-    (let* ((child (bound-and-true-p mevedel--agent-invocation))
+    (let* ((child mevedel--agent-invocation)
            (scope (if child (mevedel-agent-invocation-require-path child) "root"))
            (record (alist-get scope (mevedel-session-external-conversations mevedel--session)
                               nil nil #'equal)))

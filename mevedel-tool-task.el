@@ -143,8 +143,7 @@ Accepts nil, a vector, or a list.  Signals an error on non-integers."
 
 (defun mevedel-tool-task--current-agent-owner (&optional session)
   "Return the current agent's canonical task owner, or nil at root."
-  (and (boundp 'mevedel--agent-invocation)
-       (mevedel-agent-invocation-p mevedel--agent-invocation)
+  (and (mevedel-agent-invocation-p mevedel--agent-invocation)
        (mevedel-task-normalize-owner
         (mevedel-agent-invocation-require-path mevedel--agent-invocation)
         (and session (mevedel-session-agent-registry session)))))

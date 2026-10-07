@@ -146,9 +146,8 @@
                    (setq-local gptel-backend backend gptel-model 'gpt-5.5))
                  (with-current-buffer view-buf (mevedel-view-run-invocation "usage" ""))
                  (setq report (buffer-local-value 'mevedel-subscription-usage--buffer data-buf))
-                 (with-timeout (5 (ert-fail "Usage report did not settle"))
-                   (while (with-current-buffer report mevedel-subscription-usage--cancel)
-                     (accept-process-output nil 0.01)))
+                 (mevedel-test--await 5 "Usage report did not settle"
+                   (not (with-current-buffer report mevedel-subscription-usage--cancel)))
                  (with-current-buffer report
                    (should (string-match-p "Account: chosen" (buffer-string)))
                    (should (string-match-p "Plan: plus" (buffer-string)))

@@ -556,8 +556,7 @@ the Bash tool path because Bash had its own flattened resolver."
              (invocation
               (if permission-context
                   (plist-get permission-context :invocation)
-                (and (boundp 'mevedel--agent-invocation)
-                     mevedel--agent-invocation)))
+                mevedel--agent-invocation))
              (invocation-rules
               (and invocation
                    (mevedel-agent-invocation-skill-permission-rules

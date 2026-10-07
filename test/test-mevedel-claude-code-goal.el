@@ -14,14 +14,10 @@
   (dolist (case '((100 nil 0 budget-limited)
                   (nil nil 0 active)
                   (100 ((inputTokens . 10) (cachedWriteTokens . 0)) 10 budget-limited)))
-    (mevedel-engine-test--with-session
-      (let* ((gptel--known-backends nil)
-             (mevedel-claude-code-directory (file-name-concat root "claude"))
-             (mevedel-goal-token-budget (nth 0 case))
+    (mevedel-engine-test--with-claude-session
+      (let* ((mevedel-goal-token-budget (nth 0 case))
              (goal (mevedel-goal-create "Read a large input and complete later" session))
              (input (make-string 40000 ?x)))
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
         (setq-local gptel-system-prompt "Goal fixture" gptel-tools nil)
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                    (mevedel-engine-test--claude-launch
@@ -32,8 +28,7 @@
                   ((symbol-function 'mevedel-goal--schedule-continuation) #'ignore))
           (mevedel--insert-user-turn input)
           (mevedel--send-request input)
-          (with-timeout (5 (ert-fail "Goal turn did not finish"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+          (mevedel-test--await 5 "Goal turn did not finish" (not (mevedel-turn-busy-p buffer))))
         (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
         (should-not (plist-get (mevedel-engine-info request) :mevedel-goal-estimated-tokens))
         (should (= (nth 2 case) (mevedel-goal-tokens-used goal)))
@@ -53,13 +48,9 @@
           (should (eq 'active (mevedel-goal-status goal))))))))
 
 (mevedel-deftest mevedel--send-request/claude-goal-startup-failure (:quiet t)
-  (mevedel-engine-test--with-session
-    (let* ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
-           (mevedel-goal-token-budget 100)
+  (mevedel-engine-test--with-claude-session
+    (let* ((mevedel-goal-token-budget 100)
            (goal (mevedel-goal-create "Continue after login" session)))
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Goal fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                  (mevedel-engine-test--claude-launch
@@ -70,18 +61,15 @@
                 ((symbol-function 'mevedel-goal--schedule-continuation) #'ignore))
         (mevedel--insert-user-turn "Continue")
         (mevedel--send-request "Continue")
-        (with-timeout (5 (ert-fail "Startup failure did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+        (mevedel-test--await 5 "Startup failure did not settle" (not (mevedel-turn-busy-p buffer))))
       (should (= 0 (mevedel-goal-tokens-used goal)))
       (should-not (mevedel-goal-tokens-incomplete-p goal))
       (should (eq 'paused (mevedel-goal-status goal)))
       (should (string-search "Subscription login required" (mevedel-goal-reason goal))))))
 
 (mevedel-deftest mevedel--send-request/claude-goal-budget (:quiet t)
-  (mevedel-engine-test--with-session
-    (let* ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
-           (mevedel-goal-token-budget 100)
+  (mevedel-engine-test--with-claude-session
+    (let* ((mevedel-goal-token-budget 100)
            (file (file-name-concat root "evidence.txt"))
            (goal (mevedel-goal-create "Read the two samples and finish" session))
            (before
@@ -120,9 +108,6 @@
                (event . ((type . "message_delta") (usage . ((output_tokens . 25)))))))])
            crossings readings)
       (write-region "Evidence" nil file nil 'silent)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Goal fixture"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -143,8 +128,8 @@
                                                                (cachedWriteTokens . 50) (cachedReadTokens . 1000)))))))))))
         (mevedel--insert-user-turn "Carry out the Goal")
         (mevedel--send-request "Carry out the Goal")
-        (with-timeout (5 (ert-fail "Budgeted native turn did not settle"))
-          (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+        (mevedel-test--await 5 "Budgeted native turn did not settle"
+          (not (mevedel-turn-busy-p buffer))))
       (ert-info ((format "%S %s" (plist-get (mevedel-engine-info request) :error) mevedel-test--captured))
         (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome))))
       (should (string-search "50%" (or (cadr crossings) "")))
@@ -158,11 +143,9 @@
       (should (eq 'budget-limited (mevedel-goal-status goal))))))
 
 (mevedel-deftest mevedel-goal-start/claude-continuation (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
     (let* ((view (generate-new-buffer " *claude-goal-composer*"))
-           (gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
            (file (file-name-concat root "evidence.txt"))
            (launches 0) prompts decisions goal
            (mevedel-post-tool-use-functions
@@ -178,9 +161,6 @@
       (unwind-protect
           (progn
             (write-region "Evidence" nil file nil 'silent)
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq-local gptel-system-prompt "Goal continuation fixture"
                         gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
             (mevedel-chat-install-request-hooks)
@@ -206,9 +186,8 @@
                                                            (usage . ((inputTokens . 10) (outputTokens . 5)
                                                                      (cachedWriteTokens . 0)))))))))))
               (setq goal (mevedel-goal-start "Continue until the user pauses"))
-              (with-timeout (8 (ert-fail "Automatic native continuation did not pause"))
-                (while (or (< (mevedel-goal-turns-run goal) 2) (mevedel-turn-busy-p buffer))
-                  (accept-process-output nil 0.01)))
+              (mevedel-test--await 8 "Automatic native continuation did not pause"
+                (not (or (< (mevedel-goal-turns-run goal) 2) (mevedel-turn-busy-p buffer))))
               (should (= 2 launches))
               (should (eq 'paused (mevedel-goal-status goal)))
               (should (equal "Check the queued priority first"
@@ -216,9 +195,8 @@
               (should (eq :json-false (plist-get (car decisions) :continue)))
               (should (string-search "goal-paused" (plist-get (car decisions) :stopReason)))
               (mevedel-goal-resume)
-              (with-timeout (8 (ert-fail "Resumed native Goal did not deliver queued input"))
-                (while (or (< (mevedel-goal-turns-run goal) 3) (mevedel-turn-busy-p buffer))
-                  (accept-process-output nil 0.01)))
+              (mevedel-test--await 8 "Resumed native Goal did not deliver queued input"
+                (not (or (< (mevedel-goal-turns-run goal) 3) (mevedel-turn-busy-p buffer))))
               (should (= 3 launches))
               (should (eq 'paused (mevedel-goal-status goal)))
               (should-not (mevedel-session-pending-follow-ups session))
@@ -230,18 +208,13 @@
         (when (buffer-live-p view) (kill-buffer view))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-goal-usage (:quiet t)
-  (mevedel-engine-test--with-session
-    (let* ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
-           (mevedel-goal-token-budget 100)
+  (mevedel-engine-test--with-claude-session
+    (let* ((mevedel-goal-token-budget 100)
            (goal (mevedel-goal-create "Investigate with a retained child" session))
            (file (file-name-concat root "evidence.txt"))
            (launches 0) record invocation warnings readings)
       (write-region "Evidence" nil file nil 'silent)
       (mevedel-tool-ensure "Read")
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Goal parent fixture" gptel-tools nil)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -269,9 +242,8 @@
                                                            (usage . ((outputTokens . 25))))))))))))
             (mevedel--insert-user-turn "wait")
             (mevedel--send-request "wait")
-            (with-timeout (5 (ert-fail "Root subscription request did not start"))
-              (while (not (string-search "waiting" (buffer-string)))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Root subscription request did not start"
+              (string-search "waiting" (buffer-string)))
             (dotimes (phase 2)
               (if (zerop phase)
                   (mevedel-agent-control-spawn
@@ -284,9 +256,8 @@
                 (setq invocation (mevedel-agent-record-invocation record)))
               (ert-info ((format "Child admission: %s" mevedel-test--captured))
                 (should (mevedel-agent-invocation-p invocation)))
-              (with-timeout (8 (ert-fail "Goal child did not settle"))
-                (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                  (accept-process-output nil 0.01)))
+              (mevedel-test--await 8 "Goal child did not settle"
+                (mevedel-agent-invocation-runtime-settled-p invocation))
               (should (eq 'completed (mevedel-agent-record-settled-outcome record)))
               (should (= (* 75 (1+ phase)) (mevedel-goal-tokens-used goal)))
               (should (= 0 (mevedel-goal-turns-run goal))))
@@ -295,23 +266,17 @@
             (should (string-search "whole token budget" (or (car warnings) "")))
             (should (mevedel-turn-busy-p buffer))
             (mevedel-abort buffer)
-            (with-timeout (5 (ert-fail "Goal parent did not abort"))
-              (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+            (mevedel-test--await 5 "Goal parent did not abort" (not (mevedel-turn-busy-p buffer))))
         (when (mevedel-turn-busy-p buffer) (mevedel-abort buffer))
         (when (and record (buffer-live-p (mevedel-agent-record-conversation-buffer record)))
           (kill-buffer (mevedel-agent-record-conversation-buffer record)))))))
 
 (mevedel-deftest mevedel-goal-start/claude-verification (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
-    (let* ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude"))
-           (mevedel-model-workloads '((goal-review :provider "Claude Code:opus")))
+    (let* ((mevedel-model-workloads '((goal-review :provider "Claude Code:opus")))
            (roots 0) (verifiers 0) decisions verifier-prompts goal)
       (mevedel-tools-register)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
       (setq-local gptel-system-prompt "Completion fixture"
                   gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "UpdateGoal"))))
       (mevedel-chat-install-request-hooks)
@@ -347,14 +312,13 @@
                                                          (args . ((status . "complete")
                                                                   (summary . "Untrusted implementer assertion"))))]]))))))))))
         (setq goal (mevedel-goal-start "Implement the independently checked fixture"))
-        (with-timeout (12 (ert-fail (format "Native completion did not settle: roots=%d verifiers=%d status=%s reason=%s transcript=%s diagnostics=%s"
-                                          roots verifiers (mevedel-goal-status goal)
-                                          (mevedel-goal-reason goal)
-                                          (buffer-substring-no-properties (max (point-min) (- (point-max) 1800)) (point-max))
-                                          mevedel-test--captured)))
-          (while (or (not (eq 'complete (mevedel-goal-status goal)))
-                     (mevedel-turn-busy-p buffer))
-            (accept-process-output nil 0.01)))
+        (mevedel-test--await 12 (format "Native completion did not settle: roots=%d verifiers=%d status=%s reason=%s transcript=%s diagnostics=%s"
+                                      roots verifiers (mevedel-goal-status goal)
+                                      (mevedel-goal-reason goal)
+                                      (buffer-substring-no-properties (max (point-min) (- (point-max) 1800)) (point-max))
+                                      mevedel-test--captured)
+          (and (eq 'complete (mevedel-goal-status goal))
+               (not (mevedel-turn-busy-p buffer))))
         (should (= 2 roots))
         (should (= 2 verifiers))
         (should (= 2 (mevedel-goal-turns-run goal)))

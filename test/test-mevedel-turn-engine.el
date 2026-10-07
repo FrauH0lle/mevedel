@@ -15,8 +15,8 @@
     (insert "External assistant response.\n")
     (mevedel--complete-turn request)
     (should (mevedel-turn-busy-p buffer))
-    (with-timeout (5 (ert-fail "Request settlement did not release admission"))
-      (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+    (mevedel-test--await 5 "Request settlement did not release admission"
+      (not (mevedel-turn-busy-p buffer)))
     (should (= 1 (mevedel-session-turn-count session)))
     (should-not mevedel--current-request)
     (should (eq 'idle (mevedel-session-agent-root-activity session)))

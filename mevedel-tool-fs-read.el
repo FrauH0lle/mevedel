@@ -327,7 +327,7 @@ transcripts, and ToolCall exposes only its final value to the model, so
 neither may reuse or poison the parent conversation's Read history."
   (and (bound-and-true-p mevedel--session)
        (not mevedel-tool-fs-read--resource-address)
-       (not (bound-and-true-p mevedel--agent-invocation))
+       (not mevedel--agent-invocation)
        (not (eq (bound-and-true-p mevedel-pipeline--active-call-source) 'ptc))))
 
 (defconst mevedel-tool-fs-read--blocked-device-paths
@@ -1576,7 +1576,7 @@ Saved history returns a canceller while preparation continues asynchronously."
 
 (defun mevedel-tool-fs-read--workspace-instruction-owner ()
   "Return the canonical conversation owner for the current Read."
-  (or (and (bound-and-true-p mevedel--agent-invocation)
+  (or (and mevedel--agent-invocation
            (mevedel-agent-invocation-path mevedel--agent-invocation))
       "/root"))
 
@@ -1651,7 +1651,7 @@ AGENTS.local.md after AGENTS.md.  Do not acknowledge them until delivery."
            (mapcar #'file-truename
                    (mevedel-system-workspace-config-files workspace cwd)))
           (owner (mevedel-tool-fs-read--workspace-instruction-owner))
-          (scope (if (and (not (bound-and-true-p mevedel--agent-invocation))
+          (scope (if (and (not mevedel--agent-invocation)
                           (bound-and-true-p mevedel--current-request)
                           (mevedel-request-directive-uuid mevedel--current-request))
                      mevedel--current-request

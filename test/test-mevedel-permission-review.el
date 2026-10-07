@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'mevedel-permission-review)
+(require 'mevedel-pipeline)
 (require 'mevedel-tool-exec-permission)
 (require 'mevedel-tool-patch)
 (require 'mevedel-tool-permission)

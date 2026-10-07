@@ -17,7 +17,9 @@
          (ignore buffer)
          (setq-local mevedel--session session gptel-backend backend
                      gptel-model (car (gptel-backend-models backend)))
-         (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore))
+         ;; Cases that assert echo text capture `message' themselves.
+         (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)
+                   ((symbol-function 'message) #'ignore))
            ,@body)))))
 
 (mevedel-deftest mevedel-readiness-changed ()
@@ -67,15 +69,14 @@
       (should-not mevedel-readiness--claude)))
   :doc "a known failure is informational and a successful check resumes"
   (test-mevedel-readiness--with-claude
-    (let ((peer (expand-file-name "test/fixtures/acp-agent.py" default-directory))
-          messages)
+    (let (messages)
       (mevedel-readiness-record nil "Install Claude Code and run `claude auth login'" t)
       (should-not (mevedel-recovery-blocker session))
       (should (equal "Install Claude Code and run `claude auth login'"
                      (plist-get (car (mevedel-session-recovery-issues session)) :message)))
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
 		 (lambda (&rest _) (list :command (executable-find "python3")
-					 :args (list peer) :cwd temporary-file-directory)))
+					 :args (list mevedel-test--acp-peer) :cwd temporary-file-directory)))
                 ((symbol-function 'message)
                  (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
         ;; The next send is the retry; only an explicit check probes.
@@ -83,9 +84,8 @@
         (should (eq 'failed (plist-get mevedel-readiness--claude :state)))
         (mevedel-readiness-check)
         (should (eq 'checking (plist-get mevedel-readiness--claude :state)))
-	(with-timeout (5 (ert-fail "Native readiness did not settle"))
-	  (while (eq 'checking (plist-get mevedel-readiness--claude :state))
-	    (accept-process-output nil 0.01)))
+	(mevedel-test--await 5 "Native readiness did not settle"
+          (not (eq 'checking (plist-get mevedel-readiness--claude :state))))
 	(should (eq 'ready (plist-get mevedel-readiness--claude :state)))
         (should-not (mevedel-recovery-blocker session))
         (should (cl-find-if (lambda (text) (string-search "Claude is ready" text))

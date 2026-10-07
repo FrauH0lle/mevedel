@@ -2253,8 +2253,7 @@ decision plist."
                       (and (boundp 'mevedel--current-request)
                            mevedel--current-request)))
          (invocation (or invocation
-                         (and (boundp 'mevedel--agent-invocation)
-                              mevedel--agent-invocation)))
+                         mevedel--agent-invocation))
          (dispatch-buffer (current-buffer)))
     (if (null event)
         (funcall callback nil)
@@ -2418,8 +2417,7 @@ display the dry-run result."
                       (and (boundp 'mevedel--current-request)
                            mevedel--current-request)))
          (invocation (or invocation
-                         (and (boundp 'mevedel--agent-invocation)
-                              mevedel--agent-invocation)))
+                         mevedel--agent-invocation))
          (payload (plist-put event-plist :hook-event-name event))
          (rules (mevedel-hooks-effective-rules
                  session workspace request invocation))

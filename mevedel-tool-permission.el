@@ -526,7 +526,7 @@ permission log with REASON."
              (with-current-buffer buffer
                (when-let* ((session (bound-and-true-p mevedel--session)))
                  (let* ((request (bound-and-true-p mevedel--current-request))
-                        (invocation (bound-and-true-p mevedel--agent-invocation))
+                        (invocation mevedel--agent-invocation)
                         (workspace (mevedel-session-workspace session))
                         (context (mevedel-permission--invocation-context
                                   :tool-name tool-name :args args

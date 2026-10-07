@@ -314,7 +314,7 @@ starts no inference, and returns the sealed capture descriptors."
                (or (not (mevedel-session-codec-portable-authority-p session))
                    (mevedel-session-durability-lease-owned-p session)))
       (with-current-buffer buffer
-        (unless (or (bound-and-true-p mevedel--agent-invocation)
+        (unless (or mevedel--agent-invocation
                     (bound-and-true-p mevedel-session--read-only-mode))
           (mevedel-session-artifacts-assert-mutation-authority session buffer)
           (let ((seal (lambda () (mevedel-journal-capture--seal-owned session trigger captures))))
@@ -429,7 +429,7 @@ settlement.  This performs no inference and does not seal the capture."
              (not (mevedel-session-publication-active-p session))
              (null (mevedel-session-publication-queue session)))
     (with-current-buffer buffer
-      (unless (or (bound-and-true-p mevedel--agent-invocation)
+      (unless (or mevedel--agent-invocation
                   (bound-and-true-p mevedel-session--read-only-mode))
         ;; The assertion and the reservation share one clock reading.
         (mevedel-session-durability-with-transaction

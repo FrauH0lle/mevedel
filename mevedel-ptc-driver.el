@@ -337,7 +337,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
          (checkpoint-session
           (and session
                (mevedel-session-execution-target session)
-               (not (bound-and-true-p mevedel--agent-invocation))
+               (not mevedel--agent-invocation)
                session))
          (telemetry-span
           (when session

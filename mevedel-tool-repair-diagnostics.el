@@ -130,8 +130,7 @@
 (defun mevedel-tool-repair--current-session ()
   "Return the top-level session associated with the current buffer."
   (or (and (boundp 'mevedel--session) mevedel--session)
-      (and (boundp 'mevedel--agent-invocation)
-           (fboundp 'mevedel-agent-invocation-p)
+      (and (fboundp 'mevedel-agent-invocation-p)
            (mevedel-agent-invocation-p mevedel--agent-invocation)
            (mevedel-agent-invocation-parent-session
             mevedel--agent-invocation))))

@@ -13,13 +13,10 @@
 (require 'mevedel-init)
 
 (mevedel-deftest mevedel-view-send/claude-busy (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil) view)
+  (mevedel-engine-test--with-claude-session
+    (let (view)
       (unwind-protect
           (progn
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setf (mevedel-engine-info request) '(:external-history t))
             (setq view (mevedel-view--ensure buffer))
             (with-current-buffer view
@@ -39,18 +36,13 @@
 
 (mevedel-deftest gptel-send/claude-session (:quiet t)
   (dolist (route '(raw paired init))
-    (mevedel-engine-test--with-session
+    (mevedel-engine-test--with-claude-session
       (mevedel-request-end)
-      (let ((gptel--known-backends nil)
-            (mevedel-claude-code-directory (file-name-concat root "claude"))
-            (installed (advice-member-p #'mevedel-skills--gptel-send-advice
+      (let ((installed (advice-member-p #'mevedel-skills--gptel-send-advice
                                         'gptel-send))
             view)
         (unwind-protect
             (progn
-              (mevedel-claude-code-register)
-              (mevedel-model-set-session-provider
-               session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
               (setq-local gptel-system-prompt "Raw send fixture" gptel-tools nil)
               (when (eq route 'paired)
                 (setq view (mevedel-view--ensure buffer)))
@@ -66,9 +58,7 @@
                     (mevedel-init "raw-init-evidence")
                   (mevedel--insert-user-turn "raw-send-evidence")
                   (gptel-send))
-                (with-timeout (5 (ert-fail "Raw send did not settle"))
-                  (while (mevedel-turn-busy-p buffer)
-                    (accept-process-output nil 0.01))))
+                (mevedel-test--await 5 "Raw send did not settle" (not (mevedel-turn-busy-p buffer))))
               (should (string-search "answer:" (buffer-string)))
               (should (string-search
                        (if (eq route 'init) "raw-init-evidence" "raw-send-evidence")
@@ -83,14 +73,10 @@
 
 (mevedel-deftest gptel-send/claude-admission (:quiet t)
   (dolist (state '(busy read-only steering))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (installed (advice-member-p #'mevedel-skills--gptel-send-advice 'gptel-send)))
+    (mevedel-engine-test--with-claude-session
+      (let ((installed (advice-member-p #'mevedel-skills--gptel-send-advice 'gptel-send)))
         (unwind-protect
             (progn
-              (mevedel-claude-code-register)
-              (mevedel-model-set-session-provider
-               session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
               (when (eq state 'read-only)
                 (mevedel-request-end)
                 (setq-local mevedel-session--read-only-mode t))
@@ -118,11 +104,9 @@
 (mevedel-deftest mevedel-view--forward-input-now/claude-image (:quiet t)
 		 (pcase-dolist (`(,acknowledgement ,attachment) '((t mention) (:false mention) ("image-mismatch" mention)
 								  (t context) (t both)))
-		   (mevedel-engine-test--with-session
+		   (mevedel-engine-test--with-claude-session
 		    (mevedel-request-end)
 		    (let ((view (generate-new-buffer " *claude-image-composer*"))
-			  (gptel--known-backends nil)
-			  (mevedel-claude-code-directory (file-name-concat root "claude"))
 			  (file (file-name-concat root "sample.png"))
 			  (data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII="))
 		      (unwind-protect
@@ -132,9 +116,6 @@
 			      (insert (base64-decode-string data))
 			      (let ((coding-system-for-write 'no-conversion))
 				(write-region (point-min) (point-max) file nil 'silent)))
-			    (mevedel-claude-code-register)
-			    (mevedel-model-set-session-provider
-			     session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
 			    (setq-local gptel-system-prompt "Image fixture" gptel-tools nil)
 			    (when (memq attachment '(context both))
 			      (setq-local gptel-use-context t gptel-context (list (list file :mime "image/png"))))
@@ -151,8 +132,8 @@
 				   (format "Describe @file:{%s}" file)))
 				(goto-char (mevedel-view--input-start))
 				(insert "> Keep the next draft\nwith two lines"))
-			      (with-timeout (5 (ert-fail "Image request did not settle"))
-				(while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+			      (mevedel-test--await 5 "Image request did not settle"
+                                (not (mevedel-turn-busy-p buffer))))
 			    (should (string-search "Image accepted" (buffer-string)))
 			    (should (eq (if (eq acknowledgement t) 'ready 'uncertain)
 					(plist-get (alist-get "root" (mevedel-session-external-conversations session)
@@ -166,10 +147,8 @@
 			(when (buffer-live-p view) (kill-buffer view)))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-image (:quiet t)
-		 (mevedel-engine-test--with-session
-		  (let ((gptel--known-backends nil)
-			(mevedel-claude-code-directory (file-name-concat root "claude"))
-			(file (file-name-concat root "sample.png"))
+		 (mevedel-engine-test--with-claude-session
+		  (let ((file (file-name-concat root "sample.png"))
 			(data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=")
 			record invocation)
 		    (with-temp-buffer
@@ -177,9 +156,6 @@
 		      (insert (base64-decode-string data))
 		      (let ((coding-system-for-write 'no-conversion))
 			(write-region (point-min) (point-max) file nil 'silent)))
-		    (mevedel-claude-code-register)
-		    (mevedel-model-set-session-provider
-		     session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
 		    (unwind-protect
 			(cl-letf (((symbol-function 'mevedel-claude-code-launch)
 				   (mevedel-engine-test--claude-launch
@@ -196,9 +172,8 @@
 				   :on-invocation (lambda (value) (setq invocation value)))
 				(mevedel-agent-control-followup session "/root/image" prompt)
 				(setq invocation (mevedel-agent-record-invocation record))))
-			    (with-timeout (5 (ert-fail "Image child did not settle"))
-			      (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-				(accept-process-output nil 0.01)))
+			    (mevedel-test--await 5 "Image child did not settle"
+                              (mevedel-agent-invocation-runtime-settled-p invocation))
 			    (should (eq 'completed (mevedel-agent-record-settled-outcome record)))
 			    (should (string-suffix-p "Image accepted" (mevedel-agent-record-settled-result record)))
 			    (should (= 0 (hash-table-count (mevedel-session-mentions-shown session))))))
@@ -206,14 +181,12 @@
 			(kill-buffer (mevedel-agent-record-conversation-buffer record)))))))
 
 (mevedel-deftest mevedel--start-directive-discussion/claude-image (:quiet t)
-		 (mevedel-engine-test--with-session
+		 (mevedel-engine-test--with-claude-session
 		  (mevedel-request-end)
-		  (let* ((gptel--known-backends nil)
-			 (mevedel-show-chat-buffer nil)
+		  (let* ((mevedel-show-chat-buffer nil)
 			 (inhibit-interaction t)
 			 (gptel--known-presets (copy-tree gptel--known-presets))
 			 (mevedel-preset--registry (copy-tree mevedel-preset--registry))
-			 (mevedel-claude-code-directory (file-name-concat root "claude"))
 			 (source (find-file-noselect (file-name-concat root "subject.txt")))
 			 (file (file-name-concat root "sample.png"))
 			 (data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=")
@@ -227,9 +200,6 @@
 			    (insert (base64-decode-string data))
 			    (let ((coding-system-for-write 'no-conversion))
 			      (write-region (point-min) (point-max) file nil 'silent)))
-			  (mevedel-claude-code-register)
-			  (mevedel-model-set-session-provider
-			   session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
 			  (setq-local gptel-system-prompt "Describe the image" gptel-tools nil)
 			  (with-current-buffer source
 			    (setq-local mevedel--workspace workspace)
@@ -247,8 +217,8 @@
 			    (with-current-buffer source
 			      (mevedel--start-directive-discussion
 			       directive (lambda (err _owner) (should-not err) (setq done t))))
-			    (with-timeout (5 (ert-fail "Image directive did not settle"))
-			      (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01))))
+			    (mevedel-test--await 5 "Image directive did not settle"
+                              (not (mevedel-turn-busy-p buffer))))
 			  (should done)
 			  (should (string-search "Image accepted"
 						 (mevedel-directive-discussion-turn-result

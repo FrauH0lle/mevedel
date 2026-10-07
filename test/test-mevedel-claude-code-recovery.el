@@ -61,18 +61,13 @@
     (should (equal "Startup failed" (plist-get (mevedel-engine-info owner) :error)))))
 
 (mevedel-deftest mevedel-claude-code-recover-history/root (:quiet t)
-  (mevedel-engine-test--with-session
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (view (generate-new-buffer " *claude-recovery*"))
+  (mevedel-engine-test--with-claude-session
+    (let ((view (generate-new-buffer " *claude-recovery*"))
           (file (file-name-concat root "evidence.txt"))
           (launches 0) ids)
       (unwind-protect
           (progn
             (write-region "RETAINED TOOL EVIDENCE" nil file nil 'silent)
-            (mevedel-claude-code-register)
-            (mevedel-model-set-session-provider
-             session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
             (setq-local gptel-system-prompt "Recovery fixture"
                         gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
             (mevedel-view--setup view buffer)
@@ -89,13 +84,13 @@
                                                                     (args . ((file_path . ,file))))]])))))))))
               (mevedel--insert-user-turn "Read this evidence")
               (mevedel--send-request "Read this evidence")
-              (with-timeout (5 (ert-fail "Initial native turn did not settle"))
-                (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "Initial native turn did not settle"
+                (not (mevedel-turn-busy-p buffer)))
               (goto-char (point-max))
               (mevedel--insert-user-turn "Continue the work")
               (setq request (mevedel--send-request "Continue the work"))
-              (with-timeout (5 (ert-fail "Missing native history did not fail"))
-                (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "Missing native history did not fail"
+                (not (mevedel-turn-busy-p buffer)))
               (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
               (should (string-search "Missing history" (plist-get (mevedel-engine-info request) :error)))
               (should (string-search "mevedel-claude-code-recover-history" (plist-get (mevedel-engine-info request) :error)))
@@ -110,8 +105,8 @@
               (goto-char (point-max))
               (mevedel--insert-user-turn "Recover from retained evidence")
               (mevedel--send-request "Recover from retained evidence")
-              (with-timeout (5 (ert-fail "Recovered native turn did not settle"))
-                (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "Recovered native turn did not settle"
+                (not (mevedel-turn-busy-p buffer)))
               (should (equal '(nil "original" nil) ids))
               (should (string-search "answer:Excerpt continuation" (buffer-string)))
               (should (string-search "not an exact native resume" (buffer-string)))
@@ -120,20 +115,15 @@
               (goto-char (point-max))
               (mevedel--insert-user-turn "Continue after recovery")
               (mevedel--send-request "Continue after recovery")
-              (with-timeout (5 (ert-fail "Recovered history did not resume"))
-                (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+              (mevedel-test--await 5 "Recovered history did not resume"
+                (not (mevedel-turn-busy-p buffer)))
               (should (equal "replacement" (car ids)))))
         (when (buffer-live-p view) (kill-buffer view))))))
 
 (mevedel-deftest mevedel-claude-code-recover-history/child (:quiet t)
-  (mevedel-engine-test--with-session
+  (mevedel-engine-test--with-claude-session
     (mevedel-request-end)
-    (let ((gptel--known-backends nil)
-          (mevedel-claude-code-directory (file-name-concat root "claude"))
-          (launches 0) record invocation ids)
-      (mevedel-claude-code-register)
-      (mevedel-model-set-session-provider
-       session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+    (let ((launches 0) record invocation ids)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                      (mevedel-engine-test--claude-launch
@@ -148,23 +138,20 @@
              :agent (mevedel-agent--create :name "reader" :description "Read evidence"
                                           :tools nil :system-prompt "Recovery fixture")
              :on-invocation (lambda (value) (setq invocation value)))
-            (with-timeout (5 (ert-fail "Child initial turn did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Child initial turn did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (mevedel-agent-control-followup session "/root/reader" "Continue the task")
             (setq invocation (mevedel-agent-record-invocation record))
-            (with-timeout (5 (ert-fail "Missing child history did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Missing child history did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (eq 'errored (mevedel-agent-record-settled-outcome record)))
             (should (string-search "mevedel-claude-code-recover-history"
                                    (mevedel-agent-record-settled-result record)))
             (mevedel-claude-code-recover-history "/root/reader")
             (mevedel-agent-control-followup session "/root/reader" "Use the retained evidence")
             (setq invocation (mevedel-agent-record-invocation record))
-            (with-timeout (5 (ert-fail "Child excerpt recovery did not settle"))
-              (while (not (mevedel-agent-invocation-runtime-settled-p invocation))
-                (accept-process-output nil 0.01)))
+            (mevedel-test--await 5 "Child excerpt recovery did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
             (should (eq 'completed (mevedel-agent-record-settled-outcome record)))
             (should (string-search "CHILD RECOVERY EVIDENCE" (mevedel-agent-record-settled-result record)))
             (should (string-search "Excerpt continuation" (mevedel-agent-record-settled-result record)))
@@ -225,13 +212,8 @@
 
 (mevedel-deftest mevedel-claude-code-recover-history/root-summary (:quiet t)
   (dolist (edited '(nil t))
-    (mevedel-engine-test--with-session
-      (let ((gptel--known-backends nil)
-            (mevedel-claude-code-directory (file-name-concat root "claude"))
-            (launches 0) ids)
-        (mevedel-claude-code-register)
-        (mevedel-model-set-session-provider
-         session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+    (mevedel-engine-test--with-claude-session
+      (let ((launches 0) ids)
         (setq-local gptel-system-prompt "Summary recovery fixture" gptel-tools nil)
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                    (mevedel-engine-test--claude-launch
@@ -249,8 +231,7 @@
                                                          []))))))))
           (mevedel--insert-user-turn "Compact this evidence")
           (mevedel--send-request "Compact this evidence")
-          (with-timeout (5 (ert-fail "Root summary did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Root summary did not settle" (not (mevedel-turn-busy-p buffer)))
           (should (= 2 (mevedel-session-current-segment session)))
           (when edited
             (gptel--save-state)
@@ -266,8 +247,8 @@
           (goto-char (point-max))
           (mevedel--insert-user-turn "Use the retained summary")
           (setq request (mevedel--send-request "Use the retained summary"))
-          (with-timeout (5 (ert-fail "Root summary recovery did not settle"))
-            (while (mevedel-turn-busy-p buffer) (accept-process-output nil 0.01)))
+          (mevedel-test--await 5 "Root summary recovery did not settle"
+            (not (mevedel-turn-busy-p buffer)))
           (should (equal '(nil nil) ids))
           (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
           (let ((answer (mevedel-agent-conversation-project-history buffer session)))
