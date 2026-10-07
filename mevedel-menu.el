@@ -213,6 +213,9 @@
 (declare-function mevedel-workspace-memory-observation "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
+;; `mevedel-subscription-usage'
+(autoload 'mevedel-subscription-usage-show "mevedel-subscription-usage" nil t)
+
 ;; `mevedel-tools'
 (declare-function mevedel-tools-active-count "mevedel-tools"
                   (&optional buffer))
@@ -1379,7 +1382,7 @@ nothing to restore."
         :sections (list (list :id 'help-0 :title "Session cockpit"
 			      :body (string-join (list "The transient menu is the live key reference for session commands.") "\n"))
 			(list :id 'help-1 :title "Slash commands that open UI"
-			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Session artifacts" "Cockpit i                   Session info panel" "/tools, /tools list         Tools" "/ps                         Live executions" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
+			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Session artifacts" "Cockpit i                   Session info panel" "/usage, Cockpit U           Subscription usage" "/tools, /tools list         Tools" "/ps                         Live executions" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
 			(list :id 'help-2 :title "Direct slash commands"
 			      :body (string-join (list "/plugin enable NAME, disable NAME, reload, update NAME" "/plugin install TARGET, remove NAME, uninstall NAME, hooks ..." "/skills enable NAME, disable NAME, help NAME" "/mode MODE, /model MODEL" "/worktree create [NAME] [--for \"purpose\"] [--clean]" "/goal OBJECTIVE, /goal budget N|none, /goal edit|pause|resume|clear" "/compact, /remember [focus], /review, /verify, /edits, /clear, /init ..., /tokens") "\n"))
 			(list :id 'help-3 :title "Modes"
@@ -1459,6 +1462,7 @@ nothing to restore."
     ("C" mevedel-menu--open-control
      :description mevedel-menu--control-summary)
     ("d" "Data view" mevedel-menu--toggle-data-view)
+    ("U" "Subscription usage" mevedel-subscription-usage-show)
     ("i" "Session info" mevedel-menu--open-session-info)
     ("g" "gptel menu" mevedel-menu--open-gptel)
     ("?" "Help" mevedel-menu--open-help)]]

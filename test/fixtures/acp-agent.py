@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import subprocess
+import time
 
 
 def reply(request_id, result):
@@ -52,6 +53,7 @@ prompt_number = 0
 session_info = {}
 config_behavior = None
 applied = {}
+inspection = None
 
 
 def sdk_messages(batches, index):
@@ -105,7 +107,18 @@ for line in sys.stdin:
                 continue
             session_info = params.get("_meta", {}).get("sessionInfo", {})
             config_behavior = params.get("_meta", {}).get("configBehavior")
+            inspection = params.get("_meta", {}).get("inspection")
+            def advertise():
+                commands = [] if inspection.get("missing") else [{"name": "usage", "description": "Subscription usage"}]
+                print(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": session_id, "update": {
+                        "sessionUpdate": "available_commands_update", "availableCommands": commands}}}), flush=True)
+            if inspection and inspection.get("advertise") == "before":
+                advertise()
             reply(request_id, {**session_info, "sessionId": session_id})
+            if inspection and inspection.get("advertise") == "after":
+                time.sleep(0.02)
+                advertise()
     elif method == "session/set_config_option":
         option = next(row for row in session_info["configOptions"] if row["id"] == params["configId"])
         assert params["value"] in [row["value"] for row in option["options"]]
@@ -120,6 +133,14 @@ for line in sys.stdin:
             applied[params["configId"]] = params["value"]
         reply(request_id, session_info)
     elif method == "session/prompt":
+        if inspection:
+            with open(inspection["promptLog"], "a", encoding="utf-8") as log:
+                log.write(json.dumps(params) + "\n")
+            assert not mcp_servers
+            assert params["prompt"] == [{"type": "text", "text": "/usage"}]
+            if inspection.get("wait"):
+                pending = request_id
+                continue
         if prompt_number:
             script = continuation_prompts[prompt_number - 1] if prompt_number <= len(continuation_prompts) else {}
             tool_batches = script.get("toolBatches", [])

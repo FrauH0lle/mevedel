@@ -704,5 +704,21 @@ Return the generic ACP launch plist; no model request is made here."
                              (options . ,(append options
                                                  `((settings . ,settings)))))))))))
 
+(defun mevedel-claude-code-usage-launch (model)
+  "Prepare an isolated native subscription usage inspection for MODEL.
+Retain ordinary launch isolation, enabling only the native-command exception.
+Model configuration is unnecessary for this local command and must not update
+its caller's selected model or backend catalog."
+  (let* ((launch (mevedel-claude-code-launch "Subscription usage inspection" [] model nil))
+         (meta (copy-tree (plist-get launch :meta)))
+         (options (alist-get 'options (alist-get 'claudeCode meta))))
+    (setf (plist-get launch :meta) meta
+          (alist-get 'extraArgs options)
+          (assq-delete-all 'disable-slash-commands (alist-get 'extraArgs options))
+          (plist-get launch :prepare-session) nil
+          (plist-get launch :required-command) "usage"
+          (plist-get launch :response-timeout) 30)
+    launch))
+
 (provide 'mevedel-claude-code)
 ;;; mevedel-claude-code.el ends here

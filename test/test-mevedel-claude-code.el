@@ -35,6 +35,27 @@
            ,@body)
        (delete-directory directory t))))
 
+(mevedel-deftest mevedel-claude-code-usage-launch ()
+  (mevedel-claude-code-test--with-cli
+    (setenv "ANTHROPIC_API_KEY" "not-a-real-key")
+    (let* ((launch (mevedel-claude-code-usage-launch "sonnet"))
+           (options (alist-get 'options (alist-get 'claudeCode (plist-get launch :meta))))
+           (process-environment (plist-get launch :environment)))
+      (should-not (getenv "ANTHROPIC_API_KEY"))
+      (should (equal [] (plist-get launch :mcp)))
+      (should-not (plist-get launch :session-id))
+      (should-not (plist-get launch :prepare-session))
+      (should (equal "usage" (plist-get launch :required-command)))
+      (should (= 30 (plist-get launch :response-timeout)))
+      (should (equal [] (alist-get 'tools options)))
+      (should (equal [] (alist-get 'settingSources options)))
+      (should-not (assq 'disable-slash-commands (alist-get 'extraArgs options)))
+      (should (assq 'disable-slash-commands
+                    (alist-get 'extraArgs
+                               (alist-get 'options
+                                          (alist-get 'claudeCode
+                                                     (plist-get (mevedel-claude-code-launch "Coding" [] "sonnet" nil) :meta)))))))))
+
 (mevedel-deftest mevedel-claude-code-launch ()
   ,test
   (test)
