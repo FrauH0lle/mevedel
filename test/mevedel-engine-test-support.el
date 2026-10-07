@@ -69,8 +69,9 @@ Fail when BODY leaves a timer the fixture does not own."
                  ;; its own real HTTP/CLI and pre-commit lifecycle tests.
                  (cl-letf (((symbol-function 'mevedel-readiness-assert) #'ignore)) ,@body)))
            (setq done t))
-       (let ((leaked (mevedel-engine-test--release session buffer timers)))
-         (delete-directory root t)
+       (let ((leaked (unwind-protect
+                         (mevedel-engine-test--release session buffer timers)
+                       (delete-directory root t))))
          ;; Cancel even after a failure so leaks cannot fire in later tests.
          (mapc #'cancel-timer leaked)
          (when (and done leaked)

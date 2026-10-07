@@ -397,6 +397,27 @@ target is gone, which is slow, noisy, and order dependent."
   (when (boundp 'mevedel-skills--frontmatter-cache)
     (clrhash mevedel-skills--frontmatter-cache)))
 
+;; A publication staging directory belongs to the session that staged it and
+;; lives until that session commits, abandons, or releases its lease.  Tests
+;; drop sessions without that release, so each test removes what it staged.
+(defvar mevedel-test--staged-publications nil
+  "Publication staging directories created during the running test.")
+
+(defun mevedel-test--record-staged-publication (batch)
+  "Remember staged BATCH's directory for the running test's teardown."
+  (push (plist-get batch :directory) mevedel-test--staged-publications)
+  batch)
+
+(with-eval-after-load 'mevedel-session-publication
+  (advice-add 'mevedel-session-publication--stage-artifacts :filter-return
+              #'mevedel-test--record-staged-publication))
+
+(defun mevedel-test--delete-staged-publications ()
+  "Delete the publication staging directories the running test left."
+  (dolist (directory mevedel-test--staged-publications)
+    (when (file-directory-p directory)
+      (delete-directory directory t))))
+
 (defun mevedel-test--assert-worktree-controls-unchanged (before)
   "Signal when a test changes worktree-root session artifacts.
 BEFORE is the snapshot captured before test setup; an existing artifact is
@@ -825,7 +846,7 @@ or other symbol.
 
 KEYWORD ARGUMENTS:
   :before-each - Form(s) to run before each test case
-  :after-each  - Form(s) to run after each test case
+  :after-each  - Form(s) to run after each test case, even a failing one
   :quiet       - Capture the messages and warnings every case provokes
   :expected-result - Expected result type (:passed, :failed, etc)
   :doc         - Documentation string for the test
@@ -993,11 +1014,16 @@ See also:
                          (if (cl-every #'listp before-each)
                              before-each
                            (list before-each)))
-                     ,@(cdr test)
-                     ,@(when after-each
-                         (if (cl-every #'listp after-each)
-                             after-each
-                           (list after-each))))))
+                     ,@(cdr test))))
+              ;; Cleanup that runs only after a passing case leaks whatever
+              ;; a failing one created.
+              (when after-each
+                (setq test-body
+                      `((unwind-protect
+                            (progn ,@test-body)
+                          ,@(if (cl-every #'listp after-each)
+                                after-each
+                              (list after-each))))))
               (when quiet
                 (setq test-body
                       `((mevedel-test--with-captured-diagnostics nil
@@ -1013,7 +1039,8 @@ See also:
                             (gptel--known-tools
                              (copy-tree gptel--known-tools))
                             (worktree-controls-before
-                             (mevedel-test--worktree-control-snapshot)))
+                             (mevedel-test--worktree-control-snapshot))
+                            (mevedel-test--staged-publications nil))
                         (unwind-protect
                             (progn ,@test-body)
                           (mevedel-test--cancel-stray-lease-timers)
@@ -1021,6 +1048,7 @@ See also:
                             (clrhash mevedel--warn-once-table))
                           (when mevedel-test--release-leaked-state-p
                             (mevedel-test--release-leaked-state))
+                          (mevedel-test--delete-staged-publications)
                           (mevedel-test--assert-worktree-controls-unchanged
                            worktree-controls-before)
                           (mevedel-test--assert-no-temporary-root-state)))))

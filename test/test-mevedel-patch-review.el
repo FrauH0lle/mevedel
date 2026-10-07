@@ -1556,81 +1556,84 @@ adopt prompt.  Returns the messages the session produced."
           (when (file-directory-p root) (delete-directory root t))))))
 
   :doc "Sanitizes local paths and warns when review rollback is incomplete"
-  (mevedel-view-test--with-buffers
-    (let* ((root (file-name-as-directory
-                  (make-temp-file "mevedel-patch-review-rollback-" t)))
-           (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "rollback"
-                       :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "rollback" :session-id "rollback-id" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
-           (first-address "work://first/one.txt")
-           (second-address "work://second/two.txt")
-           (patch (string-join
-                   (list "*** Begin Patch"
-                         (concat "*** Update File: " first-address)
-                         "@@" "-old one" "+new one"
-                         (concat "*** Update File: " second-address)
-                         "@@" "-old two" "+new two"
-                         "*** End Patch")
-                   "\n"))
-           first-directory
-           first-path
-           second-path
-           first-buffer
-           second-buffer
-           result)
-      (unwind-protect
-          (progn
-            (with-current-buffer data-buf
-              (setq-local default-directory root
-                          mevedel--workspace workspace
-                          mevedel--session session)
-              (mevedel-session-persistence-shallow-ensure-files
-               session data-buf)
-              (let ((local-root
-                     (file-name-concat (mevedel-session-save-path session)
-                                       "local")))
-                (setq first-path
-                      (file-name-concat local-root "first" "one.txt")
-                      second-path
-                      (file-name-concat local-root "second" "two.txt")
-                      first-directory (file-name-directory first-path)))
-              (make-directory (file-name-directory first-path) t)
-              (make-directory (file-name-directory second-path) t)
-              (with-temp-file first-path (insert "old one\n"))
-              (with-temp-file second-path (insert "old two\n"))
-              (setq first-buffer (find-file-noselect first-path)
-                    second-buffer (find-file-noselect second-path))
-              (mevedel-tool-patch-handler
-               (lambda (value) (setq result value))
-               (list :patch patch)))
-            (with-current-buffer second-buffer
-              (add-hook 'before-change-functions
-                        (lambda (&rest _)
-                          (set-file-modes first-directory #o500)
-                          (error "Sync failure"))
-                        nil t))
-            (with-current-buffer view-buf
-              (goto-char (point-min))
-              (search-forward "ApplyPatch ·")
-              (mevedel-patch-review-submit)
-              (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
-                (should-not result)
-                (should (string-search first-address text))
-                (should-not (string-search first-path text))
-                (should (string-search "Sync failure" text))
-                (should (string-search "Rollback was incomplete" text))
-                (should-not (string-search "Deselect the stale file" text)))))
-        (when (file-directory-p first-directory)
-          (set-file-modes first-directory #o700))
-        (dolist (buffer (list first-buffer second-buffer))
-          (when (buffer-live-p buffer)
-            (with-current-buffer buffer (set-buffer-modified-p nil))
-            (kill-buffer buffer)))
-        (when (file-directory-p root) (delete-directory root t))))))
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-patch-review-rollback-" t))))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (let* ((workspace (mevedel-workspace--create
+                             :type 'test :id root :root root :name "rollback"
+                             :file-cache (mevedel-test-file-cache-create)))
+                 (session (mevedel-session--create
+                           :name "rollback" :session-id "rollback-id" :workspace workspace
+                           :working-directory root :permission-mode 'ask))
+                 (first-address "work://first/one.txt")
+                 (second-address "work://second/two.txt")
+                 (patch (string-join
+                         (list "*** Begin Patch"
+                               (concat "*** Update File: " first-address)
+                               "@@" "-old one" "+new one"
+                               (concat "*** Update File: " second-address)
+                               "@@" "-old two" "+new two"
+                               "*** End Patch")
+                         "\n"))
+                 first-directory
+                 first-path
+                 second-path
+                 first-buffer
+                 second-buffer
+                 result)
+            (unwind-protect
+                (progn
+                  (with-current-buffer data-buf
+                    (setq-local default-directory root
+                                mevedel--workspace workspace
+                                mevedel--session session)
+                    (mevedel-session-persistence-shallow-ensure-files
+                     session data-buf)
+                    (let ((local-root
+                           (file-name-concat (mevedel-session-save-path session)
+                                             "local")))
+                      (setq first-path
+                            (file-name-concat local-root "first" "one.txt")
+                            second-path
+                            (file-name-concat local-root "second" "two.txt")
+                            first-directory (file-name-directory first-path)))
+                    (make-directory (file-name-directory first-path) t)
+                    (make-directory (file-name-directory second-path) t)
+                    (with-temp-file first-path (insert "old one\n"))
+                    (with-temp-file second-path (insert "old two\n"))
+                    (setq first-buffer (find-file-noselect first-path)
+                          second-buffer (find-file-noselect second-path))
+                    (mevedel-tool-patch-handler
+                     (lambda (value) (setq result value))
+                     (list :patch patch)))
+                  (with-current-buffer second-buffer
+                    (add-hook 'before-change-functions
+                              (lambda (&rest _)
+                                (set-file-modes first-directory #o500)
+                                (error "Sync failure"))
+                              nil t))
+                  (with-current-buffer view-buf
+                    (goto-char (point-min))
+                    (search-forward "ApplyPatch ·")
+                    (mevedel-patch-review-submit)
+                    (let ((text (buffer-substring-no-properties
+                                 (point-min) mevedel-view--input-marker)))
+                      (should-not result)
+                      (should (string-search first-address text))
+                      (should-not (string-search first-path text))
+                      (should (string-search "Sync failure" text))
+                      (should (string-search "Rollback was incomplete" text))
+                      (should-not (string-search "Deselect the stale file" text)))))
+              (when (file-directory-p first-directory)
+                (set-file-modes first-directory #o700))
+              (dolist (buffer (list first-buffer second-buffer))
+                (when (buffer-live-p buffer)
+                  (with-current-buffer buffer (set-buffer-modified-p nil))
+                  (kill-buffer buffer))))))
+      ;; Killing the view buffers records telemetry under the session's
+      ;; save path, so the directory goes only after them.
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-patch-review-reject
   (:doc "Reject-all clears every change and settles with an error result")
@@ -1727,60 +1730,63 @@ adopt prompt.  Returns the messages the session produced."
   (:doc "Review displays authored local addresses and visits resolved targets")
   ,test
   (test)
-  (mevedel-view-test--with-buffers
-    (let* ((root (file-name-as-directory
-                  (make-temp-file "mevedel-patch-local-visit-" t)))
-           (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "local-visit"
-                       :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "local-visit" :session-id "local-visit-id" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
-           (address "work://notes/one.txt")
-           (patch (string-join
-                   (list "*** Begin Patch"
-                         (concat "*** Update File: " address)
-                         "@@ two"
-                         "-old"
-                         "+new"
-                         "*** End Patch")
-                   "\n"))
-           result visited local-path)
-      (unwind-protect
-          (progn
-            (with-current-buffer data-buf
-              (setq-local default-directory root
-                          mevedel--workspace workspace
-                          mevedel--session session)
-              (mevedel-session-persistence-shallow-ensure-files
-               session data-buf)
-              (setq local-path
-                    (file-name-concat (mevedel-session-save-path session)
-                                      "local" "notes" "one.txt"))
-              (make-directory (file-name-directory local-path) t)
-              (with-temp-file local-path
-                (insert "one\ntwo\nold\nfour\n"))
-              (mevedel-tool-patch-handler
-               (lambda (value) (setq result value))
-               (list :patch patch)))
-            (should-not result)
-            (with-current-buffer view-buf
-              (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
-                (should (string-search address text))
-                (should-not (string-search local-path text)))
-              (goto-char (point-min))
-              (search-forward address)
-              (mevedel-patch-review-toggle-fold)
-              (goto-char (point-min))
-              (search-forward "@@ two")
-              (mevedel-patch-review-visit)
-              (setq visited (current-buffer)))
-            (should (equal local-path (buffer-file-name visited)))
-            (should (= 3 (with-current-buffer visited
-                           (line-number-at-pos))))
-        (when (buffer-live-p visited) (kill-buffer visited))
-        (when (file-directory-p root) (delete-directory root t)))))))
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-patch-local-visit-" t))))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (let* ((workspace (mevedel-workspace--create
+                             :type 'test :id root :root root :name "local-visit"
+                             :file-cache (mevedel-test-file-cache-create)))
+                 (session (mevedel-session--create
+                           :name "local-visit" :session-id "local-visit-id" :workspace workspace
+                           :working-directory root :permission-mode 'ask))
+                 (address "work://notes/one.txt")
+                 (patch (string-join
+                         (list "*** Begin Patch"
+                               (concat "*** Update File: " address)
+                               "@@ two"
+                               "-old"
+                               "+new"
+                               "*** End Patch")
+                         "\n"))
+                 result visited local-path)
+            (unwind-protect
+                (progn
+                  (with-current-buffer data-buf
+                    (setq-local default-directory root
+                                mevedel--workspace workspace
+                                mevedel--session session)
+                    (mevedel-session-persistence-shallow-ensure-files
+                     session data-buf)
+                    (setq local-path
+                          (file-name-concat (mevedel-session-save-path session)
+                                            "local" "notes" "one.txt"))
+                    (make-directory (file-name-directory local-path) t)
+                    (with-temp-file local-path
+                      (insert "one\ntwo\nold\nfour\n"))
+                    (mevedel-tool-patch-handler
+                     (lambda (value) (setq result value))
+                     (list :patch patch)))
+                  (should-not result)
+                  (with-current-buffer view-buf
+                    (let ((text (buffer-substring-no-properties
+                                 (point-min) mevedel-view--input-marker)))
+                      (should (string-search address text))
+                      (should-not (string-search local-path text)))
+                    (goto-char (point-min))
+                    (search-forward address)
+                    (mevedel-patch-review-toggle-fold)
+                    (goto-char (point-min))
+                    (search-forward "@@ two")
+                    (mevedel-patch-review-visit)
+                    (setq visited (current-buffer)))
+                  (should (equal local-path (buffer-file-name visited)))
+                  (should (= 3 (with-current-buffer visited
+                                 (line-number-at-pos)))))
+              (when (buffer-live-p visited) (kill-buffer visited)))))
+      ;; Killing the view buffers records telemetry under the session's
+      ;; save path, so the directory goes only after them.
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-patch-review-next-row
   (:doc "n and p move between file and hunk rows")

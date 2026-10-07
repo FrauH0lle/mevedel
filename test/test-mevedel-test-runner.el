@@ -28,12 +28,12 @@
           (setenv "MEVEDEL_TEST_PARTITION" nil)
           (setenv "MEVEDEL_TEST_RESULTS" output)
           (should
-           (zerop
-            (catch 'discovered
-              (cl-letf (((symbol-function 'kill-emacs)
-                         (lambda (code) (throw 'discovered code))))
-                (mevedel-test-runner-dispatch
-                 (lambda (&rest _) (error "Discovery ran tests")))))))
+           (eq 'no-tests
+               (mevedel-test-runner-dispatch
+                (lambda (selector)
+                  (when (ert-select-tests selector t)
+                    (error "Discovery ran tests"))
+                  'no-tests))))
           (should
            (equal
             (mapcar (lambda (test) (symbol-name (ert-test-name test)))
