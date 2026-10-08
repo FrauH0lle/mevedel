@@ -67,12 +67,15 @@
   "Close CONNECTION after protocol or process ERROR.
 A process exit warns the host with the agent's last stderr output, its only
 explanation.  The outcome message omits it: that text is classified, shown to
-collaboration guests and returned to models, and stderr holds host logs."
+collaboration guests and returned to models, and stderr holds host logs.
+A closed CONNECTION is ignored: `delete-process' runs the sentinel during an
+orderly close, and that exit is no failure."
   (let ((message (if (stringp error) error
                    (or (alist-get 'message error) (format "%S" error))))
         (process (alist-get :process (mevedel-acp-client connection)))
         (stderr (string-trim (or (mevedel-acp-stderr connection) ""))))
-    (when (and process (not (process-live-p process)) (not (string-empty-p stderr)))
+    (when (and (not (eq (mevedel-acp-state connection) 'closed))
+               process (not (process-live-p process)) (not (string-empty-p stderr)))
       (display-warning 'mevedel (format "%s\nAgent stderr:\n%s" message stderr))
       (setq message (concat message "; agent stderr is in *Warnings*")))
     (mevedel-acp--shutdown

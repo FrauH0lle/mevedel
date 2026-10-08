@@ -87,6 +87,8 @@ for line in sys.stdin:
                 print(json.dumps({"jsonrpc": "2.0", "id": request_id,
                                   "error": {"code": -32000, "message": "Missing history"}}), flush=True)
             else:
+                # Real adapters log routine startup progress on stderr.
+                print("[session/create] sessionId=%s phase=register" % session_id, file=sys.stderr, flush=True)
                 mcp_servers = params.get("mcpServers", [])
                 hook_command = params.get("_meta", {}).get("hookCommand")
                 pre_tool_hook = params.get("_meta", {}).get("preToolHook", False)
