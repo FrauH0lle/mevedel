@@ -75,12 +75,86 @@
                      (lambda (program &rest _)
                        (cl-incf calls)
                        (if (equal program "pkg-config") 0 1))))
-            (should-not (mevedel-view-native--load))
-            (should (string-match-p "compilation failed" mevedel-view-native--load-state))
-            (should-not (mevedel-view-native--load))
+            (let (reported)
+              (mevedel-test--with-captured-diagnostics reported
+                (should-not (mevedel-view-native--load))
+                (should (string-match-p "compilation failed" mevedel-view-native--load-state))
+                (should-not (mevedel-view-native--load)))
+              ;; Reported once, with the next step for this system.
+              (should (= 1 (mevedel-view-native-test--count "native animation unavailable" reported)))
+              (should (string-search "GTK 3/Wayland development files" reported)))
             (should (= calls 2))
             (should-not (directory-files (file-name-concat root "native") nil "^build-"))))
       (delete-directory root t))))
+
+(defun mevedel-view-native-test--count (regexp string)
+  "Count REGEXP in STRING."
+  (with-temp-buffer (insert string) (how-many regexp (point-min) (point-max))))
+
+(defmacro mevedel-view-native-test--with-prebuilt (module &rest body)
+  "Run BODY with a source tree whose pins match MODULE's bytes.
+ROOT is the package and user directory; PATH is where the prebuilt goes."
+  (declare (indent 1) (debug t))
+  `(let* ((root (make-temp-file "mevedel-native-prebuilt-" t))
+          (mevedel-user-dir root)
+          (mevedel-view-native--directory root)
+          (mevedel-view-native--load-state nil))
+     (unwind-protect
+         (progn
+           (make-directory (file-name-concat root "native"))
+           (with-temp-file (file-name-concat root "native/mevedel-view-native.c")
+             (insert "source"))
+           (with-temp-file (file-name-concat root "native/prebuilt.eld")
+             (insert (format ";; pins\n((%S (%S . %S)))\n"
+                             (mevedel-view-native--source-hash)
+                             (mevedel-view-native--arch)
+                             (secure-hash 'sha256 ,module))))
+           (let ((path (mevedel-view-native--prebuilt-path)))
+             ,@body))
+       (delete-directory root t))))
+
+(mevedel-deftest mevedel-view-native--verified-prebuilt
+  (:doc "Loads a downloaded module only when it matches its pinned checksum.")
+  (mevedel-view-native-test--with-prebuilt "module bytes"
+    (should (mevedel-view-native--pin))
+    (should-not (mevedel-view-native--verified-prebuilt))
+    (make-directory (file-name-directory path) t)
+    (let ((coding-system-for-write 'no-conversion))
+      (write-region "tampered" nil path nil 'silent))
+    (should-not (mevedel-view-native--verified-prebuilt))
+    (let ((coding-system-for-write 'no-conversion))
+      (write-region "module bytes" nil path nil 'silent))
+    (should (equal path (mevedel-view-native--verified-prebuilt)))))
+
+(mevedel-deftest mevedel-view-native-install
+                 (:doc "Writes and loads a download only after it matches its pin.")
+                 (progn
+                   (mevedel-view-native-test--with-prebuilt "module bytes"
+                                                            (let (loaded urls)
+                                                              (cl-letf (((symbol-function 'mevedel-view-native--download)
+                                                                         (lambda (url) (push url urls) "tampered"))
+                                                                        ((symbol-function 'module-load) (lambda (file) (push file loaded))))
+                                                                (should-error (mevedel-view-native-install) :type 'user-error)
+                                                                (should-not (file-exists-p path))
+                                                                (should (string-match-p "/native-[0-9a-f]\\{16\\}/mevedel-view-native-" (car urls))))
+                                                              (cl-letf (((symbol-function 'mevedel-view-native--download)
+                                                                         (lambda (_url) "module bytes"))
+                                                                        ((symbol-function 'module-load) (lambda (file) (push file loaded))))
+                                                                (let (messages)
+                                                                  (mevedel-test--with-captured-diagnostics messages
+                                                                                                           (mevedel-view-native-install))
+                                                                  (should (string-search "installed" messages)))
+                                                                (should (equal (list path) loaded))
+                                                                (should (eq 'ready mevedel-view-native--load-state)))))
+                   (let ((mevedel-view-native--directory (make-temp-file "mevedel-native-nopin-" t)))
+                     (unwind-protect
+                         (progn
+                           (make-directory (file-name-concat mevedel-view-native--directory "native"))
+                           (with-temp-file (file-name-concat mevedel-view-native--directory
+                                                             "native/mevedel-view-native.c")
+                             (insert "unpinned"))
+                           (should-error (mevedel-view-native-install) :type 'user-error))
+                       (delete-directory mevedel-view-native--directory t)))))
 
 (mevedel-deftest mevedel-view-native--include-flags
   (:doc "Finds emacs-module.h in the running Emacs's prefix or build tree.")

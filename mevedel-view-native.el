@@ -26,6 +26,10 @@
 (declare-function mevedel-view--set-spinner-option "mevedel-view" (symbol value))
 (autoload 'mevedel-view--set-spinner-option "mevedel-view")
 
+;; `url'
+(declare-function url-retrieve-synchronously "url" (url &optional silent inhibit-cookies timeout))
+(defvar url-http-response-status)
+
 ;; `native/mevedel-view-native.c'
 (declare-function mevedel-view-native--close "ext:mevedel-view-native" (handle))
 (declare-function mevedel-view-native--move "ext:mevedel-view-native" (handle x y))
@@ -118,50 +122,161 @@ targets.  Text scaling edits the remapping list in place, so it is copied."
                         (marker-position (cdr (caar entry)))))
                 mevedel-view-native--entries)))
 
+(defconst mevedel-view-native--release-url
+  "https://github.com/FrauH0lle/mevedel/releases/download/native-%s/mevedel-view-native-%s.so"
+  "Prebuilt module download, by source hash and architecture.")
+
+(defun mevedel-view-native--source ()
+  "Return the native module's C source file."
+  (file-name-concat mevedel-view-native--directory "native/mevedel-view-native.c"))
+
+(defun mevedel-view-native--source-hash ()
+  "Return the first 16 hex digits of the module source's SHA-256."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally (mevedel-view-native--source))
+    (substring (secure-hash 'sha256 (current-buffer)) 0 16)))
+
+(defun mevedel-view-native--arch ()
+  "Return this system's architecture as prebuilt modules name it."
+  (car (split-string system-configuration "-")))
+
+(defun mevedel-view-native--pin ()
+  "Return the pinned SHA-256 of the prebuilt module for this source and system.
+CI builds each source revision and records its checksums in
+native/prebuilt.eld; a download that does not match is never loaded."
+  (when-let* ((file (file-name-concat mevedel-view-native--directory
+                                      "native/prebuilt.eld"))
+              ((file-readable-p file))
+              (pins (with-temp-buffer
+                      (insert-file-contents file)
+                      (read (current-buffer)))))
+    (cdr (assoc (mevedel-view-native--arch)
+                (cdr (assoc (mevedel-view-native--source-hash) pins))))))
+
+(defun mevedel-view-native--prebuilt-path ()
+  "Return where a downloaded prebuilt module for this source is kept."
+  (file-name-concat mevedel-user-dir "native"
+                    (format "prebuilt-%s-%s%s" (mevedel-view-native--source-hash)
+                            (mevedel-view-native--arch) module-file-suffix)))
+
+(defun mevedel-view-native--verified-prebuilt ()
+  "Return the downloaded prebuilt module when it matches its pin, or nil."
+  (when-let* ((pin (mevedel-view-native--pin))
+              (path (mevedel-view-native--prebuilt-path))
+              ((file-exists-p path)))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert-file-contents-literally path)
+      (and (equal pin (secure-hash 'sha256 (current-buffer))) path))))
+
+(defun mevedel-view-native--build ()
+  "Return the locally built module, building it first when needed."
+  (let* ((source (mevedel-view-native--source))
+         (hash (with-temp-buffer
+                 (insert-file-contents-literally source)
+                 (insert system-configuration emacs-version)
+                 (secure-hash 'sha256 (current-buffer))))
+         (directory (file-name-concat mevedel-user-dir "native"))
+         (module (file-name-concat
+                  directory (concat "view-" (substring hash 0 16)
+                                    module-file-suffix))))
+    (unless (file-exists-p module)
+      (unless (and (executable-find "cc") (executable-find "pkg-config"))
+        (error "Native animation needs cc and pkg-config"))
+      (make-directory directory t)
+      (let ((temporary (make-temp-file (file-name-concat directory "build-")))
+            (default-directory directory))
+        (unwind-protect
+            (with-temp-buffer
+              (unless (zerop (call-process
+                              "pkg-config" nil t nil "--cflags" "--libs"
+                              "gtk+-3.0" "wayland-client"))
+                (error "GTK/Wayland development files are unavailable"))
+              (let ((flags (split-string-and-unquote (buffer-string))))
+                (erase-buffer)
+                ;; No -Werror: a warning from newer headers must not
+                ;; disable the renderer; development builds use it.
+                (unless (zerop (apply #'call-process "cc" nil t nil
+                                      "-shared" "-fPIC" "-O2"
+                                      (append (mevedel-view-native--include-flags)
+                                              (list source "-o" temporary)
+                                              flags '("-lm"))))
+                  (error "Native animation compilation failed: %s"
+                         (string-trim (buffer-string)))))
+              (rename-file temporary module t))
+          (when (file-exists-p temporary) (delete-file temporary)))))
+    module))
+
+(defun mevedel-view-native--report-failure ()
+  "Say once why native animation is unavailable and how to enable it.
+Without it, animation redraws the whole editor, several times the CPU."
+  (message "mevedel: native animation unavailable (%s); animations use more CPU.  %s"
+           mevedel-view-native--load-state
+           (if (mevedel-view-native--pin)
+               "M-x mevedel-view-native-install downloads a prebuilt module."
+             "Install cc, pkg-config and the GTK 3/Wayland development files to build it.")))
+
 (defun mevedel-view-native--load ()
-  "Build and load the optional native presenter once at first use."
+  "Load the optional native presenter once at first use.
+A cached local build comes first, then a verified prebuilt download, then
+a new local build.  A failure is reported once and not retried."
   (unless mevedel-view-native--load-state
     (setq mevedel-view-native--load-state
           (condition-case err
-              (let* ((source (file-name-concat mevedel-view-native--directory
-                                               "native/mevedel-view-native.c"))
-                     (hash (with-temp-buffer
-                             (insert-file-contents-literally source)
-                             (insert system-configuration emacs-version)
-                             (secure-hash 'sha256 (current-buffer))))
-                     (directory (file-name-concat mevedel-user-dir "native"))
-                     (module (file-name-concat
-                              directory (concat "view-" (substring hash 0 16)
-                                                module-file-suffix))))
-                (unless (file-exists-p module)
-                  (unless (and (executable-find "cc") (executable-find "pkg-config"))
-                    (error "Native animation needs cc and pkg-config"))
-                  (make-directory directory t)
-                  (let ((temporary (make-temp-file (file-name-concat directory "build-")))
-                        (default-directory directory))
-                    (unwind-protect
-                        (with-temp-buffer
-                          (unless (zerop (call-process
-                                          "pkg-config" nil t nil "--cflags" "--libs"
-                                          "gtk+-3.0" "wayland-client"))
-                            (error "GTK/Wayland development files are unavailable"))
-                          (let ((flags (split-string-and-unquote (buffer-string))))
-                            (erase-buffer)
-                            ;; No -Werror: a warning from newer headers must not
-                            ;; disable the renderer; development builds use it.
-                            (unless (zerop (apply #'call-process "cc" nil t nil
-                                                  "-shared" "-fPIC" "-O2"
-                                                  (append (mevedel-view-native--include-flags)
-                                                          (list source "-o" temporary)
-                                                          flags '("-lm"))))
-                              (error "Native animation compilation failed: %s"
-                                     (string-trim (buffer-string)))))
-                          (rename-file temporary module t))
-                      (when (file-exists-p temporary) (delete-file temporary)))))
-                (module-load module)
+              (progn
+                (module-load (or (mevedel-view-native--verified-prebuilt)
+                                 (mevedel-view-native--build)))
                 'ready)
-            (error (error-message-string err)))))
+            (error (error-message-string err))))
+    (unless (eq mevedel-view-native--load-state 'ready)
+      (mevedel-view-native--report-failure)))
   (eq mevedel-view-native--load-state 'ready))
+
+(defun mevedel-view-native--download (url)
+  "Return URL's body as a unibyte string, or signal an error."
+  (require 'url)
+  (let ((buffer (url-retrieve-synchronously url t t 60)))
+    (unless buffer (error "Download failed: %s" url))
+    (unwind-protect
+        (with-current-buffer buffer
+          (unless (eql 200 (bound-and-true-p url-http-response-status))
+            (error "Download failed with HTTP status %s"
+                   (bound-and-true-p url-http-response-status)))
+          (set-buffer-multibyte nil)
+          (goto-char (point-min))
+          (re-search-forward "\r?\n\r?\n")
+          (buffer-substring-no-properties (point) (point-max)))
+      (kill-buffer buffer))))
+
+;;;###autoload
+(defun mevedel-view-native-install ()
+  "Download the prebuilt native animation module for this system and load it.
+For systems without a C compiler or the GTK 3/Wayland development files.
+The download must match the checksum pinned in mevedel's source."
+  (interactive)
+  (let ((pin (or (mevedel-view-native--pin)
+                 (user-error "No prebuilt module for %s at this mevedel revision"
+                             (mevedel-view-native--arch))))
+        (path (mevedel-view-native--prebuilt-path))
+        (url (format mevedel-view-native--release-url
+                     (mevedel-view-native--source-hash) (mevedel-view-native--arch))))
+    (message "Downloading %s..." url)
+    (let ((data (mevedel-view-native--download url)))
+      (unless (equal pin (secure-hash 'sha256 data))
+        (user-error "Downloaded module does not match its pinned checksum"))
+      (make-directory (file-name-directory path) t)
+      (let ((temporary (make-temp-file (concat path "-"))))
+        (unwind-protect
+            (let ((coding-system-for-write 'no-conversion))
+              (write-region data nil temporary nil 'silent)
+              (rename-file temporary path t))
+          (when (file-exists-p temporary) (delete-file temporary)))))
+    (setq mevedel-view-native--load-state nil)
+    (if (mevedel-view-native--load)
+        (message "Native animation module installed")
+      (user-error "Native animation module did not load: %s"
+                  mevedel-view-native--load-state))))
 
 (defun mevedel-view-native-available-p (frame)
   "Return non-nil when FRAME can host an independent animation surface."

@@ -1377,3 +1377,21 @@ through gptel's ChatGPT (Codex) backend cost 28.9% unpaced and 25.3% paced: that
 endpoint delivers about five reads a second of 2.6 KB, so the mock's 32
 chunks a second overstated gptel's real cost and its pacing gain.
 
+### October 2026: prebuilt native module
+
+Without the native presenter, the final defaults cost 22.7% editor CPU while
+waiting, 21.1% with Bash running and 32.9% for a 32-chunk stream, against 6.2%,
+7.0% and 21.5% with it, and a failed build was silent. A failure is now
+reported once per session with the next step, and `mevedel-view-native-install`
+downloads a prebuilt module from the GitHub release for the current source
+hash. CI builds it on Ubuntu 22.04 against Emacs 27's `emacs-module.h`: Emacs
+only grows the module environment and the module checks for at least the size
+it was compiled with, so the older header loads into Emacs 31; the newer
+header's module would be refused by older Emacsen, and the module uses only
+Emacs 25 functions. A download is loaded only when its SHA-256 matches the pin
+CI commits to `native/prebuilt.eld`, so trusting it means trusting a reviewed
+commit, not the release assets alone. The download is an explicit command:
+the build is first attempted inside animation scheduling, where prompting is
+unsafe. A local end-to-end check with compilation disabled installed the
+container-built module from a local server and animated a request natively.
+

@@ -104,7 +104,7 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
  '(mevedel :host github
            :repo "FrauH0lle/mevedel"
            :files ("*.el"
-                   ("native" "native/*.c")
+                   ("native" "native/*.c" "native/*.eld")
                    ("scripts" "scripts/mevedel-mcp-stdio.py")
                    "agents"
                    "prompts"
@@ -456,8 +456,13 @@ small independent surfaces, avoiding a full editor repaint per frame. This
 optional renderer builds automatically at first use; it requires Emacs module
 support, a C compiler (`cc`), `pkg-config`, and the Emacs, GTK 3 and Wayland
 client development headers. The compiled module is cached under
-`mevedel-user-dir/native/`. Other displays, unavailable build dependencies and
-unsuitable label geometry use ordinary text animation. Set
+`mevedel-user-dir/native/`. Without those build tools, `M-x
+mevedel-view-native-install` downloads a prebuilt module for x86_64 or aarch64
+Linux from the project's GitHub releases; it is loaded only when its SHA-256
+matches the checksum pinned in `native/prebuilt.eld`. When neither is available,
+mevedel says so once per session. Other displays, unavailable modules and
+unsuitable label geometry use ordinary text animation, at several times the
+CPU. Set
 `mevedel-view-native-enabled` to nil to disable it. Native breathe/bounce use
 the configured frame-rate ceiling; their ordinary renderer retains the accepted
 8-fps compromise. No Emacs patch or rebuild is required.
