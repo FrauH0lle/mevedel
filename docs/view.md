@@ -808,6 +808,14 @@ composer input in the frame becomes a follow-up for that directive; frame
 teardown leaves that scope again. Show answer positions point on the rendered
 answer instead, and deliberately does not enter composer scope.
 
+The frame opens below the directive's last line, or flush above its first line
+when there is no room below, so the directive stays readable beside its
+conversation. Only when neither side has room does the frame take the larger
+side and overlap the directive. Placement uses the frame's actual height, so a
+frame fitted shorter than its maximum stays against its directive. Width stays
+a fraction of the parent frame, so in a split layout the frame can extend over
+a neighbouring window.
+
 At most one directive frame exists at a time, and it is dismissed explicitly
 rather than on directive settlement. The frame is anchored to its directive: it
 tracks the directive's screen position as the source buffer scrolls, hides once
