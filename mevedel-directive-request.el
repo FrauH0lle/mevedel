@@ -48,9 +48,6 @@
 (defvar gptel-request--transitions)
 (defvar gptel-stream)
 
-;; `mevedel'
-(defvar mevedel-default-chat-preset)
-
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
@@ -953,8 +950,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 	(with-current-buffer chat-buffer
           (mevedel-session-artifacts-assert-new-mutation-authority
 	   mevedel--session)
-	    (mevedel-preset-apply
-	     (alist-get mevedel-default-chat-preset mevedel-action-preset-alist))
+	    (mevedel--ensure-chat-preset chat-buffer)
 	    (mevedel-request-begin mevedel--session directive-uuid)
 	    (setq cleanup-request-reserved-p t)
 		    (setq reserved-request mevedel--current-request)

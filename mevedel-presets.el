@@ -305,9 +305,32 @@ without a cycle check of its own."
   (when user-post (funcall user-post))
   (mevedel-preset--apply-settings name)
   (mevedel-preset--refresh-tools name)
+  (mevedel-preset--setup-scope name))
+
+(defun mevedel-preset--setup-scope (name)
+  "Install preset NAME's agent roster and tool catalog in the current buffer.
+They live in buffer, session, and tool state that no preset application
+can let-bind."
   (mevedel-agents--setup-for-request name)
   (mevedel-preset--setup-catalog name)
   (mevedel-preset--setup-extras name))
+
+(defun mevedel-preset--restore-scope-at-request-end ()
+  "Reinstall the session preset's scope when the current request ends.
+A request-only preset replaces the agent roster and tool catalog, which
+its tool calls read long after dispatch returns, so they cannot be
+restored when the preset's dynamic extent closes.  The session preset is
+read at teardown, so one selected during the request wins."
+  (let ((buffer (current-buffer)))
+    (mevedel-request-push-canceller
+     mevedel--current-request
+     (lambda ()
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (when-let* ((session mevedel--session)
+                       (name (mevedel-session-preset-name session))
+                       ((assq name mevedel-preset--registry)))
+             (mevedel-preset--setup-scope name))))))))
 
 (defun mevedel-preset--define (name keys)
   "Register exact preset NAME from evaluated KEYS."
@@ -394,9 +417,13 @@ preset is applied."
                                (format "Preset %s is unavailable; select a replacement" name) t))))
 
 (defmacro mevedel-with-preset (name &rest body)
-  "Run BODY with mevedel preset NAME applied for this request only."
+  "Run BODY with mevedel preset NAME applied for the current request only.
+Variables are scoped to BODY.  NAME's agent roster and tool catalog stay
+until the current request ends, when its teardown reinstalls the session
+preset's."
   (declare (indent 1) (debug t))
   `(let ((preset ,name))
+     (mevedel-preset--restore-scope-at-request-end)
      (if (and (symbolp preset)
               (assq preset mevedel-preset--registry))
          (let* ((symbols (mapcar #'car

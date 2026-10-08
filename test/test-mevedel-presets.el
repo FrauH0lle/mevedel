@@ -1114,6 +1114,28 @@
           (should (eq 'inside mevedel-test-setting))))
       (should (eq 'outside mevedel-test-setting))
       (should-not (mevedel-session-preset-name mevedel--session))))
+  :doc "keeps its agent roster and tool catalog until the request ends"
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session--create :name "test"))
+      (mevedel-preset-apply 'mevedel-implement)
+      (let ((catalog (copy-tree (mevedel-session-tool-catalog mevedel--session)))
+            (agents (mevedel-agents-specs))
+            (request (mevedel-request--create)))
+        (setq-local mevedel--current-request request)
+        (mevedel-with-preset 'mevedel-discuss
+          (should-not (mevedel-agents-specs)))
+        (should-not (mevedel-agents-specs))
+        (should-not (equal catalog (mevedel-session-tool-catalog
+                                    mevedel--session)))
+        (mevedel-request-drain-cancellers request)
+        (should (equal agents (mevedel-agents-specs)))
+        (should (equal catalog (mevedel-session-tool-catalog mevedel--session)))
+        (should (eq 'mevedel-implement
+                    (mevedel-session-preset-name mevedel--session))))))
   :doc "delegates raw gptel preset specs"
   (let ((gptel-system-prompt "outside"))
     (mevedel-with-preset '(:system "inside")

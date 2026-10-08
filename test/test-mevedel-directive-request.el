@@ -843,6 +843,88 @@
                        (kill-buffer captured-chat))
                      (delete-directory tmpdir t))))
 
+                 :doc "returns the session to its own preset after a discuss directive"
+                 ;; A request-only preset swaps the agent roster and tool
+                 ;; catalog for the request's tool calls; neither may outlive
+                 ;; it, and dispatch must not replace the session's preset.
+                 (let* ((tmpdir (file-name-as-directory
+                                 (make-temp-file "mevedel-discuss-scope-" t)))
+                        (file (file-name-concat tmpdir "sample.txt"))
+                        (buf (find-file-noselect file))
+                        (mevedel-preset--registry nil)
+                        (gptel--known-presets nil)
+                        (mevedel-action-preset-alist
+                         '((implement . mevedel-implement)
+                           (discuss . mevedel-discuss)))
+                        (mevedel-default-chat-preset 'implement)
+                        chat captured-fsm session-catalog session-agents)
+                   (unwind-protect
+                       (with-current-buffer buf
+                         (mevedel-tools-register)
+                         (mevedel--define-presets)
+                         (mevedel-define-preset test-session-preset
+                           :parents (mevedel-implement))
+                         (insert "source\n")
+                         (write-region (point-min) (point-max) file nil 'silent)
+                         (set-buffer-modified-p nil)
+                         (setq chat (mevedel--chat-buffer nil t (mevedel-workspace)))
+                         (mevedel-preset-apply 'test-session-preset chat)
+                         (with-current-buffer chat
+                           (setq session-catalog
+                                 (copy-tree (mevedel-session-tool-catalog
+                                             mevedel--session))
+                                 session-agents (mevedel-agents-specs)))
+                         (should session-agents)
+                         (let ((directive
+                                (mevedel--create-directive-in
+                                 buf (point-min) (1- (point-max)) nil
+                                 "Explain it")))
+                           (cl-letf (((symbol-function 'save-some-buffers)
+                                      (lambda (&rest _) nil))
+                                     ((symbol-function 'display-buffer)
+                                      (lambda (&rest _) nil))
+                                     ((symbol-function 'gptel-request)
+                                      (lambda (_prompt &rest args)
+                                        (let ((fsm (plist-get args :fsm)))
+                                          (setf (gptel-fsm-info fsm)
+                                                (list
+                                                 :buffer (plist-get args :buffer)
+                                                 :position
+                                                 (plist-get args :position)
+                                                 :callback
+                                                 (lambda (&rest _) nil)))
+                                          (setq captured-fsm fsm)))))
+                             (mevedel--start-directive-discussion directive nil)
+                             (with-current-buffer chat
+                               ;; Tool calls run after dispatch returns.
+                               (should-not (mevedel-agents-specs))
+                               (should-not (equal session-catalog
+                                                  (mevedel-session-tool-catalog
+                                                   mevedel--session)))
+                               (funcall
+                                (plist-get (gptel-fsm-info captured-fsm)
+                                           :mevedel-request-callback)
+                                nil captured-fsm)
+                               (mevedel--turn-commit captured-fsm)
+                               (mevedel-request-end)
+                               (should (eq 'test-session-preset
+                                           (mevedel-session-preset-name
+                                            mevedel--session)))
+                               (should (equal session-catalog
+                                              (mevedel-session-tool-catalog
+                                               mevedel--session)))
+                               (should (equal session-agents
+                                              (mevedel-agents-specs)))))))
+                     (when (buffer-live-p buf)
+                       (kill-buffer buf))
+                     (when (buffer-live-p chat)
+                       (let ((view-buf
+                              (buffer-local-value 'mevedel--view-buffer chat)))
+                         (when (buffer-live-p view-buf)
+                           (kill-buffer view-buf)))
+                       (kill-buffer chat))
+                     (delete-directory tmpdir t)))
+
                  :doc "discards synthetic source context when startup is quit"
                  (let* ((workspace
                          (mevedel-workspace--create
