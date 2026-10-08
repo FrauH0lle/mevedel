@@ -320,6 +320,38 @@
                                                (mevedel-uninstall)))
     (should called))
 
+  :doc "cancels shared periodic callbacks and their host timer"
+  (let ((after-focus-change-function #'ignore)
+        (gptel--known-tools (copy-tree gptel--known-tools))
+        (gptel--known-presets (copy-tree gptel--known-presets))
+        (gptel-prompt-transform-functions gptel-prompt-transform-functions)
+        (mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        (mevedel--gc-holds (make-hash-table :test #'eq))
+        (mevedel--gc-timer nil)
+        (mevedel--gc-restore nil)
+        (gc-cons-threshold gc-cons-threshold)
+        (noninteractive nil)
+        owned host)
+    (setq owned (mevedel--run-periodic-timer 1 #'ignore)
+          host mevedel--coalesced-timer)
+    ;; GC maintenance remembers its timer, so it must stop as an owner.
+    (mevedel--gc-hold 'request #'always)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-skills-uninstall-hot-reload) #'ignore)
+                  ((symbol-function 'mevedel-skills-uninstall-slash-commands) #'ignore)
+                  ((symbol-function 'mevedel-tool-render-data-uninstall-provider-adapter)
+                   #'ignore)
+                  ((symbol-function 'mevedel-gptel-stream-bridge-uninstall) #'ignore))
+          (mevedel-test--with-captured-diagnostics nil
+                                                   (mevedel-uninstall))
+          (should-not (mevedel--ui-timer-pending-p owned))
+          (should-not (memq host timer-list))
+          (should-not mevedel--coalesced-timer)
+          (should-not mevedel--gc-timer)
+          (should (= 0 (hash-table-count mevedel--gc-holds))))
+      (mevedel--ui-timer-cancel owned)))
+
   :doc "force-tears down executions"
   (let ((after-focus-change-function #'ignore)
         (gptel--known-tools (copy-tree gptel--known-tools))
