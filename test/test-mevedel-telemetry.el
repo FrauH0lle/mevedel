@@ -264,7 +264,9 @@
           (mevedel-telemetry--lag-tick)
           (should-not mevedel-telemetry--lag-timer)
           (should-not (advice-member-p #'mevedel-telemetry--lag-time-callback
-                                       'timer-event-handler)))
+                                       'timer-event-handler))
+          (should-not (advice-member-p #'mevedel-telemetry--lag-time-callback
+                                       'mevedel--coalesced-timer-call)))
       (delete-directory root t)))
 
   :doc "stops watching once telemetry is disabled mid-request"
@@ -1579,6 +1581,23 @@
               (should-not (mevedel-telemetry-record-workspace workspace 'journal-digest-failed)))
             (should (string-match-p "workspace telemetry failed" messages))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-telemetry--lag-time-callback
+  (:doc "attributes shared callbacks individually and measures their original deadline")
+  (let ((timer (timer-create))
+        (driver (timer-create))
+        (mevedel-telemetry--lag-since (- (float-time) 10))
+        (mevedel-telemetry--lag-late 0)
+        (mevedel-telemetry--lag-slowest nil))
+    (timer-set-time timer (time-subtract nil 1) 1)
+    (timer-set-function timer #'ignore)
+    (mevedel-telemetry--lag-time-callback #'mevedel--coalesced-timer-call timer)
+    (should (>= mevedel-telemetry--lag-late 1))
+    (should (equal "ignore" (plist-get mevedel-telemetry--lag-slowest :name)))
+    (let ((observed mevedel-telemetry--lag-slowest))
+      (timer-set-function driver #'mevedel--coalesced-timer-tick)
+      (mevedel-telemetry--lag-time-callback #'ignore driver)
+      (should (eq observed mevedel-telemetry--lag-slowest)))))
 
 (provide 'test-mevedel-telemetry)
 

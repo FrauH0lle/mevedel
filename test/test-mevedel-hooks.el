@@ -1617,7 +1617,11 @@
               ;; A queued readiness notification must not resurrect stdin.
               (funcall (process-filter child) child (string 0)))
             (let ((deadline (+ (float-time) 3)))
-              (while (and (process-live-p child) (< (float-time) deadline))
+              ;; Process exit precedes deferred output draining and the hook
+              ;; result.  Wait for settlement, regardless of timer phase.
+              (while (and (or (process-live-p child)
+                              (null (mevedel-session-hook-log session)))
+                          (< (float-time) deadline))
                 (accept-process-output nil 0.01)))
             (should-not (process-live-p child))
             (let ((entries (mevedel-session-hook-log session)))

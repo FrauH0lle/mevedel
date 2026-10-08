@@ -747,7 +747,45 @@
               (should (equal draft (mevedel-view--input-text)))
               (should (= 3 (- (point) (mevedel-view--input-start))))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-scheduled-render))))))
+          (mevedel-view--cancel-scheduled-render)))))
+
+  :doc "retains progress without recovery redraws until its source row exists"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((draft "> quoted\nsecond line")
+            (event (list :type 'progress :data-buffer data-buf
+                         :tool-use-id "new-call/0/1" :facts '(:kind bash)
+                         :output-tail "retained output")))
+        (with-current-buffer view-buf
+          (mevedel-view-stream-test--insert-composer-draft draft 3)
+          (mevedel-view-stream-set-in-flight-turn-start (point-min))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf (copy-marker (point-min)))))
+        (unwind-protect
+            (progn
+              (dotimes (_ 3) (mevedel-view-stream-handle-tool-progress event))
+              (with-current-buffer view-buf
+                (should-not mevedel-view--render-timer)
+                (should (equal "retained output"
+                               (plist-get (gethash "new-call/0/1"
+                                                   mevedel-view--execution-events)
+                                          :output-tail)))
+                (should (equal draft (mevedel-view--input-text)))
+                (should (= 3 (- (point) (mevedel-view--input-start)))))
+              ;; Once its outer ToolCall source arrives, the missing view row
+              ;; is recoverable and must still get an incremental projection.
+              (mevedel-view-stream-test--insert-data
+               data-buf "tool source" '(tool . "new-call"))
+              (with-current-buffer data-buf
+                (save-restriction
+                  (narrow-to-region (point-min) (point-min))
+                  (mevedel-view-stream-handle-tool-progress event)
+                  (should (= (point-min) (point-max)))))
+              (with-current-buffer view-buf
+                (should (mevedel--timer-pending-p mevedel-view--render-timer))
+                (should (eq 'incremental mevedel-view--pending-render-kind))))
+          (with-current-buffer view-buf
+            (mevedel-view--cancel-scheduled-render)))))))
 
 (mevedel-deftest mevedel-view-stream-nested-bash-progress ()
   ,test (test)
@@ -5084,13 +5122,13 @@
               (should-not (eq original replacement))
               (should-not (memq original
                                 (default-toplevel-value 'timer-list)))
-              (should (memq replacement
+              (should (mevedel--ui-timer-pending-p replacement))
+              (should (memq mevedel--coalesced-timer
                             (default-toplevel-value 'timer-list)))
               (should (= phase mevedel-view--spinner-phase-start))
               (setq mevedel-view-spinner-style 'ascii)
               (mevedel-view--start-spinner-timer)
-              (should-not (memq replacement
-                                    (default-toplevel-value 'timer-list)))))
+              (should-not (mevedel--ui-timer-pending-p replacement))))
           (let ((active mevedel-view--spinner-timer))
             (should (memq active timer-list))
             (with-tramp-suspended-timers
@@ -5127,7 +5165,8 @@
           (let ((timer-list nil) (timer-idle-list nil))
             (mevedel-view--start-spinner "Working...")
             (should (= 1.0 mevedel-view--spinner-timer-period))
-            (should (memq mevedel-view--spinner-timer
+            (should (mevedel--ui-timer-pending-p mevedel-view--spinner-timer))
+            (should (memq mevedel--coalesced-timer
                           (default-toplevel-value 'timer-list)))
             (should (memq mevedel-view-power--timer
                           (default-toplevel-value 'timer-list))))
@@ -6041,6 +6080,29 @@
                 (should (mevedel-view-animation-color-ready-p
                          'shimmer (mevedel-view--tool-animation-label target)
                          'mevedel-view-ephemeral :multiple))))))))))
+
+(mevedel-deftest mevedel-view--arm-spinner-timer
+  (:doc "coalesces metadata while retaining the ordinary animation cadence")
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        (metadata (timer-create))
+        (animation (timer-create)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--animation-seconds) (lambda () 1.0)))
+          (timer-set-function metadata #'ignore)
+          (timer-set-function animation #'ignore)
+          (mevedel-view--arm-spinner-timer metadata '((metadata . 1.0)))
+          (let ((due (float-time (timer--time metadata))))
+            (should (= due (floor due))))
+          (should (mevedel--ui-timer-pending-p metadata))
+          (should-not (memq metadata timer-list))
+          (mevedel-view--arm-spinner-timer animation '((shimmer . 0.04)))
+          (should (memq animation (default-toplevel-value 'timer-list)))
+          (should (< (- (float-time (timer--time animation)) (float-time)) 0.05))
+          (should-not (timer--repeat-delay metadata))
+          (should-not (timer--repeat-delay animation)))
+      (mevedel--ui-timer-cancel metadata)
+      (mevedel--ui-timer-cancel animation))))
 
 (mevedel-deftest mevedel-view--spinner-next-delay
   (:doc "Combines sweep, portable glyph and elapsed cadences without polling rest.")

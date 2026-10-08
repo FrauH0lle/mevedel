@@ -1,0 +1,30 @@
+{
+  "before": {
+    "gptel.elc": {
+      "path": ".eask/31.1/elpa/gptel-20260925.357/gptel.elc",
+      "sha256": "b2aae02e2cdf1856691f4a7782d9e367b977be63cfe69261f111426b7fd0cd84"
+    },
+    "gptel-request.elc": {
+      "path": ".eask/31.1/elpa/gptel-20260925.357/gptel-request.elc",
+      "sha256": "dddd60d37b54b261a15e8aff83bf4d14f5d5258681621978033b6ed008aae463"
+    },
+    "gptel-openai.elc": {
+      "path": ".eask/31.1/elpa/gptel-20260925.357/gptel-openai.elc",
+      "sha256": "41f379e6b8a3f217b664db6fe16877a11d6cb05531425a8bf38dd09b328ffcdb"
+    }
+  },
+  "after": {
+    "gptel.elc": {
+      "path": ".eask/31.1/elpa/gptel-20260925.357/gptel.elc",
+      "sha256": "b2aae02e2cdf1856691f4a7782d9e367b977be63cfe69261f111426b7fd0cd84"
+    },
+    "gptel-request.elc": {
+      "path": ".eask/31.1/elpa/gptel-20260925.357/gptel-request.elc",
+      "sha256": "dddd60d37b54b261a15e8aff83bf4d14f5d5258681621978033b6ed008aae463"
+    },
+    "gptel-openai.elc": {
+      "path": ".eask/31.1/elpa/gptel-20260925.357/gptel-openai.elc",
+      "sha256": "41f379e6b8a3f217b664db6fe16877a11d6cb05531425a8bf38dd09b328ffcdb"
+    }
+  }
+}

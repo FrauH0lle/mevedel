@@ -1082,21 +1082,27 @@ envelope removed from its expanded body.
 
 Managed executions publish transient progress after two seconds: at most four
 times per second while output arrives, and once a second while the command is
-silent, which keeps its whole-second elapsed time current. A longer
-`mevedel-execution-progress-interval` slows both. Output read while a remote
-operation holds the editor's timers cannot move the pending event, which
-sits on the suspended list, so the quiet cadence stands until output arrives
-outside that section; moving it there armed a second chain of events. Each event redraws
-the row, and every redraw wakes the editor. The existing Bash row receives the
+silent, which keeps its whole-second elapsed time current. Quiet updates share
+whole-second clock ticks with housekeeping and elapsed metadata. The transition
+from an output-driven update to that clock waits 250 ms to 1.25 seconds, preserving
+the four-updates-per-second bound. A longer
+`mevedel-execution-progress-interval` slows both and aligns quiet updates to
+its multiples. Output read while a remote operation binds the editor's timer
+list away moves the pending event on the top-level list rather than arming a
+second chain of events. Each event refreshes the row; callbacks due
+together share a host wakeup. The existing Bash row receives the
 bounded live output tail and updates its status and elapsed time without
 creating another output owner. A missed exit sentinel is noticed within a
 second.
 These progress updates live only in bounded view state and never create
 transcript turns. Events carry the originating data buffer and durable tool-use
 ID, so the matching main or agent view is selected directly. A progress or
-terminal event replaces only that source-backed Bash row; a missing row
-schedules one coalesced incremental recovery render rather than rebuilding the
-whole transcript.
+terminal event replaces only that source-backed Bash row. A missing view row
+schedules an incremental recovery only when the transcript already contains
+its source (or a compound call's source-owning parent). A call that has not yet
+entered the transcript keeps its bounded progress cache; normal stream and
+tool-boundary projection handle source arrival. Repeated progress does not
+rebuild an unchanged transcript in search of an absent source.
 Terminal settlement replaces the original row's hidden render-data side channel
 in the authoritative transcript with the bounded whole-artifact head-and-tail
 preview plus exit, outcome, duration, omitted-output facts, and any noteworthy

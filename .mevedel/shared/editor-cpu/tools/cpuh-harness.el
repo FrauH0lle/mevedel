@@ -61,12 +61,16 @@
   (clrhash cpuh--timers)
   (setq cpuh--redisplays 0)
   (advice-add 'timer-event-handler :before #'cpuh--count-timer)
+  (when (fboundp 'mevedel--coalesced-timer-call)
+    (advice-add 'mevedel--coalesced-timer-call :before #'cpuh--count-timer))
   (add-hook 'pre-redisplay-functions #'cpuh--count-redisplay)
   t)
 
 (defun cpuh-stop ()
   "Stop counting."
   (advice-remove 'timer-event-handler #'cpuh--count-timer)
+  (when (fboundp 'mevedel--coalesced-timer-call)
+    (advice-remove 'mevedel--coalesced-timer-call #'cpuh--count-timer))
   (remove-hook 'pre-redisplay-functions #'cpuh--count-redisplay)
   t)
 

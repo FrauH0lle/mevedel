@@ -286,7 +286,7 @@
 (declare-function mevedel-view--spinner-active-p "mevedel-view-stream" ())
 (declare-function mevedel-view--content-tick "mevedel-view-stream" ())
 (declare-function mevedel-view-stream--schedule-execution-row-recovery
-                  "mevedel-view-stream" (data-buffer))
+                  "mevedel-view-stream" (data-buffer tool-use-id))
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-collapse-state
@@ -1572,7 +1572,7 @@ redisplay hooks reschedule it once someone can see the result."
                     (dolist (id tool-rows)
                       (unless (mevedel-view--refresh-tool-row data-buffer id)
                         (mevedel-view-stream--schedule-execution-row-recovery
-                         data-buffer))))))
+                         data-buffer id))))))
             (error
              (message "mevedel: view refresh failed: %s"
                       (error-message-string err))))

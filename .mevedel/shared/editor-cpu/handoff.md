@@ -10,10 +10,10 @@ do-nothing 10 Hz timer costs 23-36% in `emacs -Q` at that size and 3% in a
 400x300 frame.
 
 Work lives on branch `review/cpu-wakeups` (worktree
-`.worktrees/cpu-wakeups-review`), which extends `fix/cpu-wakeups`
-(`.worktrees/cpu-wakeups`). Both are based on `3df91e1d`; master has moved
-since (`abb09d64` and later), and a merge will likely conflict in `README.md`.
-Nothing is merged or pushed. Commits, in order:
+`.worktrees/cpu-wakeups-review`), based on `3df91e1d`; master has moved since
+(`abb09d64` and later), and integrating will likely conflict in `README.md`.
+`fix/cpu-wakeups` (`.worktrees/cpu-wakeups`) holds commits 1-4 and the
+original form of 6. Nothing is merged or pushed. Commits, in order:
 
 1. `339c8702` wakeup reductions: telemetry heartbeat, cadenced shimmer, tool-row
    shimmer, spinner arming after redisplay, input-pause freeze, Bash progress
@@ -25,7 +25,14 @@ Nothing is merged or pushed. Commits, in order:
    `native/mevedel-view-native.c` draw animation samples on Wayland
    subsurfaces without Emacs redisplay; ordinary text animation is the
    fallback everywhere else.
-5. The review commit on `review/cpu-wakeups` (see "Review, 2026-10-08" below).
+5. The review commit (see "Review, 2026-10-08" below).
+6. Remaining request wakeups (`219b4974` on `fix/cpu-wakeups`, replayed onto
+   the review commit): GC maintenance, the process watchdog, the telemetry
+   heartbeat, quiet progress and metadata-only view updates share one host
+   timer through `mevedel--ui-timer-activate`'s coalesced queue on integral
+   clock ticks; current Markdown layout schedules no idle pass; tool-row
+   recovery waits until its source exists. Evidence and protocol:
+   [the wakeup lab](wakeup-lab/README.md).
 
 Product behavior is documented in `docs/view.md`, `docs/tools.md`,
 `docs/telemetry.md`, `docs/sessions.md` and ADR 0119; open work is in
@@ -42,6 +49,7 @@ Key numbers (single machine, directional):
 | breathe/bounce, live editor (ordinary renderer) | 64% | 26% |
 | 30-fps native bounce, isolated disposable editor | 55% ordinary | ~2% |
 | silent request, disposable editor: static / native bounce | — | 8% / 12% |
+| sleeping Bash, native 30-fps status, disposable editor (commit 6) | 18-19% | 8.6-10.1% |
 | prose streaming 8 words/s: static / native / ordinary bounce | — | 38% / 44% / 47% |
 
 The streaming row is the largest remaining cost and is not animation.

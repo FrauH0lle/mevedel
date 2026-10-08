@@ -8,6 +8,7 @@
 (require 'helpers
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-reminders)
 (require 'mevedel-view-render)
 (require 'mevedel-transcript-restore)
 

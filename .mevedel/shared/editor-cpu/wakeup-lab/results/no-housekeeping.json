@@ -1,0 +1,38 @@
+{
+  "metadata": "(\"31.1\" 1545 864 \"/tmp/mevedel-request-lab-8bts91ii/elpa/gptel-20260925.357/gptel.elc\")",
+  "source_hashes": {
+    "mevedel-view-native.el": "633efdf1efb05b27208453017c706859e0809939c91e7f250b2688d06a020f20",
+    "mevedel-view-stream.el": "e706a8cc1d80adba69e3993126aa87150eb2e5f60ec82fe37822a0f3805c3cca",
+    "native/mevedel-view-native.c": "317bd7ddd182632b28900635ea672dd80aecc448edf6cbf272b55ee7cda18bf1"
+  },
+  "samples": [
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 8.62,
+      "compositor_cpu": 13.75,
+      "diagnostic_case": "no-housekeeping",
+      "seconds": 8.000126320010168,
+      "first_use_seconds": 1.4362288780102972,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 114 112 0] :load ready :focused t :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 410 408 0] :load ready :focused t :tools 1 :entries 2)",
+      "diagnostic": "((watch . 1) (telemetry . 1) (gc . 1))",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 596 593 0] :load ready :focused t :tools 0 :entries 0)"
+    },
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 11.5,
+      "compositor_cpu": 13.75,
+      "diagnostic_case": "no-housekeeping",
+      "seconds": 8.000109425003757,
+      "first_use_seconds": 0.09448524400067981,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 709 702 0] :load ready :focused t :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 1004 997 0] :load ready :focused t :tools 1 :entries 2)",
+      "diagnostic": "((collection . 1) (watch . 2) (telemetry . 1) (gc . 1))",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 1187 1180 0] :load ready :focused t :tools 0 :entries 0)"
+    }
+  ]
+}

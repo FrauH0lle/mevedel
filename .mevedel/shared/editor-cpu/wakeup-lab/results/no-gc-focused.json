@@ -1,0 +1,38 @@
+{
+  "metadata": "(\"31.1\" 1545 864 \"/tmp/mevedel-request-lab-brxgql7k/elpa/gptel-20260925.357/gptel.elc\")",
+  "source_hashes": {
+    "mevedel-view-native.el": "633efdf1efb05b27208453017c706859e0809939c91e7f250b2688d06a020f20",
+    "mevedel-view-stream.el": "e706a8cc1d80adba69e3993126aa87150eb2e5f60ec82fe37822a0f3805c3cca",
+    "native/mevedel-view-native.c": "317bd7ddd182632b28900635ea672dd80aecc448edf6cbf272b55ee7cda18bf1"
+  },
+  "samples": [
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 14.37,
+      "compositor_cpu": 13.0,
+      "diagnostic_case": "no-gc",
+      "seconds": 8.000042151004891,
+      "first_use_seconds": 1.3627406250016065,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 113 111 0] :load ready :focused t :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 409 407 0] :load ready :focused t :tools 1 :entries 2)",
+      "diagnostic": "((gc . 1))",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 596 594 0] :load ready :focused t :tools 0 :entries 0)"
+    },
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 17.5,
+      "compositor_cpu": 13.75,
+      "diagnostic_case": "no-gc",
+      "seconds": 8.000103865007986,
+      "first_use_seconds": 0.09210815100232139,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 707 701 0] :load ready :focused t :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 1003 997 0] :load ready :focused t :tools 1 :entries 2)",
+      "diagnostic": "((gc . 1))",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 1186 1180 0] :load ready :focused t :tools 0 :entries 0)"
+    }
+  ]
+}

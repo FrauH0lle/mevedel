@@ -1,0 +1,47 @@
+{
+  "metadata": "(\"31.1\" 1545 864 \"/tmp/mevedel-request-lab-ypge560k/elpa/gptel-20260925.357/gptel.elc\")",
+  "source_hashes": {
+    "mevedel-view-native.el": "633efdf1efb05b27208453017c706859e0809939c91e7f250b2688d06a020f20",
+    "mevedel-view-stream.el": "e706a8cc1d80adba69e3993126aa87150eb2e5f60ec82fe37822a0f3805c3cca",
+    "native/mevedel-view-native.c": "317bd7ddd182632b28900635ea672dd80aecc448edf6cbf272b55ee7cda18bf1",
+    "mevedel-utilities.el": "4029974af2ca9cdc4c775fe5ac10ebd275cca6e2ec452a9ae79587933a71899d",
+    "mevedel-telemetry.el": "d200482fb75d7e8fb8679854cac9d9967b49173c215cd5fee45f82e3db7a81c4",
+    "mevedel-execution.el": "ecee70c1d79a14b29f3de8ce9a2ca3ac226036793486babda9bc0fa599527245",
+    "mevedel-execution-process.el": "1746645a09d6553134d02c08c78cef4448e225f3c79cf07f0a3bbaba003e5b55",
+    "mevedel-view-markdown.el": "37c1d63ac24b4dff2926814a393b9c4ac64e1018cd8d6d84843361b9c163996a"
+  },
+  "harness_hashes": {
+    "request.el": "8bb2a426880a9464c8b1bb20a9252a245ccc4f29fbbe9b4fa816846431d96698",
+    "cpuh-harness.el": "1ddb6c73e8f18f33ad8605ded11643e832e672bc045841fe932d449bb6127be1",
+    "mock_server.py": "2faf5e09804a6cec4975127a756159dae211c0de1d87a044e5dc456c89ca88cc"
+  },
+  "mock_tool_ids": "unique_per_request",
+  "samples": [
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 18.17,
+      "compositor_cpu": 17.08,
+      "diagnostic_case": "baseline",
+      "seconds": 12.000069636007538,
+      "first_use_seconds": 1.3145081870025024,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 114 112 0] :load ready :focused t :focus-losses 0 :coalesced nil :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 558 556 0] :load ready :focused t :focus-losses 0 :coalesced nil :tools 1 :entries 2)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 744 741 0] :load ready :focused t :focus-losses 0 :coalesced nil :tools 0 :entries 0)"
+    },
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 19.33,
+      "compositor_cpu": 16.58,
+      "diagnostic_case": "baseline",
+      "seconds": 12.000184068994713,
+      "first_use_seconds": 0.08754448298714124,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 863 858 0] :load ready :focused t :focus-losses 0 :coalesced nil :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 1306 1301 0] :load ready :focused t :focus-losses 0 :coalesced nil :tools 1 :entries 2)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 1491 1486 0] :load ready :focused t :focus-losses 0 :coalesced nil :tools 0 :entries 0)"
+    }
+  ]
+}

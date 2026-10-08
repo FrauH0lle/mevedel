@@ -54,17 +54,30 @@
                           (if (eq style 'static) 'static 'shimmer))
   (cpuh-send "measure animation")
   t)
+(defvar mevedel--coalesced-timers)
+(declare-function cpuh--name "cpuh-harness" (fn))
+(declare-function mevedel-execution-count-user "mevedel-execution" (session))
+(defvar request-lab-focus-losses 0)
+(defun request-lab-note-focus ()
+  "Count focus loss during the CPU sample, including brief interruptions."
+  (unless (frame-focus-state) (cl-incf request-lab-focus-losses)))
+(add-function :after after-focus-change-function #'request-lab-note-focus)
 (defun request-lab-state ()
   "Return bounded evidence about the active view and native presentation."
   (with-current-buffer (cpuh-view)
     (list :visible (and (get-buffer-window (current-buffer)) t)
           :busy (cpuh-busy-p)
+          :executions (mevedel-execution-count-user
+                       (buffer-local-value 'mevedel--session mevedel--data-buffer))
           :status mevedel-view--spinner-status
           :plan mevedel-view--spinner-timer-plan
           :native (length mevedel-view--native-animation-targets)
           :stats (when (fboundp 'mevedel-view-native--stats) (mevedel-view-native--stats))
           :load mevedel-view-native--load-state
           :focused (frame-focus-state)
+          :focus-losses request-lab-focus-losses
+          :coalesced (mapcar (lambda (timer) (cpuh--name (timer--function timer)))
+                             (bound-and-true-p mevedel--coalesced-timers))
           :tools (length mevedel-view--spinner-tool-targets)
           :entries (length mevedel-view-native--entries))))
 (defun request-lab-trace-invalidation (&rest _)
@@ -226,4 +239,6 @@ itself a 10 Hz wakeup, so CPU is measured in a separate pass."
                      (cl-incf (alist-get row seen 0 nil #'equal)))
                    (dolist (row seen) (insert (format "%S\n" row))))))))))
   t)
+(when-let* ((diagnostic (getenv "MEVEDEL_LAB_DIAGNOSTIC")))
+  (load diagnostic nil t))
 (provide 'request-lab)

@@ -13,20 +13,25 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', required=True)
+parser.add_argument('--source-root', type=Path)
 parser.add_argument('--seconds', type=float, default=8)
 parser.add_argument('--screenshots', action='store_true')
 parser.add_argument('--modes', nargs='+', choices=['static', 'ordinary', 'native'], default=['static', 'ordinary', 'native', 'static'])
 parser.add_argument('--tool', action='store_true')
 parser.add_argument('--tool-count', type=int, default=1)
 parser.add_argument('--trace-native', action='store_true')
+parser.add_argument('--focus-kwin', action='store_true')
 parser.add_argument('--acceptance', action='store_true')
 parser.add_argument('--observe', type=float, default=0,
                     help='after sampling CPU, record ownership for this many seconds')
 parser.add_argument('--stream-rate', type=float, default=0,
                     help='stream prose at this many words/s instead of holding silently')
+parser.add_argument('--max-editor-cpu', type=float)
+parser.add_argument('--diagnostic-lisp', type=Path)
+parser.add_argument('--diagnostic-case', default='baseline')
 args = parser.parse_args()
 lab = Path(__file__).resolve().parent
-root = lab.parents[3]
+root = args.source_root.resolve() if args.source_root else lab.parents[3]
 output = Path(args.output).resolve()
 output.mkdir(parents=True, exist_ok=True)
 results = []
@@ -52,6 +57,11 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
     env = dict(os.environ, HOME=str(temp), MEVEDEL_LAB_HOME=str(temp),
                MEVEDEL_LAB_ELPA=str(temp / 'elpa'), MEVEDEL_LAB_WORKSPACE=str(workspace),
                MEVEDEL_LAB_SERVER='mevedel-request-lab-' + str(os.getpid()))
+    if args.diagnostic_lisp:
+        shutil.copy(args.diagnostic_lisp, package / 'diagnostic.el')
+        env['MEVEDEL_LAB_DIAGNOSTIC'] = str(package / 'diagnostic.elc')
+        env['MEVEDEL_LAB_CASE'] = args.diagnostic_case
+        env['MEVEDEL_LAB_TIMELINE'] = str(output / 'timeline.el')
     if args.trace_native:
         env['MEVEDEL_LAB_TRACE'] = str(output / 'native-invalidations.txt')
     for key in ('CACHE', 'CONFIG', 'DATA', 'STATE'):
@@ -66,7 +76,9 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
     with (output / 'compile.log').open('w') as log:
         subprocess.run(['emacs', '-Q', '--batch', '-L', str(package), '--eval', init,
                         '-f', 'batch-byte-compile', str(package / 'request.el'),
-                        str(package / 'cpuh-harness.el')], env=env, check=True, stdout=log, stderr=log)
+                        str(package / 'cpuh-harness.el')] +
+                       ([str(package / 'diagnostic.el')] if args.diagnostic_lisp else []),
+                       env=env, check=True, stdout=log, stderr=log)
     control = output / 'control.json'
     hold_seconds = args.seconds + (30 if args.acceptance else 8)
     control.write_text(json.dumps(dict(hold=0 if (args.tool and args.tool_count == 1) or args.stream_rate else hold_seconds,
@@ -102,6 +114,21 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
             time.sleep(2)
             compositor = int(subprocess.check_output(['pgrep', '-x', 'kwin_wayland']))
             for index, label in enumerate(args.modes):
+                if args.focus_kwin:
+                    script = temp / 'focus.js'
+                    script.write_text('for (const w of workspace.windowList()) { '
+                                      + f'if (w.pid === {editor.pid}) workspace.activeWindow = w;'
+                                      + ' }')
+                    script_name = 'mevedel-measurement-focus-' + str(editor.pid)
+                    script_id = subprocess.check_output(
+                        ['qdbus6', 'org.kde.KWin', '/Scripting', 'loadScript', str(script), script_name],
+                        text=True).strip()
+                    try:
+                        subprocess.run(['qdbus6', 'org.kde.KWin', '/Scripting/Script' + script_id,
+                                        'org.kde.kwin.Script.run'], check=True, stdout=subprocess.DEVNULL)
+                    finally:
+                        subprocess.run(['qdbus6', 'org.kde.KWin', '/Scripting', 'unloadScript', script_name],
+                                       check=True, stdout=subprocess.DEVNULL)
                 style, native = ('static' if label == 'static' else 'bounce'), label == 'native'
                 start = time.monotonic()
                 call(f'(request-lab-start \'{style} {"t" if native else "nil"})')
@@ -115,14 +142,14 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                 # Streaming moves the label; surfaces can be settling at any instant.
                 if native and not args.stream_rate and (f':native {expected_surfaces}' not in before):
                     raise RuntimeError('Native renderer did not attach: ' + before)
-                call('(cpuh-start)')
+                call('(progn (setq request-lab-focus-losses 0) (cpuh-start))')
                 e0, k0 = ticks(editor.pid), ticks(compositor)
                 start = time.monotonic()
                 time.sleep(args.seconds)
                 seconds = time.monotonic() - start
                 e1, k1 = ticks(editor.pid), ticks(compositor)
                 after = call('(request-lab-state)')
-                if ':busy t' not in after or ':focused t' not in after:
+                if ':busy t' not in after or ':focused t' not in after or ':focus-losses 0' not in after:
                     raise RuntimeError('Request lost activity or focus during sampling: ' + after)
                 call(f'(progn (cpuh-stop) (cpuh-dump {json.dumps(str(output / "timers.txt"))} {json.dumps(label)}))')
                 if args.observe:
@@ -130,7 +157,10 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                     time.sleep(args.observe + 1)
                 factor = 100 / os.sysconf('SC_CLK_TCK') / seconds
                 row = dict(label=label, tool_count=args.tool_count if args.tool else 0, synthetic_tool_events=args.tool and args.tool_count > 1, editor_cpu=round((e1-e0)*factor, 2), compositor_cpu=round((k1-k0)*factor, 2),
+                           diagnostic_case=args.diagnostic_case,
                            seconds=seconds, first_use_seconds=first_use, before=before, after=after)
+                if args.diagnostic_lisp:
+                    row['diagnostic'] = call('(when (fboundp (quote request-lab-diagnostic-result)) (request-lab-diagnostic-result))')
                 results.append(row)
                 (output / 'samples.json').write_text(json.dumps(results, indent=2) + '\n')
                 print(json.dumps(row), flush=True)
@@ -188,10 +218,27 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                 if native and ':stats [0 ' not in stopped:
                     raise RuntimeError('Native work survived request completion: ' + stopped)
                 row['stopped'] = stopped
+                # The acceptance workload can yield after 30 s while Bash
+                # remains live.  Request settlement must not cancel its work.
+                for attempt in range(80):
+                    execution_stopped = call('(request-lab-state)')
+                    if ':executions 0' in execution_stopped:
+                        break
+                    time.sleep(.5)
+                else:
+                    raise RuntimeError('Background execution did not finish: ' + execution_stopped)
+                row['execution_stopped'] = execution_stopped
+                if 'mevedel-execution--emit-progress' in execution_stopped or 'closure:mevedel-execution-process--ended' in execution_stopped:
+                    raise RuntimeError('Execution periodic work survived completion: ' + execution_stopped)
             metadata = call('(list emacs-version (frame-pixel-width) (frame-pixel-height) (locate-library "gptel"))')
             hashes = {str(p.relative_to(package)): hashlib.sha256(p.read_bytes()).hexdigest()
-                      for p in [package / 'mevedel-view-native.el', package / 'mevedel-view-stream.el', package / 'native/mevedel-view-native.c']}
-            (output / 'results.json').write_text(json.dumps(dict(metadata=metadata, source_hashes=hashes, samples=results), indent=2) + '\n')
+                      for p in [package / 'mevedel-view-native.el', package / 'mevedel-view-stream.el', package / 'native/mevedel-view-native.c', package / 'mevedel-utilities.el', package / 'mevedel-telemetry.el', package / 'mevedel-execution.el', package / 'mevedel-execution-process.el', package / 'mevedel-view-markdown.el', package / 'mevedel-view.el']}
+            harness_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                              for p in [package / 'request.el', package / 'cpuh-harness.el',
+                                        lab.parent / 'tools/mock_server.py']}
+            (output / 'results.json').write_text(json.dumps(dict(metadata=metadata, source_hashes=hashes,
+                                                                harness_hashes=harness_hashes,
+                                                                mock_tool_ids='unique_per_request', samples=results), indent=2) + '\n')
         finally:
             try:
                 call('(kill-emacs)')
@@ -200,3 +247,7 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
             editor.wait(timeout=10)
             mock.terminate()
             mock.wait(timeout=10)
+if args.max_editor_cpu is not None:
+    passed = all(row['editor_cpu'] <= args.max_editor_cpu for row in results)
+    print(f'Editor CPU <= {args.max_editor_cpu}%: {passed}', flush=True)
+    raise SystemExit(0 if passed else 1)

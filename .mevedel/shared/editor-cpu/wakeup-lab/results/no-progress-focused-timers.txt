@@ -1,0 +1,15 @@
+== native  pre-redisplay-calls=46
+     16 mevedel-telemetry--lag-tick
+      8 mevedel--gc-maintain
+      8 closure:mevedel-execution-process--ended
+      7 closure:mevedel--ui-timer-cancel
+      2 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+== native  pre-redisplay-calls=48
+     16 mevedel-telemetry--lag-tick
+      8 mevedel--gc-maintain
+      8 closure:mevedel--ui-timer-cancel
+      8 closure:mevedel-execution-process--ended
+      2 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+      1 mevedel-session-collection--step

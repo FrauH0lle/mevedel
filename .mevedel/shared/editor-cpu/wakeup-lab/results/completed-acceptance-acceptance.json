@@ -1,0 +1,116 @@
+[
+  {
+    "step": "freeze",
+    "response": "t",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "step": "frozen",
+    "response": "t",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "step": "thaw",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "disable-native",
+    "response": "t",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "step": "enable-native",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "tool-braille",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "tool-ascii",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "tool-dots",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "tool-shimmer",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "dark",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "light",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "larger",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "split",
+    "response": "t",
+    "expected": 4,
+    "actual": 4
+  },
+  {
+    "step": "hscroll",
+    "response": "t",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "step": "unscroll",
+    "response": "t",
+    "expected": 4,
+    "actual": 4
+  },
+  {
+    "step": "unsplit",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "typing",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "draft",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  },
+  {
+    "step": "draft-retained",
+    "response": "t",
+    "expected": 2,
+    "actual": 2
+  }
+]

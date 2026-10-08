@@ -141,7 +141,36 @@
             (should (timerp mevedel-view--realign-timer))
             (should-not (memq first timer-idle-list))))
       (mevedel-view--cancel-realign-timer))
-    (should-not mevedel-view--realign-timer)))
+    (should-not mevedel-view--realign-timer))
+
+  :doc "does not wake the editor after a scroll when layout is already current"
+  (mevedel-test--with-displayed-buffer
+    (insert "Plain progress text.\n")
+    (unwind-protect
+        (progn
+          (mevedel-view--realign-markdown)
+          (mevedel-view--realign-on-window-change (selected-window))
+          (should-not mevedel-view--realign-timer)
+          ;; A resize still needs a deferred image scan.
+          (setq mevedel-view--image-layout-width 1)
+          (mevedel-view--realign-on-window-change (selected-window))
+          (should (timerp mevedel-view--realign-timer)))
+      (mevedel-view--cancel-realign-timer)))
+
+  :doc "schedules a newly visible stale table even at the remembered image width"
+  (mevedel-test--with-displayed-buffer
+    (insert "| A | B |\n|---|---|\n| one | two |\n")
+    (mevedel-view-table-decorate (point-min) (point-max) nil)
+    (put-text-property (point-min) (point-max) 'mevedel-view-table-width nil)
+    (setq mevedel-view--image-layout-width (window-body-width (selected-window) t))
+    (unwind-protect
+        (progn
+          (mevedel-view--realign-on-window-change (selected-window))
+          (should (timerp mevedel-view--realign-timer))
+          (mevedel-view--realign-markdown)
+          (mevedel-view--realign-on-window-change (selected-window))
+          (should-not mevedel-view--realign-timer))
+      (mevedel-view--cancel-realign-timer))))
 
 (mevedel-deftest mevedel-view--enable-markdown-realign ()
   ,test

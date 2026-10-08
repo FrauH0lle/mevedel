@@ -1,0 +1,36 @@
+{
+  "metadata": "(\"31.1\" 1545 864 \"/tmp/mevedel-request-lab-8j3l9tk6/elpa/gptel-20260925.357/gptel.elc\")",
+  "source_hashes": {
+    "mevedel-view-native.el": "633efdf1efb05b27208453017c706859e0809939c91e7f250b2688d06a020f20",
+    "mevedel-view-stream.el": "23d0666bc36106fbbd180467ec3ed5da3ed581d3d212da285de2e0b571ee4ddd",
+    "native/mevedel-view-native.c": "317bd7ddd182632b28900635ea672dd80aecc448edf6cbf272b55ee7cda18bf1",
+    "mevedel-utilities.el": "9878a72c762685dc7bf054fe2e6e3097038bb0309506452e55a5aa8af6fd1a3f",
+    "mevedel-telemetry.el": "520a94ed46c6ccced304016d498b95b19e8bc6d35c2b19f370c0c3727561884e",
+    "mevedel-execution.el": "14f2594e345622b6e0aac75143c64b36e250e167e090d69adb942c94fcbd7664",
+    "mevedel-execution-process.el": "18cbd07e02858a10421483284e26d4f01c4f4f4ac570fe8c19e3d88e39bdb5ad",
+    "mevedel-view-markdown.el": "669d634a547c128d517ccc4e78ddd9d67cccb1f992458562c59359c5705294b1",
+    "mevedel-view.el": "c44c6c0981cfccba731058ab379c2811cc7371d06afb9c78c808a2b0477de4ac"
+  },
+  "harness_hashes": {
+    "request.el": "17c08d9196726732efece88af1e699720460d78b5553a58b31d3b336faf658c3",
+    "cpuh-harness.el": "645d3b166c17a601f06541f14d59b629ae953d0eea97eca6820957610c24c739",
+    "mock_server.py": "2faf5e09804a6cec4975127a756159dae211c0de1d87a044e5dc456c89ca88cc"
+  },
+  "mock_tool_ids": "unique_per_request",
+  "samples": [
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 9.0,
+      "compositor_cpu": 13.75,
+      "diagnostic_case": "baseline",
+      "seconds": 8.000080668003648,
+      "first_use_seconds": 1.3069611029932275,
+      "before": "(:visible t :busy t :executions 1 :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 114 112 0] :load ready :focused t :focus-losses 0 :coalesced (\"closure:mevedel--ui-timer-cancel\" \"mevedel-execution--emit-progress\" \"closure:mevedel-execution-process--ended\" \"mevedel-telemetry--lag-tick\" \"mevedel--gc-maintain\") :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :executions 1 :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 409 407 0] :load ready :focused t :focus-losses 0 :coalesced (\"closure:mevedel--ui-timer-cancel\" \"mevedel-execution--emit-progress\" \"closure:mevedel-execution-process--ended\" \"mevedel-telemetry--lag-tick\" \"mevedel--gc-maintain\") :tools 1 :entries 2)",
+      "stopped": "(:visible t :busy nil :executions 1 :status nil :plan nil :native 0 :stats [0 1004 972 0] :load ready :focused t :focus-losses 0 :coalesced (\"mevedel-execution--emit-progress\" \"closure:mevedel-execution-process--ended\" \"mevedel-telemetry--lag-tick\" \"mevedel--gc-maintain\") :tools 0 :entries 0)",
+      "execution_stopped": "(:visible t :busy nil :executions 0 :status nil :plan nil :native 0 :stats [0 1004 972 0] :load ready :focused t :focus-losses 0 :coalesced (\"mevedel-telemetry--lag-tick\" \"mevedel--gc-maintain\") :tools 0 :entries 0)"
+    }
+  ]
+}

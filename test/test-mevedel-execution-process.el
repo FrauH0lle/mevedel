@@ -477,13 +477,14 @@
                          (lambda (process chunk)
                            (push (cons process chunk) chunks)))
                         :sentinel #'ignore))))
+             ((symbol-function 'mevedel--run-periodic-timer)
+              (lambda (period function &rest args)
+                (should (= period mevedel-execution-process--watch-interval))
+                (setq watch (lambda () (apply function args)))
+                (funcall original-run-at-time 3600 nil #'ignore)))
              ((symbol-function 'run-at-time)
               (lambda (time repeat function &rest args)
                 (cond
-                 ((and (equal time mevedel-execution-process--watch-interval)
-                       (equal repeat mevedel-execution-process--watch-interval))
-                  (setq watch (lambda () (apply function args)))
-                  (funcall original-run-at-time 3600 nil #'ignore))
                  ((eq function
                       #'mevedel-execution-process--settle-main-exit)
                   (setq settle (lambda () (apply function args)))

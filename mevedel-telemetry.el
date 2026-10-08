@@ -687,52 +687,57 @@ Collection inside the callback is kept apart from its own work.
 A stall delays every timer due during it, so TIMER's lateness measures the
 loop as well as a heartbeat would.  Idle timers are due relative to input,
 not the clock, and are not counted."
-  (let ((start (float-time))
-        (gc-count gcs-done)
-        (gc-seconds gc-elapsed))
-    (when-let* (((not (timer--idle-delay timer)))
-                (due (timer--time timer))
-                ((car due)))
-      (setq mevedel-telemetry--lag-late
-            (max mevedel-telemetry--lag-late
-                 (- start (max (float-time due)
-                               (or mevedel-telemetry--lag-since start))))))
-    (unwind-protect (funcall original timer)
-      (let ((elapsed (- (float-time) start)))
-        (when (> elapsed (or (plist-get mevedel-telemetry--lag-slowest :seconds) 0))
-          (setq mevedel-telemetry--lag-slowest
-                (list :name (mevedel-telemetry--lag-callback-name timer)
-                      :seconds elapsed
-                      :gc-seconds (- gc-elapsed gc-seconds)
-                      :gc-count (- gcs-done gc-count))))))))
+  (if (eq (timer--function timer) #'mevedel--coalesced-timer-tick)
+      (funcall original timer)
+    (let ((start (float-time))
+          (gc-count gcs-done)
+          (gc-seconds gc-elapsed))
+      (when-let* (((not (timer--idle-delay timer)))
+                  (due (timer--time timer))
+                  ((car due)))
+        (setq mevedel-telemetry--lag-late
+              (max mevedel-telemetry--lag-late
+                   (- start (max (float-time due)
+                                 (or mevedel-telemetry--lag-since start))))))
+      (unwind-protect (funcall original timer)
+        (let ((elapsed (- (float-time) start)))
+          (when (> elapsed (or (plist-get mevedel-telemetry--lag-slowest :seconds) 0))
+            (setq mevedel-telemetry--lag-slowest
+                  (list :name (mevedel-telemetry--lag-callback-name timer)
+                        :seconds elapsed
+                        :gc-seconds (- gc-elapsed gc-seconds)
+                        :gc-count (- gcs-done gc-count)))))))))
 
 (defun mevedel-telemetry--lag-start ()
   "Start the heartbeat and callback timing unless they already run."
   (unless mevedel-telemetry--lag-timer
-    (setq mevedel-telemetry--lag-due (+ (float-time) mevedel-telemetry--lag-interval)
-          mevedel-telemetry--lag-since (float-time)
+    (setq mevedel-telemetry--lag-since (float-time)
           mevedel-telemetry--lag-late 0
           mevedel-telemetry--lag-slowest nil
           mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
           mevedel-telemetry--lag-cpu (mevedel-telemetry--cpu-seconds)
           mevedel-telemetry--lag-timer
-          (run-at-time mevedel-telemetry--lag-interval
-                       mevedel-telemetry--lag-interval
-                       #'mevedel-telemetry--lag-tick))
+          (mevedel--run-periodic-timer mevedel-telemetry--lag-interval
+                                      #'mevedel-telemetry--lag-tick)
+          mevedel-telemetry--lag-due
+          (float-time (timer--time mevedel-telemetry--lag-timer)))
     (advice-add 'timer-event-handler :around
+                #'mevedel-telemetry--lag-time-callback)
+    (advice-add 'mevedel--coalesced-timer-call :around
                 #'mevedel-telemetry--lag-time-callback)))
 
 (defun mevedel-telemetry--lag-stop ()
   "Stop the heartbeat and callback timing."
   (when (timerp mevedel-telemetry--lag-timer)
-    (cancel-timer mevedel-telemetry--lag-timer))
+    (mevedel--ui-timer-cancel mevedel-telemetry--lag-timer))
   (setq mevedel-telemetry--lag-timer nil
         mevedel-telemetry--lag-since nil
         mevedel-telemetry--lag-late 0
         mevedel-telemetry--lag-gc nil
         mevedel-telemetry--lag-cpu nil
         mevedel-telemetry--lag-windows nil)
-  (advice-remove 'timer-event-handler #'mevedel-telemetry--lag-time-callback))
+  (advice-remove 'timer-event-handler #'mevedel-telemetry--lag-time-callback)
+  (advice-remove 'mevedel--coalesced-timer-call #'mevedel-telemetry--lag-time-callback))
 
 (defun mevedel-telemetry--lag-request (session event request-id)
   "Open or close SESSION's lag window for request EVENT with REQUEST-ID."
@@ -784,7 +789,9 @@ watching: the request it would close never reports settling."
            (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)))
            (cpu (mevedel-telemetry--cpu-seconds))
            (cpu-before (or mevedel-telemetry--lag-cpu cpu)))
-      (setq mevedel-telemetry--lag-due (+ now mevedel-telemetry--lag-interval)
+      (setq mevedel-telemetry--lag-due
+            (float-time (timer-next-integral-multiple-of-time
+                         nil mevedel-telemetry--lag-interval))
             mevedel-telemetry--lag-since now
             mevedel-telemetry--lag-late 0
             mevedel-telemetry--lag-slowest nil

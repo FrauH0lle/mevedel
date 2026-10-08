@@ -1,0 +1,36 @@
+{
+  "metadata": "(\"31.1\" 1545 864 \"/tmp/mevedel-request-lab-menjidy4/elpa/gptel-20260925.357/gptel.elc\")",
+  "source_hashes": {
+    "mevedel-view-native.el": "633efdf1efb05b27208453017c706859e0809939c91e7f250b2688d06a020f20",
+    "mevedel-view-stream.el": "e706a8cc1d80adba69e3993126aa87150eb2e5f60ec82fe37822a0f3805c3cca",
+    "native/mevedel-view-native.c": "317bd7ddd182632b28900635ea672dd80aecc448edf6cbf272b55ee7cda18bf1"
+  },
+  "samples": [
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 13.5,
+      "compositor_cpu": 14.37,
+      "diagnostic_case": "align",
+      "seconds": 8.000131122986204,
+      "first_use_seconds": 1.3375202510069357,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 114 112 0] :load ready :focused t :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 410 408 0] :load ready :focused t :tools 1 :entries 2)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 595 593 0] :load ready :focused t :tools 0 :entries 0)"
+    },
+    {
+      "label": "native",
+      "tool_count": 1,
+      "synthetic_tool_events": false,
+      "editor_cpu": 16.0,
+      "compositor_cpu": 16.12,
+      "diagnostic_case": "align",
+      "seconds": 8.000074846000643,
+      "first_use_seconds": 0.09619288600515574,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 707 701 0] :load ready :focused t :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 1003 997 0] :load ready :focused t :tools 1 :entries 2)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 1184 1178 0] :load ready :focused t :tools 0 :entries 0)"
+    }
+  ]
+}

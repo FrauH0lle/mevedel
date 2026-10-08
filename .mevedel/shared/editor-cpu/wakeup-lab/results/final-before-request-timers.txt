@@ -1,0 +1,16 @@
+== native  pre-redisplay-calls=55
+     24 mevedel-telemetry--lag-tick
+     12 mevedel--gc-maintain
+     11 closure:mevedel--ui-timer-cancel
+      3 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+== native  pre-redisplay-calls=61
+     25 mevedel-telemetry--lag-tick
+     13 mevedel--gc-maintain
+     12 closure:mevedel--ui-timer-cancel
+      3 closure:mevedel-transport-run-when-idle
+      2 mevedel-view--control-transfer-refresh
+      1 mevedel-session-persistence--checkpoint-tick
+      1 mevedel-session-durability-lease-renew
+      1 undo-auto--boundary-timer
+      1 mevedel-session-collection--step

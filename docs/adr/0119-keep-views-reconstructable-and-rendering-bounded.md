@@ -140,6 +140,22 @@ paused labels; offscreen labels wait until they return. Frozen glyphs recheck
 display fallbacks without scheduling decorative motion. A move between frames
 uses the destination palette or the portable multi-frame fallback.
 
+Periodic housekeeping and metadata share host wakeups. Aligning separate timer
+deadlines alone still allowed redisplay between their callbacks on PGTK, so one
+UI-host timer now dispatches due callbacks together. GC maintenance, process-exit
+recovery and quiet progress retain whole-second updates; telemetry retains its
+half-second heartbeat and attributes each callback separately. Metadata-only
+views join the whole-second clock. Decorative Lisp animation and output-driven
+progress retain their natural deadlines. Missing execution rows trigger recovery
+only when their source, or their compound parent's source, is in the transcript;
+progress remains cached until source arrival and normal boundary projection.
+Cancellation removes an owner's work
+without affecting other owners, and the last cancellation removes the host timer.
+Missed periodic observations are skipped after a stall. Batches yield between
+callbacks for input or after 25 ms; individual callbacks still own their own
+responsiveness. Layout hooks avoid scheduling idle callbacks when visible tables
+and images are already current.
+
 Focus, window and ordinary buffer-scroll events rearm scheduling. The one-shot
 timer uses the Emacs UI host's top-level timer list: TRAMP's temporary binding
 neither discards rearms nor hides a queued timer from cancellation. Window
@@ -1234,3 +1250,31 @@ position: 17 premature commits in the reproduction. Synchronizing initial and
 moved surfaces until the parent frame callback removes this race; subsequent
 native frames remain independent. The trace check passes and the user confirmed
 the refocus flicker is gone. Pending callbacks are destroyed with their surfaces.
+
+
+### October 2026: share request wakeups and require recoverable source
+
+Native animation removed per-frame Lisp redisplay, but independent housekeeping,
+quiet progress and metadata callbacks still incurred whole-surface presentation.
+A bounded callback/redisplay trace showed that equal timer deadlines alone did
+not prevent redisplay between callbacks. These owners now share a dispatcher;
+missed observation ticks are skipped, individual callback telemetry is retained,
+and dispatch yields between callbacks for input or after 25 ms. Output-driven
+progress and ordinary decorative animation retain their separate cadences.
+
+Window-change notifications no longer arm an idle Markdown pass when visible
+layout is already current. Execution progress still updates its cache immediately,
+but a missing tool row is recovered only when its authoritative source exists;
+a repeated incremental render cannot reconstruct source that has not arrived.
+Normal source-arrival projection, nested source-owning tool IDs and narrowed
+transcript buffers remain supported.
+
+A corrected mock with unique tool IDs and matching compiled dependencies measured
+real sleeping-Bash requests at 18.17–19.33% editor CPU before these changes and
+8.58–10.08% afterward on the same Emacs 31.1 PGTK/Wayland setup, retaining 30-fps
+native status motion. The average reduction is about 50%; a provisional strict
+10% per-sample target narrowly failed. Earlier repeated-request mock samples
+reused a tool ID and could find a previous source row, so they do not establish
+fresh-tool performance. Protocol, source hashes, full-suite results and separate
+request/execution teardown checks are retained in
+`.mevedel/shared/editor-cpu/wakeup-lab/`.

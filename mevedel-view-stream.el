@@ -47,6 +47,10 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-segment-bounds
+                  "mevedel-tool-render-data" (tool-use-id))
+
 ;; `mevedel-utilities'
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
@@ -994,6 +998,17 @@ a window resize."
             (mevedel-view-native-sync specs seconds #'mevedel-view--start-spinner-timer)))
     mevedel-view--native-animation-targets))
 
+(defun mevedel-view--arm-spinner-timer (timer plan)
+  "Arm TIMER for PLAN's next visual change or shared metadata tick."
+  (let ((metadata-only (equal plan '((metadata . 1.0)))))
+    (timer-set-time
+     timer (if metadata-only
+               (timer-next-integral-multiple-of-time nil 1)
+             (time-add nil (seconds-to-time
+                            (mevedel-view--spinner-next-delay
+                             plan (mevedel-view--animation-seconds))))))
+    (mevedel--ui-timer-activate timer metadata-only)))
+
 (defun mevedel-view--start-spinner-timer (&optional resumed)
   "Start one view timer at the next needed visual or metadata cadence.
 RESUMED means visibility or focus changed, so frozen glyph support can be
@@ -1132,11 +1147,6 @@ rechecked without changing the displayed animation phase."
       (when period
         (let ((buffer (current-buffer)) timer)
           (setq timer (timer-create))
-          (timer-set-time timer
-                          (time-add nil (seconds-to-time
-                                         (mevedel-view--spinner-next-delay
-                                          plan
-                                          (mevedel-view--animation-seconds)))))
           (timer-set-function
            timer
            (lambda ()
@@ -1156,13 +1166,7 @@ rechecked without changing the displayed animation phase."
                            ;; during a stall.  Reuse its object after each
                            ;; delivered tick to avoid frame-rate allocation.
                            (when (eq timer mevedel-view--spinner-timer)
-                             (timer-set-time
-                              timer (time-add (current-time)
-                                              (seconds-to-time
-                                               (mevedel-view--spinner-next-delay
-                                                plan
-                                                (mevedel-view--animation-seconds)))))
-                             (mevedel--ui-timer-activate timer)))
+                             (mevedel-view--arm-spinner-timer timer plan)))
                        (error (mevedel-view--stop-spinner-timer)))
                    (mevedel--ui-timer-cancel timer)
                    (when (eq timer mevedel-view--spinner-timer)
@@ -1170,7 +1174,7 @@ rechecked without changing the displayed animation phase."
                      (when (and (derived-mode-p 'mevedel-view-mode)
                                 (mevedel-view--spinner-active-p))
                        (mevedel-view--start-spinner-timer))))))))
-          (mevedel--ui-timer-activate timer)
+          (mevedel-view--arm-spinner-timer timer plan)
           (setq mevedel-view--spinner-timer timer))))))
 
 (defun mevedel-view--refresh-animation-options ()
@@ -1542,10 +1546,26 @@ Without PREVIOUS, capture displayed samples before replacing the live rows."
     (setq mevedel-view--execution-event-entries
           (max 0 (1- mevedel-view--execution-event-entries)))))
 
-(defun mevedel-view-stream--schedule-execution-row-recovery (data-buffer)
-  "Schedule one incremental render to recover a missing execution row."
-  (when (and (mevedel-view-stream-in-flight-turn-start-position)
-             (markerp mevedel-view--data-turn-start))
+(defun mevedel-view-stream--schedule-execution-row-recovery (data-buffer tool-use-id)
+  "Recover TOOL-USE-ID's missing view row when DATA-BUFFER has its source.
+A live call may not have entered the transcript yet.  Its progress stays
+cached until source arrival and normal stream/tool-boundary rendering;
+repeatedly rebuilding an unchanged transcript cannot materialize that row.
+Nested calls recover through their source-owning parent.  A nil TOOL-USE-ID
+requests generic recovery, without a particular source identity to check."
+  (when (and (buffer-live-p data-buffer)
+             (mevedel-view-stream-in-flight-turn-start-position)
+             (markerp mevedel-view--data-turn-start)
+             (or (null tool-use-id)
+                 (with-current-buffer data-buffer
+                   (save-restriction
+                     (widen)
+                     (let ((owner tool-use-id) source)
+                       (while (and owner (not source))
+                         (setq source (mevedel-tool-render-data-segment-bounds owner)
+                               owner (and (string-match "/[0-9]+\\'" owner)
+                                          (substring owner 0 (match-beginning 0)))))
+                       source)))))
     (mevedel-view--schedule-render
      'incremental data-buffer mevedel-view-stream-render-delay)))
 
@@ -1631,7 +1651,7 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
                (mevedel-view--refresh-tool-row data-buffer tool-use-id)))
          (t
           (mevedel-view-stream--schedule-execution-row-recovery
-           data-buffer))))))
+           data-buffer tool-use-id))))))
   nil)
 
 (defun mevedel-view--render-stream-update (data-buf)

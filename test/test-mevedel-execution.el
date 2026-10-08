@@ -69,30 +69,60 @@
                (lambda (_record _type &rest properties) properties))
               ((symbol-function 'mevedel-execution--emit-event)
                (lambda (value) (setq event value)))
-              ((symbol-function 'run-at-time) (lambda (&rest _) nil)))
+              ((symbol-function 'mevedel--ui-timer-activate) (lambda (&rest _) nil)))
       (mevedel-execution--emit-progress record))
     (should (plist-get event :output-preview-truncated-p)))
 
-  :doc "waits the quiet interval when no output arrives"
-  (let ((record (mevedel-execution--record-create)) delay)
-    (cl-letf (((symbol-function 'mevedel-execution--event) #'ignore)
-              ((symbol-function 'mevedel-execution--emit-event) #'ignore)
-              ((symbol-function 'run-at-time)
-               (lambda (seconds &rest _) (setq delay seconds) nil)))
-      (mevedel-execution--emit-progress record))
-    (should (= mevedel-execution--quiet-progress-interval delay))
-    (should (mevedel-execution--record-progress-emitted-at record)))
+  :doc "shares whole-second quiet updates without violating the output rate bound"
+  (let ((record (mevedel-execution--record-create)) timer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-execution--event) #'ignore)
+                  ((symbol-function 'mevedel-execution--emit-event) #'ignore))
+          (mevedel-execution--emit-progress record)
+          (setq timer (mevedel-execution--record-progress-timer record))
+          (let ((due (float-time (timer--time timer)))
+                (emitted (mevedel-execution--record-progress-emitted-at record)))
+            (should (<= 0.25 (- due emitted) 1.26))
+            (should (= due (floor due))))
+          (should (mevedel--ui-timer-pending-p timer))
+          (should-not (memq timer timer-list))
+          (timer-set-time timer (time-add nil 1))
+          (mevedel-execution--hasten-progress record)
+          ;; Output moves the same event out of the shared queue, earlier.
+          (should (eq timer (mevedel-execution--record-progress-timer record)))
+          (should-not (memq timer mevedel--coalesced-timers))
+          (should (memq timer timer-list))
+          (should (< (float-time (timer--time timer)) (+ (float-time) 0.3))))
+      (mevedel--ui-timer-cancel timer)
+      (mevedel--ui-timer-cancel (mevedel-execution--record-progress-timer record))))
 
   :doc "honours an output interval longer than the quiet interval"
   (let ((record (mevedel-execution--record-create))
         (mevedel-execution-progress-interval 3)
-        delay)
-    (cl-letf (((symbol-function 'mevedel-execution--event) #'ignore)
-              ((symbol-function 'mevedel-execution--emit-event) #'ignore)
-              ((symbol-function 'run-at-time)
-               (lambda (seconds &rest _) (setq delay seconds) nil)))
-      (mevedel-execution--emit-progress record))
-    (should (= 3 delay))))
+        timer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-execution--event) #'ignore)
+                  ((symbol-function 'mevedel-execution--emit-event) #'ignore))
+          (mevedel-execution--emit-progress record)
+          (setq timer (mevedel-execution--record-progress-timer record))
+          (let ((due (float-time (timer--time timer))))
+            (should (= 0 (mod (floor due) 3)))
+            (should (<= 0.25 (- due (float-time)) 3.26))))
+      (mevedel--ui-timer-cancel timer)))
+
+  :doc "terminal cleanup cancels shared quiet progress without stopping other jobs"
+  (let ((record (mevedel-execution--record-create)) timer other)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-execution--event) #'ignore)
+                  ((symbol-function 'mevedel-execution--emit-event) #'ignore))
+          (setq other (mevedel--run-periodic-timer 1 #'ignore))
+          (mevedel-execution--emit-progress record)
+          (setq timer (mevedel-execution--record-progress-timer record))
+          (mevedel-execution--release-runtime record)
+          (should-not (mevedel--ui-timer-pending-p timer))
+          (should (mevedel--ui-timer-pending-p other)))
+      (mevedel--ui-timer-cancel timer)
+      (mevedel--ui-timer-cancel other))))
 
 (mevedel-deftest mevedel-execution--hasten-progress ()
   ,test
@@ -106,8 +136,8 @@
         (progn
           (mevedel-execution--hasten-progress record)
           (let ((timer (mevedel-execution--record-progress-timer record)))
-            (should-not (eq old timer))
-            (should-not (memq old timer-list))
+            (should (eq old timer))
+            (should (= 1 (cl-count old timer-list)))
             (should (< (float-time (timer--time timer)) (+ (float-time) 0.2)))
             ;; Further output before that event leaves it alone.
             (mevedel-execution--hasten-progress record)
@@ -124,7 +154,7 @@
           (should (eq timer (mevedel-execution--record-progress-timer record))))
       (cancel-timer (mevedel-execution--record-progress-timer record))))
 
-  :doc "leaves a wait it cannot cancel from a suspended timer section"
+  :doc "moves a suspended event instead of arming a second one"
   (let* ((record (mevedel-execution--record-create
                   :progress-emitted-at (- (float-time) 0.1)
                   :progress-timer (run-at-time 0.9 nil #'ignore)))
@@ -134,10 +164,9 @@
           (mevedel-transport-with-exclusive-connection
             (mevedel-execution--hasten-progress record))
           (should (eq old (mevedel-execution--record-progress-timer record)))
-          (should (memq old timer-list))
-          (should-not (cl-find #'mevedel-execution--emit-progress timer-list
-                               :key #'timer--function)))
-      (cancel-timer old))))
+          (should (= 1 (cl-count old timer-list)))
+          (should (< (float-time (timer--time old)) (+ (float-time) 0.2))))
+      (mevedel--ui-timer-cancel old))))
 
 (mevedel-deftest mevedel-execution--user-snapshot ()
   ,test

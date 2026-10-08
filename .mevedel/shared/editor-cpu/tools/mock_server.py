@@ -4,7 +4,7 @@
 # - A request whose messages already contain a tool result gets a short text answer.
 # - Otherwise, after HOLD seconds of silence, it streams the tool call (if any) or a short text.
 # The first request body is saved to BODY for schema inspection.
-import http.server, json, sys, time, os
+import http.server, json, sys, time, os, uuid
 PORT = int(sys.argv[1]); CONTROL = sys.argv[2]; BODY = sys.argv[3]
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -30,7 +30,8 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Connection", "close")
         self.end_headers()
-        base = {"id": "mock", "object": "chat.completion.chunk", "model": "mock"}
+        request_id = uuid.uuid4().hex
+        base = {"id": "mock_" + request_id, "object": "chat.completion.chunk", "model": "mock"}
         def send(obj):
             self.wfile.write(("data: " + json.dumps(obj) + "\n\n").encode()); self.wfile.flush()
         if not has_tool_result:
@@ -38,7 +39,7 @@ class H(http.server.BaseHTTPRequestHandler):
         tools = [] if has_tool_result else (ctl.get("tools") or ([ctl["tool"]] if ctl.get("tool") else []))
         if tools:
             send(dict(base, choices=[{"index": 0, "delta": {"role": "assistant", "tool_calls": [
-                {"index": index, "id": "call_mock_" + str(index), "type": "function",
+                {"index": index, "id": "call_mock_" + request_id + "_" + str(index), "type": "function",
                  "function": {"name": tool["name"], "arguments": json.dumps(tool["args"])}}
                 for index, tool in enumerate(tools)]},
                 "finish_reason": None}]))

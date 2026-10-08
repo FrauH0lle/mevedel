@@ -500,7 +500,7 @@ Incomplete identity, an unreachable target, or an unexpected exit is
                    (mevedel-execution-process--child-force-timer child)
                    (mevedel-execution-process--child-settle-timer child)
                    (mevedel-execution-process--child-watch-timer child)))
-      (when (timerp timer) (cancel-timer timer)))
+      (when (timerp timer) (mevedel--ui-timer-cancel timer)))
     (setf (mevedel-execution-process--child-process child) nil
           (mevedel-execution-process--child-timeout-timer child) nil
           (mevedel-execution-process--child-force-timer child) nil
@@ -753,8 +753,8 @@ deferred work, so that case deletes immediately rather than leak."
 (defconst mevedel-execution-process--watch-interval 1.0
   "Seconds between checks for an exit whose sentinel never ran.
 The sentinel settles almost every child; this only bounds how late a lost
-one is noticed.  Each check is a wakeup, and on pgtk every wakeup repaints
-the whole frame: at 0.1 s, a running command cost ten a second.")
+one is noticed.  Checks share periodic host wakeups with housekeeping.
+The former 0.1 s timer repainted a whole pgtk frame ten times a second.")
 
 (cl-defun mevedel-execution-process-start
     (child &key name command target coding timeout confined)
@@ -821,8 +821,7 @@ the whole frame: at 0.1 s, a running command cost ten a second.")
             (process-send-eof
              (mevedel-execution-process--child-process child)))
           (setf (mevedel-execution-process--child-watch-timer child)
-                (run-at-time
-                 mevedel-execution-process--watch-interval
+                (mevedel--run-periodic-timer
                  mevedel-execution-process--watch-interval
                  (lambda ()
                    (unless

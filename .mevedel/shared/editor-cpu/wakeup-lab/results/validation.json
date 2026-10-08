@@ -1,0 +1,21 @@
+{
+  "suite": {
+    "count": 9789,
+    "unexpected": 0,
+    "skipped": 31,
+    "wall_seconds": 240.3238912050001
+  },
+  "suite_report": ".scratch/test-suite-performance/20261008-141727/summary.json",
+  "compilation": {
+    "files": 242,
+    "warnings": 0,
+    "log": ".scratch/wakeup-lab/final-compile.log"
+  },
+  "graphical_checks": 19,
+  "tool_cpu_gate": {
+    "maximum": 10,
+    "passed": false,
+    "highest_sample": 10.08
+  },
+  "execution_teardown_passed": true
+}

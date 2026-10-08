@@ -1,5 +1,13 @@
 # Renderer experiments: low-CPU animation
 
+**Later benchmark correction:** repeated tool-request samples in this report
+used a mock that reused tool-call IDs. Such samples could update an older tool
+row and are not representative of fresh calls; first-request and isolated
+animation samples are unaffected by that collision. The
+[follow-up wakeup investigation](../wakeup-lab/README.md) records the correction
+and comparisons using unique IDs for both product revisions.
+
+
 Working investigation, 2026-10-08. Product base: `a9f58a80` on
 `fix/cpu-wakeups`. Diagnostic probes stay in this directory; the integrated
 candidate is `mevedel-view-native.el` and `native/mevedel-view-native.c`.

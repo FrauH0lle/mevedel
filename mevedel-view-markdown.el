@@ -1038,12 +1038,16 @@ undo state, the modified flag, selections and the authoritative transcript."
 (defun mevedel-view--realign-on-window-change (&optional window &rest _)
   "Schedule idle formatting after display, scrolling, commands or resize.
 Coalesce work into one timer.  Each table yields for another 250 ms of idle
-before the next pass; an idle timer deadline is absolute within its idle period."
+before the next pass; an idle timer deadline is absolute within its idle period.
+Do not wake the editor when the visible layout is already current."
   (mevedel-view--cancel-realign-timer)
   (when-let* ((window (if (and (window-live-p window)
                               (eq (window-buffer window) (current-buffer)))
                          window
-                       (get-buffer-window (current-buffer) t))))
+                       (get-buffer-window (current-buffer) t)))
+              ((or (not (eql (window-body-width window t)
+                             mevedel-view--image-layout-width))
+                   (mevedel-view-table--visible-stale window))))
     (setq mevedel-view--realign-timer
           (run-with-idle-timer
            (+ 0.25 (if-let* ((idle (current-idle-time))) (float-time idle) 0))
