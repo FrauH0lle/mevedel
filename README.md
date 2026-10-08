@@ -158,7 +158,7 @@ Install the unmodified Claude CLI using its
 [official instructions](https://code.claude.com/docs/en/setup) and run
 `claude auth login` in a terminal with your Claude Pro or Max account (Team and
 Enterprise logins also work). Then run `M-x mevedel-claude-code-setup`: it
-checks Claude Code 2.1.290+, Node.js 22+, Python 3.8+, acp.el 0.15.2+ and the
+checks Claude Code 2.1.293+, Node.js 22+, Python 3.8+, acp.el 0.15.2+ and the
 subscription login without starting a model request. Subscription selection
 rejects API authentication and does not enable paid overflow.
 

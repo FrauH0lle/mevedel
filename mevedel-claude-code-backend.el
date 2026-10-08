@@ -19,7 +19,7 @@
   '(("sonnet" low medium high xhigh max)
     ("opus" low medium high xhigh max)
     ("fable" low medium high xhigh max)
-    ("haiku"))
+    ("haiku" low medium high xhigh max))
   "Documented alias effort choices before ACP reports live capabilities.
 See https://code.claude.com/docs/en/model-config.")
 
@@ -38,7 +38,7 @@ See https://code.claude.com/docs/en/model-config.")
 Keep this location stable to resume the installed CLI's retained histories."
   :type 'directory :group 'mevedel)
 
-(defconst mevedel-claude-code--cli-version "2.1.290"
+(defconst mevedel-claude-code--cli-version "2.1.293"
   "Minimum supported Claude Code CLI release.")
 
 (defconst mevedel-claude-code--adapter-version "0.86.0"

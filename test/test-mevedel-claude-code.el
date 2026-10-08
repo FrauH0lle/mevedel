@@ -119,6 +119,18 @@
                     (plist-get (mevedel-claude-code-launch "system" [] "sonnet" 'low) :prepare-launch))
                   :type 'user-error))
 
+  :doc "rejects a CLI too old to support Haiku 5.5"
+  (mevedel-claude-code-test--with-cli
+    (setenv "MEVEDEL_TEST_CLAUDE_VERSION" "2.1.292")
+    (should (string-search
+             "Claude Code 2.1.293 or newer is required"
+             (error-message-string
+              (should-error
+               (mevedel-claude-code--wait
+                (plist-get (mevedel-claude-code-launch "system" [] "haiku" 'low)
+                           :prepare-launch))
+               :type 'user-error)))))
+
   :doc "rejects an outdated Emacs ACP client before adapter startup"
   (mevedel-claude-code-test--with-cli
     (let ((acp-package-version "0.14.0"))
@@ -197,8 +209,26 @@
     (dolist (name '("sonnet" "opus" "fable" "haiku"))
       (should (assoc (concat "Claude Code:" name) (mevedel-model-candidates)))
       (let ((model (plist-get (mevedel-model-resolve-provider (concat "Claude Code:" name)) :model)))
-        (should (equal (unless (equal name "haiku") '(low medium high xhigh max))
-                       (mevedel-model-supported-efforts model)))))))
+        (should (equal '(low medium high xhigh max)
+                       (mevedel-model-supported-efforts model)))
+        (dolist (effort '(low medium high xhigh max))
+          (should (eq effort (mevedel-model-validate-effort model effort))))
+        (should-error (mevedel-model-validate-effort model 'none) :type 'user-error)))))
+
+(mevedel-deftest mevedel-model-resolve-workload/haiku-before-connection (:quiet t)
+  (let* ((gptel--known-backends nil)
+         (backend (mevedel-claude-code-register))
+         (mevedel-model-tiers '((fast :provider "Claude Code:haiku" :effort low)))
+         (mevedel-model-workloads '((naming :tier fast))))
+    (let ((policy (mevedel-model-resolve-workload 'naming)))
+      (should (eq backend (plist-get policy :backend)))
+      (should (equal "haiku" (gptel--model-name (plist-get policy :model))))
+      (should (eq 'low (plist-get policy :effort))))
+    (should (eq 'xhigh (plist-get (mevedel-model-resolve-workload 'naming nil 'xhigh)
+                                  :effort)))
+    (should-error (mevedel-model-resolve-workload 'naming nil 'none) :type 'user-error)
+    (setq mevedel-model-tiers '((fast :provider "Claude Code:haiku" :effort nil)))
+    (should-not (plist-get (mevedel-model-resolve-workload 'naming) :effort))))
 
 (mevedel-deftest mevedel-model-candidates/claude-discovery (:quiet t)
   (mevedel-claude-code-test--with-cli
@@ -280,7 +310,7 @@
           (when cancel (funcall cancel)))))))
 
 (mevedel-deftest mevedel-claude-code--prepare-session (:quiet t)
-  (pcase-dolist (`(,effort ,levels ,behavior ,expected ,mode)
+  (pcase-dolist (`(,effort ,levels ,behavior ,expected ,mode ,model-name)
                 '((high ["default" "low" "high"] nil "high mode:default" "plan")
                   (high ["default" "low" "high"] nil "high")
                   ;; An already current effort needs no configuration request.
@@ -290,13 +320,18 @@
                   (high nil nil "unset")
                   (high ["default" "high"] "mismatch" "acknowledge")
                   (high ["default" "high"] "error" "rejected")
-                  (high ["default" "high"] "wait" "closed")))
+                  (high ["default" "high"] "wait" "closed")
+                  (xhigh ["default" "low" "xhigh"] nil "xhigh" nil "haiku")
+                  (high ["default" "low"] nil "default" nil "haiku")
+                  (nil ["default" "low" "xhigh"] nil "default" nil "haiku")))
     (mevedel-claude-code-test--with-cli
       (with-temp-buffer
-        (let* ((gptel--known-backends nil)
+        (let* ((model-name (or model-name "opus"))
+               (gptel--known-backends nil)
                (backend (mevedel-claude-code-register))
-               (model (plist-get (mevedel-model-resolve-provider "Claude Code:opus") :model))
-               (launch (mevedel-claude-code-launch "Effort fixture" [] "opus" effort))
+               (model (plist-get (mevedel-model-resolve-provider
+                                  (concat "Claude Code:" model-name)) :model))
+               (launch (mevedel-claude-code-launch "Effort fixture" [] model-name effort))
                done response info cancel)
           (setq-local gptel-backend backend gptel-model model)
           (setq-local mevedel--session
@@ -310,8 +345,9 @@
                        (sessionInfo .
                         ((configOptions .
                           ,(vconcat
-                            [((id . "model") (category . "model") (type . "select")
-                              (currentValue . "opus") (options . [((value . "opus"))]))]
+                            (vector `((id . "model") (category . "model") (type . "select")
+                                      (currentValue . ,model-name)
+                                      (options . [((value . ,model-name))])))
                             ;; User Claude settings can choose the initial mode.
                             (when mode
                               (vector `((id . "mode") (category . "mode") (type . "select")
@@ -342,6 +378,10 @@
                   ;; The peer reports only values applied by a real config request.
                   (should (equal expected response))
                   (should-not (plist-get info :error))
+                  (when (equal model-name "haiku")
+                    (should (equal (cl-loop for value across levels
+                                            unless (equal value "default") collect (intern value))
+                                   (mevedel-model-supported-efforts model))))
                   (should (eq (mevedel-session-reasoning-effort mevedel--session)
                               gptel-reasoning-effort))
                   (should (eq gptel-reasoning-effort
@@ -534,7 +574,10 @@
 (mevedel-deftest mevedel-claude-code--version ()
   (progn
     (should (equal "22.4.0" (mevedel-claude-code--version "v22.4.0" "22.0.0")))
-    (should (equal "2.1.290" (mevedel-claude-code--version "2.1.290 (Claude Code)" "2.1.290")))
+    (should (equal "2.1.293" (mevedel-claude-code--version "2.1.293 (Claude Code)"
+                                                         mevedel-claude-code--cli-version)))
+    (should-not (mevedel-claude-code--version "2.1.292 (Claude Code)"
+                                               mevedel-claude-code--cli-version))
     (should-not (mevedel-claude-code--version "v20.0.0" "22.0.0"))
     (should-not (mevedel-claude-code--version "unknown" "22.0.0"))))
 

@@ -338,10 +338,10 @@ Sonnet, Opus, Fable and Haiku aliases remain available and resolve through Claud
 current catalog. Each ACP session initialization refreshes an in-memory model
 list from the adapter's `configOptions`, before any prompt is sent. Additional
 reported models appear in the normal picker. The selected model's effort menu
-uses the reported levels. Before connection, Sonnet, Opus and Fable offer
+uses the reported levels. Before connection, Sonnet, Opus, Fable and Haiku offer
 `low`, `medium`, `high`, `xhigh` and `max` from Claude's documented alias
-capabilities; Haiku has no effort control. Other configured or persisted
-model IDs resolve with staged effort symbols without joining the catalog;
+capabilities. Other configured or persisted model IDs resolve with staged
+effort symbols without joining the catalog;
 dispatch rejects any ID the session's catalog omits. Collaborators can pick
 only offered model labels.
 Startup applies the selected level through `session/set_config_option` and
