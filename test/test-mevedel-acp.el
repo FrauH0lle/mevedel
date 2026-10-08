@@ -163,9 +163,12 @@
         (let ((end (+ (float-time) 3)))
           (while (and (process-live-p process) (< (float-time) end))))
         (should-not (process-live-p process))
-        (let ((before (process-list)))
-          (mevedel-acp-cancel connection)
-          (should-not (cl-set-difference (process-list) before)))
+        (let ((before (process-list)) warnings)
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (_type text &rest _) (push text warnings))))
+            (mevedel-acp-cancel connection))
+          (should-not (cl-set-difference (process-list) before))
+          (should (string-search "phase=register" (car warnings))))
         (should (eq 'closed (mevedel-acp-state connection)))
         (should (eq 'error (plist-get outcome :status)))
         ;; Let the deferred sentinel release the stderr pipe inside this test.
@@ -286,8 +289,10 @@
     (should-error
      (mevedel-acp-prompt connection [] #'ignore #'ignore))))
 
-(mevedel-deftest mevedel-acp-close
-  (:doc "close settles a waiting prompt once and is idempotent")
+(mevedel-deftest mevedel-acp-close ()
+  ,test
+  (test)
+  :doc "close settles a waiting prompt once and is idempotent"
   (mevedel-acp-test--with-connection nil
     (let (streaming outcomes)
       (mevedel-acp-prompt connection [((type . "text") (text . "wait"))]
@@ -297,7 +302,20 @@
       (mevedel-acp-close connection)
       (mevedel-acp-close connection)
       (should (= 1 (length outcomes)))
-      (should (eq 'interrupted (plist-get (car outcomes) :status))))))
+      (should (eq 'interrupted (plist-get (car outcomes) :status)))))
+  :doc "an orderly close is not reported as an agent crash, despite routine stderr"
+  (let (warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type text &rest _) (push text warnings))))
+      (mevedel-acp-test--with-connection nil
+        (let (outcome)
+          (mevedel-acp-prompt connection [((type . "text") (text . "hello"))]
+                              #'ignore (lambda (value) (setq outcome value)))
+          (await (lambda () (and outcome (mevedel-acp-stderr connection))))
+          (should (eq 'success (plist-get outcome :status)))
+          ;; `delete-process' runs the agent's sentinel synchronously.
+          (mevedel-acp-close connection))))
+    (should-not warnings)))
 
 (provide 'test-mevedel-acp)
 ;;; test-mevedel-acp.el ends here
