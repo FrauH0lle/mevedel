@@ -33,6 +33,7 @@
                   "mevedel-session-control-transfer" (session))
 (declare-function mevedel-session-codec-portable-authority-p
                   "mevedel-session-codec" (session))
+(autoload 'mevedel-session-codec-portable-authority-p "mevedel-session-codec")
 (declare-function mevedel-session-control-transfer-poll
                   "mevedel-session-control-transfer"
                   (session buffer read-only-p))

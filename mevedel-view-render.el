@@ -222,6 +222,7 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
 (declare-function mevedel--gc-hold "mevedel-utilities" (key live-p))
+(declare-function mevedel--gc-release "mevedel-utilities" (key))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 (declare-function mevedel--warn-once
@@ -7899,6 +7900,23 @@ turn.  SAVED-STATES restores matching disclosure state."
           (+ (float-time) mevedel-view-render--gc-grace))
     (setq mevedel-view-render--batch nil)))
 
+(defun mevedel-view-render--hold-gc (job)
+  "Hold the busy collection threshold while this view runs batch JOB.
+Collection waits for a pause in typing while the job runs and briefly
+after it: a refresh allocates tens of megabytes, and one collection
+landing in a callback was its slowest step.  A job parked on an
+unattended view releases the hold, which would otherwise keep the
+threshold raised and the maintenance timer waking each second until the
+view is shown again; resuming takes it again."
+  (let ((view (current-buffer)))
+    (mevedel--gc-hold
+     job (lambda ()
+           (or (and (buffer-live-p view)
+                    (eq job (buffer-local-value
+                             'mevedel-view-render--batch view)))
+               (< (float-time)
+                  (or (plist-get job :settled-until) 0)))))))
+
 (defun mevedel-view-render-resume-batch ()
   "Resume this view's paused history work without scheduling duplicate callbacks."
   (when (and mevedel-view-render--batch
@@ -7907,6 +7925,7 @@ turn.  SAVED-STATES restores matching disclosure state."
              (not (mevedel-view--unattended-p))
              (not (mevedel--timer-pending-p
                    (plist-get mevedel-view-render--batch :timer))))
+    (mevedel-view-render--hold-gc mevedel-view-render--batch)
     (setf (plist-get mevedel-view-render--batch :timer)
           (run-at-time 0.001 nil #'mevedel-view-render--batch-step
                        (current-buffer) mevedel-view-render--batch))))
@@ -8051,7 +8070,7 @@ change or missing context leaves the existing full-history fallback in charge."
                (let ((data (plist-get job :data)))
 		 (cond
                   ((not (buffer-live-p data)) (mevedel-view-render-cancel-batch))
-                  ((mevedel-view--unattended-p) nil)
+                  ((mevedel-view--unattended-p) (mevedel--gc-release job))
                   ((mevedel-transport-busy-p (buffer-local-value 'default-directory data))
                    (setf (plist-get job :timer)
 			 (run-at-time 0.1 nil #'mevedel-view-render--batch-step view job)))
@@ -8125,17 +8144,6 @@ In-flight streaming retains synchronous reconciliation of view-only live text."
                       :index (make-hash-table :test #'eq)
                       :audits (make-hash-table :test #'equal))))
       (setq mevedel-view-render--batch job)
-      ;; Collection waits for a pause in typing while the job runs and
-      ;; briefly after it: a refresh allocates tens of megabytes, and one
-      ;; collection landing in a callback was its slowest step.
-      (let ((view (current-buffer)))
-        (mevedel--gc-hold
-         job (lambda ()
-               (or (and (buffer-live-p view)
-                        (eq job (buffer-local-value
-                                 'mevedel-view-render--batch view)))
-                   (< (float-time)
-                      (or (plist-get job :settled-until) 0))))))
       (mevedel-view-render-resume-batch))))
 
 (defun mevedel-view-render--install-batch (job)

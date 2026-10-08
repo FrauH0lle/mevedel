@@ -49,7 +49,8 @@ collapsed with a red `×`; warning rows remain groupable and mark their group
 with `!`. Only markers receive severity highlighting, and an accompanying
 sandbox warning cannot downgrade an error. Full rerender is the correctness
 fallback. One scheduler coalesces redraws;
-unattended graphical views defer visual work, retaining changed tool IDs rather
+unattended views (unfocused, or shown in no window of an interactive editor)
+arm no render timers and defer visual work, retaining changed tool IDs rather
 than forcing a full rebuild on focus return. Incremental projection also drains
 those row updates; full projection subsumes them. Retained-agent metadata
 replacements refresh source-backed handles, with full projection as the fallback
@@ -177,7 +178,9 @@ pending-tool rows sweep their verb and tool name in the same frames. The
 October 2026 measurement below records why. `full` forces the normal ceiling; `save` forces the saving
 ceiling. The lower ceiling never speeds up a naturally slower animation or
 changes its cycle duration. A saving ceiling of zero freezes decorative
-motion while active elapsed time and status remain current. A shared battery
+motion while active elapsed time and status remain current. While the request
+waits for user input, every indicator holds its phase and no frame is
+scheduled. A shared battery
 observer consumes existing notifications and uses a deferred, at-most-minute
 fallback query while subscribed views exist; animation callbacks never query
 power. TRAMP temporarily binds Emacs's timer list to nil, so a fallback
@@ -1108,17 +1111,17 @@ The ceilings were first lowered to 12 and 6 fps. A side-by-side comparison
 in the user's own theme showed visible stepping at 12 fps, so that was
 reversed. The shimmer now follows Codex's cadence: 0.6 seconds after the
 request starts, and every four seconds after that, a cosine band at least
-three columns wide crosses the label in one second; the label rests at its
+six columns wide crosses the label in one second; the label rests at its
 dimmed shade in between and no frame is scheduled (the resting contrast was
-subsequently reversed as recorded below). With the 30/15-fps
-ceilings restored, the same label costs 29% (22% at 15 fps). Tool rows used a
+subsequently reversed as recorded below). With new 30/15-fps
+ceilings (60/30 before), the same label costs 29% (22% at 15 fps). Tool rows used a
 continuous braille glyph; they now shimmer their verb and tool name ("Calling
 Bash"; the whole row swept too fast on long commands, and "Calling" alone
 looked detached), in the same frames as the label, so a pending tool adds no
 wakeups of its own. Breathe, bounce
 and the glyph styles still pay their cadence throughout (breathe and bounce
-64% at 30 fps, braille and ascii about 30%); finding cheaper forms for them
-is the next step.
+64% at 30 fps, braille and ascii about 30%); their cheaper cadences are
+recorded below.
 
 ### October 2026: arm indicators after their spans are drawn
 
@@ -1128,7 +1131,20 @@ see the previous range, so a request started in an attended, unscrolled
 view never armed its timer and the label stayed frozen, elapsed time
 included, until a focus or scroll event. A scroll back to the label froze it
 the same way. Both now recheck once after the next redisplay; a span still
-outside the window waits for scrolling, as before.
+outside the window waits for scrolling, as before. Review found that a
+resize (`delete-other-windows`, a taller frame) can reveal a span without
+running `window-scroll-functions`, so `window-size-change-functions` rechecks
+the same way.
+
+The same review measured a disposable editor streaming prose at eight words a
+second above the progress row: under both renderers the label was judged
+hidden in about half of the samples taken while text arrived, and froze
+between semantic renders. Streamed text was inserted at the label's start marker, which did not advance, so the span
+absorbed the reply and its start lost the label property. Start markers now
+advance past insertions (rewrites of the label recapture them), and the label
+animated in every sample while text streamed; the native presenter opened two
+surfaces in six seconds instead of tearing its surface down after each
+insertion.
 
 Each animation frame rewrites a display property and advances
 `buffer-modified-tick`. Header-line caches key on a content tick that

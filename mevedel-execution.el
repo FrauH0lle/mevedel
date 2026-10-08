@@ -238,7 +238,8 @@ the complete spool remains at the path in the execution facts."
   "Seconds between managed Bash progress events while output arrives.
 Values below 0.25 are clamped so the UI receives at most four per second.
 A command printing nothing publishes only its elapsed time, once each
-`mevedel-execution--quiet-progress-interval'."
+`mevedel-execution--quiet-progress-interval', or once each interval when
+that is longer."
   :type 'number
   :group 'mevedel)
 
@@ -1141,9 +1142,9 @@ execution's progress cost."
 
 (defun mevedel-execution--emit-progress (record)
   "Publish one bounded progress event for live RECORD.
-The next event waits `mevedel-execution--quiet-progress-interval'; output
-arriving meanwhile brings it forward, see
-`mevedel-execution--hasten-progress'."
+The next event waits `mevedel-execution--quiet-progress-interval', or
+`mevedel-execution-progress-interval' when that is longer; output arriving
+meanwhile brings it forward, see `mevedel-execution--hasten-progress'."
   (unless (mevedel-execution--record-finished-p record)
     (setf (mevedel-execution--record-progress-emitted-at record) (float-time))
     (mevedel-execution--emit-event
@@ -1155,17 +1156,23 @@ arriving meanwhile brings it forward, see
       :output-tail (or (mevedel-execution--record-output-tail record) "")))
     (setf (mevedel-execution--record-progress-timer record)
           (run-at-time
-           mevedel-execution--quiet-progress-interval nil
-           #'mevedel-execution--emit-progress record))))
+           (max mevedel-execution--quiet-progress-interval
+                mevedel-execution-progress-interval)
+           nil #'mevedel-execution--emit-progress record))))
 
 (defun mevedel-execution--hasten-progress (record)
   "Bring RECORD's next progress event forward after new output.
 Before the first event, the initial `mevedel-execution-progress-delay'
 stands.  Afterwards the next event follows the previous one by
-`mevedel-execution-progress-interval' instead of the quiet interval."
+`mevedel-execution-progress-interval' instead of the quiet interval.
+A filter running inside `mevedel-transport-with-exclusive-connection' or a
+TRAMP wait cannot cancel the pending event: it sits on a suspended timer
+list.  Moving it there would leave two events armed, each re-arming
+itself, so the quiet cadence stands until the next output outside."
   (when-let* ((emitted (mevedel-execution--record-progress-emitted-at record))
               (timer (mevedel-execution--record-progress-timer record))
               ((timerp timer))
+              ((memq timer timer-list))
               (due (+ emitted (max 0.25 mevedel-execution-progress-interval)))
               ;; Rearming lands a hair after DUE; only a quiet wait is late.
               ((> (float-time (timer--time timer)) (+ due 0.01))))

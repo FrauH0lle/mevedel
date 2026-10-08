@@ -19,6 +19,9 @@
 ;; `mevedel-structs'
 (defvar mevedel-user-dir)
 
+;; `mevedel-utilities'
+(autoload 'mevedel-library-source-directory "mevedel-utilities")
+
 ;; `mevedel-view'
 (declare-function mevedel-view--set-spinner-option "mevedel-view" (symbol value))
 (autoload 'mevedel-view--set-spinner-option "mevedel-view")
@@ -35,19 +38,30 @@
 (defcustom mevedel-view-native-enabled t
   "Use independent animation surfaces when this display supports them.
 The optional module requires PGTK on Wayland, a C compiler, pkg-config,
-and GTK 3/Wayland development headers.  It builds once on first animation
-use, under `mevedel-user-dir'.  Other displays use ordinary text animation."
+and Emacs, GTK 3 and Wayland development headers.  It builds once on first
+animation use, under `mevedel-user-dir'.  Other displays use ordinary text
+animation."
   :type 'boolean
   :initialize #'custom-initialize-default
   :set #'mevedel-view--set-spinner-option
   :group 'mevedel)
 
 (defconst mevedel-view-native--directory
-  (file-name-directory (or load-file-name buffer-file-name))
+  (mevedel-library-source-directory (or load-file-name buffer-file-name))
   "Package source directory, including its native module source.")
 
 (defvar mevedel-view-native--load-state nil
-  "Native module loading result: nil, ready, or an explanatory string.")
+  "Native module loading result: nil, ready, or an explanatory string.
+A failure is not retried in this session; set this to nil to retry.")
+
+(defun mevedel-view-native--include-flags ()
+  "Return `-I' flags locating the running Emacs's `emacs-module.h'.
+An Emacs installed under its own prefix keeps the header in that prefix's
+include directory, and one run from its build tree beside the binary."
+  (cl-loop for directory in (list (expand-file-name "../include" invocation-directory)
+                                  invocation-directory)
+           when (file-exists-p (expand-file-name "emacs-module.h" directory))
+           collect (concat "-I" directory)))
 (defvar mevedel-view-native--views (make-hash-table :test #'eq)
   "Views subscribed to native placement changes and their rearm callbacks.")
 (defvar-local mevedel-view-native--entries nil
@@ -94,10 +108,13 @@ use, under `mevedel-user-dir'.  Other displays use ordinary text animation."
                             (error "GTK/Wayland development files are unavailable"))
                           (let ((flags (split-string-and-unquote (buffer-string))))
                             (erase-buffer)
+                            ;; No -Werror: a warning from newer headers must not
+                            ;; disable the renderer; development builds use it.
                             (unless (zerop (apply #'call-process "cc" nil t nil
-                                                  "-shared" "-fPIC" "-O2" "-Wall"
-                                                  "-Wextra" "-Werror" source "-o"
-                                                  temporary (append flags '("-lm"))))
+                                                  "-shared" "-fPIC" "-O2"
+                                                  (append (mevedel-view-native--include-flags)
+                                                          (list source "-o" temporary)
+                                                          flags '("-lm"))))
                               (error "Native animation compilation failed: %s"
                                      (string-trim (buffer-string)))))
                           (rename-file temporary module t))
@@ -123,8 +140,11 @@ use, under `mevedel-user-dir'.  Other displays use ordinary text animation."
              (face (get-text-property start 'face sample))
              (color (or (and (listp face) (plist-get face :foreground)) foreground)))
         (push (format "<span foreground=\"%s\">%s</span>"
-                      (xml-escape-string color)
-                      (xml-escape-string (substring-no-properties sample start end)))
+                      (xml-escape-string color t)
+                      ;; Labels quote model-supplied tool arguments.  Dropping
+                      ;; characters XML cannot carry changes the rendered
+                      ;; width, so the module declines and text animates.
+                      (xml-escape-string (substring-no-properties sample start end) t))
               pieces)
         (setq start end)))
     (apply #'concat (nreverse pieces))))
@@ -279,20 +299,27 @@ Each spec is (TARGET STYLE LABEL FACE PERIOD), with a marker pair TARGET.
 Coalesce presentation at the parent redisplay boundary.  Return targets
 already entirely handled by native surfaces; the caller schedules
 ordinary text animation for the others.  Lifecycle and placement are local
-to this module, including invalidation while a composer is being edited."
+to this module, including invalidation while a composer is being edited.
+Empty SPECS still wait for that boundary, since a writer may reinsert the
+row first, but mark the view's windows for redisplay: pre-redisplay hooks
+run only for windows being redisplayed, and a surface whose teardown waits
+for an unchanged window keeps animating on its own.  An error while
+placing or preparing a surface closes the surfaces opened so far and
+hands every target back to text animation."
   (if (and (not mevedel-view-native--presenting)
            (or mevedel-view-native--entries mevedel-view-native--pending
                (and specs mevedel-view-native-enabled (not noninteractive)
                     (cl-some #'mevedel-view-native-available-p (frame-list)))))
       (progn
         (setq mevedel-view-native--pending (list specs (- (float-time) elapsed) rearm))
+        (unless specs (force-window-update (current-buffer)))
         (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay nil t)
         (cl-loop for spec in specs
                  when (cl-find (car spec) mevedel-view-native--entries
                                :key #'caar :test #'eq)
                  collect (car spec)))
     (setq mevedel-view-native--pending nil)
-    (let (handled next)
+    (let (handled next opened)
       (when (and specs mevedel-view-native-enabled (not noninteractive)
                  (cl-some #'mevedel-view-native-available-p (frame-list)))
         (puthash (current-buffer) rearm mevedel-view-native--views)
@@ -300,53 +327,58 @@ to this module, including invalidation while a composer is being edited."
         (add-hook 'window-scroll-functions #'mevedel-view-native--invalidate nil t)
         (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay nil t)
         (add-hook 'window-state-change-functions #'mevedel-view-native--window-change)
-        (unless mevedel-view-native--settling
-          (dolist (spec specs)
-            (pcase-let ((`(,target ,style ,label ,face ,period) spec))
-              (let (candidates failed)
-                (dolist (window (get-buffer-window-list (current-buffer) nil t))
-                  (when (mevedel-view-native--visible-p target window)
-                    (let* ((placement (mevedel-view-native--placement target window))
-                           (frame (car placement))
-                           (geometry (cadr placement))
-                           (font (nth 2 placement))
-                           (key (list target window))
-                           (colors (and frame (mevedel-view-animation--colors face frame)))
-                           (signature (and colors
-                                           (list style label face period frame font colors
-                                                 (append (seq-subseq geometry 2) nil))))
-                           ;; Semantic redraws release their markers even when
-                           ;; the label and its on-screen geometry are unchanged.
-                           (old (or (assoc key mevedel-view-native--entries)
-                                    (cl-find-if
-                                     (lambda (entry)
-                                       (and (eq window (cadar entry))
-                                            (equal signature (cadr entry))
-                                            (equal placement (nth 3 entry))
-                                            (not (cl-find
-                                                  (nth 2 entry) (append candidates next)
-                                                  :key (lambda (item) (nth 2 item))))))
-                                     mevedel-view-native--entries)))
-                           handle)
-                      (when (and placement colors (mevedel-view-native-available-p frame))
-                        (when (and old (equal signature (cadr old))
-                                   (mevedel-view-native--move (nth 2 old)
-                                                             (aref geometry 0) (aref geometry 1)))
-                          (setq handle (nth 2 old)))
-                        (unless handle
-                          (setq handle (mevedel-view-native--open
-                                        (frame-parameter frame 'window-id) geometry font
-                                        (cdr colors)
-                                        (mevedel-view-native--timeline style label period face frame)
-                                        (float elapsed)))))
-                      (if handle (push (list key signature handle placement
-                                            (buffer-substring-no-properties
-                                             (car target) (cdr target))) candidates)
-                        (setq failed t)))))
-                (if (or failed (not candidates))
-                    (dolist (entry candidates) (mevedel-view-native--close (nth 2 entry)))
-                  (push target handled)
-                  (setq next (append candidates next))))))))
+        (condition-case nil
+            (unless mevedel-view-native--settling
+              (dolist (spec specs)
+                (pcase-let ((`(,target ,style ,label ,face ,period) spec))
+                  (let (candidates failed)
+                    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+                      (when (mevedel-view-native--visible-p target window)
+                        (let* ((placement (mevedel-view-native--placement target window))
+                               (frame (car placement))
+                               (geometry (cadr placement))
+                               (font (nth 2 placement))
+                               (key (list target window))
+                               (colors (and frame (mevedel-view-animation--colors face frame)))
+                               (signature (and colors
+                                               (list style label face period frame font colors
+                                                     (append (seq-subseq geometry 2) nil))))
+                               ;; Semantic redraws release their markers even when
+                               ;; the label and its on-screen geometry are unchanged.
+                               (old (or (assoc key mevedel-view-native--entries)
+                                        (cl-find-if
+                                         (lambda (entry)
+                                           (and (eq window (cadar entry))
+                                                (equal signature (cadr entry))
+                                                (equal placement (nth 3 entry))
+                                                (not (cl-find
+                                                      (nth 2 entry) (append candidates next)
+                                                      :key (lambda (item) (nth 2 item))))))
+                                         mevedel-view-native--entries)))
+                               handle)
+                          (when (and placement colors (mevedel-view-native-available-p frame))
+                            (when (and old (equal signature (cadr old))
+                                       (mevedel-view-native--move (nth 2 old)
+                                                                  (aref geometry 0) (aref geometry 1)))
+                              (setq handle (nth 2 old)))
+                            (unless handle
+                              (setq handle (mevedel-view-native--open
+                                            (frame-parameter frame 'window-id) geometry font
+                                            (cdr colors)
+                                            (mevedel-view-native--timeline style label period face frame)
+                                            (float elapsed)))
+                              (when handle (push handle opened))))
+                          (if handle (push (list key signature handle placement
+                                                 (buffer-substring-no-properties
+                                                  (car target) (cdr target))) candidates)
+                            (setq failed t)))))
+                    (if (or failed (not candidates))
+                        (dolist (entry candidates) (mevedel-view-native--close (nth 2 entry)))
+                      (push target handled)
+                      (setq next (append candidates next)))))))
+          (error
+           (mapc #'mevedel-view-native--close opened)
+           (setq handled nil next nil))))
       (dolist (entry mevedel-view-native--entries)
         (unless (cl-find (nth 2 entry) next :key (lambda (item) (nth 2 item)))
           (mevedel-view-native--close (nth 2 entry))))

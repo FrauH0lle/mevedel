@@ -267,6 +267,24 @@
                                        'timer-event-handler)))
       (delete-directory root t)))
 
+  :doc "stops watching once telemetry is disabled mid-request"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil))
+    (unwind-protect
+        (progn
+          (mevedel-telemetry-record session 'request-start :request-id "request-1")
+          (should (timerp mevedel-telemetry--lag-timer))
+          (let ((mevedel-telemetry-enabled nil))
+            ;; Settling is no longer recorded, so its window never closes.
+            (mevedel-telemetry-record session 'request-settled :request-id "request-1")
+            (mevedel-telemetry--lag-tick))
+          (should-not mevedel-telemetry--lag-timer)
+          (should-not mevedel-telemetry--lag-windows)
+          (should-not (advice-member-p #'mevedel-telemetry--lag-time-callback
+                                       'timer-event-handler)))
+      (delete-directory root t)))
+
   :doc "records a long stall with its timer and summarizes the request"
   (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
          (session (test-mevedel-telemetry--session root))

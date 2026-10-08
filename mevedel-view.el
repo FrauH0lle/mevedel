@@ -760,7 +760,11 @@ the editable composer body.
   (add-hook 'window-buffer-change-functions
             #'mevedel-view--resume-on-window-change nil t)
   (add-hook 'window-scroll-functions
-            #'mevedel-view--resume-on-window-scroll nil t))
+            #'mevedel-view--resume-on-window-layout nil t)
+  ;; Resizing (`delete-other-windows', a taller frame) can bring a span
+  ;; into view without scrolling.
+  (add-hook 'window-size-change-functions
+            #'mevedel-view--resume-on-window-layout nil t))
 
 
 ;;
@@ -1593,9 +1597,9 @@ redisplay hooks reschedule it once someone can see the result."
           (mevedel-view-render-resume-batch))
         (mevedel-view-prepare-resume)))))
 
-(defun mevedel-view--resume-on-window-scroll (window _start)
-  "Update animation scheduling after scrolling WINDOW.
-The hook runs before redisplay, while `window-end' still describes the
+(defun mevedel-view--resume-on-window-layout (window &optional _start)
+  "Update animation scheduling after WINDOW scrolled or changed size.
+Both hooks run before redisplay, while `window-end' still describes the
 old range, so the decision waits for the completed redisplay."
   (when (and (eq (window-buffer window) (current-buffer))
              (fboundp 'mevedel-view--recheck-spinner-after-redisplay)

@@ -16,7 +16,10 @@
   (let* ((sample (concat "A<&" (propertize "B>" 'face '(:foreground "#123456"))))
          (markup (mevedel-view-native--markup sample "#abcdef")))
     (should (equal markup (concat "<span foreground=\"#abcdef\">A&lt;&amp;</span>"
-                                  "<span foreground=\"#123456\">B&gt;</span>")))))
+                                  "<span foreground=\"#123456\">B&gt;</span>")))
+    ;; Tool labels quote model arguments, which may hold control characters.
+    (should (equal (mevedel-view-native--markup (concat "a" (string 27) "b") "#000000")
+                   "<span foreground=\"#000000\">ab</span>"))))
 
 (mevedel-deftest mevedel-view-native--timeline
   (:doc "Portable glyph samples preserve their existing cadence and text.")
@@ -60,6 +63,24 @@
             (should-not (mevedel-view-native--load))
             (should (= calls 2))
             (should-not (directory-files (file-name-concat root "native") nil "^build-"))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-view-native--include-flags
+  (:doc "Finds emacs-module.h in the running Emacs's prefix or build tree.")
+  (let* ((root (make-temp-file "mevedel-native-include-" t))
+         (bin (file-name-as-directory (file-name-concat root "bin")))
+         (include (file-name-concat root "include")))
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (make-directory include)
+          (let ((invocation-directory bin))
+            (should-not (mevedel-view-native--include-flags))
+            (with-temp-file (file-name-concat include "emacs-module.h"))
+            (should (equal (mevedel-view-native--include-flags)
+                           (list (concat "-I" (expand-file-name "../include" bin)))))
+            (with-temp-file (file-name-concat bin "emacs-module.h"))
+            (should (= 2 (length (mevedel-view-native--include-flags))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view-native--visible-p
@@ -141,6 +162,61 @@
               (should (equal closed '(2 1)))
               (should-not mevedel-view-native--entries)
               (should (= 0 (hash-table-count mevedel-view-native--views)))))
+        (mevedel-view-native-stop)))))
+
+(mevedel-deftest mevedel-view-native-sync/teardown
+  (:doc "Queued teardown marks the view's windows for redisplay.")
+  (with-temp-buffer
+    (let ((noninteractive nil)
+          (mevedel-view-native--views (make-hash-table :test #'eq))
+          forced)
+      (setq mevedel-view-native--entries '(((target window) signature handle)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'force-window-update)
+                     (lambda (object) (push object forced)))
+                    ((symbol-function 'mevedel-view-native--close) #'ignore))
+            (mevedel-view-native-sync nil 0 #'ignore)
+            (should (equal forced (list (current-buffer))))
+            (should mevedel-view-native--entries)
+            (should (memq #'mevedel-view-native--before-redisplay
+                          pre-redisplay-functions)))
+        (cl-letf (((symbol-function 'mevedel-view-native--close) #'ignore))
+          (mevedel-view-native-stop))))))
+
+(mevedel-deftest mevedel-view-native-sync/failure
+  (:doc "An error after opening a surface closes it and keeps text animation.")
+  (with-temp-buffer
+    (insert "Working...\nTesting...\n")
+    (let* ((noninteractive nil)
+           (mevedel-view-native--presenting t)
+           (first (cons (copy-marker 1) (copy-marker 11)))
+           (second (cons (copy-marker 12) (copy-marker 22)))
+           (mevedel-view-native--views (make-hash-table :test #'eq))
+           (opens 0) closed)
+      (unwind-protect
+          (cl-letf (((symbol-function 'get-buffer-window-list) (lambda (&rest _) '(window)))
+                    ((symbol-function 'mevedel-view-native--visible-p) (lambda (&rest _) t))
+                    ((symbol-function 'mevedel-view-native--placement)
+                     (lambda (&rest _) '(frame [8 42 80 21 16] "Mono 16px")))
+                    ((symbol-function 'mevedel-view-native-available-p) (lambda (_) t))
+                    ((symbol-function 'frame-parameter) (lambda (&rest _) "123"))
+                    ((symbol-function 'mevedel-view-animation--colors)
+                     (lambda (&rest _) '("#ffffff" . "#000000")))
+                    ((symbol-function 'mevedel-view-native--timeline)
+                     (lambda (_style label &rest _)
+                       (if (equal label "Testing") (error "Injected timeline failure") [1.0])))
+                    ((symbol-function 'mevedel-view-native--open)
+                     (lambda (&rest _) (cl-incf opens)))
+                    ((symbol-function 'mevedel-view-native--move) (lambda (&rest _) t))
+                    ((symbol-function 'mevedel-view-native--close)
+                     (lambda (handle) (push handle closed))))
+            (should-not (mevedel-view-native-sync
+                         (list (list first 'ascii "Working" 'default 0.24)
+                               (list second 'ascii "Testing" 'default 0.24))
+                         0 #'ignore))
+            (should (= opens 1))
+            (should (equal closed '(1)))
+            (should-not mevedel-view-native--entries))
         (mevedel-view-native-stop)))))
 
 (mevedel-deftest mevedel-view-native--clear

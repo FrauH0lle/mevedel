@@ -139,8 +139,11 @@ cancellation releases the fence and leaves the machine retryable.
   request runs and for two minutes after it settles, since journal,
   collection and publication work follows settlement. Every timer delivered
   meanwhile reports how late it ran, since a stall delays every timer due
-  during it; a 500 ms heartbeat covers quiet stretches without other timers
-  and reports the worst delay since the previous heartbeat, once. Lateness the
+  during it; a 500 ms heartbeat samples quiet stretches without other timers
+  and reports the worst delay since the previous heartbeat, once. A stall
+  shorter than the heartbeat with no timer due during it can go unseen.
+  Disabling telemetry stops the heartbeat at its next tick, since requests
+  no longer report settling to close their windows. Lateness the
   previous heartbeat already saw is not counted again, and idle timers do not
   count. The heartbeat was 100 ms until each wakeup was measured to repaint a
   whole pgtk frame: on a 2x-scaled frame it cost 23% editor CPU on its own.
