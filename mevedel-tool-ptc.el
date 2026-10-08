@@ -23,6 +23,10 @@
 (require 'mevedel-system)
 (require 'mevedel-execution-telemetry)
 
+;; `mevedel-utilities'
+(declare-function mevedel--duration-label "mevedel-utilities" (seconds))
+(autoload 'mevedel--duration-label "mevedel-utilities")
+
 ;; `gptel'
 (defvar gptel-tools)
 
@@ -252,7 +256,8 @@ nested-row machinery."
                               (length calls)
                               (if (= (length calls) 1) "" "s")
                               (if (numberp elapsed)
-                                  (format " \u00b7 %.1fs" elapsed)
+                                  (format " \u00b7 %s"
+                                          (mevedel--duration-label elapsed))
                                 "")
                               (if (> error-count 0)
                                   (format " \u00b7 %d failed" error-count)

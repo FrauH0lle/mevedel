@@ -86,6 +86,24 @@
       (should-not (memq old timer-idle-list))
       (should (memq (plist-get job :timer) timer-idle-list)))))
 
+(mevedel-deftest mevedel-session-collection--retry (:quiet t)
+  ,test
+  (test)
+  :doc "a blocked collection waits longer each time, up to a bound"
+  (test-mevedel-collection--with-session
+    (mevedel-session-collection-schedule session)
+    (let ((job (gethash session mevedel-session-collection--jobs))
+          waits)
+      (setf (mevedel-session-publication-active-p session) t)
+      (dotimes (_ 8)
+        (mevedel-session-collection--step session job)
+        (push (plist-get job :wait) waits))
+      (setf (mevedel-session-publication-active-p session) nil)
+      (should (equal '(1.0 2.0 4.0 8.0 8.0 8.0 8.0 8.0) (nreverse waits)))
+      ;; A slice that runs starts the next wait over.
+      (mevedel-session-collection--step session job)
+      (should-not (plist-get job :wait)))))
+
 (mevedel-deftest mevedel-session-collection--observed (:quiet t)
   ,test
   (test)

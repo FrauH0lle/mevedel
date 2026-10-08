@@ -349,7 +349,7 @@
                                   :render-data (:state running
                                                 :wall-time-seconds 0.25)))))
                       data)))
-            (should (string-match-p "running · 7.0s" (plist-get row :header)))
+            (should (string-match-p "running · 7s" (plist-get row :header)))
             (should (string-match-p "NEW OUTPUT" (plist-get row :body)))
             (should (equal 'unavailable
                            (plist-get (plist-get row :sandbox-summary) :sandbox)))
@@ -454,7 +454,7 @@
                                          :sandbox unavailable :filesystem unrestricted
                                          :network unrestricted)
                                         :wall-time-seconds 0.25)))))
-              (should (string-match-p "running · 7.0s" (plist-get row :header)))
+              (should (string-match-p "running · 7s" (plist-get row :header)))
               (should (string-match-p "NEW OUTPUT" (plist-get row :body)))
               (should (equal 'unavailable
                              (plist-get (plist-get row :sandbox-summary) :sandbox)))

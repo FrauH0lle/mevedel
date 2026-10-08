@@ -145,7 +145,7 @@
   (test)
   :doc "formats shared live and terminal row metadata"
   (should
-   (equal "running · 2.5s · 3 lines · 42 bytes · exec-1"
+   (equal "running · 2s · 3 lines · 42 bytes · exec-1"
           (mevedel-tool-exec-format-execution-metadata
            '(:state running :wall-time-seconds 2.5
                     :output-lines 3 :output-bytes 42 :execution-id "exec-1"))))

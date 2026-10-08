@@ -31,6 +31,8 @@
                   "mevedel-session-control-transfer" (session read-only-p))
 (declare-function mevedel-session-control-transfer-drain-blocker
                   "mevedel-session-control-transfer" (session))
+(declare-function mevedel-session-codec-portable-authority-p
+                  "mevedel-session-codec" (session))
 (declare-function mevedel-session-control-transfer-poll
                   "mevedel-session-control-transfer"
                   (session buffer read-only-p))
@@ -208,7 +210,16 @@ transfer in flight wants a cadence the idle session does not."
     (with-current-buffer view
       (when (timerp mevedel-view--control-transfer-timer)
         (cancel-timer mevedel-view--control-transfer-timer))
-      (unless mevedel-view--control-transfer-torn-down-p
+      ;; Only portable sessions transfer control; another session's poll
+      ;; signals, and re-arming it woke the view every few seconds forever.
+      (unless (or mevedel-view--control-transfer-torn-down-p
+                  (and-let* ((data (and (boundp 'mevedel--data-buffer)
+                                        (buffer-live-p mevedel--data-buffer)
+                                        mevedel--data-buffer))
+                             (session (buffer-local-value 'mevedel--session data)))
+                    (condition-case nil
+                        (not (mevedel-session-codec-portable-authority-p session))
+                      (error nil))))
         (let ((interval
                (mevedel-view--control-transfer-poll-seconds
                 (and (boundp 'mevedel--data-buffer)

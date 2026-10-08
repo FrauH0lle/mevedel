@@ -1216,6 +1216,9 @@ artifacts.
 Turn settlement and lease-acquiring restore schedule publication collection
 without scanning history on the foreground path. The coalesced job reads at
 most eight generations per idle slice, yielding after 50 ms between reads.
+Slices run one idle second apart: each is a wakeup, and at 0.2 s a job that
+deleted a few files woke the editor three or four times a second for fifteen
+seconds after every turn.
 A single target read can exceed that budget. For local Linux sessions with more
 than sixteen uncached generations, a batch Emacs child prepares the compact
 immutable generation and sidecar observations. The editor caches those answers
@@ -1224,7 +1227,8 @@ no deletion and needs no session lease. Cancellation stops it, and late replies
 cannot revive a cancelled job. Finishing the scan yields before
 marking retained files. Pending input prevents all collection target I/O,
 including ownership checks and deletion after a completed scan. Busy
-transport and pending, queued or active publications defer work; an active
+transport and pending, queued or active publications defer work, retrying
+after twice the previous wait, up to eight seconds; an active
 request does not, since a Goal keeps one active for hours and deferring to it
 once left a 25-hour Goal session with 3,067 unreclaimed generations (4.9 GB).
 Closing the root or losing its lease cancels the job. Generations are

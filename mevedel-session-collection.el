@@ -61,13 +61,37 @@ from one that did."
   "Cancel the current root buffer's publication collection."
   (when mevedel--session (mevedel-session-collection-cancel mevedel--session)))
 
-(defun mevedel-session-collection--arm (session job)
-  "Schedule the next idle slice for SESSION and JOB."
+(defconst mevedel-session-collection--slice-interval 1.0
+  "Idle seconds between collection slices.
+Collection follows every settled turn.  At 0.2 s, a job deleting a few
+old files took about fifty slices over fifteen seconds, three or four
+wakeups a second; every wakeup repaints a pgtk frame, and old generations
+are not urgent.")
+
+(defconst mevedel-session-collection--max-wait 8.0
+  "Most seconds a collection blocked by other work waits before retrying.")
+
+(defun mevedel-session-collection--arm (session job &optional wait)
+  "Schedule the next idle slice for SESSION and JOB after WAIT idle seconds.
+WAIT defaults to `mevedel-session-collection--slice-interval'."
   (when-let* ((timer (plist-get job :timer))) (cancel-timer timer))
   (setf (plist-get job :timer)
         (run-with-idle-timer
-         (+ 0.2 (if-let* ((idle (current-idle-time))) (float-time idle) 0))
+         (+ (or wait mevedel-session-collection--slice-interval)
+            (if-let* ((idle (current-idle-time))) (float-time idle) 0))
          nil #'mevedel-session-collection--step session job)))
+
+(defun mevedel-session-collection--retry (session job)
+  "Retry JOB for SESSION later, waiting twice as long as last time.
+Publication can stay busy for a whole request, or indefinitely while it
+awaits recovery; retrying every 0.2 s woke the editor five times a second
+throughout, and every wakeup repaints a pgtk frame."
+  (let ((wait (min mevedel-session-collection--max-wait
+                   (if-let* ((last (plist-get job :wait)))
+                       (* 2 last)
+                     mevedel-session-collection--slice-interval))))
+    (setf (plist-get job :wait) wait)
+    (mevedel-session-collection--arm session job wait)))
 
 (defun mevedel-session-collection-schedule (session)
   "Schedule bounded publication cleanup for SESSION without doing target I/O."
@@ -78,7 +102,7 @@ from one that did."
     (let ((job (list :buffer (mevedel-session-root-buffer session)
                      :head nil :names nil :remaining nil
                      :summaries (make-hash-table :test #'equal)
-                     :plan nil :timer nil :started-at (float-time))))
+                     :plan nil :timer nil :wait nil :started-at (float-time))))
       (puthash session job mevedel-session-collection--jobs)
       (with-current-buffer (plist-get job :buffer)
         (add-hook 'kill-buffer-hook #'mevedel-session-collection--on-kill nil t))
@@ -146,9 +170,10 @@ Cache observations only; the editor still checks authority and pins at deletion.
                 (mevedel-session-publication-uncommitted-batches session)
                 (mevedel-session-publication-queue session)
                 (mevedel-session-publication-active-p session))
-            (mevedel-session-collection--arm session job))
+            (mevedel-session-collection--retry session job))
            ((or (plist-get job :worker) (plist-get job :pending)) nil)
            (t
+            (setf (plist-get job :wait) nil)
             (mevedel-transport-with-exclusive-connection
              (mevedel-session-durability-with-transaction
               ;; Ownership is proved on the target where collection deletes;

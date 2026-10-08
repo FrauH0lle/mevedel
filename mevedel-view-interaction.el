@@ -110,6 +110,7 @@
                   (&optional data-buf start end))
 
 ;; `mevedel-view-stream'
+(declare-function mevedel-view--start-spinner-timer "mevedel-view-stream" (&optional resumed))
 (declare-function mevedel-view--render-request-progress
                   "mevedel-view-stream" nil)
 (declare-function mevedel-view--request-progress-region-start
@@ -316,7 +317,10 @@ silently placing controls in a data buffer."
     (let ((paused (mevedel-view--interaction-active-work-paused-p)))
       (mevedel-request-set-active-work-paused request paused)
       (when (fboundp 'mevedel-view--render-request-progress)
-        (mevedel-view--render-request-progress)))))
+        (mevedel-view--render-request-progress))
+      ;; A pause holds the indicators still; resuming must move them again.
+      (when (fboundp 'mevedel-view--start-spinner-timer)
+        (mevedel-view--start-spinner-timer)))))
 
 (defun mevedel-view--interaction-plural (n singular plural)
   "Return N followed by SINGULAR or PLURAL."

@@ -315,7 +315,7 @@
               (should (string-prefix-p
                        "$ printf run\n\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"
                        (plist-get rendering :body)))
-              (should (string-search "Details: running · 2.5s"
+              (should (string-search "Details: running · 2s"
                                      (plist-get rendering :body)))
               (should (string-search "output truncated"
                                      (plist-get rendering :header)))
@@ -338,7 +338,7 @@
                          (buffer-substring-no-properties
                           (point-min) (mevedel-view--input-start))))
             (should (string-match-p
-                     "Bash: printf run · running · 2.5s"
+                     "Bash: printf run · running · 2s"
                      (buffer-substring-no-properties
                       (point-min) (mevedel-view--input-start))))
             (should-not
@@ -382,7 +382,7 @@
               (should (string-match-p
                        "Sandbox:.*additional filesystem write access"
                        visible))
-              (should (string-match-p "Bash: printf run · finished · 3.0s"
+              (should (string-match-p "Bash: printf run · finished · 3s"
                                       visible)))
             (save-excursion
               (goto-char (point-min))
@@ -411,7 +411,7 @@
                             (point-min) (mevedel-view--input-start))))
               (should (string-match-p "whole head" visible))
               (should (string-match-p "whole tail" visible))
-              (should (string-match-p "Bash: printf new · running · 2.1s"
+              (should (string-match-p "Bash: printf new · running · 2s"
                                       visible))
               (should-not (string-match-p "new live tail" visible)))
             (should (equal draft (mevedel-view--input-text)))
@@ -791,7 +791,7 @@
                       :state running :wall-time-seconds 7)
              :output-tail "NEW OUTPUT"))
       (with-current-buffer view-buf
-        (should (string-match-p "Bash: sleep 10 · running · 7.0s"
+        (should (string-match-p "Bash: sleep 10 · running · 7s"
                                 (buffer-string)))
         (should (string-match-p "NEW OUTPUT" (buffer-string)))
         (should-not (string-match-p "OLD OUTPUT" (buffer-string)))
@@ -2835,6 +2835,101 @@
             (mevedel-view--spinner-tick))
           (should (equal (get-text-property frame-pos 'display) "\\ "))))))
 
+  :doc "recapturing spans detaches the markers they replace"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-power-policy 'full))
+        (unwind-protect
+            (progn
+              (mevedel-view--start-spinner "Thinking...")
+              (let ((old mevedel-view--spinner-label-target))
+                (should (marker-buffer (car old)))
+                (mevedel-view--capture-request-animation-target)
+                (should-not (marker-buffer (car old)))
+                (should-not (marker-buffer (cdr old)))
+                (should (marker-buffer
+                         (car mevedel-view--spinner-label-target)))))
+          (mevedel-view--stop-spinner)))))
+
+  :doc "a request waiting for input holds its indicators still"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-power-policy 'full)
+            (request (mevedel-request--create :started-at (current-time))))
+        (unwind-protect
+            (cl-letf (((symbol-function 'mevedel-view--spinner-request)
+                       (lambda () request)))
+              (mevedel-view--start-spinner "Thinking...")
+              (should (mevedel--ui-timer-pending-p mevedel-view--spinner-timer))
+              (mevedel-request-set-active-work-paused request t)
+              (mevedel-view--start-spinner-timer)
+              (should-not mevedel-view--spinner-timer)
+              (mevedel-request-set-active-work-paused request nil)
+              (mevedel-view--start-spinner-timer)
+              (should (mevedel--ui-timer-pending-p mevedel-view--spinner-timer)))
+          (mevedel-view--stop-spinner)))))
+
+  :doc "shimmer tool rows animate their verb and tool name"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-tool-spinner-style 'shimmer)
+            (mevedel-view-spinner-power-policy 'full)
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read: notes.org..."))))
+        (mevedel-view--refresh-pending-tool-lines)
+        (let* ((start (text-property-any (point-min) (point-max)
+                                         'mevedel-view-inline-spinner-frame t))
+               (end (next-single-property-change
+                     start 'mevedel-view-inline-spinner-frame)))
+          (should (equal "Calling Read" (buffer-substring-no-properties start end)))
+          (should (string-search "Calling Read" (get-text-property start 'display)))
+          (should (equal ": notes.org..."
+                         (buffer-substring-no-properties
+                          end (save-excursion (goto-char end)
+                                              (line-end-position)))))))))
+
+  :doc "probes once when a new span is not yet within the drawn window"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-power-policy 'full)
+            (mevedel-view--spinner-probed-targets nil))
+        (unwind-protect
+            (cl-letf (((symbol-function 'mevedel-view--animation-visible-p) #'ignore)
+                      ((symbol-function 'mevedel-view--animation-target-visible-p)
+                       #'ignore)
+                      ((symbol-function 'mevedel-view--animation-window-attended-p)
+                       (lambda (_) t)))
+              (mevedel-view--start-spinner "Thinking...")
+              (should-not mevedel-view--spinner-timer)
+              (let ((probe mevedel-view--spinner-probe-timer))
+                (should (mevedel--ui-timer-pending-p probe))
+                ;; The same spans are not probed again.
+                (mevedel--ui-timer-cancel probe)
+                (setq mevedel-view--spinner-probe-timer nil)
+                (mevedel-view--start-spinner-timer)
+                (should-not mevedel-view--spinner-probe-timer)))
+          (mevedel-view--stop-spinner)))))
+
+  :doc "the probe rearms the spinner once the span has been drawn"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-power-policy 'full)
+            (mevedel-view--spinner-probed-targets nil)
+            (drawn nil))
+        (unwind-protect
+            (cl-letf* ((visible (symbol-function
+                                 'mevedel-view--animation-target-visible-p))
+                       ((symbol-function 'mevedel-view--animation-target-visible-p)
+                        (lambda (&rest args) (and drawn (apply visible args))))
+                       ((symbol-function 'mevedel-view--animation-window-attended-p)
+                        (lambda (_) t)))
+              (mevedel-view--start-spinner "Thinking...")
+              (should-not mevedel-view--spinner-timer)
+              (setq drawn t)
+              (funcall (timer--function mevedel-view--spinner-probe-timer))
+              (should (mevedel--ui-timer-pending-p mevedel-view--spinner-timer)))
+          (mevedel-view--stop-spinner)))))
+
   :doc "spinner tick does not move point on pending tool frame"
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--with-visible-view
@@ -4733,6 +4828,26 @@
           (fundamental-mode)
           (should-not (mevedel--timer-pending-p timer))
           (should-not (gethash view-buf mevedel-view-power--watchers)))))))
+
+(mevedel-deftest mevedel-view--resume-on-window-scroll
+  (:doc "Scrolling defers the decision until the scrolled range is drawn.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full))
+        (unwind-protect
+            (progn
+              (mevedel-view--start-spinner "Working...")
+              (let ((timer mevedel-view--spinner-timer))
+                ;; Inside the hook the old range would read as hidden.
+                (cl-letf (((symbol-function 'mevedel-view--animation-visible-p)
+                           #'ignore))
+                  (mevedel-view--resume-on-window-scroll (selected-window)
+                                                         (point-min)))
+                (should (mevedel--ui-timer-pending-p timer))
+                (should (mevedel--ui-timer-pending-p
+                         mevedel-view--spinner-probe-timer))))
+          (mevedel-view--stop-spinner))))))
 
 (mevedel-deftest mevedel-view-animation-window-departure
   (:doc "Hiding the last frozen tool view releases power monitoring immediately.")

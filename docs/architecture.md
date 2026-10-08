@@ -528,8 +528,11 @@ Resource availability remains context-specific. Provider cache reuse still depen
 repairs detached insertion markers, falls back to raw chunks when a stale
 transformer fails, and delays early output until the process has a registered
 request state machine. Consecutive plain-text inserts are batched for
-`mevedel-gptel-stream-bridge-insert-batch-delay` seconds (0.04 by default);
-non-text boundaries and cleanup flush the batch. Setting the delay to nil or
+`mevedel-gptel-stream-bridge-insert-batch-delay` seconds (0.2 by default);
+non-text boundaries and cleanup flush the batch. Every flush wakes and
+redisplays the editor, which on pgtk repaints the whole frame, while the view
+shows inserted text only on its slower render debounce; the batch is sized to
+that debounce rather than to chunk arrival. Setting the delay to nil or
 zero disables batching. These mechanisms preserve the data buffer as the
 transcript authority; view redraw scheduling remains separate.
 `mevedel-gptel-bridge.el` routes native steering commands through the root

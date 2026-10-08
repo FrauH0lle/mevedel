@@ -98,6 +98,50 @@
   (should (= (mevedel-view-animation-period 'ellipsis) 0.48))
   (should-not (mevedel-view-animation-period 'static))))
 
+(mevedel-deftest mevedel-view-animation-sweep-phase ()
+  ,test
+  (test)
+  :doc "sweeps one second every four after a short delay"
+  (should-not (mevedel-view-animation-sweep-phase 0.0))
+  (should-not (mevedel-view-animation-sweep-phase 0.5))
+  (should (< (abs (- 0.2 (mevedel-view-animation-sweep-phase 0.8))) 1e-9))
+  (should-not (mevedel-view-animation-sweep-phase 1.7))
+  (should-not (mevedel-view-animation-sweep-phase 4.5))
+  (should (mevedel-view-animation-sweep-phase 4.7)))
+
+(mevedel-deftest mevedel-view-animation-next-delay ()
+  ,test
+  (test)
+  :doc "sleeps between sweeps and steps through them"
+  ;; Before the first sweep and at rest, wait for the next one.
+  (should (< (abs (- 0.6 (mevedel-view-animation-next-delay 'shimmer 0.0 0.05))) 1e-9))
+  (should (< (abs (- 3.0 (mevedel-view-animation-next-delay 'shimmer 1.6 0.05))) 1e-9))
+  ;; Within a sweep, step by the frame period but stop at its end.
+  (should (= 0.05 (mevedel-view-animation-next-delay 'shimmer 0.8 0.05)))
+  (should (< (abs (- 0.02 (mevedel-view-animation-next-delay 'shimmer 1.58 0.05))) 1e-9))
+  ;; Rounding just short of a sweep does not wake twice.
+  (should (= 0.05 (mevedel-view-animation-next-delay 'shimmer (- 4.6 1e-12) 0.05)))
+  ;; Other styles move continuously.
+  (should (= 0.12 (mevedel-view-animation-next-delay 'braille 1.6 0.12))))
+
+(mevedel-deftest mevedel-view-animation--sweep-sample ()
+  ,test
+  (test)
+  :doc "rests evenly and brightens a band while sweeping"
+  (let* ((palette (mevedel-view-animation--palette "#ffffff" "#000000"))
+         (shades (lambda (tick)
+                   (let ((sample (mevedel-view-animation--sweep-sample
+                                  "Thinking..." palette tick)))
+                     (mapcar (lambda (i)
+                               (plist-get (get-text-property i 'face sample)
+                                          :foreground))
+                             (number-sequence 0 10))))))
+    (should (equal (list (aref palette 0)) (delete-dups (funcall shades 0))))
+    (let ((middle (funcall shades 30)))
+      ;; A band of distinct shades rises above the resting text around it.
+      (should (> (length (delete-dups (copy-sequence middle))) 3))
+      (should (member (aref palette 0) middle)))))
+
 (mevedel-deftest mevedel-view-animation-prefixes
   (:doc "All non-static tool prefixes are discoverable without matching all rows.")
   (progn

@@ -68,6 +68,8 @@
 (declare-function mevedel--truncate-display
                   "mevedel-utilities" (text width &optional ellipsis))
 (autoload 'mevedel--truncate-display "mevedel-utilities")
+(declare-function mevedel--duration-label "mevedel-utilities" (seconds))
+(autoload 'mevedel--duration-label "mevedel-utilities")
 
 ;; `subr-x'
 (declare-function string-empty-p "subr-x" (string))
@@ -94,15 +96,6 @@
   (mevedel-execution-list-user
    (mevedel-executions-list--session context)))
 
-(defun mevedel-executions-list--elapsed (seconds)
-  "Return compact elapsed time for SECONDS."
-  (cond
-   ((< seconds 60) (format "%.1fs" seconds))
-   ((< seconds 3600) (format "%dm%02ds" (/ (floor seconds) 60)
-                             (% (floor seconds) 60)))
-   (t (format "%dh%02dm" (/ (floor seconds) 3600)
-              (% (/ (floor seconds) 60) 60)))))
-
 (defun mevedel-executions-list--entry (item _context)
   "Return tabulated row for execution ITEM."
   (let ((id (plist-get item :execution-id)))
@@ -112,7 +105,7 @@
       id
       (or (plist-get item :owner) "")
       (if (plist-get item :tty) "PTY" "pipe")
-      (mevedel-executions-list--elapsed
+      (mevedel--duration-label
        (or (plist-get item :wall-time-seconds) 0))
       (number-to-string (or (plist-get item :output-bytes) 0))
       (format "%s" (or (plist-get item :sandbox-state) 'pending))
@@ -140,7 +133,7 @@
                         (list "Owner" (plist-get item :owner))
                         (list "Command" (plist-get item :command))
                         (list "Mode" (if (plist-get item :tty) "PTY" "pipe"))
-                        (list "Elapsed" (mevedel-executions-list--elapsed (or (plist-get item :wall-time-seconds) 0)))))
+                        (list "Elapsed" (mevedel--duration-label (or (plist-get item :wall-time-seconds) 0)))))
            (list :id 'output :title "Output & sandbox"
                  :body (concat
                         (mevedel-report-fields

@@ -107,6 +107,8 @@
 (autoload 'mevedel-transcript-restore-properties "mevedel-transcript-restore")
 
 ;; `mevedel-utilities'
+(declare-function mevedel--duration-label "mevedel-utilities" (seconds))
+(autoload 'mevedel--duration-label "mevedel-utilities")
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
@@ -249,7 +251,7 @@ badges promptly."
                            (format " · %d calls" calls)
                          ""))
          (elapsed-suffix (if (and elapsed (> elapsed 0))
-                             (format " · %.1fs" elapsed)
+                             (format " · %s" (mevedel--duration-label elapsed))
                            "")))
     (if blocked-reason
         (propertize (format "[blocked · awaiting %s]" blocked-reason)
@@ -408,7 +410,7 @@ running in the UI."
            (list (format "Agent %s" agent-path)
                  (unless (string-empty-p badge) badge)
                  (when (integerp calls) (format "%d calls" calls))
-                 (when (numberp elapsed) (format "%.1fs" elapsed))
+                 (when (numberp elapsed) (mevedel--duration-label elapsed))
                  (format "session %s" session-label)))
      "  ")))
 
@@ -547,7 +549,9 @@ Also kill retained conversation data when KILL-RETAINED is non-nil."
               (with-current-buffer agent-buf
                 (let ((mevedel--view-buffer view))
                   (apply function args))))
-            (force-mode-line-update t))
+            ;; Only this view's windows: with ALL, every streamed chunk
+            ;; re-evaluated every mode, header and tab line in the frame.
+            (force-mode-line-update))
         (error
          (mevedel--warn-once
           'view-agent-live-update

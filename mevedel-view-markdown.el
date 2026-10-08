@@ -525,6 +525,10 @@ sizing or when WINDOW is not live."
             (create-image path nil nil :max-width max-width))
         (error nil)))))
 
+(defvar-local mevedel-view--image-layout-width nil
+  "Window body width the last image layout pass used, or nil.
+Placing an image clears it, so the next pass checks again.")
+
 (defun mevedel-view--put-image-display (start end path &optional window)
   "Display PATH as an image over START..END when possible.
 Under a ratio `mevedel-view-inline-image-max-width', the image region
@@ -535,6 +539,7 @@ recreates only stale images."
                      window
                    (get-buffer-window (current-buffer) t)))
          (sizing (mevedel-view--image-sizing window)))
+    (setq mevedel-view--image-layout-width nil)
     (when-let* ((image (mevedel-view--image-display path (car sizing))))
       (add-text-properties
        start end
@@ -561,7 +566,8 @@ discipline."
   (when-let* ((window (if (and window (window-live-p window))
                           window
                         (get-buffer-window (current-buffer) t)))
-              (width (window-body-width window t)))
+              (width (window-body-width window t))
+              ((not (eql width mevedel-view--image-layout-width))))
     (save-excursion
       (goto-char (point-min))
       (let (match)
@@ -575,7 +581,10 @@ discipline."
                 (mevedel-view--put-image-display
                  beg (prop-match-end match)
                  (get-text-property beg 'mevedel-view-image-source)
-                 window)))))))))
+                 window)))))))
+    ;; The scan walks the whole buffer; repeat it only for a new width or
+    ;; after an image was placed.
+    (setq mevedel-view--image-layout-width width)))
 
 (defun mevedel-view--decorate-local-images-in-range (start end)
   "Render local Markdown image links and bare image paths between START and END."
@@ -992,8 +1001,20 @@ undo state, the modified flag, selections and the authoritative transcript."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (mevedel-view--cancel-realign-timer)
-        (if (input-pending-p)
-            (mevedel-view--realign-on-window-change window)
+        (cond
+         ((input-pending-p)
+          (mevedel-view--realign-on-window-change window))
+         ;; Streaming scrolls the view after every render.  Take the view's
+         ;; mutation ownership only when a table or image needs this width.
+         ((not (when-let* ((target (if (and (window-live-p window)
+                                            (eq (window-buffer window) buffer))
+                                       window
+                                     (get-buffer-window buffer t))))
+                 (or (not (eql (window-body-width target t)
+                               mevedel-view--image-layout-width))
+                     (mevedel-view-table--visible-stale target))))
+          nil)
+         (t
           (mevedel-view-render-mutate
            'markdown-realign
            (lambda ()
@@ -1012,7 +1033,7 @@ undo state, the modified flag, selections and the authoritative transcript."
                      (mevedel-view--rerender-images window))
                  (restore-buffer-modified-p modified))
                (when rendered
-                 (mevedel-view--realign-on-window-change window))))))))))
+                 (mevedel-view--realign-on-window-change window)))))))))))
 
 (defun mevedel-view--realign-on-window-change (&optional window &rest _)
   "Schedule idle formatting after display, scrolling, commands or resize.

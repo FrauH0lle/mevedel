@@ -4,6 +4,8 @@
 
 ;; Pure time-based animation samples for the view's request and tool indicators.
 ;; Scheduling, status ownership, and buffer writes belong to the view stream.
+;; Shimmer is cadenced: a brightness band sweeps the label for one second every
+;; four and the label rests in between, so a view wakes only while it moves.
 ;; Color banks hold only a bounded animated prefix; the entire label remains
 ;; readable.  Six shared banks reuse frames between views; each live view can
 ;; pin four banks so another view cannot evict its active sample.  Theme changes
@@ -19,6 +21,21 @@
 
 (defconst mevedel-view-animation--frame-count 216
   "Number of prepared color samples in one cycle.")
+
+(defconst mevedel-view-animation--sweep-delay 0.6
+  "Seconds after an animation starts before its first shimmer sweep.")
+
+(defconst mevedel-view-animation--sweep-duration 1.0
+  "Seconds one shimmer sweep takes to cross its label.")
+
+(defconst mevedel-view-animation--sweep-interval 4.0
+  "Seconds from one shimmer sweep's start to the next.
+Every wakeup repaints a pgtk frame's whole surface.  A continuous shimmer
+held the editor at 34% CPU at 12 fps and 70% at 60; resting three seconds
+in four lets each sweep run smoothly at a fraction of that.")
+
+(defconst mevedel-view-animation--sweep-frames 60
+  "Prepared shimmer samples across one sweep.")
 
 (defconst mevedel-view-animation--palette-size 64
   "Number of theme-derived shades in a color bank.")
@@ -87,10 +104,36 @@ also retries a fallback bank when a frame gains color support."
 (add-hook 'enable-theme-functions #'mevedel-view-animation-invalidate)
 (add-hook 'disable-theme-functions #'mevedel-view-animation-invalidate)
 
+(defun mevedel-view-animation-sweep-phase (seconds)
+  "Return seconds into the shimmer sweep at animation SECONDS, or nil at rest."
+  (let ((since (- seconds mevedel-view-animation--sweep-delay)))
+    (when (>= since 0)
+      (let ((into (mod since mevedel-view-animation--sweep-interval)))
+        (and (< into mevedel-view-animation--sweep-duration) into)))))
+
+(defun mevedel-view-animation-next-delay (style seconds period)
+  "Return seconds until STYLE next changes after animation SECONDS.
+PERIOD is the frame period to use while STYLE moves.  Shimmer moves only
+during its sweep: from rest, wait for the next sweep; within one, step
+by PERIOD but never past its end, so the label settles at rest."
+  (if (not (eq style 'shimmer))
+      period
+    (let ((since (- seconds mevedel-view-animation--sweep-delay)))
+      (if (< since 0)
+          (- since)
+        (let ((into (mod since mevedel-view-animation--sweep-interval)))
+          (cond
+           ((< into mevedel-view-animation--sweep-duration)
+            (min period (- mevedel-view-animation--sweep-duration into)))
+           ;; Rounding can land a hair before the next sweep: start it.
+           ((< (- mevedel-view-animation--sweep-interval into) 0.001) period)
+           (t (- mevedel-view-animation--sweep-interval into))))))))
+
 (defun mevedel-view-animation-period (style)
   "Return the natural update period in seconds for STYLE, or nil if static.
 The caller may choose a slower rendering ceiling without changing the
-time-based animation phase."
+time-based animation phase.  Shimmer moves at this period only during
+its sweep; see `mevedel-view-animation-next-delay'."
   (pcase style
     ((or 'shimmer 'breathe 'bounce) (/ 1.0 60))
     ((or 'braille 'ascii) 0.12)
@@ -144,6 +187,31 @@ leave that entire final cluster unanimated."
         (setq end (1- end))))
     end))
 
+(defun mevedel-view-animation--sweep-sample (head palette tick)
+  "Return HEAD shaded from PALETTE at shimmer sweep TICK, 0 being at rest.
+A cosine band at least three columns wide crosses HEAD's columns; outside
+it the text keeps the palette's resting shade."
+  (let* ((width (float (string-width head)))
+         (half (max 3.0 (* 0.1 width)))
+         (position (and (> tick 0)
+                        (- (* (/ (1- tick)
+                                 (float mevedel-view-animation--sweep-frames))
+                              (+ width (* 2 half)))
+                           half)))
+         (sample (copy-sequence head))
+         (column 0.0))
+    (dotimes (i (length head))
+      (let* ((glyph (float (char-width (aref head i))))
+             (distance (if position
+                           (min 1.0 (/ (abs (- (+ column (/ glyph 2)) position))
+                                       half))
+                         1.0))
+             (intensity (* 0.5 (+ 1 (cos (* float-pi distance)))))
+             (shade (aref palette (min 63 (max 0 (round (* 63 intensity)))))))
+        (setq column (+ column glyph))
+        (put-text-property i (1+ i) 'face `(:foreground ,shade) sample)))
+    sample))
+
 (defun mevedel-view-animation--prepare (style label colors frame)
   "Build a bank of color frames for STYLE and LABEL using COLORS on FRAME."
   (let* ((palette (mevedel-view-animation--palette
@@ -151,25 +219,29 @@ leave that entire final cluster unanimated."
          (end (mevedel-view-animation--prefix-end label))
          (suffix (substring label end))
          (head (substring label 0 end))
-         (frames (make-vector mevedel-view-animation--frame-count nil)))
+         (frames (make-vector (if (eq style 'shimmer)
+                                  (1+ mevedel-view-animation--sweep-frames)
+                                mevedel-view-animation--frame-count)
+                              nil)))
     (when palette
-      (dotimes (tick mevedel-view-animation--frame-count)
-        (let* ((seconds (/ tick 60.0))
-               (center (if (eq style 'bounce)
-                           (- 3.5 (* 3.5 (cos (/ (* seconds float-pi) 1.8))))
-                         (- (* (/ seconds mevedel-view-animation--cycle) 16) 4)))
-               (breath (when (eq style 'breathe)
-                         (/ (- 1 (cos (/ (* seconds float-pi) 1.8))) 2)))
-               (sample (copy-sequence head)))
-          (dotimes (i end)
-            (let* ((intensity
-                    (or breath
-                        (max 0.0 (- 1 (/ (abs (- i center)) 2.5)))))
-                   (shade (aref palette
-                                (min 63 (max 0 (round (* 63 intensity)))))))
-              (put-text-property i (1+ i) 'face
-                                 `(:foreground ,shade) sample)))
-          (aset frames tick sample)))
+      (dotimes (tick (length frames))
+        (aset frames tick
+              (if (eq style 'shimmer)
+                  (mevedel-view-animation--sweep-sample head palette tick)
+                (let* ((seconds (/ tick 60.0))
+                       (center (- 3.5 (* 3.5 (cos (/ (* seconds float-pi) 1.8)))))
+                       (breath (when (eq style 'breathe)
+                                 (/ (- 1 (cos (/ (* seconds float-pi) 1.8))) 2)))
+                       (sample (copy-sequence head)))
+                  (dotimes (i end)
+                    (let* ((intensity
+                            (or breath
+                                (max 0.0 (- 1 (/ (abs (- i center)) 2.5)))))
+                           (shade (aref palette
+                                        (min 63 (max 0 (round (* 63 intensity)))))))
+                      (put-text-property i (1+ i) 'face
+                                         `(:foreground ,shade) sample)))
+                  sample))))
       (list frames suffix colors))))
 
 (defun mevedel-view-animation--remember-view-bank (key bank)
@@ -205,10 +277,18 @@ leave that entire final cluster unanimated."
     (unless local
       (mevedel-view-animation--remember-view-bank key (or bank :fallback)))
     (when (consp bank)
-      (let* ((tick (mod (floor (* (mod (max 0.0 seconds)
-                                       mevedel-view-animation--cycle)
-                                  60))
-                        mevedel-view-animation--frame-count))
+      (let* ((tick
+              (if (eq style 'shimmer)
+                  (if-let* ((phase (mevedel-view-animation-sweep-phase
+                                    (max 0.0 seconds))))
+                      (min mevedel-view-animation--sweep-frames
+                           (1+ (floor (* (/ phase mevedel-view-animation--sweep-duration)
+                                         mevedel-view-animation--sweep-frames))))
+                    0)
+                (mod (floor (* (mod (max 0.0 seconds)
+                                    mevedel-view-animation--cycle)
+                               60))
+                     mevedel-view-animation--frame-count)))
              (sample (aref (car bank) tick)))
         (if (equal (cadr bank) "") sample
           (concat sample (cadr bank)))))))

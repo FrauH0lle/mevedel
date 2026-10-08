@@ -214,7 +214,9 @@
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root
-                 '("sh" "-c" "printf start; sleep .65; printf end")
+                 ;; Output after the first event brings the next one forward;
+                 ;; without it, a quiet command waits a whole second.
+                 '("sh" "-c" "printf start; sleep .4; printf mid; sleep .65; printf end")
                  :tool-args '(:command "progress")
                  :tool-use-id "call-progress"
                  :data-buffer origin-buffer))

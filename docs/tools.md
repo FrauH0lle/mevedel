@@ -1080,9 +1080,13 @@ resemble a model-facing `<bash-execution .../>` envelope. Only a rendered tool
 result whose hidden data marks an appended model-facing envelope has that
 envelope removed from its expanded body.
 
-Managed executions publish transient progress after two seconds, at most four
-times per second. The existing Bash row receives the bounded live output tail
-and updates its status and elapsed time without creating another output owner.
+Managed executions publish transient progress after two seconds: at most four
+times per second while output arrives, and once a second while the command is
+silent, which keeps its whole-second elapsed time current. Each event redraws
+the row, and every redraw wakes the editor. The existing Bash row receives the
+bounded live output tail and updates its status and elapsed time without
+creating another output owner. A missed exit sentinel is noticed within a
+second.
 These progress updates live only in bounded view state and never create
 transcript turns. Events carry the originating data buffer and durable tool-use
 ID, so the matching main or agent view is selected directly. A progress or

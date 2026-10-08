@@ -124,6 +124,8 @@
 (declare-function mevedel-current-origin "mevedel-turn" ())
 
 ;; `mevedel-utilities'
+(declare-function mevedel--duration-label "mevedel-utilities" (seconds))
+(autoload 'mevedel--duration-label "mevedel-utilities")
 (declare-function mevedel--clamped-integer
                   "mevedel-utilities" (value default minimum maximum))
 (declare-function mevedel--warn-once
@@ -312,7 +314,7 @@ operation rather than a successful or semantic non-error result."
                       ((not (eq termination 'exited))))
             (symbol-name termination))
           (when (plist-member facts :wall-time-seconds)
-            (format "%.1fs" (or (plist-get facts :wall-time-seconds) 0)))
+            (mevedel--duration-label (plist-get facts :wall-time-seconds)))
           (when (plist-member facts :output-lines)
             (format "%d lines" (or (plist-get facts :output-lines) 0)))
           (when (plist-member facts :output-bytes)
@@ -869,8 +871,8 @@ the full command, bounded output and execution details."
                          (mevedel--truncate-display first-line 60 "..."))
                  (and label (format " · %s" label))
                  (when (plist-member render-data :wall-time-seconds)
-                   (format " · %.1fs"
-                           (or (plist-get render-data :wall-time-seconds) 0)))
+                   (format " · %s" (mevedel--duration-label
+                                    (plist-get render-data :wall-time-seconds))))
                  (when (or (plist-get render-data :output-preview-truncated-p)
                            (> (or (plist-get render-data :omitted-output-bytes) 0) 0))
                    " · output truncated"))))

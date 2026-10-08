@@ -304,8 +304,11 @@ subsumes them. Source replacement or cancellation discards the pending IDs.
 Focus returning to a frame
 (`after-focus-change-function`) or a window redisplaying the buffer
 (`window-buffer-change-functions`) reschedules the pending render.  A view
-with no window, or one on a terminal frame, is always attended, which keeps
-batch behavior unchanged. Child frames use their top-level ancestor's focus
+shown in no window is unattended too; one on a terminal frame is attended,
+since focus is unknowable there, and so is an undisplayed view in batch Emacs,
+which keeps test behavior unchanged. While unattended, a render request only
+records its kind: it arms no timer that would wake the editor merely to defer
+again. Child frames use their top-level ancestor's focus
 state. The rendering measurements are recorded in
 [ADR 0119](adr/0119-keep-views-reconstructable-and-rendering-bounded.md#decision-history).
 
@@ -323,7 +326,11 @@ observers or animation resume hooks in `pre-redisplay-functions`.
 
 The elapsed suffix uses the same range check and retains its once-per-second
 semantic refresh independently of decorative motion. Focus, window and normal
-buffer scrolling changes reevaluate scheduling. Theme and display-frame changes
+buffer scrolling changes reevaluate scheduling. A scroll hook and a just-inserted
+label or tool row both see the previous redisplay's range, so they reevaluate
+once after the next redisplay instead; without that a new request's indicator
+stayed frozen, elapsed time included, until the next focus or scroll event. A
+span still outside the window after that check waits for scrolling. Theme and display-frame changes
 repaint eligible labels at their displayed or frozen phase; labels outside the
 visible buffer range wait until they return. Frozen glyphs recheck display
 fallbacks on these events without restarting decorative motion. The
@@ -347,16 +354,21 @@ pending-tool row rebuilds, incremental projection, and full rerenders of the
 same transcript; a scheduling-only rearm does not sample the next
 clock phase. A subsequent resume clears the old freeze latch without
 restarting the underlying phase. Waiting for input freezes active
-elapsed time while allowing motion under the selected policy. Progress/status
+elapsed time and holds every indicator still; answering resumes motion. Progress/status
 ownership, the stream-render delay, and the authoritative data buffer do not
 change with animation settings.
 
 The foreground request label supports `shimmer`, `breathe`, `bounce`, `dots`,
 `ellipsis`, `braille`, `ascii`, and `static` (`shimmer` by default). Pending-tool
-rows use compact `braille`, `ascii`, `dots`, or `static` indicators (`braille` by
-default), independently of the request label. Color styles use 64 theme-derived
-shades and a 3.6-second cycle; the prepared frames are cached with a bounded
-animated prefix so long labels remain readable. A live view pins up to four
+rows use `shimmer`, `braille`, `ascii`, `dots`, or `static` (`shimmer` by
+default), independently of the request label. Shimmer is cadenced: 0.6 seconds
+after a request starts, and then every four seconds, a cosine brightness band at
+least three columns wide sweeps the label in one second; between sweeps the
+label rests at its dimmed shade and the view schedules no frames. Tool rows
+shimmer their verb and tool name ("Calling Bash", not its arguments), in the
+same frames as the label, so they add no wakeups of their own. Color styles use 64 theme-derived shades;
+breathe and bounce use a continuous 3.6-second cycle. Prepared frames are
+cached with a bounded animated prefix so long labels remain readable. A live view pins up to four
 prepared banks independently of the shared six-bank reuse cache, so other views
 cannot evict its active frame. Theme changes clear both caches. If colors
 cannot be resolved on a display, color styles fall back to a glyph indicator;
@@ -389,10 +401,15 @@ paused view to another display frame also repaints its frozen color sample for t
 destination palette (or the portable multi-frame fallback) on visibility
 resume, without starting a decorative timer or discarding reusable color banks.
 
-The normal `mevedel-view-spinner-framerate` ceiling defaults to 60 fps.
+The normal `mevedel-view-spinner-framerate` ceiling defaults to 30 fps.
+Each decorative frame is a redisplay, and a pgtk frame repaints its whole
+surface on every redisplay, so the ceiling bounds editor and compositor CPU
+rather than only animation smoothness. Shimmer pays it only during its sweep;
+breathe, bounce and the glyph styles pay it, or their slower natural cadence,
+throughout.
 `mevedel-view-spinner-power-policy` defaults to `auto`: external power uses
 that ceiling; battery/backup power or unknown/stale readings use the lower of
-it and `mevedel-view-spinner-battery-framerate` (default 30). `full` always
+it and `mevedel-view-spinner-battery-framerate` (default 15). `full` always
 uses the normal ceiling; `save` always uses the battery ceiling. Battery 0
 freezes decorative motion for both indicator types, while the global
 `mevedel-view-spinner-animate` switch disables all motion without suppressing
@@ -845,6 +862,11 @@ When compaction copies multiple prompts into the live tail, content before
 their first header uses the preceding archived prompt, not the last copied
 prompt. A local header anywhere in the visible window suppresses the archived
 preview; once it scrolls above the window, its own local preview takes over.
+Finding whether a local header is on screen walks the window body, so it runs
+only when an archived prompt exists, and its answer is kept per window until
+the window's start or size, the buffer, or its invisibility spec changes.
+Header lines are evaluated on every redisplay, including the many caused by
+timers and streamed output that change nothing on screen.
 Clicking that preview opens the archived segment read-only at the original
 prompt; `[Latest]` returns to the live transcript. Fresh segments started by
 `/clear` do not carry a prompt across the boundary. The archived prompt is

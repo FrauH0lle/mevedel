@@ -70,7 +70,47 @@
                (lambda (value) (setq event value)))
               ((symbol-function 'run-at-time) (lambda (&rest _) nil)))
       (mevedel-execution--emit-progress record))
-    (should (plist-get event :output-preview-truncated-p))))
+    (should (plist-get event :output-preview-truncated-p)))
+
+  :doc "waits the quiet interval when no output arrives"
+  (let ((record (mevedel-execution--record-create)) delay)
+    (cl-letf (((symbol-function 'mevedel-execution--event) #'ignore)
+              ((symbol-function 'mevedel-execution--emit-event) #'ignore)
+              ((symbol-function 'run-at-time)
+               (lambda (seconds &rest _) (setq delay seconds) nil)))
+      (mevedel-execution--emit-progress record))
+    (should (= mevedel-execution--quiet-progress-interval delay))
+    (should (mevedel-execution--record-progress-emitted-at record))))
+
+(mevedel-deftest mevedel-execution--hasten-progress ()
+  ,test
+  (test)
+  :doc "brings a quiet wait forward to the output interval"
+  (let* ((record (mevedel-execution--record-create
+                  :progress-emitted-at (- (float-time) 0.1)
+                  :progress-timer (run-at-time 0.9 nil #'ignore)))
+         (old (mevedel-execution--record-progress-timer record)))
+    (unwind-protect
+        (progn
+          (mevedel-execution--hasten-progress record)
+          (let ((timer (mevedel-execution--record-progress-timer record)))
+            (should-not (eq old timer))
+            (should-not (memq old timer-list))
+            (should (< (float-time (timer--time timer)) (+ (float-time) 0.2)))
+            ;; Further output before that event leaves it alone.
+            (mevedel-execution--hasten-progress record)
+            (should (eq timer (mevedel-execution--record-progress-timer record)))))
+      (cancel-timer old)
+      (cancel-timer (mevedel-execution--record-progress-timer record))))
+
+  :doc "keeps the initial delay before the first event"
+  (let ((record (mevedel-execution--record-create
+                 :progress-timer (run-at-time 2 nil #'ignore))))
+    (unwind-protect
+        (let ((timer (mevedel-execution--record-progress-timer record)))
+          (mevedel-execution--hasten-progress record)
+          (should (eq timer (mevedel-execution--record-progress-timer record))))
+      (cancel-timer (mevedel-execution--record-progress-timer record)))))
 
 (mevedel-deftest mevedel-execution--user-snapshot ()
   ,test

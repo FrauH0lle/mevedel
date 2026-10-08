@@ -116,11 +116,6 @@
 (autoload 'mevedel-session-artifacts-segment-summary-bounds
   "mevedel-session-artifacts")
 
-;; `mevedel-session-publication'
-(declare-function mevedel-session-publication-status
-                  "mevedel-session-publication" (session))
-(autoload 'mevedel-session-publication-status "mevedel-session-publication")
-
 ;; `mevedel-structs'
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
@@ -287,6 +282,9 @@
                   "mevedel-view-stream" (data-buf))
 (declare-function mevedel-view--start-spinner-timer
                   "mevedel-view-stream" (&optional resumed))
+(declare-function mevedel-view--recheck-spinner-after-redisplay "mevedel-view-stream" ())
+(declare-function mevedel-view--spinner-active-p "mevedel-view-stream" ())
+(declare-function mevedel-view--content-tick "mevedel-view-stream" ())
 (declare-function mevedel-view-stream--schedule-execution-row-recovery
                   "mevedel-view-stream" (data-buffer))
 
@@ -632,19 +630,26 @@ preview overlays render against this marker.")
   :set #'mevedel-view--set-spinner-option
   :group 'mevedel)
 
-(defcustom mevedel-view-tool-spinner-style 'braille
-  "Compact animation style for pending-tool rows."
-  :type '(choice (const braille) (const ascii) (const dots) (const static))
+(defcustom mevedel-view-tool-spinner-style 'shimmer
+  "Animation style for pending-tool rows.
+Shimmer sweeps a row's verb and tool name, such as \"Calling Bash\", in
+step with the request label's shimmer, so both move in the same frames;
+the arguments stay still.  The glyph styles draw a compact prefix."
+  :type '(choice (const shimmer) (const braille) (const ascii) (const dots)
+                 (const static))
   :set #'mevedel-view--set-spinner-option
   :group 'mevedel)
 
-(defcustom mevedel-view-spinner-framerate 60
-  "Maximum graphical progress frames per second on external power."
+(defcustom mevedel-view-spinner-framerate 30
+  "Maximum graphical progress frames per second on external power.
+Every frame is a redisplay, and a pgtk frame repaints its whole surface
+for each one.  The shimmer draws frames only during its one-second sweep
+every four seconds; continuously moving styles pay this rate throughout."
   :type '(integer 1 60)
   :set #'mevedel-view--set-spinner-option
   :group 'mevedel)
 
-(defcustom mevedel-view-spinner-battery-framerate 30
+(defcustom mevedel-view-spinner-battery-framerate 15
   "Maximum animation frames per second when saving power.
 Zero freezes decorative animation but leaves progress metadata current."
   :type '(integer 0 60)
@@ -1045,6 +1050,20 @@ Kills the associated view buffer."
                 'local-map map
                 'mevedel-view-cockpit-area area)))
 
+(defvar-local mevedel-view--status-strip-root nil
+  "(DIRECTORY . ABBREVIATED) for the status strip's last root.")
+
+(defun mevedel-view--status-strip-abbreviated (directory)
+  "Return DIRECTORY abbreviated for display, remembering the last answer.
+The strip is evaluated on every redisplay, and `abbreviate-file-name'
+consults the file name handlers each time."
+  (if (equal directory (car mevedel-view--status-strip-root))
+      (cdr mevedel-view--status-strip-root)
+    (cdr (setq mevedel-view--status-strip-root
+               (cons directory
+                     (abbreviate-file-name
+                      (file-name-as-directory directory)))))))
+
 (defun mevedel-view--status-strip-width ()
   "Return display columns available for the status strip."
   (let* ((buffer (current-buffer))
@@ -1247,29 +1266,52 @@ When ARCHIVE is non-nil, POSITION is a source position in that segment."
        'help-echo "Jump to this prompt"
        'local-map map))))
 
+(defun mevedel-view--prompt-on-screen-p (window)
+  "Return non-nil when a prompt header below WINDOW's start is on screen.
+Header lines are evaluated on every redisplay, and finding the window's
+last visible position walks its whole body, so the answer is kept per
+window until its start, size, the buffer or its invisibility changes."
+  (let ((key (list (current-buffer)
+                   ;; Animation frames rewrite display properties but move
+                   ;; nothing a header depends on.
+                   (if (fboundp 'mevedel-view--content-tick)
+                       (mevedel-view--content-tick)
+                     (buffer-modified-tick))
+                   buffer-invisibility-spec (window-start window)
+                   (window-body-height window) (window-body-width window)
+                   (mevedel-view--input-marker-position)))
+        (cached (window-parameter window 'mevedel-view--prompt-on-screen)))
+    (if (equal key (car cached))
+        (cdr cached)
+      (let* ((next (next-single-property-change
+                    (window-start window)
+                    'mevedel-view-prompt-preview nil
+                    (mevedel-view--input-marker-position)))
+             (visible (and next
+                           (get-text-property next 'mevedel-view-prompt-preview)
+                           (< next
+                              (save-excursion
+                                (goto-char (window-start window))
+                                (vertical-motion
+                                 (window-body-height window) window)
+                                (point)))
+                           (not (invisible-p next))
+                           t)))
+        (set-window-parameter window 'mevedel-view--prompt-on-screen
+                              (cons key visible))
+        visible))))
+
 (defun mevedel-view--sticky-prompt-line ()
   "Return the current window's pinned prompt on its own header line."
   (let* ((window (selected-window))
          (local (mevedel-view--pinned-prompt window))
-         (archived (and (not local)
+         (continuation (and (not local) (mevedel-view--continuation-prompt)))
+         (archived (and continuation
                         (not (get-text-property
                               (window-start window)
                               'mevedel-view-prompt-preview))
-                        (let ((next (next-single-property-change
-                                     (window-start window)
-                                     'mevedel-view-prompt-preview nil
-                                     (mevedel-view--input-marker-position))))
-                          (not (and next
-                                    (get-text-property
-                                     next 'mevedel-view-prompt-preview)
-                                    (< next
-                                       (save-excursion
-                                         (goto-char (window-start window))
-                                         (vertical-motion
-                                          (window-body-height window) window)
-                                         (point)))
-                                    (not (invisible-p next)))))
-                        (mevedel-view--continuation-prompt)))
+                        (not (mevedel-view--prompt-on-screen-p window))
+                        continuation))
          (pinned (or local archived)))
     (when pinned
       (let* ((width (max 0 (1- (window-body-width window))))
@@ -1293,20 +1335,22 @@ When ARCHIVE is non-nil, POSITION is a source position in that segment."
                         (mevedel-session-execution-target session)))
            (target-label
             (and target (mevedel-execution-target-label target)))
-           (durability
-            (and session workspace
-                 (mevedel-session-publication-status session)))
+           ;; Read the two facts directly: the full publication status also
+           ;; resolves a state directory, through TRAMP on a remote target,
+           ;; and this runs on every redisplay of the view.
            (pending-publication
-            (plist-get durability :pending-publication))
-           (lease-state (plist-get durability :lease-state))
+            (and session workspace
+                 (mevedel-session-pending-publication session)
+                 t))
+           (lease-state (and session workspace
+                             (plist-get (mevedel-session-lease session) :state)))
            (session-name (or (and session (mevedel-session-name session))
                              "unknown"))
-           (root (abbreviate-file-name
-                  (file-name-as-directory
-                   (or (and target
-                            (mevedel-execution-target-native-root target))
-                       (and workspace (mevedel-workspace-root workspace))
-                       (with-current-buffer data-buffer default-directory)))))
+           (root (mevedel-view--status-strip-abbreviated
+                  (or (and target
+                           (mevedel-execution-target-native-root target))
+                      (and workspace (mevedel-workspace-root workspace))
+                      (with-current-buffer data-buffer default-directory))))
            (permission-label
             (car (mevedel-view--permission-mode-display
                   (mevedel-view--effective-permission-mode))))
@@ -1447,25 +1491,28 @@ refresh; a full request upgrades a pending incremental refresh."
 (defun mevedel-view--unattended-p (&optional buffer)
   "Return non-nil when nobody can be watching BUFFER's view.
 
-BUFFER defaults to the current buffer.  A view is unattended when every
-window showing it sits on a frame that is invisible or iconified, or on a
-graphical frame without input focus; a child frame reports the focus of
-its top-level ancestor.  A view with no window, or one on a terminal
-frame, counts as attended: focus is unknowable there, and batch tests
-run their views without windows.  An unattended session otherwise paid a
-quarter of its CPU redisplaying spinner frames and live rows nobody saw."
+BUFFER defaults to the current buffer.  A view is unattended when no
+window shows it, or when every window showing it sits on a frame that is
+invisible or iconified, or on a graphical frame without input focus; a
+child frame reports the focus of its top-level ancestor.  A view on a
+terminal frame counts as attended, since focus is unknowable there, and
+so does a view without windows in a batch Emacs, where tests run views
+undisplayed.  The window-change hook resumes a view when it reappears.
+An unattended session otherwise paid a quarter of its CPU redisplaying
+spinner frames and live rows nobody saw."
   (let ((windows (get-buffer-window-list (or buffer (current-buffer)) nil t)))
-    (and windows
-         (cl-every
-          (lambda (window)
-            (let* ((frame (window-frame window))
-                   (top frame))
-              (while (frame-parent top)
-                (setq top (frame-parent top)))
-              (or (not (eq (frame-visible-p frame) t))
-                  (and (display-graphic-p top)
-                       (null (frame-focus-state top))))))
-          windows))))
+    (if (null windows)
+        (not noninteractive)
+      (cl-every
+       (lambda (window)
+         (let* ((frame (window-frame window))
+                (top frame))
+           (while (frame-parent top)
+             (setq top (frame-parent top)))
+           (or (not (eq (frame-visible-p frame) t))
+               (and (display-graphic-p top)
+                    (null (frame-focus-state top))))))
+       windows))))
 
 (defun mevedel-view--flush-scheduled-render (view-buffer &optional synchronous)
   "Run VIEW-BUFFER's pending transcript render once.
@@ -1547,10 +1594,13 @@ redisplay hooks reschedule it once someone can see the result."
         (mevedel-view-prepare-resume)))))
 
 (defun mevedel-view--resume-on-window-scroll (window _start)
-  "Update animation scheduling after scrolling WINDOW."
+  "Update animation scheduling after scrolling WINDOW.
+The hook runs before redisplay, while `window-end' still describes the
+old range, so the decision waits for the completed redisplay."
   (when (and (eq (window-buffer window) (current-buffer))
-             (fboundp 'mevedel-view--start-spinner-timer))
-    (mevedel-view--start-spinner-timer t)))
+             (fboundp 'mevedel-view--recheck-spinner-after-redisplay)
+             (mevedel-view--spinner-active-p))
+    (mevedel-view--recheck-spinner-after-redisplay)))
 
 (defun mevedel-view--resume-attended-views (&rest _)
   "Resume the pending render of every view that became attended.
@@ -1577,7 +1627,9 @@ still release animation and power observers when it becomes invisible."
 Once scheduled, later requests join
 the same refresh instead of creating independent stream, tool, and full
 render timers.  A non-positive DELAY flushes at once, which still defers
-while the view is unattended."
+while the view is unattended.  An unattended view only records the kind:
+a timer would wake the editor just to defer again, once per streamed
+chunk or progress event.  The resume hooks schedule it when it is seen."
   (unless (memq kind '(tools incremental full))
     (error "Unknown render kind: %S" kind))
   (when (buffer-live-p data-buffer)
@@ -1587,20 +1639,23 @@ while the view is unattended."
                    (eq mevedel-view--pending-render-kind 'tools))
               (null mevedel-view--pending-render-kind))
       (setq mevedel-view--pending-render-kind kind))
-    (if (and (numberp delay) (> delay 0))
-        ;; Test the timer's presence on `timer-list', not the variable: a
-        ;; timer armed from a stream or tool hook while TRAMP had timers
-        ;; suspended is silently discarded, and trusting the stale object
-        ;; would wedge every future render of this view.
-        (unless (mevedel--timer-pending-p mevedel-view--render-timer)
-          (let ((view-buffer (current-buffer)))
-            (setq mevedel-view--render-timer
-                  (run-at-time
-                   delay nil #'mevedel-view--flush-scheduled-render
-                   view-buffer))))
+    (cond
+     ((mevedel-view--unattended-p) nil)
+     ((and (numberp delay) (> delay 0))
+      ;; Test the timer's presence on `timer-list', not the variable: a
+      ;; timer armed from a stream or tool hook while TRAMP had timers
+      ;; suspended is silently discarded, and trusting the stale object
+      ;; would wedge every future render of this view.
+      (unless (mevedel--timer-pending-p mevedel-view--render-timer)
+        (let ((view-buffer (current-buffer)))
+          (setq mevedel-view--render-timer
+                (run-at-time
+                 delay nil #'mevedel-view--flush-scheduled-render
+                 view-buffer)))))
+     (t
       (when (timerp mevedel-view--render-timer)
         (cancel-timer mevedel-view--render-timer))
-      (mevedel-view--flush-scheduled-render (current-buffer) t))))
+      (mevedel-view--flush-scheduled-render (current-buffer) t)))))
 
 (defun mevedel-view-rerender (&optional buffer)
   "Schedule a coalesced full re-render of BUFFER.

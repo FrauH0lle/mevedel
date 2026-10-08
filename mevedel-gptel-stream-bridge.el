@@ -43,12 +43,19 @@
 (autoload 'mevedel--warn-once "mevedel-utilities")
 (eval-when-compile (require 'mevedel-utilities))
 
-(defcustom mevedel-gptel-stream-bridge-insert-batch-delay 0.04
+(defcustom mevedel-gptel-stream-bridge-insert-batch-delay 0.2
   "Seconds to batch consecutive string stream inserts in data buffers.
 
 When positive, mevedel coalesces adjacent plain text stream chunks before
 letting gptel insert them into the authoritative transcript buffer.  nil
-or zero disables batching and preserves immediate insertion."
+or zero disables batching and preserves immediate insertion.
+
+Each flush is a timer wakeup, and every wakeup redisplays; a pgtk frame
+repaints its whole surface each time even though the data buffer is not
+shown.  The view renders the inserted text on its own, slower debounce
+\(`mevedel-view-stream-render-delay'), so a longer batch costs little
+latency: at 0.04 s, a 25-chunk-per-second stream flushed about 15 times a
+second."
   :type '(choice (const :tag "Disabled" nil)
                  (number :tag "Seconds"))
   :group 'mevedel)
