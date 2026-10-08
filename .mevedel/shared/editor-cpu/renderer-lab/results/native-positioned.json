@@ -1,0 +1,25 @@
+{
+  "metadata": "(\"31.1\" pgtk 1545 864 t)",
+  "samples": [
+    {
+      "mode": "idle",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 0.6,
+      "compositor_cpu": 4.4,
+      "callbacks_per_second": 0.0,
+      "native_frames": "(0 0)"
+    },
+    {
+      "mode": "native-surface",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 2.4,
+      "compositor_cpu": 9.4,
+      "callbacks_per_second": 29.6,
+      "native_frames": "(178 177)"
+    }
+  ]
+}

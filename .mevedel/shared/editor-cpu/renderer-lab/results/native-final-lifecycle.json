@@ -1,0 +1,62 @@
+[
+  {
+    "check": "attached",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "inhibited edit hides old pixels before redisplay",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "reattached after inhibited edit",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "cursor occlusion hides surface",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "cursor remains ordinary text",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "cursor leaves label",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "hidden frame releases native work",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "shown frame reattaches",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "font resize reattaches",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "explicit stop",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "50 create/close cycles leave no native work",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "file descriptor stability",
+    "before": 18,
+    "after": 18
+  }
+]

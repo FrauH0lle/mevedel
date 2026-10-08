@@ -1,0 +1,8 @@
+{
+  "command": "npx @emacs-eask/cli package",
+  "source_matches": {
+    "mevedel-view-native.el": true,
+    "native/mevedel-view-native.c": true
+  },
+  "note": "package-build emits an existing obsolete constructor-name notice; package compilation was warning-free."
+}

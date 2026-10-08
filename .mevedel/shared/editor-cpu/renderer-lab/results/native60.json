@@ -1,0 +1,49 @@
+{
+  "metadata": "(\"31.1\" pgtk 1545 864 t)",
+  "samples": [
+    {
+      "mode": "idle",
+      "repeat": 0,
+      "rate": 60.0,
+      "seconds": 8.0,
+      "editor_cpu": 0.62,
+      "compositor_cpu": 4.37,
+      "callbacks_per_second": 0.0,
+      "native_frames": "(0 0)"
+    },
+    {
+      "mode": "native-surface",
+      "repeat": 0,
+      "rate": 60.0,
+      "seconds": 8.0,
+      "editor_cpu": 3.25,
+      "compositor_cpu": 12.0,
+      "callbacks_per_second": 56.25,
+      "native_frames": "(507 505)",
+      "submitted_per_second": 56.25,
+      "released_per_second": 56.25
+    },
+    {
+      "mode": "idle",
+      "repeat": 1,
+      "rate": 60.0,
+      "seconds": 8.0,
+      "editor_cpu": 0.25,
+      "compositor_cpu": 5.12,
+      "callbacks_per_second": 0.0,
+      "native_frames": "(0 0)"
+    },
+    {
+      "mode": "native-surface",
+      "repeat": 1,
+      "rate": 60.0,
+      "seconds": 8.0,
+      "editor_cpu": 3.25,
+      "compositor_cpu": 11.87,
+      "callbacks_per_second": 56.12,
+      "native_frames": "(506 505)",
+      "submitted_per_second": 56.12,
+      "released_per_second": 56.12
+    }
+  ]
+}

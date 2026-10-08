@@ -1,0 +1,41 @@
+{
+  "metadata": "(\"32.0.50\" pgtk 1545 864 t)",
+  "samples": [
+    {
+      "mode": "idle",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.001,
+      "editor_cpu": 0.6,
+      "compositor_cpu": 5.4,
+      "callbacks_per_second": 0.0
+    },
+    {
+      "mode": "noop",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 55.8,
+      "compositor_cpu": 31.8,
+      "callbacks_per_second": 30.0
+    },
+    {
+      "mode": "text",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 55.6,
+      "compositor_cpu": 31.0,
+      "callbacks_per_second": 30.0
+    },
+    {
+      "mode": "canvas",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 55.4,
+      "compositor_cpu": 31.4,
+      "callbacks_per_second": 30.0
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "before": {
+    "0": "/dev/null",
+    "1": "/home/roland/Projekte/mevedel/.worktrees/cpu-wakeups/.scratch/renderer-lab/native-complete-lifecycle/editor.log",
+    "2": "/home/roland/Projekte/mevedel/.worktrees/cpu-wakeups/.scratch/renderer-lab/native-complete-lifecycle/editor.log",
+    "3": "anon_inode:[timerfd]",
+    "4": "socket:[18114131]",
+    "5": "anon_inode:[eventfd]",
+    "6": "socket:[18114132]",
+    "7": "anon_inode:[eventfd]",
+    "8": "socket:[18089499]",
+    "9": "anon_inode:[eventfd]",
+    "10": "/memfd:wayland-cursor (deleted)",
+    "11": "anon_inode:[eventfd]",
+    "12": "socket:[18114133]",
+    "13": "anon_inode:[eventfd]",
+    "14": "anon_inode:inotify",
+    "15": "pipe:[18114679]",
+    "16": "socket:[18116627]",
+    "17": "pipe:[18114679]"
+  },
+  "after": {
+    "0": "/dev/null",
+    "1": "/home/roland/Projekte/mevedel/.worktrees/cpu-wakeups/.scratch/renderer-lab/native-complete-lifecycle/editor.log",
+    "2": "/home/roland/Projekte/mevedel/.worktrees/cpu-wakeups/.scratch/renderer-lab/native-complete-lifecycle/editor.log",
+    "3": "anon_inode:[timerfd]",
+    "4": "socket:[18114131]",
+    "5": "anon_inode:[eventfd]",
+    "6": "socket:[18114132]",
+    "7": "anon_inode:[eventfd]",
+    "8": "socket:[18089499]",
+    "9": "anon_inode:[eventfd]",
+    "10": "/memfd:wayland-cursor (deleted)",
+    "11": "anon_inode:[eventfd]",
+    "12": "socket:[18114133]",
+    "13": "anon_inode:[eventfd]",
+    "14": "anon_inode:inotify",
+    "15": "pipe:[18114679]",
+    "16": "socket:[18116627]",
+    "17": "pipe:[18114679]"
+  }
+}

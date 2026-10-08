@@ -1,0 +1,8 @@
+== native  pre-redisplay-calls=42
+     12 mevedel-telemetry--lag-tick
+      6 mevedel--gc-maintain
+      6 mevedel-view--flush-scheduled-render
+      6 mevedel-execution--emit-progress
+      6 closure:mevedel-execution-process--ended
+      1 undo-auto--boundary-timer
+      1 mevedel-view--control-transfer-refresh

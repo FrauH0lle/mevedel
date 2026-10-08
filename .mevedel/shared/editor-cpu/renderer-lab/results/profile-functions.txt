@@ -1,0 +1,25 @@
+Functions sorted by metric: Exclusive Total CPU Time
+
+Excl. Total   Incl. Total    Name
+CPU           CPU
+ sec.      %   sec.      %
+6.254 100.00  6.254 100.00   <Total>
+5.394  86.24  5.394  86.24   <static>@0x69def (<libpixman-1.so.0.46.4>)
+0.290   4.64  0.290   4.64   munmap
+0.130   2.08  5.934  94.88   <static>@0x1b453a (<emacs-31.1>)
+0.090   1.44  4.973  79.52   <static>@0x2685f (<emacs-31.1>)
+0.040   0.64  0.040   0.64   <static>@0x9fa83 (<libgccjit.so.0.0.1>)
+0.030   0.48  0.050   0.80   <static>@0x1a9674 (<emacs-31.1>)
+0.030   0.48  0.030   0.48   <static>@0xa08b4 (<libc.so.6>)
+0.020   0.32  0.030   0.48   read
+0.010   0.16  0.010   0.16   <static>@0x10315f (<libgtk-3.so.0.2420.32>)
+0.010   0.16  0.010   0.16   <static>@0x12d256 (<libgtk-3.so.0.2420.32>)
+0.010   0.16  0.861  13.76   <static>@0x1bc91 (<libcairo.so.2.11806.6>)
+0.010   0.16  0.520   8.32   <static>@0x37f555 (<libgtk-3.so.0.2420.32>)
+0.010   0.16  0.010   0.16   <static>@0x5eec6 (<libglib-2.0.so.0.8800.3>)
+0.010   0.16  0.010   0.16   <static>@0x6bfaa (<libgdk-3.so.0.2420.32>)
+0.010   0.16  0.010   0.16   <static>@0x79101 (<libcairo.so.2.11806.6>)
+0.010   0.16  0.010   0.16   <static>@0xa5beb (<libc.so.6>)
+0.010   0.16  0.010   0.16   <static>@0xac90 (<ld-linux-x86-64.so.2>)
+0.010   0.16  0.010   0.16   <static>@0xfa33 (<libpixman-1.so.0.46.4>)
+0.010   0.16  0.010   0.16   F6d696e696275666665722d77696e646f772d6163746976652d70_minibuffer_window_active_p_0

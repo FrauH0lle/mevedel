@@ -1,10 +1,43 @@
 # Handoff: editor CPU and wakeups — independent review and investigation
 
+## Current independent review entry point
+
+Review the native renderer change on `fix/cpu-wakeups`, in
+`.worktrees/cpu-wakeups`, against `a9f58a80`:
+
+```sh
+git diff a9f58a80..HEAD
+```
+
+That base already contains the earlier scheduler/contrast fixes. The historical
+tasks below explain their context; the new change is the native presenter and
+its integration. Start with the [renderer report](renderer-lab/README.md) for
+reproduction commands, measured comparisons, source hashes and test scope.
+
+Review priorities:
+
+1. C ownership and Wayland ordering: parent lookup, synchronized initial/moved
+   presentation, callback cancellation, buffer releases and partial failures.
+2. Lisp presentation ownership: coalescing at redisplay, invalidation, marker
+   replacement, multiple windows, focus/occlusion, freeze phases and teardown.
+3. Feature-boundary build/load, ordinary fallback, packaging and installation.
+4. Measurement validity: distinguish isolated animation from total request CPU;
+   synthetic concurrent tool events from actual sleeping Bash; earlier results
+   from final results. Do not infer per-timer CPU attribution from counts alone.
+
+The full 9,776-case suite predates two final Lisp changes (pre-command hook
+removal and unload cleanup); the final 237-case focused suite covers both.
+The later C positioning fix has a failing-before/passing-after protocol check,
+30 graphical lifecycle checks, a passing CPU/delivery gate, and user-confirmed
+absence of the refocus flicker. Eask compilation and C compilation are clean.
+No performance claim is made for non-Wayland platforms, and the remaining
+non-animation request wakeups are a separate follow-up in `docs/backlog.md`.
+
 ## Situation
 
 The user's laptop fans spun up during mevedel requests. Root cause: on their
 Emacs 31.1 pgtk build (KDE Wayland, 2x scale, ~1536x888 logical frame) every
-wakeup — a timer firing, process output — ends in a redisplay that presents the
+Lisp/process wakeup — a timer firing, process output — ends in a redisplay that presents the
 **whole frame surface**, even when nothing changed. Rule of thumb on that frame:
 **~2% editor CPU + ~1% compositor per wakeup per second.** A do-nothing 10 Hz
 timer costs 23-36% in `emacs -Q` at that size and 3% in a 400x300 frame.
@@ -147,8 +180,8 @@ implements the user's visually accepted 8-fps breathe/bounce and half-speed
 glyphs. See the investigation for measurements, test results and limitations.
 
 [Canvas/native-module research](canvas-research.md) traces the Emacs 32 API and
-its PGTK presentation path. Canvas is merged, but has not been benchmarked here;
-no native module or custom Emacs build was added. Remaining presentation, GC,
+its PGTK presentation path. At that earlier checkpoint Canvas had not been benchmarked and no native module
+or custom Emacs build had been added; the investigation below supersedes it. Remaining presentation, GC,
 markdown, status-strip and ACP costs remain in the backlog.
 
 
@@ -157,3 +190,66 @@ now fade a moving band over normal foreground text, and breathe fades from
 normal foreground and back. Glyph styles retain their normal text. This visual
 follow-up preserves the measured cadences; see the investigation's visual
 contrast follow-up for final validation.
+
+
+## New investigation goal: unrestricted approaches (2026-10-08)
+
+Find and validate a substantially lower-CPU way to display smooth mevedel
+status and tool animations. Explore any promising approach: Canvas, native
+modules, and Emacs rendering patches are examples, not constraints or a
+required sequence. The user authorizes measurements, tests, and experiments
+and prefers a solution implemented entirely on mevedel's side. Preserve the
+accepted visual behavior when assessing candidates. Implement and validate a
+justified solution if found; otherwise retain reproducible experiments,
+measurements, and a clear account of the remaining limitation.
+
+The user recreated and activated this unrestricted goal after clarifying its
+scope. The earlier pause is superseded.
+
+
+## Broader renderer investigation: implemented and validated
+
+The [renderer lab](renderer-lab/README.md) retains the reproducible experiments,
+measurements, source hashes, screenshots and acceptance results. A mevedel-side
+native module now presents the existing animation samples on independent Wayland
+surfaces, without modifying Emacs. It builds automatically on first supported
+animation use. Ordinary text animation remains the fallback.
+
+At 30 fps, isolated native bounce uses about 1.5–2.6% editor CPU, versus 55–56%
+for ordinary 30-Hz text/no-op Lisp wakeups. Canvas on an isolated Emacs 32 build
+still used about 55%. The final repeated real sleeping-Bash + main status test
+used 22–23% total editor CPU with native 30-fps bounce, versus 38.7% for ordinary
+8-fps bounce. Warm static baseline was 18.7%. Semantic updates no longer churn
+native surfaces: they coalesce at parent redisplay and retain unchanged text and
+geometry. Remaining non-animation CPU costs are separate backlog items.
+
+The accepted normal-text contrast, faded moving band, continuous color motion,
+glyph cadence, freeze policy and phase semantics are preserved. Native main
+color motion can use the configured 30 fps again. Construction failures,
+unsupported displays and unsuitable geometry keep the ordinary renderer.
+
+Validation includes all seven exact-sample styles; full request/tool lifecycle;
+seven concurrent presentation events and changing overflow counts; theme/font,
+splits, clipping, cursor/selection, child-frame and focus changes; composer draft
+preservation; allocation failures and 50 actual create/close cycles with stable
+file descriptors. Full Eask suite: 9,776 cases, zero unexpected, 31 conditional
+skips. Final focused suite after local cleanup changes: 237 passed. Package
+compilation: 242 files, no warnings. Details and exact scope are in the lab report.
+
+Implementation: `mevedel-view-native.el`, `native/mevedel-view-native.c`, with
+sample preparation and stream scheduling changes. README, view/module docs,
+ADR 0119 and backlog reflect the implemented path. Native requires Linux
+PGTK/Wayland, Emacs modules, cc/pkg-config and GTK 3/Wayland development headers.
+The results do not claim the same acceleration on other platforms.
+
+All graphical native checks ran in disposable editors. The user's live editor
+was not loaded with the native module. The native renderer and evidence are
+committed together on `fix/cpu-wakeups` for independent review.
+
+The user then spotted a top-left flash on refocusing the standalone preview.
+It was a native positioning race, not steady-state animation: a child image
+could commit before its parent's pending position. The C presenter now stays
+synchronized through the parent frame callback at creation/movement, then
+resumes independent animation. The protocol reproduction fails before the fix
+(17 premature commits), passes afterward, and the user confirmed the flicker
+is gone. See `renderer-lab/results/positioning.json` and `check-positioning.py`.

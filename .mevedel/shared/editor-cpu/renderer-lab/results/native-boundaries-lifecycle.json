@@ -1,0 +1,152 @@
+[
+  {
+    "check": "attached",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "inhibited edit hides old pixels before redisplay",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "reattached after inhibited edit",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "cursor occlusion hides surface",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "cursor remains ordinary text",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "cursor leaves label",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "hidden frame releases native work",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "shown frame reattaches",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "font resize reattaches",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "multiline label uses ordinary text",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "single line restored",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "selection uses ordinary text",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "selection cleared",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "child frame hides native labels",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "child frame dismissal restores labels",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "switching buffers releases work",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "buffer returns",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "inactive tab releases work",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "tab returns",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "unfocused parent releases work",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "focus returns",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "explicit stop",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "buffer allocation 1 failure releases resources",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "buffer allocation 2 failure releases resources",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "buffer allocation 3 failure releases resources",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "invalid parent is rejected safely",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "50 create/close cycles leave no native work",
+    "expected": 0,
+    "actual": 0
+  },
+  {
+    "check": "file descriptor stability",
+    "before": 18,
+    "after": 18
+  },
+  {
+    "check": "active before feature unload",
+    "expected": 1,
+    "actual": 1
+  },
+  {
+    "check": "feature unload releases native work",
+    "expected": 0,
+    "actual": 0
+  }
+]

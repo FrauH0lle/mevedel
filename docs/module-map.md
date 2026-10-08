@@ -111,6 +111,8 @@ Chat / view
   mevedel-view-composer.el    composer geometry, submission, root dispatch, fork/send flow
   mevedel-view-input-files.el local file drops and clipboard-image input
   mevedel-view-animation.el   prepared status frames, styles, and bounded color cache
+  mevedel-view-native.el      optional native presentation, placement, fallback and teardown
+  native/mevedel-view-native.c timed Wayland surfaces without Lisp frame callbacks
   mevedel-view-power.el       shared battery observations and effective FPS policy
   mevedel-pending-inputs.el   pending queue, steering, delivery, and cockpit
   mevedel-patch-review.el     staged ApplyPatch review UI

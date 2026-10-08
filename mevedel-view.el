@@ -642,9 +642,9 @@ the arguments stay still.  The glyph styles draw a compact prefix."
 
 (defcustom mevedel-view-spinner-framerate 30
   "Maximum graphical progress frames per second on external power.
-Every frame is a redisplay, and a pgtk frame repaints its whole surface
-for each one.  The shimmer draws frames only during its one-second sweep
-every four seconds; continuously moving styles pay this rate throughout."
+Ordinary text frames require editor redisplay; supported native surfaces
+present independently.  Shimmer draws during its one-second sweep every
+four seconds.  Ordinary breathe/bounce keep their lower natural cadence."
   :type '(integer 1 60)
   :set #'mevedel-view--set-spinner-option
   :group 'mevedel)

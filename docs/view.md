@@ -27,9 +27,11 @@ ephemeral projection state.
 `mevedel-view-stream.el` owns request progress and streaming redraw scheduling;
 `mevedel-gptel-stream-bridge.el` owns private gptel stream compatibility.
 `mevedel-view-animation.el` prepares bounded time-based status frames;
+`mevedel-view-native.el` optionally presents those samples through independent
+Wayland surfaces, owning setup, placement, fallback and teardown;
 `mevedel-view-power.el` shares local battery observations and computes the
 effective animation ceiling. The stream owner decides when visible frames
-and semantic progress metadata need updating; neither module owns the
+and semantic progress metadata need updating; these modules do not own the
 authoritative transcript.
 `mevedel-side-conversation.el` owns transient
 `/btw` conversations. The data buffer remains the model-visible transcript;
@@ -321,8 +323,13 @@ Horizontal clipping and partial pixel scrolling deliberately do not suspend an
 indicator whose buffer span still overlaps that range. A clipped indicator may
 therefore receive decorative updates until its row leaves the viewport. This
 bounded extra work avoids expensive pixel-position queries and visibility
-checks from inside redisplay. There are no horizontal/pixel-scroll primitive
-observers or animation resume hooks in `pre-redisplay-functions`.
+checks from inside redisplay for ordinary text animation. The native presenter
+also validates pixel placement at semantic boundaries: it covers only a fully
+visible, single-line span with matching font geometry. If any window showing
+part of the label cannot host it, ordinary animation continues for that target.
+A local pre-redisplay guard hides stale native pixels after text, geometry or
+cursor/selection changes. There is no per-frame Lisp callback and no
+horizontal/pixel-scroll primitive observer.
 
 The elapsed suffix uses the same range check and retains its once-per-second
 semantic refresh independently of decorative motion. Focus, window and normal
@@ -409,11 +416,12 @@ destination palette (or the portable multi-frame fallback) on visibility
 resume, without starting a decorative timer or discarding reusable color banks.
 
 The normal `mevedel-view-spinner-framerate` ceiling defaults to 30 fps.
-Each decorative frame is a redisplay, and a pgtk frame repaints its whole
-surface on every redisplay, so the ceiling bounds editor and compositor CPU
-rather than only animation smoothness. Shimmer pays it only during its sweep;
-breathe, bounce and the glyph styles pay it, or their slower natural cadence,
-throughout.
+With ordinary text animation, each decorative frame is a redisplay, and the
+measured pgtk build presents its whole surface. Native presentation avoids that
+path: GLib timers draw prepared Pango samples into small Wayland shared-memory
+surfaces. Breathe/bounce then use the configured ceiling rather than the ordinary
+8-fps compromise. Glyph cadence and shimmer sweep/rest timing remain unchanged.
+Equal adjacent samples share an interval. Native callbacks never call Emacs APIs.
 `mevedel-view-spinner-power-policy` defaults to `auto`: external power uses
 that ceiling; battery/backup power or unknown/stale readings use the lower of
 it and `mevedel-view-spinner-battery-framerate` (default 15). `full` always
@@ -436,6 +444,30 @@ immediately, rather than waiting for elapsed-metadata maintenance. Explicit
 `full` is useful on desktops whose power source cannot be determined. Lower
 frame rates reduce
 scheduled animation work, not necessarily battery drain proportionally.
+
+The optional native presenter requires Linux PGTK/Wayland, Emacs module support,
+`cc`, `pkg-config`, and Emacs/GTK 3/Wayland development headers. It compiles once
+on first eligible animation and caches the module by source/build identity under
+`mevedel-user-dir/native/`. `mevedel-view-native-enabled` disables this path;
+unsupported displays or build/placement failures retain ordinary text animation.
+The internal `mevedel-view-native--load-state` retains a build failure's reason.
+
+The presenter matches the frame's opaque window ID against live GTK toplevels;
+it never dereferences that ID. Native ownership includes three bounded pixel
+buffers per surface, Pango layouts, timers and parent lifecycle handlers. An
+empty input region leaves mouse events with Emacs. Hidden/unfocused/destroyed
+parents release native work. Cursor/selection overlap, child frames, clipping,
+wrapping and incompatible font metrics retain the ordinary text renderer.
+Creation and movement keep the child surface synchronized until a parent frame
+callback confirms that its position has been committed. Only then do native
+frames run independently, preventing a brief image at the initial `(0, 0)`.
+
+Projection writers inhibit redisplay while deleting and reconstructing rows.
+Native synchronization coalesces to their latest intent at the parent redisplay
+boundary, retaining unchanged surfaces even when markers are replaced. The stream
+owner keeps metadata cadence, power policy and the last presented phase for freezes;
+the native presenter owns pixels and placement. Stopping the view releases surfaces,
+timers, observers, pending parent callbacks and pending presentation.
 
 Before rendering a restored transcript, `mevedel-transcript-restore.el`
 recovers gptel bounds and normalizes their text properties through that same

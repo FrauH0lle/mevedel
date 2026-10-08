@@ -2,8 +2,9 @@
 
 Investigated 2026-10-08 against Emacs master `6d14004c581982231bd959f586c5c835ef347256`
 and minad/emacs-canvas-patch `0a614cdc8df1d30442615c0ef4ffc7d5148ea983`.
-Source inspection only: no live-editor calls, compilation, or canvas CPU
-measurements were performed for this note.
+The original note below was source inspection only. The subsequent
+[renderer experiments](renderer-lab/README.md) measured Canvas and implemented
+a mevedel-side Wayland presenter; see that report for the current result.
 
 **Recommendation:** investigate PGTK presentation first. Canvas is a useful
 pixel-update API and is already in Emacs 32 development sources, but its
@@ -82,3 +83,15 @@ animation at 8/12/30 Hz. Check resize, scrolling, overlapping windows, cursor,
 and expose behavior before considering a presentation patch usable. Canvas
 can initially use precomputed Lisp pixel buffers; a native module is justified
 only if profiling then finds significant pixel-generation cost.
+
+
+## Subsequent measurement
+
+The later [renderer experiments](renderer-lab/README.md) built the referenced
+Emacs master and measured native Canvas drawing: roughly 55% editor CPU at
+30 Hz, comparable to ordinary text on this PGTK setup. They also found a
+separate native Wayland subsurface can bypass that presentation path at about
+2% CPU. The earlier recommendation to investigate presentation is supported;
+the earlier discussion of native rendering should not be read as excluding a
+module which owns a separate compositor surface. Product integration is still
+under investigation.

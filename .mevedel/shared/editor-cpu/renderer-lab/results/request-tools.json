@@ -1,0 +1,54 @@
+{
+  "metadata": "(\"31.1\" 1545 864 \"/tmp/mevedel-request-lab-jqey7gf1/elpa/gptel-20260925.357/gptel.elc\")",
+  "source_hashes": {
+    "mevedel-view-native.el": "39a74f3cb675621aef612783b71938e561e0dc49a5a7d757c6e9f3b05fa796cf",
+    "mevedel-view-stream.el": "e706a8cc1d80adba69e3993126aa87150eb2e5f60ec82fe37822a0f3805c3cca",
+    "native/mevedel-view-native.c": "8596456874a78673d518a6de944e0998d379cc04146a0d470e7f5da017b3dac1"
+  },
+  "samples": [
+    {
+      "label": "static",
+      "tool": true,
+      "editor_cpu": 14.12,
+      "compositor_cpu": 14.75,
+      "seconds": 8.000299848994473,
+      "first_use_seconds": 0.8961436569952639,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 0 :stats nil :load nil :focused t :tools 0 :entries 0)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 0 :stats nil :load nil :focused t :tools 0 :entries 0)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats nil :load nil :focused t :tools 0 :entries 0)"
+    },
+    {
+      "label": "ordinary",
+      "tool": true,
+      "editor_cpu": 37.37,
+      "compositor_cpu": 22.87,
+      "seconds": 8.000101400990388,
+      "first_use_seconds": 0.08893404599803034,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((bounce . 0.125) (shimmer . 0.03333333333333333) (metadata . 1.0)) :native 0 :stats nil :load nil :focused t :tools 1 :entries 0)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((bounce . 0.125) (shimmer . 0.03333333333333333) (metadata . 1.0)) :native 0 :stats nil :load nil :focused t :tools 1 :entries 0)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats nil :load nil :focused t :tools 0 :entries 0)"
+    },
+    {
+      "label": "native",
+      "tool": true,
+      "editor_cpu": 29.0,
+      "compositor_cpu": 18.12,
+      "seconds": 8.000333691001288,
+      "first_use_seconds": 0.5508581930043874,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 116 111 0] :load ready :focused t :tools 1 :entries 2)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 2 :stats [2 354 333 0] :load ready :focused t :tools 1 :entries 2)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 502 471 0] :load ready :focused t :tools 0 :entries 0)"
+    },
+    {
+      "label": "static",
+      "tool": true,
+      "editor_cpu": 15.0,
+      "compositor_cpu": 14.75,
+      "seconds": 8.00007737398846,
+      "first_use_seconds": 0.09604005300207064,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 0 :stats [0 502 471 0] :load ready :focused t :tools 0 :entries 0)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 0 :stats [0 502 471 0] :load ready :focused t :tools 0 :entries 0)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 502 471 0] :load ready :focused t :tools 0 :entries 0)"
+    }
+  ]
+}

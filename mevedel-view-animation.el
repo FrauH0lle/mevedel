@@ -400,5 +400,34 @@ glyph fallback.  SECONDS is elapsed animation time, not a frame counter."
          (concat label (make-string n ?.) (make-string (- 3 n) ?\s))))
       (_ label))))
 
+(defun mevedel-view-animation-sequence (style label period face &optional frame)
+  "Prepare a repeating sequence for STYLE and LABEL at minimum PERIOD.
+FACE and FRAME resolve the displayed colors and glyphs.  Return a vector
+[CYCLE [SECONDS SAMPLE] ...], starting at zero, or nil for static styles.
+Native presenters consume these same samples instead of duplicating style
+semantics.  Adjacent equal samples share an interval without timer wakeups."
+  (when-let* ((cycle (pcase style
+                      ('shimmer mevedel-view-animation--sweep-interval)
+                      ((or 'breathe 'bounce) mevedel-view-animation--cycle)
+                      ('braille 2.4) ('ascii 0.96) ('dots 1.92) ('ellipsis 3.84)))
+              ((numberp period)) ((> period 0)))
+    (let* ((duration (if (eq style 'shimmer)
+                         mevedel-view-animation--sweep-duration cycle))
+           (steps (max 1 (min 216 (floor (/ duration period)))))
+           (times (if (eq style 'shimmer)
+                      (cons 0.0
+                            (cl-loop for i from 1 to steps
+                                     collect (+ mevedel-view-animation--sweep-delay
+                                                (* i (/ duration steps)))))
+                    (cl-loop for i below steps collect (* i (/ cycle steps)))))
+           samples previous)
+      (dolist (seconds times)
+        (let ((sample (mevedel-view-animation-frame
+                       style label seconds face frame)))
+          (unless (and previous (equal-including-properties previous sample))
+            (push (vector (float seconds) sample) samples)
+            (setq previous sample))))
+      (vconcat (list (float cycle)) (nreverse samples)))))
+
 (provide 'mevedel-view-animation)
 ;;; mevedel-view-animation.el ends here

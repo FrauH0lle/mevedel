@@ -1,0 +1,49 @@
+{
+  "metadata": "(\"31.1\" pgtk 1545 864 t)",
+  "samples": [
+    {
+      "mode": "idle",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 0.4,
+      "compositor_cpu": 6.6,
+      "callbacks_per_second": 0.0,
+      "module_stats": "[0 0 0 0]"
+    },
+    {
+      "mode": "native-owned",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 2.6,
+      "compositor_cpu": 11.4,
+      "callbacks_per_second": 29.8,
+      "module_stats": "[1 181 180 0]",
+      "submitted_per_second": 30.0,
+      "released_per_second": 30.0
+    },
+    {
+      "mode": "idle",
+      "repeat": 1,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 0.4,
+      "compositor_cpu": 10.6,
+      "callbacks_per_second": 0.0,
+      "module_stats": "[0 247 246 0]"
+    },
+    {
+      "mode": "native-owned",
+      "repeat": 1,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 2.4,
+      "compositor_cpu": 12.0,
+      "callbacks_per_second": 29.8,
+      "module_stats": "[1 427 425 0]",
+      "submitted_per_second": 30.0,
+      "released_per_second": 30.0
+    }
+  ]
+}

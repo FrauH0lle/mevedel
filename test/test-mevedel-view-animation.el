@@ -452,5 +452,31 @@
         (should (mevedel-view-animation-color-ready-p
                  'shimmer "D" 'default :multiple))))))
 
+(mevedel-deftest mevedel-view-animation-sequence
+  (:doc "Presenter sequences retain style phases and sleep through equal samples.")
+  (let ((mevedel-view-animation--cache nil))
+    (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+               (lambda (&rest _) '("#ffffff" . "#000000"))))
+      (dolist (style '(shimmer breathe bounce braille ascii dots ellipsis))
+        (let* ((sequence (mevedel-view-animation-sequence
+                          style "Working..." (/ 1.0 30) 'default))
+               (cycle (aref sequence 0))
+               (previous -1.0) sample)
+          (should (= 0.0 (aref (aref sequence 1) 0)))
+          (cl-loop for entry across (seq-subseq sequence 1) do
+                   (should (> (aref entry 0) previous))
+                   (should (< (aref entry 0) cycle))
+                   (should-not (equal-including-properties sample (aref entry 1)))
+                   (should (equal-including-properties
+                            (aref entry 1)
+                            (mevedel-view-animation-frame style "Working..."
+                                                           (aref entry 0) 'default)))
+                   (setq previous (aref entry 0) sample (aref entry 1)))
+          (when (eq style 'shimmer)
+            (should (<= previous 1.60000001))
+            (should (equal-including-properties sample (aref (aref sequence 1) 1))))))
+      (should-not (mevedel-view-animation-sequence 'static "Working" 0.1 'default))
+      (should-not (mevedel-view-animation-sequence 'breathe "Working" 0 'default)))))
+
 (provide 'test-mevedel-view-animation)
 ;;; test-mevedel-view-animation.el ends here

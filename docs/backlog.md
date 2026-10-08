@@ -24,15 +24,16 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ### Remaining per-wakeup costs
 
-On pgtk every wakeup redisplays and presents the whole frame surface, even
+On the measured pgtk build, Lisp/process wakeups present the whole frame surface, even
 when nothing changed: about 2% editor CPU and 1% compositor per wakeup per
 second on a 2x-scaled 1536x888 frame. The heartbeat, shimmer cadence, tool
 rows, Bash progress and watch timers, stream batching, collection pacing and
 unattended render timers were reduced for this (ADR 0119). Still open:
 
-- Continuous indicators now use the visually accepted 8-fps breathe/bounce
-  and half-speed glyph cadences. Further smooth-animation savings depend on
-  reducing pgtk presentation cost; burst-and-pause glyph variants were rejected.
+- Independent native animation avoids per-frame Lisp wakeups on PGTK/Wayland.
+  Other displays retain the accepted 8-fps breathe/bounce and half-speed glyph
+  cadences; investigate their presentation costs before adding another native
+  backend. Burst-and-pause glyph variants were rejected.
 - `mevedel--gc-maintain` wakes once a second during requests and their
   30-second grace, to re-apply the threshold after idle tuning such as gcmh
   lowers it.

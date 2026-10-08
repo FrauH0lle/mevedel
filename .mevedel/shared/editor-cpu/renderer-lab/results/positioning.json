@@ -1,0 +1,34 @@
+{
+  "before": {
+    "exit_code": 1,
+    "created": 16,
+    "independent_transitions": 16,
+    "premature_child_commits": 17,
+    "examples": [
+      {
+        "line": 564,
+        "child": 41,
+        "parent": 33
+      },
+      {
+        "line": 610,
+        "child": 54,
+        "parent": 33
+      },
+      {
+        "line": 630,
+        "child": 62,
+        "parent": 33
+      }
+    ]
+  },
+  "after": {
+    "exit_code": 0,
+    "created": 56,
+    "independent_transitions": 56,
+    "premature_child_commits": 0,
+    "examples": []
+  },
+  "native_source_sha256": "317bd7ddd182632b28900635ea672dd80aecc448edf6cbf272b55ee7cda18bf1",
+  "user_confirmation": "User repeatedly refocused the corrected preview and confirmed the top-left flicker is gone."
+}

@@ -34,11 +34,12 @@ class H(http.server.BaseHTTPRequestHandler):
             self.wfile.write(("data: " + json.dumps(obj) + "\n\n").encode()); self.wfile.flush()
         if not has_tool_result:
             time.sleep(ctl.get("hold", 0))
-        tool = None if has_tool_result else ctl.get("tool")
-        if tool:
+        tools = [] if has_tool_result else (ctl.get("tools") or ([ctl["tool"]] if ctl.get("tool") else []))
+        if tools:
             send(dict(base, choices=[{"index": 0, "delta": {"role": "assistant", "tool_calls": [
-                {"index": 0, "id": "call_mock", "type": "function",
-                 "function": {"name": tool["name"], "arguments": json.dumps(tool["args"])}}]},
+                {"index": index, "id": "call_mock_" + str(index), "type": "function",
+                 "function": {"name": tool["name"], "arguments": json.dumps(tool["args"])}}
+                for index, tool in enumerate(tools)]},
                 "finish_reason": None}]))
             send(dict(base, choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]))
         else:

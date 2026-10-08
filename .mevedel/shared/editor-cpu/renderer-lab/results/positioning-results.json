@@ -1,0 +1,27 @@
+{
+  "metadata": "(\"31.1\" pgtk 1545 864 t)",
+  "samples": [
+    {
+      "mode": "idle",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 0.4,
+      "compositor_cpu": 7.2,
+      "callbacks_per_second": 0.0,
+      "module_stats": "[0 0 0 0]"
+    },
+    {
+      "mode": "native-owned",
+      "repeat": 0,
+      "rate": 30,
+      "seconds": 5.0,
+      "editor_cpu": 2.6,
+      "compositor_cpu": 12.0,
+      "callbacks_per_second": 30.0,
+      "module_stats": "[1 178 176 0]",
+      "submitted_per_second": 30.0,
+      "released_per_second": 29.8
+    }
+  ]
+}

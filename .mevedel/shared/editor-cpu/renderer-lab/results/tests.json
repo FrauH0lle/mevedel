@@ -1,0 +1,52 @@
+{
+  "count": 9776,
+  "unexpected": 0,
+  "skipped": 31,
+  "wall_seconds": 389.20915877200605,
+  "clean_seconds": 0.3723619520023931,
+  "discovery_seconds": 8.129980785990483,
+  "workers": [
+    {
+      "worker": 0,
+      "exit_code": 0,
+      "wall_seconds": 373.00221382500604,
+      "ert_seconds": 364.044700421
+    },
+    {
+      "worker": 1,
+      "exit_code": 0,
+      "wall_seconds": 377.10126841199235,
+      "ert_seconds": 368.482634418
+    },
+    {
+      "worker": 2,
+      "exit_code": 0,
+      "wall_seconds": 378.4985681130056,
+      "ert_seconds": 369.546003718
+    },
+    {
+      "worker": 3,
+      "exit_code": 0,
+      "wall_seconds": 381.02634778899665,
+      "ert_seconds": 372.083630457
+    }
+  ],
+  "command": "npx @emacs-eask/cli run script test -- --jobs 4",
+  "scope": "Full suite before removal of eager pre-command invalidation and native feature-unload cleanup. Latest focused suite covers both; final docstring clarification is non-behavioral.",
+  "focused": {
+    "count": 237,
+    "unexpected": 0,
+    "command": "npx @emacs-eask/cli clean elc; npx @emacs-eask/cli test ert test/test-mevedel-view-native.el test/test-mevedel-view-animation.el test/test-mevedel-view-stream.el"
+  },
+  "compile": {
+    "files": 242,
+    "warnings": 0,
+    "command": "npx @emacs-eask/cli compile"
+  },
+  "final_source_hashes": {
+    "mevedel-view-native.el": "633efdf1efb05b27208453017c706859e0809939c91e7f250b2688d06a020f20",
+    "mevedel-view-stream.el": "e706a8cc1d80adba69e3993126aa87150eb2e5f60ec82fe37822a0f3805c3cca",
+    "mevedel-view-animation.el": "ff666135d5b788c1a26957a3c9a7c926e659a394ba3f99adae04323016c11734",
+    "native/mevedel-view-native.c": "571756393b65d9682da250d7f593a13dd9f97763d114bbba7c06819be2478a31"
+  }
+}

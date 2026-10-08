@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-08",
+  "branch": "fix/cpu-wakeups",
+  "base_commit": "a9f58a80",
+  "emacs32_commit": "6d14004c581982231bd959f586c5c835ef347256",
+  "system": "Arch Linux; KDE Wayland; 2x scale",
+  "emacs32_configure": "--with-pgtk --with-cairo --with-modules --without-native-compilation --without-compress-install --without-pop --with-tree-sitter CFLAGS=-O2 -g",
+  "notes": [
+    "GTK exploratory and profile runs overlapped a four-worker Emacs build. Baseline, clipping, native-surface, native-verified and Canvas measurements ran without that build.",
+    "The native drawing uses an approximate Pango bounce gradient, with hardcoded light-theme font/colors. It is not the product renderer.",
+    "Native modes run on a 33 ms GTK timeout (about 30 Hz); snapshots show submitted/released buffer totals including one second of settling.",
+    "Screenshots were captured after the measurement interval. Surface position was subsequently corrected using window-inside-pixel-edges.",
+    "Final native60 results use the final recorded probe sources, monotonic phase, posn-derived positioning, and explicit submitted/released frame-rate assertions. Earlier exploratory files predate these refinements."
+  ],
+  "final_probe_sha256": {
+    "lab.el": "74b3b7a951fe02a323ec0b4ea4fcbbeca5969513ae563a45766b9a0f40d51890",
+    "damage-probe.c": "5dc9433db375fbd884f2a009cd49737739276a68454d332477b3e893944a0bcd",
+    "gtk-probe.c": "23127fbe902e31de2d32abcf551a490fc74bb678a58d36b1826fef076c2bda55",
+    "canvas-probe.c": "8cc88b760dded39adb7c2610beadc6e2f4c92eabc957be61c9aea9ee2661e484",
+    "run.py": "6083e5d746ee82cd87faaaa79b65657958c8eaa6697a402af636419753303dfe"
+  }
+}
