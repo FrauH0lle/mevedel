@@ -11,6 +11,7 @@
           "helpers"))
 (require 'mevedel-view)
 (require 'mevedel-view-animation)
+(require 'mevedel-view-native)
 (require 'mevedel-view-power)
 (require 'mevedel-view-stream)
 (require 'mevedel-agent-control)
@@ -6139,6 +6140,48 @@
         (should-not (mevedel-view--animation-frozen-p))
         (let ((mevedel-view-spinner-animate nil))
           (should (mevedel-view--animation-frozen-p)))))))
+
+(mevedel-deftest mevedel-view--capture-native-animation
+  (:doc "Freezing uses the native submitted phase instead of stale Lisp display text.")
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-spinner-style 'ascii))
+        (mevedel-view--start-spinner "Working...")
+        (setq mevedel-view--native-animation-targets
+              (list mevedel-view--spinner-label-target)
+              mevedel-view--spinner-last-sample-seconds 0.0)
+        (cl-letf (((symbol-function 'mevedel-view-native-sample) (lambda (_) 0.72)))
+          (mevedel-view--capture-native-animation)
+          (should (= 0.72 mevedel-view--spinner-last-sample-seconds))
+          (let ((mevedel-view-spinner-animate nil))
+            (should (= 0.72 (mevedel-view--animation-display-seconds)))))))))
+
+(mevedel-deftest mevedel-view--sync-native-animation
+  (:doc "Offloaded labels leave only metadata wakeups and preserve the composer.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'bounce)
+            (mevedel-view-spinner-power-policy 'full)
+            (mevedel-view-spinner-framerate 30))
+        (mevedel-view--start-spinner "Working...")
+        (goto-char (mevedel-view--input-start))
+        (insert "> retained
+second line")
+        (let ((draft (mevedel-view--input-text)) captured)
+          (cl-letf (((symbol-function 'mevedel-view-native-sync)
+                     (lambda (specs _seconds _rearm)
+                       (setq captured specs)
+                       (mapcar #'car specs)))
+                    ((symbol-function 'mevedel-view-native-sample) (lambda (_) 0.5)))
+            (mevedel-view--start-spinner-timer)
+            (should (eq (cadar captured) 'bounce))
+            (should (= (/ 1.0 30) (nth 4 (car captured))))
+            (should (equal mevedel-view--spinner-timer-plan '((metadata . 1.0))))
+            (let* ((start (marker-position (car mevedel-view--spinner-label-target)))
+                   (sample (get-text-property start 'display)))
+              (mevedel-view--spinner-tick)
+              (should (equal-including-properties sample (get-text-property start 'display))))
+            (should (equal draft (mevedel-view--input-text)))))))))
 
 (provide 'test-mevedel-view-stream)
 ;;; test-mevedel-view-stream.el ends here

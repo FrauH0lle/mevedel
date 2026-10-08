@@ -104,6 +104,7 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
  '(mevedel :host github
            :repo "FrauH0lle/mevedel"
            :files ("*.el"
+                   ("native" "native/*.c")
                    ("scripts" "scripts/mevedel-mcp-stdio.py")
                    "agents"
                    "prompts"
@@ -427,6 +428,7 @@ the next send.
 | `mevedel-view-rerender-debounce`               | Debounce delay for explicit full view rerenders.                   |
 | `mevedel-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |
 | `mevedel-view-spinner-animate`                 | Global reduced-motion switch for request and pending-tool indicators. |
+| `mevedel-view-native-enabled`                  | Use low-CPU native animation on PGTK/Wayland when available (default t). |
 | `mevedel-view-spinner-style`                   | Request label: `shimmer` (default), `breathe`, `bounce`, `dots`, `ellipsis`, `braille`, `ascii`, or `static`. |
 | `mevedel-view-tool-spinner-style`              | Pending-tool indicator: `shimmer` (default; sweeps "Calling TOOL" with the label), `braille`, `ascii`, `dots`, or `static`. |
 | `mevedel-view-spinner-framerate`               | Normal animation ceiling, 1–60 frames/second (default 30).          |
@@ -450,6 +452,17 @@ time and status updates continue even with `static`, a zero saving ceiling,
 or `mevedel-view-spinner-animate` set to nil. The former
 `mevedel-view-spinner-frames` and `mevedel-view-spinner-interval` settings
 were removed; choose a style and rendering ceiling instead.
+
+On Linux with PGTK/Wayland, mevedel can present the same animation samples on
+small independent surfaces, avoiding a full editor repaint per frame. This
+optional renderer builds automatically at first use; it requires Emacs module
+support, a C compiler (`cc`), `pkg-config`, and the Emacs, GTK 3 and Wayland
+client development headers. The compiled module is cached under
+`mevedel-user-dir/native/`. Other displays, unavailable build dependencies and
+unsuitable label geometry use ordinary text animation. Set
+`mevedel-view-native-enabled` to nil to disable it. Native breathe/bounce use
+the configured frame-rate ceiling; their ordinary renderer retains the accepted
+8-fps compromise. No Emacs patch or rebuild is required.
 
 ```emacs-lisp
 ;; Automatic 30 fps on external power, 15 fps on battery or unknown power.

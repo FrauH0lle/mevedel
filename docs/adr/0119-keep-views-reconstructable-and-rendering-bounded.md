@@ -87,7 +87,7 @@ prompts to install missing grammars. The [view manual](../view.md) owns the
 detailed rendering and recovery contracts.
 
 Request progress animation is presentation only. The view stream schedules
-one timer for visible decorative frames and elapsed metadata, separate from
+one timer for ordinary visible decorative frames and elapsed metadata, separate from
 transcript rendering; it updates registered fragment-owned display spans and
 never writes the authoritative transcript. Each one-shot callback rearms its
 timer from the present, so a stall neither replays overdue callbacks nor
@@ -105,7 +105,8 @@ row retains its phase while adopting changed text or a destination display. Them
 spinner, its inherited faces, or the default face invalidate both; observing
 resolved-color dependencies matters when a paused, zero-fps view has no timer
 to discover updated Customize colors.
-Breathe and bounce retain their 3.6-second cycle at an 8-fps natural ceiling.
+Breathe and bounce retain their 3.6-second cycle. Ordinary text uses the accepted
+8-fps ceiling; eligible native surfaces use the configured rendering ceiling.
 Glyphs advance every 240 ms (braille/ascii), 480 ms (dots) or 960 ms
 (ellipsis); colorless and low-color terminals use the glyph
 fallback cadence rather than waking at the color rate. Even resolvable face
@@ -122,10 +123,11 @@ eligibility uses overlap of a registered span with the completed redisplay's
 visible buffer range in an attended window. Partially visible spans are retained;
 horizontal clipping and partial pixel scrolling do not refine that decision.
 This intentionally permits decorative updates to horizontally clipped labels
-on visible rows. Pixel-position queries, horizontal/pixel-scroll primitive
-observers, animation redisplay hooks, and prepared changing-prefix bounds are
-absent. Deciding whether a decorative update is useful must be cheaper than
-performing it. The October 2026 measurement below explains this reversal.
+on visible rows. Ordinary animation keeps pixel-position queries and
+per-frame redisplay hooks out of its hot path. Native presentation additionally
+checks geometry at semantic boundaries and guards stale pixels before redisplay;
+it never adds a Lisp callback per native frame. The October 2026 measurements
+below explain both the ordinary visibility policy and this native exception.
 
 The elapsed suffix independently retains its one-second semantic refresh when
 its range is eligible. Window focus and range eligibility must hold together:
@@ -144,6 +146,18 @@ replacement and deletion release power subscriptions, including frozen
 tool-only progress with no timer to discover that its window disappeared.
 Package install/uninstall owns the global focus and face-change observers.
 
+Eligible Linux PGTK/Wayland views optionally use independent native surfaces.
+The animation module supplies timed, styled samples; a small C module owns
+bounded buffers, GLib scheduling, Pango drawing and Wayland presentation without
+calling Emacs APIs from native callbacks. Lisp owns setup, placement and fallback.
+The ordinary renderer covers unsupported displays, unavailable build dependencies
+and unsuitable geometry. Native presentation coalesces at the parent redisplay
+boundary: intermediate row removal/reinsertion never presents, including outside
+`inhibit-redisplay`, and unchanged labels reuse surfaces across marker rebuilds.
+Creation/movement stays synchronized until the parent's frame callback, then
+switches to independent presentation. Position is parent-owned pending state;
+an independent child commit before that boundary can flash at `(0, 0)`.
+
 Prompt previews stored for header-line redisplay are limited to 512 characters,
 including an ellipsis when truncated, after mailbox filtering and whitespace
 normalization. The original prompt and its navigation target remain in the
@@ -156,8 +170,8 @@ spent 13% of its editor CPU in that walk, though no session had been compacted.
 The default `auto` power policy uses the Emacs UI host's battery information:
 external power permits the configured 30-fps normal ceiling, and battery,
 backup, unknown or stale power information uses the conservative 15-fps
-saving ceiling. Each decorative frame is a full redisplay and, on pgtk, a
-whole-surface repaint, so the shimmer is cadenced: one one-second sweep
+saving ceiling. Ordinary decorative frames require full redisplay and the
+measured pgtk build presents the whole surface, so the shimmer is cadenced: one one-second sweep
 every four seconds, resting in between with no frames scheduled, and
 pending-tool rows sweep their verb and tool name in the same frames. The
 October 2026 measurement below records why. `full` forces the normal ceiling; `save` forces the saving
@@ -1171,3 +1185,36 @@ fades out and back, while bounce moves a faded band over normal text. This
 reverses the original contrast without changing cadence or frame count. Glyph
 styles already retain normal text. Light and dark themes use the same
 foreground-to-background fade.
+
+
+### October 2026: independent native animation surfaces
+
+Reducing Lisp allocation did not remove the dominant cost. At approximately
+1545x864 logical pixels and 2x scale on KDE Wayland, a no-op Lisp timer and
+prepared text at 30 Hz both used about 55-56% editor CPU. A native GLib timer
+without drawing used about 1.3%, but a small GTK drawing widget and Emacs 32
+Canvas still paid the expensive parent presentation cost (about 50-55%).
+A separate desynchronized Wayland subsurface used about 2% at 30 Hz without an
+Emacs patch. The integrated presenter uses the animation module's exact samples
+rather than the experiment's approximate gradient.
+
+This changes the earlier decision to express every decorative frame through
+ordinary text redisplay. It preserves that renderer as a display/geometry
+fallback and keeps request, power and semantic state in Lisp. Native presentation
+restores smooth configured rates for continuous color styles; accepted contrast
+and glyph cadence remain intact. Initial complete mock-request tests measured
+12.75% for native bounce near 30 fps versus 24.5% for ordinary bounce at 8 fps.
+A tool workload revealed redundant surface recreation inside temporary row
+removal; coalescing at the existing projection boundary removed that per-second
+churn. A repeated sleeping-tool workload measured 22-23% with native animation
+versus 38.7% ordinary and 18.7% warmed static. Native and static runs had the
+same Lisp redisplay count, while native main motion ran at 30 fps instead of
+8 fps. Measurements and reproducible experiments are retained in
+`.mevedel/shared/editor-cpu/renderer-lab/`.
+
+The user's preview exposed a top-left flash on refocusing that lifecycle counts
+had missed. Wayland traces showed child images committed before their parent
+position: 17 premature commits in the reproduction. Synchronizing initial and
+moved surfaces until the parent frame callback removes this race; subsequent
+native frames remain independent. The trace check passes and the user confirmed
+the refocus flicker is gone. Pending callbacks are destroyed with their surfaces.

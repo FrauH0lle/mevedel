@@ -1,0 +1,370 @@
+;;; mevedel-view-native.el --- Independent animation surfaces -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; A Wayland surface presents the animation module's prepared samples without
+;; waking Emacs redisplay for every frame.  This module owns optional module
+;; construction, placement, invalidation and teardown.  Unsupported displays
+;; keep the ordinary text renderer.  No native callback calls back into Lisp.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'color)
+(require 'xml)
+(require 'seq)
+(require 'mevedel-structs)
+(require 'mevedel-view-animation)
+
+;; `mevedel-structs'
+(defvar mevedel-user-dir)
+
+;; `mevedel-view'
+(declare-function mevedel-view--set-spinner-option "mevedel-view" (symbol value))
+(autoload 'mevedel-view--set-spinner-option "mevedel-view")
+
+;; `native/mevedel-view-native.c'
+(declare-function mevedel-view-native--close "ext:mevedel-view-native" (handle))
+(declare-function mevedel-view-native--move "ext:mevedel-view-native" (handle x y))
+(declare-function mevedel-view-native--open "ext:mevedel-view-native"
+                  (parent geometry font background timeline elapsed))
+(declare-function mevedel-view-native--sample "ext:mevedel-view-native" (handle))
+(declare-function mevedel-view-native--stats "ext:mevedel-view-native" ())
+(declare-function mevedel-view-native--supported-p "ext:mevedel-view-native" (parent))
+
+(defcustom mevedel-view-native-enabled t
+  "Use independent animation surfaces when this display supports them.
+The optional module requires PGTK on Wayland, a C compiler, pkg-config,
+and GTK 3/Wayland development headers.  It builds once on first animation
+use, under `mevedel-user-dir'.  Other displays use ordinary text animation."
+  :type 'boolean
+  :initialize #'custom-initialize-default
+  :set #'mevedel-view--set-spinner-option
+  :group 'mevedel)
+
+(defconst mevedel-view-native--directory
+  (file-name-directory (or load-file-name buffer-file-name))
+  "Package source directory, including its native module source.")
+
+(defvar mevedel-view-native--load-state nil
+  "Native module loading result: nil, ready, or an explanatory string.")
+(defvar mevedel-view-native--views (make-hash-table :test #'eq)
+  "Views subscribed to native placement changes and their rearm callbacks.")
+(defvar-local mevedel-view-native--entries nil
+  "Live (KEY SIGNATURE HANDLE PLACEMENT TEXT) entries for this view's surfaces.")
+(defvar mevedel-view-native--presenting nil
+  "Non-nil while committing native presentation at the redisplay boundary.")
+(defvar-local mevedel-view-native--pending nil
+  "Latest (SPECS EPOCH REARM) coalesced until the parent redisplay.")
+(defvar-local mevedel-view-native--content-tick nil
+  "Character modification tick when the current surfaces were placed.")
+(defvar-local mevedel-view-native--last-samples nil
+  "Last presented phases retained through layout invalidation.")
+(defvar-local mevedel-view-native--rearm-timer nil
+  "One deferred placement check after layout changes.")
+(defvar-local mevedel-view-native--settling nil
+  "Non-nil while changed text or window geometry awaits redisplay.")
+
+(defun mevedel-view-native--load ()
+  "Build and load the optional native presenter once at first use."
+  (unless mevedel-view-native--load-state
+    (setq mevedel-view-native--load-state
+          (condition-case err
+              (let* ((source (file-name-concat mevedel-view-native--directory
+                                               "native/mevedel-view-native.c"))
+                     (hash (with-temp-buffer
+                             (insert-file-contents-literally source)
+                             (insert system-configuration emacs-version)
+                             (secure-hash 'sha256 (current-buffer))))
+                     (directory (file-name-concat mevedel-user-dir "native"))
+                     (module (file-name-concat
+                              directory (concat "view-" (substring hash 0 16)
+                                                module-file-suffix))))
+                (unless (file-exists-p module)
+                  (unless (and (executable-find "cc") (executable-find "pkg-config"))
+                    (error "Native animation needs cc and pkg-config"))
+                  (make-directory directory t)
+                  (let ((temporary (make-temp-file (file-name-concat directory "build-")))
+                        (default-directory directory))
+                    (unwind-protect
+                        (with-temp-buffer
+                          (unless (zerop (call-process
+                                          "pkg-config" nil t nil "--cflags" "--libs"
+                                          "gtk+-3.0" "wayland-client"))
+                            (error "GTK/Wayland development files are unavailable"))
+                          (let ((flags (split-string-and-unquote (buffer-string))))
+                            (erase-buffer)
+                            (unless (zerop (apply #'call-process "cc" nil t nil
+                                                  "-shared" "-fPIC" "-O2" "-Wall"
+                                                  "-Wextra" "-Werror" source "-o"
+                                                  temporary (append flags '("-lm"))))
+                              (error "Native animation compilation failed: %s"
+                                     (string-trim (buffer-string)))))
+                          (rename-file temporary module t))
+                      (when (file-exists-p temporary) (delete-file temporary)))))
+                (module-load module)
+                'ready)
+            (error (error-message-string err)))))
+  (eq mevedel-view-native--load-state 'ready))
+
+(defun mevedel-view-native-available-p (frame)
+  "Return non-nil when FRAME can host an independent animation surface."
+  (and mevedel-view-native-enabled (not noninteractive)
+       (eq (framep frame) 'pgtk) (not (frame-parent frame))
+       (fboundp 'module-load) module-file-suffix
+       (mevedel-view-native--load)
+       (mevedel-view-native--supported-p (frame-parameter frame 'window-id))))
+
+(defun mevedel-view-native--markup (sample foreground)
+  "Convert SAMPLE's foreground runs to Pango markup over FOREGROUND."
+  (let ((start 0) pieces)
+    (while (< start (length sample))
+      (let* ((end (next-single-property-change start 'face sample (length sample)))
+             (face (get-text-property start 'face sample))
+             (color (or (and (listp face) (plist-get face :foreground)) foreground)))
+        (push (format "<span foreground=\"%s\">%s</span>"
+                      (xml-escape-string color)
+                      (xml-escape-string (substring-no-properties sample start end)))
+              pieces)
+        (setq start end)))
+    (apply #'concat (nreverse pieces))))
+
+(defun mevedel-view-native--timeline (style label period face frame)
+  "Prepare native markup for STYLE, LABEL, PERIOD, FACE and FRAME."
+  (when-let* ((sequence (mevedel-view-animation-sequence style label period face frame))
+              (colors (mevedel-view-animation--colors face frame)))
+    (dotimes (i (1- (length sequence)))
+      (let ((entry (aref sequence (1+ i))))
+        (aset entry 1 (mevedel-view-native--markup (aref entry 1) (car colors)))))
+    sequence))
+
+(defun mevedel-view-native--visible-p (target window)
+  "Return non-nil when TARGET overlaps WINDOW's displayed buffer range.
+A clipped start does not make the rest of the label disappear.  Such a
+window must participate in the decision to use ordinary text presentation."
+  (when-let* ((start (marker-position (car target)))
+              (end (marker-position (cdr target)))
+              (visible-end (window-end window)))
+    (and (< (window-start window) end) (< start visible-end))))
+
+(defun mevedel-view-native--placement (target window)
+  "Return TARGET's unoccluded single-line placement in WINDOW, or nil."
+  (let* ((frame (window-frame window))
+         (start (marker-position (car target)))
+         (end (marker-position (cdr target)))
+         (point (window-point window)))
+    (when (and start end (< start end)
+               (eq (frame-visible-p frame) t) (frame-focus-state frame)
+               (not (use-region-p))
+               (not (and (<= start point) (< point end)))
+               (not (cl-some (lambda (other)
+                               (and (eq (frame-parent other) frame)
+                                    (eq (frame-visible-p other) t)))
+                             (frame-list))))
+      (when-let* ((first (posn-at-point start window))
+                  (last (posn-at-point end window))
+                  ((= start (posn-point first)))
+                  ((= end (posn-point last)))
+                  (xy (posn-x-y first)) (end-xy (posn-x-y last))
+                  ((= (cdr xy) (cdr end-xy)))
+                  (font (font-at start window)))
+        (let* ((edges (window-inside-pixel-edges window))
+               (x (+ (car edges) (car xy)))
+               (y (+ (cadr edges) (cdr xy)))
+               (width (- (car end-xy) (car xy)))
+               (height (cdr (posn-object-width-height first)))
+               (info (font-info font frame))
+               (ascent (aref info 8))
+               (family (font-get font :family))
+               (weight (font-get font :weight))
+               (slant (font-get font :slant))
+               (size (font-get font :size)))
+          (when (and (> width 0) (<= (+ x width) (nth 2 edges))
+                     (>= y (cadr edges)) (<= (+ y height) (nth 3 edges)))
+            (list frame (vector x y width height ascent)
+                  (format "%s %s %s %spx" family
+                          (if (memq weight '(normal regular book)) "" weight)
+                          (if (eq slant 'normal) "" slant) size))))))))
+
+(defun mevedel-view-native--clear ()
+  "Release this view's current native surfaces."
+  (dolist (entry mevedel-view-native--entries)
+    (when (fboundp 'mevedel-view-native--sample)
+      (setf (alist-get (caar entry) mevedel-view-native--last-samples nil nil #'eq)
+            (mevedel-view-native--sample (nth 2 entry))))
+    (mevedel-view-native--close (nth 2 entry)))
+  (setq mevedel-view-native--entries nil))
+
+(defun mevedel-view-native-sample (target)
+  "Return TARGET's last native presentation phase, including invalidated pixels."
+  (if-let* ((entry (cl-find target mevedel-view-native--entries :key #'caar :test #'eq)))
+      (mevedel-view-native--sample (nth 2 entry))
+    (cdr (assq target mevedel-view-native--last-samples))))
+
+(defun mevedel-view-native-stop ()
+  "Release this view's surfaces, pending placement check, and observers."
+  (mevedel-view-native--clear)
+  (when mevedel-view-native--rearm-timer
+    (cancel-timer mevedel-view-native--rearm-timer))
+  (setq mevedel-view-native--rearm-timer nil mevedel-view-native--settling nil
+        mevedel-view-native--last-samples nil mevedel-view-native--pending nil)
+  (remhash (current-buffer) mevedel-view-native--views)
+  (remove-hook 'kill-buffer-hook #'mevedel-view-native-stop t)
+  (remove-hook 'window-scroll-functions #'mevedel-view-native--invalidate t)
+  (remove-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay t)
+  (when (zerop (hash-table-count mevedel-view-native--views))
+    (remove-hook 'window-state-change-functions #'mevedel-view-native--window-change)))
+
+(defun mevedel-view-native--invalidate (&rest _)
+  "Hide stale surfaces until changed text or window geometry is redisplayed."
+  (mevedel-view-native--clear)
+  (setq mevedel-view-native--settling t)
+  (when mevedel-view-native--rearm-timer
+    (cancel-timer mevedel-view-native--rearm-timer))
+  (let ((buffer (current-buffer)))
+    (setq mevedel-view-native--rearm-timer
+          (run-at-time
+           0.2 nil
+           (lambda ()
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (setq mevedel-view-native--rearm-timer nil
+                       mevedel-view-native--settling nil)
+                 (when-let* ((rearm (gethash buffer mevedel-view-native--views)))
+                   (funcall rearm)))))))))
+
+(defun mevedel-view-native--before-redisplay (window)
+  "Hide stale surfaces before WINDOW displays changed text or geometry.
+Transcript projection suppresses modification hooks, so check its character
+version here.  Decorative display properties leave this version unchanged."
+  (when-let* ((pending mevedel-view-native--pending))
+    (setq mevedel-view-native--pending nil)
+    ;; Projection writers can delete and reinsert the same row.  Present only
+    ;; their final state, at the same boundary as the parent text surface.
+    (let ((inhibit-redisplay nil)
+          (mevedel-view-native--presenting t))
+      (mevedel-view-native-sync (car pending)
+                               (max 0.0 (- (float-time) (cadr pending)))
+                               (nth 2 pending))
+      (funcall (nth 2 pending))))
+  (when (and mevedel-view-native--entries
+             (cl-some
+              (lambda (entry)
+                (let* ((target (caar entry))
+                       (start (marker-position (car target)))
+                       (end (marker-position (cdr target))))
+                  (or (not start) (not end)
+                      (and (not (eql mevedel-view-native--content-tick
+                                     (buffer-chars-modified-tick)))
+                           (not (equal (nth 4 entry)
+                                       (buffer-substring-no-properties start end))))
+                      (and (eq window (cadar entry))
+                           (not (equal (nth 3 entry)
+                                       (mevedel-view-native--placement target window)))))))
+              mevedel-view-native--entries))
+    (mevedel-view-native--invalidate))
+  (setq mevedel-view-native--content-tick (buffer-chars-modified-tick)))
+
+
+(defun mevedel-view-native--window-change (_frame)
+  "Invalidate registered views after a window configuration change."
+  (maphash (lambda (buffer _callback)
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer (mevedel-view-native--invalidate))))
+           mevedel-view-native--views))
+
+(defun mevedel-view-native-sync (specs elapsed rearm)
+  "Queue SPECS at ELAPSED seconds, calling REARM after layout changes.
+Each spec is (TARGET STYLE LABEL FACE PERIOD), with a marker pair TARGET.
+Coalesce presentation at the parent redisplay boundary.  Return targets
+already entirely handled by native surfaces; the caller schedules
+ordinary text animation for the others.  Lifecycle and placement are local
+to this module, including invalidation while a composer is being edited."
+  (if (and (not mevedel-view-native--presenting)
+           (or mevedel-view-native--entries mevedel-view-native--pending
+               (and specs mevedel-view-native-enabled (not noninteractive)
+                    (cl-some #'mevedel-view-native-available-p (frame-list)))))
+      (progn
+        (setq mevedel-view-native--pending (list specs (- (float-time) elapsed) rearm))
+        (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay nil t)
+        (cl-loop for spec in specs
+                 when (cl-find (car spec) mevedel-view-native--entries
+                               :key #'caar :test #'eq)
+                 collect (car spec)))
+    (setq mevedel-view-native--pending nil)
+    (let (handled next)
+      (when (and specs mevedel-view-native-enabled (not noninteractive)
+                 (cl-some #'mevedel-view-native-available-p (frame-list)))
+        (puthash (current-buffer) rearm mevedel-view-native--views)
+        (add-hook 'kill-buffer-hook #'mevedel-view-native-stop nil t)
+        (add-hook 'window-scroll-functions #'mevedel-view-native--invalidate nil t)
+        (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay nil t)
+        (add-hook 'window-state-change-functions #'mevedel-view-native--window-change)
+        (unless mevedel-view-native--settling
+          (dolist (spec specs)
+            (pcase-let ((`(,target ,style ,label ,face ,period) spec))
+              (let (candidates failed)
+                (dolist (window (get-buffer-window-list (current-buffer) nil t))
+                  (when (mevedel-view-native--visible-p target window)
+                    (let* ((placement (mevedel-view-native--placement target window))
+                           (frame (car placement))
+                           (geometry (cadr placement))
+                           (font (nth 2 placement))
+                           (key (list target window))
+                           (colors (and frame (mevedel-view-animation--colors face frame)))
+                           (signature (and colors
+                                           (list style label face period frame font colors
+                                                 (append (seq-subseq geometry 2) nil))))
+                           ;; Semantic redraws release their markers even when
+                           ;; the label and its on-screen geometry are unchanged.
+                           (old (or (assoc key mevedel-view-native--entries)
+                                    (cl-find-if
+                                     (lambda (entry)
+                                       (and (eq window (cadar entry))
+                                            (equal signature (cadr entry))
+                                            (equal placement (nth 3 entry))
+                                            (not (cl-find
+                                                  (nth 2 entry) (append candidates next)
+                                                  :key (lambda (item) (nth 2 item))))))
+                                     mevedel-view-native--entries)))
+                           handle)
+                      (when (and placement colors (mevedel-view-native-available-p frame))
+                        (when (and old (equal signature (cadr old))
+                                   (mevedel-view-native--move (nth 2 old)
+                                                             (aref geometry 0) (aref geometry 1)))
+                          (setq handle (nth 2 old)))
+                        (unless handle
+                          (setq handle (mevedel-view-native--open
+                                        (frame-parameter frame 'window-id) geometry font
+                                        (cdr colors)
+                                        (mevedel-view-native--timeline style label period face frame)
+                                        (float elapsed)))))
+                      (if handle (push (list key signature handle placement
+                                            (buffer-substring-no-properties
+                                             (car target) (cdr target))) candidates)
+                        (setq failed t)))))
+                (if (or failed (not candidates))
+                    (dolist (entry candidates) (mevedel-view-native--close (nth 2 entry)))
+                  (push target handled)
+                  (setq next (append candidates next))))))))
+      (dolist (entry mevedel-view-native--entries)
+        (unless (cl-find (nth 2 entry) next :key (lambda (item) (nth 2 item)))
+          (mevedel-view-native--close (nth 2 entry))))
+      (setq mevedel-view-native--entries next
+            mevedel-view-native--content-tick (buffer-chars-modified-tick)
+            mevedel-view-native--last-samples
+            (cl-remove-if-not (lambda (entry) (assq (car entry) specs))
+                              mevedel-view-native--last-samples))
+      (unless (and specs mevedel-view-native-enabled) (mevedel-view-native-stop))
+      handled)))
+
+(defun mevedel-view-native-unload-function ()
+  "Release presentations and pending hooks before unloading this feature."
+  (dolist (buffer (buffer-list))
+    (when (or (gethash buffer mevedel-view-native--views)
+              (local-variable-p 'mevedel-view-native--pending buffer))
+      (with-current-buffer buffer (mevedel-view-native-stop))))
+  nil)
+
+(provide 'mevedel-view-native)
+;;; mevedel-view-native.el ends here
