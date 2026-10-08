@@ -12,7 +12,7 @@
   "Run BODY in an isolated native installation with a managed adapter."
   (declare (indent 0))
   `(let* ((directory (make-temp-file "mevedel-runtime-test-" t))
-          (native (file-name-concat directory "claude" "versions" "2.1.290"))
+          (native (file-name-concat directory "claude" "versions" "2.1.293"))
           (bin (file-name-concat directory "bin"))
           (mevedel-claude-code-directory (file-name-concat directory "managed"))
           (mevedel-claude-code-executable (file-name-concat bin "claude"))

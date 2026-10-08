@@ -38,7 +38,7 @@ elif sys.argv[1:] == ["--version"]:
     elif os.path.basename(sys.argv[0]) == "claude-agent-acp":
         print("0.86.0")
     else:
-        print("2.1.290 (Claude Code)")
+        print(os.getenv("MEVEDEL_TEST_CLAUDE_VERSION", "2.1.293") + " (Claude Code)")
 elif sys.argv[1:] == ["auth", "status", "--json"]:
     if os.getenv("MEVEDEL_TEST_LOGGED_OUT"):
         # The real CLI exits 1 while still printing valid status JSON.
