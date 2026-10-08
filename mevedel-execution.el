@@ -673,7 +673,7 @@ The process spool remains owned by RECORD until registry cleanup."
                        (mevedel-execution--record-retire-timer record)
                        (mevedel-execution--record-yield-timer record)))
     (when (timerp timer)
-      (cancel-timer timer)))
+      (mevedel--ui-timer-cancel timer)))
   (setf (mevedel-execution--record-observer-timer record) nil
         (mevedel-execution--record-progress-timer record) nil
         (mevedel-execution--record-retire-timer record) nil
@@ -1142,9 +1142,11 @@ execution's progress cost."
 
 (defun mevedel-execution--emit-progress (record)
   "Publish one bounded progress event for live RECORD.
-The next event waits `mevedel-execution--quiet-progress-interval', or
-`mevedel-execution-progress-interval' when that is longer; output arriving
-meanwhile brings it forward, see `mevedel-execution--hasten-progress'."
+Quiet events share integral multiples of
+`mevedel-execution--quiet-progress-interval', or of
+`mevedel-execution-progress-interval' when that is longer, at least 250 ms
+after this event.  Output arriving meanwhile brings the next event forward,
+see `mevedel-execution--hasten-progress'."
   (unless (mevedel-execution--record-finished-p record)
     (setf (mevedel-execution--record-progress-emitted-at record) (float-time))
     (mevedel-execution--emit-event
@@ -1154,32 +1156,38 @@ meanwhile brings it forward, see `mevedel-execution--hasten-progress'."
       (> (or (mevedel-execution--record-output-chars record) 0)
          mevedel-execution-inline-output-limit)
       :output-tail (or (mevedel-execution--record-output-tail record) "")))
-    (setf (mevedel-execution--record-progress-timer record)
-          (run-at-time
-           (max mevedel-execution--quiet-progress-interval
-                mevedel-execution-progress-interval)
-           nil #'mevedel-execution--emit-progress record))))
+    (let ((timer (or (mevedel-execution--record-progress-timer record)
+                     (timer-create))))
+      (mevedel--ui-timer-cancel timer)
+      (timer-set-time
+       timer (timer-next-integral-multiple-of-time
+              (time-add nil 0.25)
+              (max mevedel-execution--quiet-progress-interval
+                   mevedel-execution-progress-interval)))
+      (timer-set-function timer #'mevedel-execution--emit-progress (list record))
+      (setf (mevedel-execution--record-progress-timer record) timer)
+      (mevedel--ui-timer-activate timer t))))
 
 (defun mevedel-execution--hasten-progress (record)
   "Bring RECORD's next progress event forward after new output.
 Before the first event, the initial `mevedel-execution-progress-delay'
 stands.  Afterwards the next event follows the previous one by
 `mevedel-execution-progress-interval' instead of the quiet interval.
-A filter running inside `mevedel-transport-with-exclusive-connection' or a
-TRAMP wait cannot cancel the pending event: it sits on a suspended timer
-list.  Moving it there would leave two events armed, each re-arming
-itself, so the quiet cadence stands until the next output outside."
+A filter can run inside a TRAMP wait or
+`mevedel-transport-with-exclusive-connection', which binds `timer-list'
+away: `cancel-timer' there left the pending event armed beside its
+replacement, two self-rearming chains, and `run-at-time' would arm the
+replacement on a binding about to be discarded.  Move the same timer with
+the UI-host primitives instead."
   (when-let* ((emitted (mevedel-execution--record-progress-emitted-at record))
               (timer (mevedel-execution--record-progress-timer record))
               ((timerp timer))
-              ((memq timer timer-list))
               (due (+ emitted (max 0.25 mevedel-execution-progress-interval)))
               ;; Rearming lands a hair after DUE; only a quiet wait is late.
               ((> (float-time (timer--time timer)) (+ due 0.01))))
-    (cancel-timer timer)
-    (setf (mevedel-execution--record-progress-timer record)
-          (run-at-time (max 0 (- due (float-time))) nil
-                       #'mevedel-execution--emit-progress record))))
+    (mevedel--ui-timer-cancel timer)
+    (timer-set-time timer (seconds-to-time (max due (float-time))))
+    (mevedel--ui-timer-activate timer)))
 
 (defun mevedel-execution--unread-preview (record unread-bytes)
   "Return RECORD's bounded unread preview for UNREAD-BYTES."

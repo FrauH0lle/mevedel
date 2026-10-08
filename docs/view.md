@@ -1488,7 +1488,8 @@ which the same idle timer then formats once. This avoids relaying out a table
 on each stream update or alternating between its raw and rendered forms.
 
 `mevedel-view-mode` schedules that job from decoration, window size/buffer
-changes, scrolling, and commands. Each buffer owns one cancellable timer;
+changes, scrolling, and commands. A current image width and no visible stale
+table require no timer. Each buffer owns one cancellable timer;
 killing the buffer or changing its major mode cancels pending work. Pending
 input postpones the callback. Consecutive tables receive separate idle passes,
 with another 250 ms between them. The callback also realigns ratio-sized images.

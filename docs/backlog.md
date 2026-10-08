@@ -36,11 +36,10 @@ open:
   another native backend. They keep the accepted 8-fps breathe/bounce and
   half-speed glyph cadences; native surfaces cover PGTK/Wayland only.
   Burst-and-pause glyph variants were rejected.
-- `mevedel--gc-maintain` wakes once a second during requests and their
-  30-second grace, to re-apply the threshold after idle tuning such as gcmh
-  lowers it.
-- `mevedel-view--realign-markdown` still wakes once a second while a Bash row
-  refreshes, though the pass itself now returns early.
+- Housekeeping, quiet progress and metadata now share callbacks, and current
+  Markdown layout does not schedule another idle pass. The remaining 2-Hz
+  telemetry heartbeat still incurs presentation work; investigate lowering that
+  cost while preserving useful lag detection and timely progress observation.
 - `mevedel-view--status-strip` still evaluates its cache key from several
   live lookups on every redisplay.
 - `acp.el` routes each output chunk through a zero-delay timer, about 30 a

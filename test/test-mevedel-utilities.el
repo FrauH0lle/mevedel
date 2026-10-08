@@ -20,6 +20,132 @@
           "helpers"))
 (eval-when-compile (require 'tramp))
 
+(mevedel-deftest mevedel--run-periodic-timer
+  (:doc "shares one host wakeup and dispatches all due callbacks once")
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        first second calls)
+    (unwind-protect
+        (progn
+          (setq first (mevedel--run-periodic-timer 1 (lambda () (push 'first calls)))
+                second (mevedel--run-periodic-timer 1 (lambda () (push 'second calls))))
+          (dolist (timer (list first second))
+            (let ((due (float-time (timer--time timer))))
+              (should (= due (floor due)))))
+          (should-not (memq first timer-list))
+          (should-not (memq second timer-list))
+          (should (mevedel--ui-timer-pending-p first))
+          (should (memq mevedel--coalesced-timer (default-toplevel-value 'timer-list)))
+          (timer-set-time first (time-subtract nil 1) 1)
+          (timer-set-time second (time-subtract nil 1) 1)
+          (mevedel--coalesced-timer-tick)
+          (should (equal '(first second) calls))
+          (should (time-less-p nil (timer--time first)))
+          (should (time-less-p nil (timer--time second))))
+      (mevedel--ui-timer-cancel first)
+      (mevedel--ui-timer-cancel second))
+    (should-not mevedel--coalesced-timer)))
+
+(mevedel-deftest mevedel--coalesced-timer-tick ()
+  ,test
+  (test)
+  :doc "cancellation during dispatch prevents an already-due callback"
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        first second called)
+    (unwind-protect
+        (progn
+          (setq second (mevedel--run-periodic-timer 1 (lambda () (setq called t)))
+                first (mevedel--run-periodic-timer
+                       1 (lambda () (mevedel--ui-timer-cancel second))))
+          (timer-set-time first (time-subtract nil 1) 1)
+          (timer-set-time second (time-subtract nil 1) 1)
+          (mevedel--coalesced-timer-tick)
+          (should-not called)
+          (should-not (mevedel--ui-timer-pending-p second)))
+      (mevedel--ui-timer-cancel first)
+      (mevedel--ui-timer-cancel second)))
+
+  :doc "one-shot work can rearm itself while another callback fails"
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        (debug-on-error nil)
+        good bad calls notices)
+    (unwind-protect
+        (progn
+          (setq good (timer-create)
+                bad (mevedel--run-periodic-timer 1 (lambda () (error "Expected failure"))))
+          (timer-set-time good (time-subtract nil 1))
+          (timer-set-function good (lambda ()
+                                     (push 'good calls)
+                                     (timer-set-time good (time-add nil 5))
+                                     (mevedel--ui-timer-activate good t)))
+          (mevedel--ui-timer-activate good t)
+          (timer-set-time bad (time-subtract nil 1) 1)
+          (cl-letf (((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args) notices))))
+            (mevedel--coalesced-timer-tick))
+          (should (equal '(good) calls))
+          (should (= 1 (length notices)))
+          (should (string-match-p "Expected failure" (car notices)))
+          (should (mevedel--ui-timer-pending-p good)))
+      (mevedel--ui-timer-cancel good)
+      (mevedel--ui-timer-cancel bad))
+    (should-not mevedel--coalesced-timer))
+
+  :doc "yields between callbacks for pending input without dropping due work"
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        (pending nil) (calls 0) first second)
+    (unwind-protect
+        (cl-letf (((symbol-function 'input-pending-p) (lambda () pending)))
+          (setq second (mevedel--run-periodic-timer 1 (lambda () (cl-incf calls)))
+                first (mevedel--run-periodic-timer
+                       1 (lambda () (cl-incf calls) (setq pending t))))
+          (timer-set-time first (time-subtract nil 1) 1)
+          (timer-set-time second (time-subtract nil 1) 1)
+          (mevedel--coalesced-timer-tick)
+          (should (= 1 calls))
+          (should (mevedel--ui-timer-pending-p second))
+          (should (time-less-p (timer--time second) nil))
+          (setq pending nil)
+          (mevedel--coalesced-timer-tick)
+          (should (= 2 calls)))
+      (mevedel--ui-timer-cancel first)
+      (mevedel--ui-timer-cancel second))))
+
+(mevedel-deftest mevedel--coalesced-timer-arm
+  (:doc "owns one persistent host timer across temporary transport bindings")
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        owned clock)
+    (unwind-protect
+        (let ((timer-list nil))
+          (setq owned (mevedel--run-periodic-timer 1 #'ignore)
+                clock mevedel--coalesced-timer)
+          (should (memq clock (default-toplevel-value 'timer-list)))
+          (should (mevedel--ui-timer-pending-p owned))
+          (mevedel--coalesced-timer-arm)
+          (should (eq clock mevedel--coalesced-timer))
+          (mevedel--ui-timer-cancel owned)
+          (should-not (memq clock (default-toplevel-value 'timer-list)))
+          (should-not mevedel--coalesced-timer))
+      (mevedel--ui-timer-cancel owned))))
+
+(mevedel-deftest mevedel--coalesced-timer-call
+  (:doc "restores the caller's current buffer after a callback changes it")
+  (with-temp-buffer
+    (let ((caller (current-buffer))
+          (other (generate-new-buffer " *mevedel-timer-other*"))
+          (timer (timer-create)))
+      (unwind-protect
+          (progn
+            (timer-set-function timer (lambda () (set-buffer other)))
+            (mevedel--coalesced-timer-call timer)
+            (should (eq caller (current-buffer))))
+        (kill-buffer other)))))
+
 (mevedel-deftest mevedel--ui-timer-activate
   (:doc "schedules on the host list during TRAMP without disturbing foreign timers")
   (let ((earlier (run-at-time 60 nil #'ignore))
@@ -1024,7 +1150,7 @@ rejects trailing binary operators"
           (mevedel--gc-release 'second)
           (should (= 800000 gc-cons-threshold))
           (should-not mevedel--gc-timer))
-      (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer))))
+      (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer))))
 
   :doc "drops a dead hold and leaves a value someone else chose"
   (let ((gc-cons-threshold 800000)
@@ -1044,7 +1170,7 @@ rejects trailing binary operators"
           (should (= 0 (hash-table-count mevedel--gc-holds)))
           (should (= (* 128 1024 1024) gc-cons-threshold))
           (should-not mevedel--gc-timer))
-      (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer))))
+      (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer))))
 
   :doc "defers collection while typing and lets it run once input pauses"
   (let ((gc-cons-threshold 800000)
@@ -1074,7 +1200,7 @@ rejects trailing binary operators"
           (should (= 800000 gc-cons-threshold))
           (should-not (memq #'mevedel--gc-note-input pre-command-hook)))
       (remove-hook 'pre-command-hook #'mevedel--gc-note-input)
-      (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer))))
+      (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer))))
 
   :doc "changes nothing in a batch Emacs or when disabled"
   (let ((gc-cons-threshold 800000)
@@ -1113,7 +1239,7 @@ rejects trailing binary operators"
           (should (= 800000 gc-cons-threshold))
           (should (= 0 (hash-table-count mevedel--gc-holds)))
           (should-not mevedel--gc-timer))
-      (when (timerp mevedel--gc-timer) (cancel-timer mevedel--gc-timer)))))
+      (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer)))))
 
 (mevedel-deftest mevedel--optimize-transcript-buffer ()
   ,test

@@ -141,7 +141,10 @@ cancellation releases the fence and leaves the machine retryable.
   meanwhile reports how late it ran, since a stall delays every timer due
   during it; a 500 ms heartbeat samples quiet stretches without other timers
   and reports the worst delay since the previous heartbeat, once. A stall
-  shorter than the heartbeat with no timer due during it can go unseen.
+  shorter than the heartbeat with no timer due during it can go unseen. This
+  heartbeat shares a host wakeup with due GC maintenance, process-exit
+  recovery and quiet progress/metadata updates. Each callback retains its own
+  timing attribution; the shared dispatcher does not replace callback names.
   Disabling telemetry stops the heartbeat at its next tick, since requests
   no longer report settling to close their windows. Lateness the
   previous heartbeat already saw is not counted again, and idle timers do not

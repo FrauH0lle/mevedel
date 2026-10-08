@@ -256,6 +256,6 @@ Support
   mevedel-file-state.el       LRU file cache
   mevedel-diff-apply.el       transactional unified diff staging/application
   mevedel-theme-faces.el      active-theme-derived face registration and refresh
-  mevedel-utilities.el        package version + shared tinting/env helpers
+  mevedel-utilities.el        package version + shared helpers + coalesced UI timers
   mevedel-init.el             repository guidance bootstrap command
 ```
