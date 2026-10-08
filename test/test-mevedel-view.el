@@ -1665,6 +1665,21 @@
                 ((symbol-function 'mevedel-view--continuation-prompt) #'ignore))
         (should-not (mevedel-view--sticky-prompt-line))))))
 
+(mevedel-deftest mevedel-view--status-strip-abbreviated
+  (:doc "Reuses a root abbreviation and replaces it when the root changes.")
+  (with-temp-buffer
+    (let ((calls 0))
+      (cl-letf (((symbol-function 'abbreviate-file-name)
+                 (lambda (path) (cl-incf calls) (concat "short:" path))))
+        (should (equal "short:/one/"
+                       (mevedel-view--status-strip-abbreviated "/one")))
+        (should (equal "short:/one/"
+                       (mevedel-view--status-strip-abbreviated "/one")))
+        (should (= calls 1))
+        (should (equal "short:/two/"
+                       (mevedel-view--status-strip-abbreviated "/two")))
+        (should (= calls 2))))))
+
 (provide 'test-mevedel-view)
 
 ;;; test-mevedel-view.el ends here

@@ -30,9 +30,9 @@ second on a 2x-scaled 1536x888 frame. The heartbeat, shimmer cadence, tool
 rows, Bash progress and watch timers, stream batching, collection pacing and
 unattended render timers were reduced for this (ADR 0119). Still open:
 
-- Breathe, bounce and the glyph label styles animate continuously (breathe
-  and bounce 64% at 30 fps, braille and ascii about 30%); find cheaper forms
-  with the cadenced shimmer as the reference.
+- Continuous indicators now use the visually accepted 8-fps breathe/bounce
+  and half-speed glyph cadences. Further smooth-animation savings depend on
+  reducing pgtk presentation cost; burst-and-pause glyph variants were rejected.
 - `mevedel--gc-maintain` wakes once a second during requests and their
   30-second grace, to re-apply the threshold after idle tuning such as gcmh
   lowers it.

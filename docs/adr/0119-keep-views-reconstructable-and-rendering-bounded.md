@@ -94,15 +94,20 @@ timer from the present, so a stall neither replays overdue callbacks nor
 allocates a new timer at frame rate. Time-based frame selection skips missed
 samples and retains phase across power changes. The foreground label
 offers shimmer, breathe, bounce, dots, ellipsis, braille, ascii, and static;
-pending-tool rows use compact braille, ascii, dots, or static indicators.
+pending-tool rows offer shimmer, braille, ascii, dots, or static indicators.
 Color animations prepare bounded, theme-derived frame banks; each live view
-pins at most four banks in addition to a six-bank shared reuse cache, preventing
-other views from evicting an active sample. Theme changes and edits to the
+reserves enough banks for its registered tool rows, overflow row and main label,
+with a four-bank minimum, in addition to a six-bank shared reuse cache. The
+visible-tool row cap bounds this working set. All eligible banks are prepared
+at semantic boundaries, preventing other views from evicting an active sample.
+A mixed set of color and portable glyph tool rows keeps both cadences. A frozen
+row retains its phase while adopting changed text or a destination display. Theme changes and edits to the
 spinner, its inherited faces, or the default face invalidate both; observing
 resolved-color dependencies matters when a paused, zero-fps view has no timer
 to discover updated Customize colors.
-Glyphs have a
-natural, slower cadence; colorless and low-color terminals use the glyph
+Breathe and bounce retain their 3.6-second cycle at an 8-fps natural ceiling.
+Glyphs advance every 240 ms (braille/ascii), 480 ms (dots) or 960 ms
+(ellipsis); colorless and low-color terminals use the glyph
 fallback cadence rather than waking at the color rate. Even resolvable face
 colors cannot distinguish the prepared shades on an eight-color terminal;
 terminal palettes below 256 colors therefore fall back to glyphs. Braille and
@@ -1090,7 +1095,8 @@ in the user's own theme showed visible stepping at 12 fps, so that was
 reversed. The shimmer now follows Codex's cadence: 0.6 seconds after the
 request starts, and every four seconds after that, a cosine band at least
 three columns wide crosses the label in one second; the label rests at its
-dimmed shade in between and no frame is scheduled. With the 30/15-fps
+dimmed shade in between and no frame is scheduled (the resting contrast was
+subsequently reversed as recorded below). With the 30/15-fps
 ceilings restored, the same label costs 29% (22% at 15 fps). Tool rows used a
 continuous braille glyph; they now shimmer their verb and tool name ("Calling
 Bash"; the whole row swept too fast on long commands, and "Calling" alone
@@ -1115,3 +1121,53 @@ Each animation frame rewrites a display property and advances
 ignores those decorative writes; otherwise the archived-prompt check walked
 the window body on every frame. Waiting for user input holds every
 indicator still, as the elapsed time already was.
+
+
+### October 2026: retain every tool shimmer label
+
+Independent review reproduced two failures introduced when tool indicators
+changed from a shared glyph prefix to distinct shimmer labels. The scheduler
+prepared only the first visible tool, and the old four-bank local limit could
+not retain the default five tool labels, overflow row and main label. A display
+change or another view evicting shared banks left later rows frozen. Preparation
+now covers every eligible label; local retention scales with the bounded row set
+and shrinks when rows leave. Color and portable glyph rows contribute separate
+cadences, so shimmer's rest cannot stall a glyph in another display.
+
+The overflow row also retained its fragment identity when its count changed.
+Restoring its complete previous display string hid the new count indefinitely
+at zero fps. Restoration now regenerates changed label text at the retained
+phase, preserving reduced motion without suppressing semantic updates. Tests
+reproduced both failures before the fixes and cover mixed displays, frozen
+tool-only frame changes, cache eviction and composer preservation.
+
+
+### October 2026: slower continuous styles after visual comparison
+
+A side-by-side comparison in the user's own theme retained the original motion,
+12-fps color / half-speed glyph variants, and 8-fps color / third-speed glyph
+variants. The user preferred the original appearance but accepted 8 fps for
+breathe/bounce and half-speed glyphs as the performance tradeoff; third-speed
+glyphs looked laggy. Those accepted rates now define the natural cadences.
+The continuous color cycle remains 3.6 seconds, glyph cycles take twice as long,
+and shimmer retains its smooth cadenced sweep. No burst-and-pause behavior is
+introduced for continuous styles.
+
+Review also reproduced a paused shimmer advancing during visibility refresh:
+input pause stopped its timer but did not freeze its sampled phase. Input pause
+now participates in the same presentation freeze as reduced motion, including
+already-delivered callbacks and palette/display changes. Actual Ask lifecycle
+coverage verifies stopping and rearming while preserving a multiline draft.
+
+
+### October 2026: retain normal animation text contrast
+
+The dimmed resting shade made pending tool labels look washed out next to
+ordinary text in the user's light theme. Shimmer now rests at the label's
+normal foreground, with only the moving cosine band fading toward the
+background. After confirming that appearance, the user requested the same
+contrast for the other color styles: breathe starts at normal foreground and
+fades out and back, while bounce moves a faded band over normal text. This
+reverses the original contrast without changing cadence or frame count. Glyph
+styles already retain normal text. Light and dark themes use the same
+foreground-to-background fade.
