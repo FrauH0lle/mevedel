@@ -55,7 +55,8 @@ authoritative transcript.
   streaming target, or interaction registry.
 
 An open running-agent transcript view follows the main view's update cadence:
-streamed text uses `mevedel-view-stream-render-delay`, tool boundaries use
+streamed text uses `mevedel-view-stream-render-delay` (a batch flushed by the
+stream bridge renders in the flush's own wakeup), tool boundaries use
 `mevedel-view-tool-boundary-render-delay`, and terminal settlement renders
 immediately. It shows the same transient pending-tool rows as the main view,
 but not the main foreground-request spinner; the transcript header already

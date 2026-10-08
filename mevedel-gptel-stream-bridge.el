@@ -43,7 +43,7 @@
 (autoload 'mevedel--warn-once "mevedel-utilities")
 (eval-when-compile (require 'mevedel-utilities))
 
-(defcustom mevedel-gptel-stream-bridge-insert-batch-delay 0.2
+(defcustom mevedel-gptel-stream-bridge-insert-batch-delay 0.4
   "Seconds to batch consecutive string stream inserts in data buffers.
 
 When positive, mevedel coalesces adjacent plain text stream chunks before
@@ -52,10 +52,11 @@ or zero disables batching and preserves immediate insertion.
 
 Each flush is a timer wakeup, and every wakeup redisplays; a pgtk frame
 repaints its whole surface each time even though the data buffer is not
-shown.  The view renders the inserted text on its own, slower debounce
-\(`mevedel-view-stream-render-delay'), so a longer batch costs little
-latency: at 0.04 s, a 25-chunk-per-second stream flushed about 15 times a
-second."
+shown.  The view renders a flushed batch in the same wakeup, so text
+appears at most this long after it arrives.  The same delay paces reading
+a local curl stream on systems with job control: see
+`mevedel-gptel-stream-bridge--pace-reading'.  Streaming 32 chunks a second
+cost 59% editor CPU unpaced, 27% at 0.2 s and 17% at 0.4 s."
   :type '(choice (const :tag "Disabled" nil)
                  (number :tag "Seconds"))
   :group 'mevedel)
@@ -64,6 +65,11 @@ second."
 
 (defconst mevedel-gptel-stream-bridge--gptel-stream-filter-max-retries 100
   "Maximum deferred flush attempts for early gptel stream chunks.")
+
+(defvar mevedel-gptel-stream-bridge-flushing nil
+  "Non-nil while a batched stream insert reaches gptel.
+Stream observers can render at once: the batch already coalesced the
+chunks.")
 
 (defvar mevedel-gptel-stream-bridge--insert-batching-suspended nil
   "Non-nil means nested gptel stream insert calls should not batch.")
@@ -201,6 +207,7 @@ chunk when that stale transformer fails."
               ((functionp orig-fn)))
     (plist-put info :mevedel-stream-insert-parts nil)
     (let ((inhibit-modification-hooks t)
+          (mevedel-gptel-stream-bridge-flushing t)
           (mevedel-gptel-stream-bridge--insert-batching-suspended t))
       (mevedel-gptel-stream-bridge--repair-gptel-stream-info info)
       (when (mevedel-gptel-stream-bridge--gptel-stream-info-p info)
@@ -208,13 +215,115 @@ chunk when that stale transformer fails."
                  (apply #'concat (nreverse parts))
                  info nil)))))
 
+(defconst mevedel-gptel-stream-bridge--pace-backlog-bytes 4096
+  "Reads at least this large mean curl has a backlog to deliver.
+Pausing after such a read capped a large stream at one pipe read per
+pause, about 72 KB a second; Responses API events alone can approach that.")
+
+(defvar mevedel-gptel-stream-bridge--paced nil
+  "Processes stopped by `mevedel-gptel-stream-bridge--pace-reading'.
+They are continued on exit and uninstall: a stopped curl outlives Emacs.")
+
+(defun mevedel-gptel-stream-bridge--stream-info (process)
+  "Return the gptel request INFO of PROCESS, or nil."
+  (when-let* ((fsm (mevedel-gptel-stream-bridge--gptel-stream-filter-registered-p
+                    process)))
+    (and (fboundp 'gptel-fsm-info)
+         (ignore-errors (gptel-fsm-info fsm)))))
+
+(defun mevedel-gptel-stream-bridge--note-stream-start (process)
+  "Remember the stop reason PROCESS's request had before its first read.
+gptel keeps one INFO for every tool round and never clears its stop
+reason, so the previous round's would otherwise end pacing at once."
+  (unless (process-get process 'mevedel-gptel-stream-bridge--started)
+    (process-put process 'mevedel-gptel-stream-bridge--started t)
+    (process-put process 'mevedel-gptel-stream-bridge--stale-stop-reason
+                 (plist-get (mevedel-gptel-stream-bridge--stream-info process)
+                            :stop-reason))))
+
+(defun mevedel-gptel-stream-bridge--stream-ended-p (process)
+  "Return non-nil when PROCESS has delivered its complete response.
+gptel records a stop reason as soon as the Responses, Anthropic, Gemini
+and Bedrock streams finish; OpenAI-compatible chat streams end with
+`data: [DONE]'.  A reason left from an earlier tool round does not count."
+  (or (when-let* ((reason (plist-get (mevedel-gptel-stream-bridge--stream-info process)
+                                     :stop-reason)))
+        (not (eq reason (process-get
+                         process 'mevedel-gptel-stream-bridge--stale-stop-reason))))
+      (when-let* ((buffer (process-buffer process))
+                  ((buffer-live-p buffer)))
+        (with-current-buffer buffer
+          (save-excursion
+            (goto-char (point-max))
+            (search-backward "data: [DONE]" (max (point-min) (- (point-max) 256))
+                             t))))))
+
+(defun mevedel-gptel-stream-bridge--pace-reading (process output)
+  "Stop local curl PROCESS after reading OUTPUT until the next batch is due.
+Emacs redisplays after every read of process output, and a pgtk frame
+repaints its whole surface each time: a stream of 32 chunks a second held
+the editor at 59% CPU with nothing animating.  Stopped, curl leaves what
+the server sends in the kernel's socket buffer, and Emacs reads it in one
+burst when curl continues: the same stream cost 17%.
+
+Only a small read pauses: a large one means curl has more to deliver.  A
+finished response continues at once, even when the read that stopped it
+held only part of the final burst: curl must exit for gptel to settle the
+request and run its tools.  Only mevedel's own streams from a real local
+subprocess are paused, on a system with job control; gptel's sentinel
+ignores the stop and continue events."
+  (cond
+   ((mevedel-gptel-stream-bridge--stream-ended-p process)
+    (mevedel-gptel-stream-bridge--resume-reading process))
+   (t
+    (when-let* ((delay mevedel-gptel-stream-bridge-insert-batch-delay)
+                ((numberp delay))
+                ((> delay 0))
+                ((not (memq system-type '(windows-nt ms-dos))))
+                ((eq (process-type process) 'real))
+                ((eq (process-status process) 'run))
+                ((< (string-bytes output) mevedel-gptel-stream-bridge--pace-backlog-bytes))
+                ((mevedel-gptel-stream-bridge--gptel-stream-info-p
+                  (mevedel-gptel-stream-bridge--stream-info process)))
+                ((not (mevedel--timer-pending-p
+                       (process-get process 'mevedel-gptel-stream-bridge--resume-timer)))))
+      (signal-process process 'SIGSTOP)
+      (push process mevedel-gptel-stream-bridge--paced)
+      (process-put
+       process 'mevedel-gptel-stream-bridge--resume-timer
+       (mevedel-transport-run-at-time
+        delay #'mevedel-gptel-stream-bridge--resume-reading process))))))
+
+(defun mevedel-gptel-stream-bridge--resume-reading (process)
+  "Continue PROCESS stopped by `mevedel-gptel-stream-bridge--pace-reading'."
+  (when-let* ((timer (process-get process 'mevedel-gptel-stream-bridge--resume-timer)))
+    (cancel-timer timer))
+  (process-put process 'mevedel-gptel-stream-bridge--resume-timer nil)
+  (setq mevedel-gptel-stream-bridge--paced
+        (delq process mevedel-gptel-stream-bridge--paced))
+  (when (eq (process-status process) 'stop)
+    (signal-process process 'SIGCONT)))
+
+(defun mevedel-gptel-stream-bridge--resume-all ()
+  "Continue every paced process, so none outlives Emacs or the advice."
+  (mapc #'mevedel-gptel-stream-bridge--resume-reading
+        (copy-sequence mevedel-gptel-stream-bridge--paced)))
+
 (defun mevedel-gptel-stream-bridge--gptel-stream-cleanup-advice (orig-fn process status)
   "Call ORIG-FN after wrapping stream transformers for PROCESS.
-STATUS is passed through unchanged.
+STATUS is passed through unchanged.  Stop and continue events from
+`mevedel-gptel-stream-bridge--pace-reading' do not end the stream and
+never reach ORIG-FN, which treats every call as the end.
 
 Runs with GC batched: the cleanup drives the terminal settlement --
 response parsing, FSM transitions, and the renders they trigger -- and
 was a leading allocator in a profiled session."
+  (unless (memq (process-status process) '(stop run))
+    (mevedel-gptel-stream-bridge--cleanup process status orig-fn)))
+
+(defun mevedel-gptel-stream-bridge--cleanup (process status orig-fn)
+  "Settle PROCESS's stream with STATUS through gptel's ORIG-FN sentinel."
+  (mevedel-gptel-stream-bridge--resume-reading process)
   (mevedel--with-gc-batched
   (let* ((entry (alist-get process gptel--request-alist))
          (fsm (car-safe entry))
@@ -326,7 +435,9 @@ the entire filter runs with collections batched."
               (setq output (concat pending output))
               (process-put process 'mevedel-gptel-stream-bridge--pending-output nil))
             (process-put process 'mevedel-gptel-stream-bridge--filter-retries nil)
-            (funcall orig-fn process output))
+            (mevedel-gptel-stream-bridge--note-stream-start process)
+            (funcall orig-fn process output)
+            (mevedel-gptel-stream-bridge--pace-reading process output))
         (process-put process 'mevedel-gptel-stream-bridge--pending-output
                      (concat pending output))
         (mevedel-gptel-stream-bridge--schedule-gptel-stream-filter-flush process)))))
@@ -375,6 +486,7 @@ the entire filter runs with collections batched."
 (defun mevedel-gptel-stream-bridge-install ()
   "Install gptel stream compatibility advice."
   (setq mevedel-gptel-stream-bridge--gptel-stream-advice-installed t)
+  (add-hook 'kill-emacs-hook #'mevedel-gptel-stream-bridge--resume-all)
   (mevedel-gptel-stream-bridge--install-if-enabled)
   (with-eval-after-load 'gptel
     (mevedel-gptel-stream-bridge--install-if-enabled))
@@ -382,7 +494,11 @@ the entire filter runs with collections batched."
     (mevedel-gptel-stream-bridge--install-if-enabled)))
 
 (defun mevedel-gptel-stream-bridge-uninstall ()
-  "Remove gptel stream compatibility advice."
+  "Remove gptel stream compatibility advice.
+Paused streams continue first: without the advice, gptel's sentinel would
+take their continue event for the end of the response."
+  (mevedel-gptel-stream-bridge--resume-all)
+  (remove-hook 'kill-emacs-hook #'mevedel-gptel-stream-bridge--resume-all)
   (setq mevedel-gptel-stream-bridge--gptel-stream-advice-installed nil)
   (mevedel-gptel-stream-bridge--uninstall-advice))
 

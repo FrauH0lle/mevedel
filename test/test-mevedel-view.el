@@ -75,6 +75,9 @@
 ;;
 ;;; Rendering
 
+;; `mevedel-gptel-stream-bridge'
+(defvar mevedel-gptel-stream-bridge-flushing)
+
 (mevedel-deftest mevedel-view--schedule-render
   ()
   ,test
@@ -133,6 +136,31 @@
             (should (= 1 full-count))
             (should (= 1 incremental-count)))
         (mapc #'cancel-timer fake-timers))))
+
+  :doc "renders a flushed stream batch in the same wakeup"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-stream-render-delay 1)
+          (incremental-count 0)
+          delays callback)
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (delay _repeat function &rest _)
+                   (push delay delays)
+                   (setq callback function)
+                   'timer))
+                ((symbol-function 'mevedel-view--render-stream-update)
+                 (lambda (_data-buffer) (cl-incf incremental-count))))
+        (with-current-buffer data-buf
+          (let ((mevedel-gptel-stream-bridge-flushing t))
+            (mevedel-view-stream-schedule)))
+        (should (equal delays '(0)))
+        (should (= 0 incremental-count))
+        (funcall callback)
+        (should (= 1 incremental-count)))))
 
   :doc "defers timer flushes while a remote operation is already in flight"
   (mevedel-view-test--with-buffers

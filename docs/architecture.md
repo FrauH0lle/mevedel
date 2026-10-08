@@ -528,12 +528,21 @@ Resource availability remains context-specific. Provider cache reuse still depen
 repairs detached insertion markers, falls back to raw chunks when a stale
 transformer fails, and delays early output until the process has a registered
 request state machine. Consecutive plain-text inserts are batched for
-`mevedel-gptel-stream-bridge-insert-batch-delay` seconds (0.2 by default);
-non-text boundaries and cleanup flush the batch. Every flush wakes and
-redisplays the editor, which on pgtk repaints the whole frame, while the view
-shows inserted text only on its slower render debounce; the batch is sized to
-that debounce rather than to chunk arrival. Setting the delay to nil or
-zero disables batching. These mechanisms preserve the data buffer as the
+`mevedel-gptel-stream-bridge-insert-batch-delay` seconds (0.4 by default);
+non-text boundaries and cleanup flush the batch, and the view renders a
+flushed batch in the same wakeup. Emacs redisplays after every read of
+process output, which on pgtk repaints the whole frame, so the bridge also
+paces reading a local curl stream of a mevedel request: after a small read
+it stops curl with SIGSTOP and continues it when the batch is due. The
+server's output waits in the kernel socket buffer and arrives as one burst;
+a read of 4 KiB or more means curl has a backlog, so reading continues. gptel's
+sentinel never sees the stop and continue events. A response that has
+finished (a stop reason new to this tool round, or an OpenAI-compatible
+`data: [DONE]`) continues at once, so curl exits and gptel settles the
+request. Paused processes continue on exit and uninstall; an Emacs crash
+leaves one stopped. Pacing needs a real local subprocess on a system with job
+control; other transports keep batching alone. Setting the
+delay to nil or zero disables batching and pacing. These mechanisms preserve the data buffer as the
 transcript authority; view redraw scheduling remains separate.
 `mevedel-gptel-bridge.el` routes native steering commands through the root
 composer submission path and refuses native agent/confirmation steering;

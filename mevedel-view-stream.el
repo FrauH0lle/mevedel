@@ -51,6 +51,11 @@
 (declare-function mevedel-tool-render-data-segment-bounds
                   "mevedel-tool-render-data" (tool-use-id))
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
@@ -1682,7 +1687,11 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
 Intended for `gptel-post-stream-hook', which fires once per streamed
 chunk in the data buffer.  Defers the incremental render by
 `mevedel-view-stream-render-delay' seconds so chunks in the same pending
-window share one refresh instead of rebuilding the view per token."
+window share one refresh instead of rebuilding the view per token.  A
+batch flushed by `mevedel-gptel-stream-bridge' already coalesced its
+chunks: it renders from a zero-delay timer, which runs in the same wakeup
+as the flush instead of waking the editor again, and shows the text
+sooner."
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
@@ -1696,8 +1705,14 @@ window share one refresh instead of rebuilding the view per token."
       ;; incremental markers are nil and rendering would no-op.
       (when (and (mevedel-view-stream-in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
-        (mevedel-view--schedule-render
-         'incremental data-buf mevedel-view-stream-render-delay))))
+        (if (bound-and-true-p mevedel-gptel-stream-bridge-flushing)
+            (mevedel-transport-run-at-time
+             0 (lambda ()
+                 (when (buffer-live-p view-buf)
+                   (with-current-buffer view-buf
+                     (mevedel-view--schedule-render 'incremental data-buf 0)))))
+          (mevedel-view--schedule-render
+           'incremental data-buf mevedel-view-stream-render-delay)))))
   nil)
 
 (defun mevedel-view--routine-pending-poll-p (info)
