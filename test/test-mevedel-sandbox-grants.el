@@ -72,6 +72,28 @@
                           "target"))
               (last (plist-get grant :symlinks))))
             (should (eq 'read (plist-get grant :access)))))
+      (delete-directory root t)))
+  :doc "protected children survive normalization; exact directory authority refuses before launch"
+  (let* ((root (make-temp-file "mevedel-protected-overlap-" t))
+         (git (file-name-concat root ".git"))
+         (file (file-name-concat git "value"))
+         (parent `(:path ,root :access write :recursive t))
+         (mevedel-protected-paths '(("**/.git/**" . read-only))))
+    (unwind-protect
+        (progn
+          (make-directory git)
+          (with-temp-file file)
+          (should-error
+           (mevedel-sandbox--resolve-filesystem-permissions
+            (list parent `(:path ,git :access write)))
+           :type 'mevedel-sandbox-policy-error)
+          (let ((resolved (mevedel-sandbox--resolve-filesystem-permissions
+                           (list parent `(:path ,file :access write)))))
+            (should (= 2 (length resolved)))
+            (should (equal file (plist-get (cadr resolved) :path))))
+          (should (= 1 (length (mevedel-sandbox--resolve-filesystem-permissions
+                               (list `(:path ,git :access write :recursive t)
+                                     `(:path ,file :access write)))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-sandbox--grant-paths ()

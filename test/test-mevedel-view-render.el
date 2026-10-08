@@ -24,6 +24,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-patch)
+(require 'mevedel-tool-ptc)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair-diagnostics)
@@ -3756,6 +3757,77 @@
                         (and (string-search "×2" (buffer-string)) t)))
             (should-not (string-search "HiddenBoundary" (buffer-string)))))))))
 
+(mevedel-deftest mevedel-view--render-tool-call ()
+  ,test
+  (test)
+
+  :doc "direct labels retain canonical children, envelope IDs and hook audits"
+  (progn
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                           :renderer #'mevedel-tool-ptc--render))
+    (dolist (name '("Eval" "Read" "Grep" "Glob" "Bash" "WebFetch"
+                    "WebSearch" "DisplayProbe"))
+      (dolist (status '(success error))
+        (with-temp-buffer
+          (let* ((args '(:expression "(+ 1 2)"))
+                 (audit '(:type tool-result-rewrite :event "PostToolUse"
+                          :original-result "raw" :updated-result "3"))
+                 (data (list :kind 'ptc :direct-tool name :status status
+                             :outcome (if (eq status 'error) 'tool-error 'completed)
+                             :calls (list (list :id "outer/1" :source 'ptc
+                                                :tool name :status status
+                                                :args args :result "audit preview"))))
+                 (call (list :name "ToolCall" :args args :result "3"
+                             :tool-use-id "outer" :render-data data
+                             :hook-audits (list audit)))
+                 (original (copy-tree call)))
+            (dolist (collapsed-only '(nil t))
+              (let* ((row (mevedel-view--render-tool-call
+                           call (current-buffer) collapsed-only))
+                     (child (plist-get row :group-child)))
+                (should (equal name (plist-get row :group-tool)))
+                (should (equal "outer" (plist-get row :tool-use-id)))
+                (should (equal (list audit) (plist-get row :hook-audits)))
+                (should (equal "ToolCall" (plist-get child :tool)))
+                (should (equal args (plist-get child :args)))
+                (should (equal "3" (plist-get child :result)))
+                (should (eq status (plist-get child :status)))
+                (should (equal data (plist-get child :render-data)))))
+            (should (equal original call)))))))
+
+  :doc "composed, live, malformed and failed envelopes retain ToolCall labels"
+  (progn
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                           :renderer #'mevedel-tool-ptc--render))
+    (dolist (change
+             '((:direct-tool . nil) (:live-p . t) (:kind . other)
+               (:outcome . script-error) (:outcome . denied)
+               (:outcome . interrupted) (:status . error)
+               (:direct-tool . "Read") (:calls . nil)
+               (:calls . ((:tool "Eval" :status success)
+                          (:tool "Read" :status success)))))
+      (with-temp-buffer
+        (let* ((data (plist-put
+                      (copy-tree '(:kind ptc :direct-tool "Eval"
+                                   :outcome completed :status success
+                                   :calls ((:id "outer/1" :tool "Eval"
+                                            :status success))))
+                      (car change) (cdr change)))
+               (call (list :name "ToolCall" :args '(:expression "(+ 1 2)")
+                           :tool-use-id "outer" :result "3" :render-data data))
+               (original (copy-tree call)))
+          (dolist (collapsed-only '(nil t))
+            (let ((row (mevedel-view--render-tool-call
+                        call (current-buffer) collapsed-only)))
+              (should (equal "ToolCall" (plist-get row :group-tool)))
+              (should (string-prefix-p "ToolCall" (plist-get row :header)))
+              (should (equal "outer" (plist-get row :tool-use-id)))
+              (should (equal data (plist-get (plist-get row :group-child)
+                                             :render-data)))))
+          (should (equal original call)))))))
+
 (mevedel-deftest mevedel-view--render-tool-group ()
   ,test
   (test)
@@ -3863,6 +3935,105 @@
                                        'mevedel-view-collapsed))
         (should (search-forward "body must survive cache"
                                 mevedel-view--input-marker t)))))
+
+  :doc "direct Eval mixed with Read and Grep survives cached redraw and disclosure"
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                           :renderer #'mevedel-tool-ptc--render))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Eval" :category "mevedel"
+                           :renderer #'mevedel-tool-exec--render-eval))
+    (let* ((mevedel-view-tool-group-collapse-threshold 1)
+           (data '(:kind ptc :direct-tool "Eval" :outcome completed
+                   :status success
+                   :calls ((:id "outer/1" :source ptc :tool "Eval"
+                            :status success :args (:expression "(+ 1 2)")
+                            :result "audit preview"))))
+           (heading "Read 1 file, searched 1 pattern, evaluated 1 form")
+           eval-start eval-end original)
+      (mevedel-view-test--insert-data
+       data-buf "(:name \"Read\" :args (:file_path \"file.el\"))\n\nfile body\n"
+       '(tool . "read"))
+      (mevedel-view-test--insert-data
+       data-buf "(:name \"Grep\" :args (:pattern \"defun\"))\n\nfile.el:1:match\n"
+       '(tool . "grep"))
+      (setq eval-start (with-current-buffer data-buf (point-max)))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat "#+begin_tool\n"
+               "(:name \"ToolCall\" :args (:expression \"(Eval :expression \\\"(+ 1 2)\\\")\"))\n\n3\n"
+               (mevedel-tool-render-data-format data "outer")
+               "#+end_tool\n")
+       '(tool . "outer"))
+      (setq eval-end (with-current-buffer data-buf (point-max)))
+      (with-current-buffer data-buf
+        (mevedel-transcript-restore-properties)
+        (setq original (buffer-string)))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (mevedel-view--full-rerender)
+        (dotimes (_ 3)
+          ;; Settled group summaries must use the cached name, not the hidden
+          ;; audit or result payload, even on a complete redraw.
+          (cl-letf (((symbol-function 'mevedel-view--prepare-tool-segment)
+                     (lambda (&rest _) (ert-fail "Reparsed a cached tool"))))
+            (mevedel-view--full-rerender)
+            (let (cached)
+              (maphash (lambda (_key rendering)
+                         (when (and (equal "outer" (plist-get rendering :tool-use-id))
+                                    (null (plist-get rendering :body)))
+                           (setq cached rendering)))
+                       mevedel-view--tool-rendering-cache)
+              (should cached)
+              (let ((entry (list :start eval-start :end eval-end
+                                 :rendering cached)))
+                (should (equal "Eval" (plist-get cached :group-tool)))
+                (should-not (plist-get cached :group-child))
+                (should (equal "Eval" (plist-get
+                                       (mevedel-view--tool-group-child
+                                        entry data-buf 2 t) :tool))))))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))
+          (goto-char (point-min))
+          (search-forward heading)
+          (goto-char (match-beginning 0))
+          (should (get-text-property (point) 'mevedel-view-collapsed))
+          (mevedel-view-toggle-section)
+          (goto-char (point-min))
+          (search-forward "Eval: live (+ 1 2)")
+          (goto-char (match-beginning 0))
+          (should (equal (mevedel-view-disclosure-source-range
+                          data-buf eval-start eval-end)
+                         (get-text-property (point) 'mevedel-view-source)))
+          (should-not (search-forward "audit preview"
+                                      mevedel-view--input-marker t))
+          (goto-char (point-min))
+          (search-forward "Eval: live (+ 1 2)")
+          (goto-char (match-beginning 0))
+          (mevedel-view-toggle-section)
+          (should (search-forward "3" mevedel-view--input-marker t))
+          (mevedel-view--full-rerender)
+          (goto-char (point-min))
+          (search-forward "Eval: live (+ 1 2)")
+          (goto-char (match-beginning 0))
+          (should-not (get-text-property (point) 'mevedel-view-collapsed))
+          (mevedel-view-toggle-section)
+          (goto-char (point-min))
+          (let ((group (text-property-any
+                        (point-min) mevedel-view--input-marker
+                        'mevedel-view-type 'tool-group)))
+            (should group)
+            (goto-char group)
+            (mevedel-view-toggle-section))
+          (goto-char (+ 4 (mevedel-view--input-start))))
+        (mevedel-view--full-rerender)
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (goto-char (point-min))
+        (should (search-forward heading mevedel-view--input-marker t)))
+      (with-current-buffer data-buf
+        (should (equal-including-properties original (buffer-string)))
+        (should (equal data (mevedel-tool-render-data-for-tool data-buf "outer"))))))
 
   :doc "coalesced rows retain every source-ordered hook audit"
   (mevedel-view-test--with-buffers

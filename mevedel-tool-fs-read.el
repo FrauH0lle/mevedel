@@ -49,7 +49,8 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-tool-results-dir
-                  "mevedel-pipeline" (session buffer &optional request))
+                  "mevedel-pipeline"
+                  (session buffer &optional request existing-only-p))
 (defvar mevedel-pipeline--active-call-source)
 
 ;; `mevedel-resource'
@@ -122,6 +123,9 @@
 
 (defvar mevedel-tool-fs-read--resource-address nil
   "Authored resource address for the current Read operation.")
+
+(defvar mevedel-tool-fs-read--scratch-directory nil
+  "A caller's scratch directory for derived media, deleted by that caller.")
 
 (defvar mevedel-tool-fs-read--local-media-copy nil
   "Dynamically scoped remote path and local copy for one media read.")
@@ -491,9 +495,6 @@ is deleted before returning."
 
 (defvar mevedel-tool-fs-read--sessionless-results nil
   "This Emacs's private directory for media read outside a session.")
-
-(defvar mevedel-tool-fs-read--scratch-directory nil
-  "A caller's scratch directory for derived media, deleted by that caller.")
 
 (defun mevedel-tool-fs-read--delete-sessionless-results ()
   "Delete media read outside a session; nothing retains it past this Emacs."

@@ -151,7 +151,7 @@
                          (equal
                           (file-name-concat root "tool-results" "executions")
                           (mevedel-tool-exec--execution-artifact-directory
-                           session))
+                           session nil))
                        (error "Execution facade could not resolve artifacts"))
                    (delete-directory root t)))
                (unless
@@ -342,8 +342,9 @@
           (dolist (owner owners)
             (copy-file (file-name-concat root owner)
                        (file-name-concat compiled-root owner))
-            (let ((byte-compile-verbose nil))
-              (byte-compile-file (file-name-concat compiled-root owner))))
+            (let ((byte-compile-verbose nil)
+                  (byte-compile-error-on-warn t))
+              (should (byte-compile-file (file-name-concat compiled-root owner)))))
           (dolist (case cases)
             (with-temp-buffer
               (ert-info ((format "cold owner: %s" (car case)))

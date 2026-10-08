@@ -620,13 +620,48 @@ normally configured Bash Tree-sitter grammar when available and a conservative
 scanner otherwise.  Redirections, substitutions, expansions, assignments,
 subshells, here-documents, control flow, parse errors, and unsupported operators
 are complex.  A dangerous component takes precedence in a compound request.
-Read-only classification uses argument-aware built-in policies. Git has no
-built-in read-only classification because repository and system configuration
-can attach helper processes to inspection commands; it requires explicit Bash
-authority even when its argv looks read-only. Find, ripgrep, base64, sed, and
-awk reject deletion, helper execution, output-file options, and unrecognized
-programs. Safe forms need no broad default allow patterns; variants outside
-these narrow policies remain unknown.
+Read-only classification uses argument-aware built-in policies. Reading,
+searching, listing, comparing and path inspection need no broad default Bash
+allow patterns. Besides the existing readers, supported policies include
+`diff`, `cmp`, `readlink`, `realpath`, `du`, and literal file/string/integer
+`test`/`[` forms. Unsupported options, variable lookup and recursive arithmetic
+expressions remain unknown. Find, ripgrep, base64, sed and awk reject deletion,
+helper execution, output-file options and unrecognized programs.
+Uniq accepts ordinary inspection options before its input and an optional `-`
+stdout operand, but rejects output filenames and options after the input.
+
+Git inspection covers `status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`,
+`ls-tree`, bounded `cat-file` and `merge-base`, `for-each-ref`, and explicit
+branch listing. Recognized flags, literal `-C` paths and `--` path operands
+are supported; mutations, arbitrary config overrides and helper-enabling
+options are not. Classification requires hardened launch: pager, filesystem
+monitor, external diff/text conversion, signature verification, tracing,
+optional index writes and implicit object fetching are disabled. The target
+launcher clears every inherited `GIT_*` environment entry before installing
+fixed inspection controls; environment enumeration failure refuses launch.
+This relies on trusted Git/env executables, PATH and dynamic loader, not on the
+classifier replacing ordinary child confinement. Worktree
+`status`/`diff` use a private temporary metadata view with copied HEAD/index
+and flattened effective repository/user/system config. Includes and filter
+commands are removed from the launch config; active configured clean/process
+filters and gitlinks cause explicit refusal. Final submodule traversal is
+disabled, so concurrent source config, attributes or index edits cannot enable
+those helpers after preflight. Objects, refs, worktree files and attributes
+remain live: output is not an atomic repository snapshot. The view uses the
+execution target's authorized temporary directory and is removed on ordinary
+exit and caught signals; an uncatchable kill may leave a private temporary view.
+Ordinary config remains available except for these safety overrides.
+Git inspection does not need `.git` write grants.
+
+Supported pipes and `&&`, `||`, `;` chains are read-only when every component
+is read-only. Read-only launch uses Bash without startup files or inherited
+shell functions/options, and prepares Git/ripgrep spans from parsed arguments while
+preserving shell connectors, quoting and short-circuit behavior. Original
+authored commands remain the permission/hook/audit facts; prepared launch
+text is not new user authority. Parser/preparation disagreement refuses
+launch. Unknown commands and unsupported syntax remain conservative.
+Ripgrep receives `--no-config`, so inherited `RIPGREP_CONFIG_PATH` cannot inject
+helper-enabling options absent from the analyzed command.
 Bash keeps its specialized permission entry and controls, but an `ask` passes
 through the pipeline's shared `PermissionRequest` boundary before that entry
 is admitted.
@@ -699,7 +734,15 @@ read grants beneath inaccessible masks, therefore refuse confined preparation wi
 message identifying the directory and the prompt's recursive-scope selection.
 An exact directory read already available through the baseline filesystem adds
 no mount. An explicitly approved recursive grant subsumes redundant exact
-mounts, without merging their separate identities in the authority store.
+mounts only when it supplies the same enforceable authority, without merging
+their separate identities in the authority store. Execution-specific coverage
+does not cross a separately protected descendant: a recursive checkout grant
+does not authorize `.git` writes. The missing child request reaches the human
+card, whose displayed recursive directory scope requires explicit approval.
+Sufficient approved child-tree authority is reused without another prompt;
+meaningful exact child-file grants are retained during mount normalization.
+Capability checks, queued rechecks, approval validation and mount normalization
+share this rule. Native resource-grant coverage remains unchanged.
 
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths require approval in Ask and Edits;

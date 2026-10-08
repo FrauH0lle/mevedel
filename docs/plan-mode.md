@@ -106,6 +106,19 @@ workers, which retain their own policy.
 
 ## Tool boundary
 
+Reading commands are allowed in Plan, not just native Read/Glob/Grep. Bash
+uses the shared read-only classification for file reading, searching, listing,
+comparison, path inspection and supported Git inspection. Pipes and `&&`,
+`||`, `;` compositions are allowed when every component is read-only. For
+example, `git status --short && git diff --stat` needs neither a broad Bash
+allow rule nor `.git` write authority. Read-only execution is hardened against
+shell startup and Git helpers; unsafe helper-dependent worktree inspection
+refuses rather than silently executing helpers. Explicit denials and ordinary
+resource permissions still apply. Unknown commands, output-file options,
+mutating compounds and unsupported shell constructs remain blocked.
+This rule is shared by standalone/sticky Plan, directive planning, and retained
+agents in a planning session. See [Bash specifics](permissions.md#bash-specifics).
+
 Plan requests expose `ApplyPatch` for session-only `work://` descendants,
 including retained agents, so durable plans and notes can be updated through
 the ordinary `ApplyPatch` path. Before materialization, the pipeline denies any

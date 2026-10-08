@@ -46,6 +46,8 @@
 ;; `mevedel-bash-analysis'
 (declare-function mevedel-bash-analysis-analyze
                   "mevedel-bash-analysis" (source))
+(declare-function mevedel-bash-analysis-prepare-read-only
+                  "mevedel-bash-analysis" (source analysis &optional temporary-root))
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-list
@@ -66,6 +68,8 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
@@ -79,7 +83,8 @@
 (declare-function mevedel-pipeline-active-tool-use-id
                   "mevedel-pipeline" ())
 (declare-function mevedel-pipeline-tool-results-dir
-                  "mevedel-pipeline" (session buffer &optional request))
+                  "mevedel-pipeline"
+                  (session buffer &optional request existing-only-p))
 
 ;; `mevedel-queue'
 (declare-function mevedel-queue--current-session "mevedel-queue" ())
@@ -161,8 +166,10 @@ writes use 250-30000ms and pure polls use 5000-300000ms."
                               (if input-p 250 5000)
                               (if input-p 30000 300000))))
 
-(defun mevedel-tool-exec--execution-artifact-directory (session)
-  "Return SESSION's retained execution artifact directory, if available."
+(defun mevedel-tool-exec--execution-artifact-directory (session read-only-p)
+  "Return SESSION's retained execution artifact directory, if available.
+For READ-ONLY-P commands, do not initialize storage or Git exclusions;
+unsaved readers use the execution module's temporary spool instead."
   (unless (and (mevedel-session-execution-target session)
                (mevedel-execution-target-remote-p
                 (mevedel-session-execution-target session)))
@@ -171,7 +178,8 @@ writes use 250-30000ms and pure polls use 5000-300000ms."
                   session
                   (or (and (boundp 'mevedel--data-buffer)
                            mevedel--data-buffer)
-                      (current-buffer)))))
+                      (current-buffer))
+                  nil read-only-p)))
       (file-name-concat root "executions"))))
 
 (defun mevedel-tool-exec--sandbox-temporary-root (workdir)
@@ -422,7 +430,21 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
     (let* ((analysis (mevedel-bash-analysis-analyze command))
            (_ (when (plist-get analysis :background-p)
                 (error "Shell-native background execution is not supported; use yield_time_ms")))
+           (read-only-p (eq (plist-get analysis :class) 'read-only))
            (session (mevedel-queue--current-session))
+           (workdir (mevedel-tool-exec-permission-default-directory))
+           (temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir))
+           (launch-command
+            (if read-only-p
+                ;; -p suppresses startup files and inherited shell functions
+                ;; and shell-option variables.  It grants no OS authority.
+                (list "bash" "--noprofile" "--norc" "-p" "-c"
+                      (mevedel-bash-analysis-prepare-read-only
+                       command analysis
+                       (mevedel-execution-target-native-path
+                        (and session (mevedel-session-execution-target session))
+                        temporary-root)))
+              (list "bash" "-lc" command)))
            (sandbox-request
             (mevedel-tool-exec-permission-effective-sandbox-request
              args "Bash" command nil
@@ -433,8 +455,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
            (owner (mevedel-current-origin))
            (yield-time-ms
             (unless (plist-get args :wait-for-completion-p)
-              (mevedel-tool-exec--bash-yield-time-ms args)))
-           (workdir (mevedel-tool-exec-permission-default-directory)))
+              (mevedel-tool-exec--bash-yield-time-ms args))))
       (unless session
         (error "Bash requires an active session"))
       (mevedel-execution-start-bash
@@ -448,18 +469,18 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
        :owner-context (or invocation session)
        :tool-args args
        :tool-use-id (mevedel-pipeline-active-tool-use-id)
-       :command (list "bash" "-lc" command)
+       :command launch-command
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
-       :temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir)
+       :temporary-root temporary-root
        :outcome-function
        (lambda (exit-code termination)
          (mevedel-tool-exec--bash-outcome analysis exit-code termination))
-       :read-only-p (eq (plist-get analysis :class) 'read-only)
+       :read-only-p read-only-p
        :tty (eq tty t)
        :yield-time-ms yield-time-ms
        :artifact-directory
-       (mevedel-tool-exec--execution-artifact-directory session)
+       (mevedel-tool-exec--execution-artifact-directory session read-only-p)
        :additional-permissions
        (plist-get sandbox-request :additional-permissions)
        :sandbox-permissions

@@ -17,6 +17,7 @@
 ;;; Code:
 
 (require 'map)
+(require 'mevedel-execution-grants)
 (require 'mevedel-structs)
 (require 'mevedel-permission-log)
 (require 'mevedel-queue)
@@ -48,11 +49,6 @@
                   "mevedel-permission-review" (entry fallback))
 (autoload 'mevedel-permission-review-start "mevedel-permission-review")
 (defvar mevedel-permission-reviewer 'user)
-
-;; `mevedel-permission-rules'
-(declare-function mevedel-permission-rules-resource-granted-p
-                  "mevedel-permission-rules" (path access grants &optional recursive))
-(autoload 'mevedel-permission-rules-resource-granted-p "mevedel-permission-rules")
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
@@ -499,8 +495,11 @@ subsume an exact grant, but this function never broadens selected authority."
       (dolist (grant grants)
         (let ((path (plist-get grant :path)))
           (when (and (mevedel-permission-queue-resource-needs-tree-p entry grant)
-                     (not (mevedel-permission-rules-resource-granted-p
-                           path (plist-get grant :access) grants t)))
+                     (not (mevedel-execution-grants-covering-grant
+                           path (plist-get grant :access) grants t
+                           (and (plist-get entry :session)
+                                (mevedel-session-execution-target
+                                 (plist-get entry :session))))))
             (user-error
              "Exact directory access cannot be confined: %s; select directory-tree scope before approving"
              path)))))))

@@ -14,14 +14,12 @@
   (require 'cl-lib))
 
 (require 'subr-x)
+(require 'mevedel-execution-grants)
 
 ;; `mevedel-permission-rules'
 (declare-function mevedel-permission-rules-path-in-allowed-roots-p
                   "mevedel-permission-rules" (path roots))
-(declare-function mevedel-permission-rules-resource-granted-p
-                  "mevedel-permission-rules" (path access grants &optional recursive))
 (autoload 'mevedel-permission-rules-path-in-allowed-roots-p "mevedel-permission-rules")
-(autoload 'mevedel-permission-rules-resource-granted-p "mevedel-permission-rules")
 
 
 ;;
@@ -85,10 +83,12 @@ device number for remote files, which never matches the target."
                            path))))
         identity))))
 
-(defun mevedel-sandbox--resolve-filesystem-permissions (permissions &optional inaccessible-paths)
+(defun mevedel-sandbox--resolve-filesystem-permissions
+    (permissions &optional inaccessible-paths restrictions)
   "Return PERMISSIONS with canonical paths and original source paths.
 Directory bind mounts expose descendants.  Refuse an exact directory rather
 than silently widening it; an explicitly approved tree subsumes exact grants.
+RESTRICTIONS are the concrete launch protection boundaries.
 Exact directory reads outside INACCESSIBLE-PATHS need no additional mount:
 the base read-only filesystem already allows them."
   (delq nil (mapcar
@@ -125,8 +125,9 @@ the base read-only filesystem already allows them."
              (cl-remove-if
               (lambda (grant)
                 (and (not (plist-get grant :recursive))
-                     (mevedel-permission-rules-resource-granted-p
-                      (plist-get grant :path) (plist-get grant :access) permissions t)))
+                     (mevedel-execution-grants-covering-grant
+                      (plist-get grant :path) (plist-get grant :access)
+                      permissions t nil restrictions)))
               permissions))))
 
 (defun mevedel-sandbox--grant-paths (grant)

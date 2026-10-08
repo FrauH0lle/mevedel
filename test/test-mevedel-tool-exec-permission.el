@@ -807,6 +807,29 @@ additive child permissions are available only to batch Eval"
       (mevedel-tool-exec-permission-effective-sandbox-request
        '(:expression "(url-retrieve-synchronously url)" :mode "batch")
        "Eval" "(url-retrieve-synchronously url)" 'batch context))))
+  :doc "reuses an independent protected child tree but never infers one from its parent"
+  (let* ((root (make-temp-file "mevedel-reuse-child-" t))
+         (git (file-name-concat root ".git"))
+         (mevedel-protected-paths '(("**/.git/**" . read-only)))
+         (args `(:sandbox_permissions "with_additional_permissions"
+                 :additional_permissions (:file_system (:write [,git]))
+                 :justification "Write child")))
+    (unwind-protect
+        (progn
+          (make-directory git)
+          (dolist (grants (list `((:path ,root :access write :recursive t))
+                               `((:path ,git :access write :recursive t))))
+            (let ((grant (car (plist-get
+                               (plist-get
+                                (mevedel-tool-exec-permission-effective-sandbox-request
+                                 args "Bash" "true" nil
+                                 `(:resource-grants ,grants :buckets ((:session))))
+                                :additional-permissions)
+                               :file-system))))
+              (should (equal git (plist-get grant :path)))
+              (should (eq (equal git (plist-get (car grants) :path))
+                          (plist-get grant :recursive))))))
+      (delete-directory root t)))
   :doc "does not attach a remembered child profile to live Eval"
   (let* ((rules
           '(("Eval" :pattern "(url-retrieve-synchronously url)"
@@ -877,6 +900,35 @@ additive child permissions are available only to batch Eval"
           '(:mode full-auto :buckets ((:session))))))
     (should-not (plist-get state :missing))
     (should (equal '(:network t) (plist-get state :granted))))
+  :doc "protected child needs explicit tree authority in every direct bucket, and revocation restores the ask"
+  (let* ((root (make-temp-file "mevedel-authority-child-" t))
+         (git (file-name-concat root ".git"))
+         (parent `(:path ,root :access write :recursive t))
+         (child `(:path ,git :access write :recursive t))
+         (exact `(:path ,git :access write))
+         (mevedel-protected-paths '(("**/.git/**" . read-only)))
+         (request `(:operation-pattern "operation"
+                    :additional-permissions (:file-system (,exact)))))
+    (unwind-protect
+        (progn
+          (make-directory git)
+          (dolist (bucket '(:session :persistent :defcustom))
+            (dolist (approved (list nil child))
+              (let* ((rule `("Bash" :pattern "operation" :action allow
+                            :file-system ,(delq nil (list parent approved))))
+                     (context `(:buckets ((,bucket ,rule)) :resource-grants nil))
+                     (state (mevedel-tool-exec-permission--additional-authority-state
+                             "Bash" request context)))
+                (should (eq (null approved) (and (plist-get state :missing) t)))
+                (dolist (action '(deny ask))
+                  (let ((state (mevedel-tool-exec-permission--additional-authority-state
+                                "Bash" request
+                                `(:resource-grants (,parent ,child)
+                                  :buckets ((:session ("Bash" :path ,git :action ,action)))))))
+                    (if (eq action 'deny)
+                        (should (eq 'sandbox-filesystem (plist-get state :deny-via)))
+                      (should (plist-get state :missing)))))))))
+      (delete-directory root t)))
   :doc "explicit resource deny settles before prompting"
   (let* ((write '(:path "/tmp/output" :access write))
          (state

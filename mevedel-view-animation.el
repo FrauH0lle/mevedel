@@ -15,6 +15,7 @@
 
 (require 'cl-lib)
 (require 'color)
+(require 'face-remap)
 
 (defconst mevedel-view-animation--cycle 3.6
   "Duration in seconds of a color animation cycle.")
@@ -105,7 +106,8 @@ also retries a fallback bank when a frame gains color support."
   (mevedel-view-animation-reset-glyph-support)
   (when (cl-some
          (lambda (entry)
-           (let ((key (car entry)) (bank (cdr entry)))
+           (let* ((key (car entry)) (bank (cdr entry))
+                  (face-remapping-alist (nth 4 key)))
              (not (equal (mevedel-view-animation--colors
                           (nth 2 key) (nth 3 key))
                          (and (consp bank) (nth 2 bank))))))
@@ -156,6 +158,8 @@ its sweep; see `mevedel-view-animation-next-delay'."
 
 (defun mevedel-view-animation--colors (face frame)
   "Return (FOREGROUND . BACKGROUND) for FACE on FRAME, or nil.
+Resolve buffer-local face remapping just as redisplay does, including the
+default background painted by the native presenter.
 Only called when preparing a color bank, never to sample a cached bank.
 Small terminal palettes cannot resolve the 64 shades into a useful color
 animation; use the glyph fallback instead of scheduling invisible frames."
@@ -163,12 +167,16 @@ animation; use the glyph fallback instead of scheduling invisible frames."
       (when (and (display-color-p frame)
                  (or (display-graphic-p frame)
                      (>= (or (display-color-cells frame) 0) 256)))
-        (let* ((foreground (face-foreground face frame t))
-               (background (face-background 'default frame t)))
-          (when (and (stringp foreground) (stringp background)
-                     (color-name-to-rgb foreground frame)
-                     (color-name-to-rgb background frame))
-            (cons foreground background))))
+        (with-selected-frame (or frame (selected-frame))
+          (let* ((attributes (face-attributes-as-vector (list face 'default)))
+                 (foreground (aref attributes
+                                   (cl-position :foreground internal-lisp-face-attributes)))
+                 (background (aref attributes
+                                   (cl-position :background internal-lisp-face-attributes))))
+            (when (and (stringp foreground) (stringp background)
+                       (color-name-to-rgb foreground frame)
+                       (color-name-to-rgb background frame))
+              (cons foreground background)))))
     (error nil)))
 
 (defun mevedel-view-animation--palette (foreground background &optional frame)
@@ -273,13 +281,16 @@ it and at rest the text keeps its normal foreground."
 (defun mevedel-view-animation--color-frame (style label seconds face frame)
   "Return prepared color STYLE for LABEL at SECONDS with FACE on FRAME."
   (let* ((frame (or frame (selected-frame)))
-         (key (list style label face frame))
+         (key (list style label face frame face-remapping-alist))
          (local (assoc key mevedel-view-animation--view-cache))
          (entry (or local (assoc key mevedel-view-animation--cache)))
          (bank (if entry (cdr entry)
                  (let* ((colors (mevedel-view-animation--colors face frame))
                         (prepared (and colors (mevedel-view-animation--prepare
                                                style label colors frame))))
+                   ;; Remapping clients may edit their specs in place.  A bank
+                   ;; retains the inputs it was actually prepared with.
+                   (setf (nth 4 key) (copy-tree face-remapping-alist))
                    (push (cons key (or prepared :fallback))
                          mevedel-view-animation--cache)
                    (when (> (length mevedel-view-animation--cache)
@@ -289,7 +300,8 @@ it and at rest the text keeps its normal foreground."
                              nil))
                    prepared))))
     (unless local
-      (mevedel-view-animation--remember-view-bank key (or bank :fallback)))
+      (mevedel-view-animation--remember-view-bank
+       (if entry (car entry) key) (or bank :fallback)))
     (when (consp bank)
       (let* ((tick
               (if (eq style 'shimmer)
@@ -314,7 +326,7 @@ bounded bank prepared for the first visible frame when available."
   (when (memq style '(shimmer breathe bounce))
     (let* ((frame (or frame (selected-frame)))
            (sample (mevedel-view-animation--color-frame style label 0 face frame))
-           (entry (assoc (list style label face frame)
+           (entry (assoc (list style label face frame face-remapping-alist)
                          mevedel-view-animation--view-cache)))
       ;; Promote only during semantic preparation.  Otherwise old-frame banks
       ;; can evict an active label already visited by this preparation pass.
@@ -328,7 +340,8 @@ bounded bank prepared for the first visible frame when available."
 Unlike `mevedel-view-animation-color-available-p', this never resolves
 colors or constructs frames; visual callbacks can use it after a theme
 invalidation to defer bank preparation until semantic maintenance."
-  (let ((key (list style label face (or frame (selected-frame)))))
+  (let ((key (list style label face (or frame (selected-frame))
+                   face-remapping-alist)))
     (or (assoc key mevedel-view-animation--view-cache)
         (assoc key mevedel-view-animation--cache))))
 

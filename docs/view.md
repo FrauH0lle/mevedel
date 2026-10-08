@@ -382,7 +382,10 @@ same frames as the label, so they add no wakeups of their own. Color styles use 
 breathe and bounce use a continuous 3.6-second cycle sampled at at most 8 fps.
 Breathe starts at normal foreground, fades toward the background, and returns;
 bounce moves a faded band over otherwise normal text. Prepared frames are
-cached with a bounded animated prefix so long labels remain readable. A live view reserves a prepared bank for every registered tool label, including
+cached with a bounded animated prefix so long labels remain readable. Color
+resolution honors buffer-local face remapping, including the background painted
+by native surfaces, so indicators blend into views styled by Solaire or buffer
+faces. Prepared banks distinguish each view's remapping specs. A live view reserves a prepared bank for every registered tool label, including
 the overflow row, plus the main label (with a four-bank minimum). This working
 set is bounded by the visible-tool row cap and retained independently of the
 shared six-bank reuse cache, so other views cannot evict active frames. The
@@ -1581,8 +1584,13 @@ revision-and-provenance key skips payload copying, tool-call parsing, structural
 recovery, and request-failure decoding. Restoring trust can
 expose a request failure without changing text, so a text-only hit is insufficient.
 Collapsed activity groups retain tool names with their cached headers rather
-than reparsing hidden arguments and results to count them. Expanding a group,
-or retaining an already expanded child, recovers its complete child data.
+than reparsing hidden arguments and results to count them. A settled direct
+ToolCall caches the recognized specialist's displayed name, so a direct Eval
+groups as "evaluated 1 form" rather than as a generic ToolCall. This changes
+presentation only: its canonical ToolCall child, provider/source identity,
+envelope IDs and audits remain unchanged. Composed or live programs, malformed
+audits and failed envelopes retain ToolCall labeling. Expanding a group, or
+retaining an already expanded child, recovers its complete child data.
 The tool-call reader uses offsets into the existing source string instead of
 copying a large result merely to read its leading call form.
 The render-data reader likewise reads within explicit string bounds instead of

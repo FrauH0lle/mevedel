@@ -33,6 +33,11 @@
 (declare-function gptel--to-string "ext:gptel-request" (s))
 (defvar gptel-backend)
 
+;; `mevedel-bash-analysis'
+(declare-function mevedel-bash-analysis-analyze
+                  "mevedel-bash-analysis" (source))
+(autoload 'mevedel-bash-analysis-analyze "mevedel-bash-analysis")
+
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
                   "mevedel-execution-telemetry" (summary))
@@ -325,7 +330,8 @@ of omitted characters."
         result result length mevedel-pipeline--preview-size)
        :text))))
 
-(defun mevedel-pipeline-tool-results-dir (session buffer &optional request)
+(defun mevedel-pipeline-tool-results-dir
+    (session buffer &optional request existing-only-p)
   "Return SESSION's tool-results directory, materializing when possible.
 
 When SESSION has no save path yet, use
@@ -333,6 +339,8 @@ When SESSION has no save path yet, use
 oversized tool output produced during the first turn can still be
 owned by the session.  REQUEST defaults to BUFFER's active request.
 Ephemeral requests never materialize or reuse a durable directory.
+EXISTING-ONLY-P returns only an already materialized directory, without
+initialization or generated-state exclusion writes.
 Returns nil when there is no session, the request is ephemeral, or
 shallow materialization fails."
   (let ((request
@@ -345,24 +353,29 @@ shallow materialization fails."
                (not (and request
                          (mevedel-request-ephemeral-p request))))
       (let ((save-path (or (mevedel-session-save-path session)
-                           (when (and buffer (buffer-live-p buffer))
+                           (when (and (not existing-only-p)
+                                      buffer (buffer-live-p buffer))
                              (mevedel-session-persistence-shallow-ensure-files
                               session buffer)))))
         (when save-path
-          (mevedel-workspace-ensure-generated-state-ignored
-           (mevedel-session-workspace session))
+          (unless existing-only-p
+            (mevedel-workspace-ensure-generated-state-ignored
+             (mevedel-session-workspace session)))
           (file-name-concat save-path "tool-results"))))))
 
-(defun mevedel-pipeline--persist-result (result tool session &optional buffer)
+(defun mevedel-pipeline--persist-result
+    (result tool session &optional buffer existing-only-p)
   "Save RESULT to disk and return a preview string.
 
 TOOL is the `mevedel-tool' whose result exceeded its size limit.
 SESSION owns the output file through its `tool-results/' directory.
 BUFFER is the chat data buffer used to shallowly materialize SESSION
 when it has not been saved yet.  If no session-owned directory is
-available, falls back to `mevedel-pipeline--truncate-result'."
+available, falls back to `mevedel-pipeline--truncate-result'.
+EXISTING-ONLY-P forbids initializing storage or updating Git exclusions."
   (setq result (mevedel--normalize-message-text result))
-  (if-let* ((dir (mevedel-pipeline-tool-results-dir session buffer)))
+  (if-let* ((dir (mevedel-pipeline-tool-results-dir
+                 session buffer nil existing-only-p)))
       (let* ((name (mevedel-tool-name tool))
              (file (concat
                     (make-temp-name
@@ -1522,7 +1535,13 @@ possibly-updated context."
                         (mevedel-request-ephemeral-p request))
                    (mevedel-pipeline--truncate-result result tool t)
                  (mevedel-pipeline--persist-result
-                  result tool session buffer))))
+                  result tool session buffer
+                  (and (equal (mevedel-tool-name tool) "Bash")
+                       (eq 'read-only
+                           (plist-get
+                            (mevedel-bash-analysis-analyze
+                             (plist-get (plist-get context :args) :command))
+                            :class)))))))
           (funcall deliver
                    (plist-put context :result projected)
                    (if (string-prefix-p "<persisted-output>" projected)
@@ -1866,7 +1885,12 @@ dispatch defers and retries once the transport is idle instead of
 failing the call.  Any error the assertion still signals must settle
 the tool call as a canonical error result rather than escape."
   (let* ((session (plist-get context :session))
-         (mutating-p (and session (not (mevedel-tool-read-only-p tool))))
+         ;; Bash owns mutation admission after hooks and argument analysis in
+         ;; `mevedel-execution-start-bash'.  Its static mutating-tool flag must
+         ;; not materialize session state for readers or denied Plan calls.
+         (mutating-p (and session
+                          (not (mevedel-tool-read-only-p tool))
+                          (not (equal (mevedel-tool-name tool) "Bash"))))
          (workdir (plist-get context :default-directory))
          (cancel-cell (plist-get context :cancel-cell))
          (key (list 'tool-dispatch

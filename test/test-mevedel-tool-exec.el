@@ -91,10 +91,12 @@
   (let* ((target (mevedel-execution-target-create default-directory))
          (session (mevedel-session--create :authority-mode 'pid-lock :execution-target target)))
     (cl-letf (((symbol-function 'mevedel-pipeline-tool-results-dir)
-               (lambda (_session _buffer) "/tmp/tool-results")))
+               (lambda (_session _buffer _request existing-only-p)
+                 (should-not existing-only-p)
+                 "/tmp/tool-results")))
       (should (equal "/tmp/tool-results/executions"
                      (mevedel-tool-exec--execution-artifact-directory
-                      session)))))
+                      session nil)))))
   :doc "remote sessions use the execution module's local temporary spool"
   (let* ((target (mevedel-execution-target-create
                   "/ssh:user@host:/srv/project/"))
@@ -103,7 +105,7 @@
                (lambda (&rest _)
                  (ert-fail "Remote spool consulted the target store"))))
       (should-not
-       (mevedel-tool-exec--execution-artifact-directory session))))
+       (mevedel-tool-exec--execution-artifact-directory session nil))))
   :doc "ephemeral Bash requests do not materialize retained artifacts"
   (let* ((root (make-temp-file "mevedel-ephemeral-bash-" t))
          (workspace (mevedel-workspace--create
@@ -116,10 +118,31 @@
         (with-temp-buffer
           (setq-local mevedel--current-request request)
           (should-not
-           (mevedel-tool-exec--execution-artifact-directory session))
+           (mevedel-tool-exec--execution-artifact-directory session nil))
           (should-not (mevedel-session-save-path session))
           (should-not (file-exists-p
                        (file-name-concat root ".mevedel"))))
+      (delete-directory root t)))
+  :doc "readers use existing storage or temporary spools without metadata writes"
+  (let* ((root (make-temp-file "mevedel-reader-spool-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create :workspace workspace)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-workspace-ensure-generated-state-ignored)
+                   (lambda (&rest _) (ert-fail "Reader wrote Git exclusions")))
+                  ((symbol-function 'mevedel-session-persistence-shallow-ensure-files)
+                   (lambda (&rest _) (ert-fail "Reader initialized storage"))))
+          (should-not (mevedel-tool-exec--execution-artifact-directory session t))
+          (should-not (mevedel-session-save-path session))
+          (should-not (directory-files root nil "^[^.].*"))
+          (setf (mevedel-session-save-path session) root)
+          (should (equal (file-name-concat root "tool-results" "executions")
+                         (mevedel-tool-exec--execution-artifact-directory session t)))
+          (with-temp-buffer
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :session session :ephemeral-p t))
+            (should-not
+             (mevedel-tool-exec--execution-artifact-directory session t))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-exec--execution-facts-xml ()
@@ -584,6 +607,20 @@
                    (plist-get (cdr captured) :tool-use-id)))
     (should (equal '(:command "printf identity" :yield_time_ms 250)
                    (plist-get (cdr captured) :tool-args))))
+  :doc "keeps authored facts while launching hardened read-only commands"
+  (let* ((source "git status --short && git diff --stat")
+         (args (list :command source))
+         captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest keys) (setq captured (cdr keys)))))
+      (mevedel-tool-exec-test--call-bash #'ignore args))
+    (should (equal args (plist-get captured :tool-args)))
+    (should (plist-get captured :read-only-p))
+    (should (equal '("bash" "--noprofile" "--norc" "-p" "-c")
+                   (butlast (plist-get captured :command))))
+    (should-not (equal source (car (last (plist-get captured :command)))))
+    (should (string-match-p "--no-optional-locks"
+                            (car (last (plist-get captured :command))))))
   :doc "launches a default call with its matching remembered profile"
   (let* ((session
           (mevedel-session--create
@@ -783,6 +820,30 @@
     (should (string-match-p "filesystem: unrestricted" result))
     (should (string-match-p "network: unrestricted" result))
     (should (string-match-p "test confinement unavailable" result)))
+  :doc "read-only launch ignores startup files and inherited shell functions"
+  (let* ((home (make-temp-file "mevedel-bash-reading-" t))
+         (startup (file-name-concat home "startup"))
+         (marker (file-name-concat home "helper-ran"))
+         (process-environment (copy-sequence process-environment))
+         result done)
+    (unwind-protect
+        (progn
+          (with-temp-file startup
+            (insert "touch " (shell-quote-argument marker) "\n"))
+          (copy-file startup (file-name-concat home ".bash_profile"))
+          (setenv "HOME" home)
+          (setenv "BASH_ENV" startup)
+          (setenv "BASH_FUNC_echo%%"
+                  (concat "() { touch " (shell-quote-argument marker) "; }"))
+          (mevedel-tool-exec-test--call-bash
+           (lambda (r)
+             (setq result (mevedel-tool-exec-test--handler-result r) done t))
+           '(:command "echo inspected"))
+          (with-timeout (5 (error "Timed out"))
+            (while (not done) (accept-process-output nil 0.1)))
+          (should (string-prefix-p "inspected\n" result))
+          (should-not (file-exists-p marker)))
+      (delete-directory home t)))
   :doc "loads Bash login initialization from an isolated home"
   (let* ((home (make-temp-file "mevedel-bash-login-" t))
          (profile (file-name-concat home ".bash_profile"))

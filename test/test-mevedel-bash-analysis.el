@@ -60,7 +60,7 @@
   (cl-letf (((symbol-function 'treesit-language-available-p)
              (lambda (_language) nil)))
     (let ((analysis (mevedel-bash-analysis-analyze "[ 1 = 2 ]")))
-      (should (equal 'unknown (plist-get analysis :class)))
+      (should (equal 'read-only (plist-get analysis :class)))
       (should (equal '(("[" "1" "=" "2" "]"))
                      (plist-get analysis :commands))))
     (should (equal 'complex
@@ -75,6 +75,15 @@
                      (plist-get
                       (mevedel-bash-analysis-analyze "echo foo\\ bar")
                       :commands)))))
+  :doc "literal quoting preserves separators and double-quote backslashes"
+  (dolist (case '(("echo 'git status; && |'" ("echo" "git status; && |"))
+                  ("echo 'a\\'" ("echo" "a\\"))
+                  ("echo \"a\\q\"" ("echo" "a\\q"))
+                  ("echo '' ab\"cd\"'ef'" ("echo" "" "abcdef"))
+                  ("echo \"a\\\"b\"" ("echo" "a\"b"))))
+    (let ((analysis (mevedel-bash-analysis-analyze (car case))))
+      (should (eq 'read-only (plist-get analysis :class)))
+      (should (equal (list (cadr case)) (plist-get analysis :commands)))))
   :doc "line continuation:
 `mevedel-bash-analysis-analyze' removes Bash backslash-newline pairs"
   (cl-letf (((symbol-function 'treesit-language-available-p)
@@ -194,7 +203,10 @@ cat file"
   ;; plain words, so they are where the analyzers drift apart first.
   (progn
     (skip-unless (treesit-language-available-p 'bash))
-    (dolist (source '("NODE_ENV=test npm run test" "[ 1 = 2 ]"))
+    (dolist (source '("NODE_ENV=test npm run test" "[ 1 = 2 ]"
+                      "diff -u one two | head -10"
+                      "git status --short && git diff --stat"
+                      "git -C './repo space' log --oneline -1 || pwd; ls"))
       (let ((grammar (mevedel-bash-analysis-analyze source))
             (scanner (cl-letf (((symbol-function 'treesit-language-available-p)
                                 (lambda (_language) nil)))
@@ -260,6 +272,93 @@ cat file"
                       "printf %s \"\\`sleep 1 &\\`\""))
       (should-not (plist-get (mevedel-bash-analysis-analyze source)
                              :background-p)))))
+
+(mevedel-deftest mevedel-bash-analysis--quote-word ()
+  ,test
+  (test)
+  :doc "Bash quoting round-trips literal words independent of host shell"
+  (dolist (word '("" "simple" "a b" "a'b" "a\\b" "$HOME; `pwd`"))
+    (should (equal (list word)
+                   (mevedel-bash-analysis--split-command
+                    (mevedel-bash-analysis--quote-word word))))))
+
+(mevedel-deftest mevedel-bash-analysis-prepare-read-only ()
+  ,test
+  (test)
+  :doc "preserves ordinary source and shell connectors"
+  (let* ((source "[ -f './a b' ] && cat './a b' | head -1 || pwd; ls")
+         (analysis (mevedel-bash-analysis-analyze source)))
+    (should (eq 'read-only (plist-get analysis :class)))
+    (should (equal source
+                   (mevedel-bash-analysis-prepare-read-only source analysis))))
+  :doc "hardens only Git spans, including quoted connector characters"
+  (let* ((source "echo 'git status; && |' && git -C './a b' status --short || git diff --stat | head -1; pwd")
+         (analysis (mevedel-bash-analysis-analyze source))
+         (prepared (mevedel-bash-analysis-prepare-read-only source analysis)))
+    (should (string-prefix-p "echo 'git status; && |' && " prepared))
+    (should (string-suffix-p "| head -1; pwd" prepared))
+    (should (string-match-p "--no-optional-locks" prepared))
+    (should (string-match-p (regexp-quote "'./a b'") prepared))
+    (should (string-match-p " || " prepared)))
+  :doc "rejects parser disagreement instead of falling back"
+  (let* ((source "git status --short")
+         (analysis (mevedel-bash-analysis-analyze source)))
+    (should-error (mevedel-bash-analysis-prepare-read-only
+                   "git reset --hard" analysis))
+    (should-error (mevedel-bash-analysis-prepare-read-only
+                   source '(:class unknown))))
+  :doc "comments and effectful compounds never enter preparation"
+  (dolist (source '("git status # comment" "git status && touch file"
+                    "git diff >out" "git log --output=out"))
+    (let ((analysis (mevedel-bash-analysis-analyze source)))
+      (should-not (eq 'read-only (plist-get analysis :class)))
+      (should-error (mevedel-bash-analysis-prepare-read-only source analysis)))))
+
+(mevedel-deftest mevedel-bash-analysis-prepare-read-only/ripgrep-config ()
+  ,test
+  (test)
+  :doc "suppresses inherited helper config while preserving literal compounds"
+  (progn
+    (unless (and (executable-find "rg") (executable-find "bash"))
+      (ert-skip "Ripgrep and Bash required"))
+    (let* ((root (make-temp-file "mevedel-rg-config-" t))
+         (default-directory (file-name-as-directory root))
+         (config (file-name-concat root "rg.conf"))
+         (helper (file-name-concat root "helper"))
+         (marker (file-name-concat root "marker"))
+         (data (file-name-concat root "data.txt"))
+         (source "rg needle ./data.txt")
+         (analysis (mevedel-bash-analysis-analyze source))
+         (process-environment
+          (cons (concat "RIPGREP_CONFIG_PATH=" config) process-environment)))
+    (unwind-protect
+        (progn
+          (with-temp-file data (insert "needle\n"))
+          (with-temp-file helper
+            (insert "#!/bin/sh\nprintf ran > "
+                    (mevedel-bash-analysis--quote-word marker)
+                    "\ncat \"$1\"\n"))
+          (set-file-modes helper #o700)
+          (with-temp-file config (insert "--pre=" helper "\n"))
+          (should (eq 'read-only (plist-get analysis :class)))
+          ;; Positive control: privileged Bash alone does not stop rg config.
+          (with-temp-buffer
+            (should (zerop (process-file "bash" nil t nil "--noprofile" "--norc"
+                                         "-p" "-c" source))))
+          (should (file-exists-p marker))
+          (delete-file marker)
+          (with-temp-buffer
+            (should (zerop (process-file
+                            "bash" nil t nil "--noprofile" "--norc" "-p" "-c"
+                            (mevedel-bash-analysis-prepare-read-only source analysis))))
+            (should (string-search "needle" (buffer-string))))
+          (should-not (file-exists-p marker))
+          (let* ((compound "echo 'rg; &&' && rg 'needle' './data.txt' | head -1; pwd")
+                 (prepared (mevedel-bash-analysis-prepare-read-only
+                            compound (mevedel-bash-analysis-analyze compound))))
+            (should (string-prefix-p "echo 'rg; &&' && 'rg' '--no-config'" prepared))
+            (should (string-suffix-p " | head -1; pwd" prepared))))
+      (delete-directory root t)))))
 
 (mevedel-deftest mevedel-bash-analysis--treesit ()
   ,test

@@ -218,7 +218,15 @@
                (mevedel-permission-queue--on-head-outcome entry outcome)
                :type 'user-error)
               (should (eq entry (car (mevedel-session-permission-queue session))))
-              (should-not received))
+             (should-not received))
+            ;; A recursive ancestor cannot validate an exact protected child.
+            (let* ((child (file-name-concat root ".git"))
+                   (mevedel-protected-paths '(("**/.git/**" . read-only))))
+              (make-directory child)
+              (setcar selection (list (list :path root :access 'write :recursive t)
+                                      (list :path child :access 'write)))
+              (should-error (mevedel-permission-queue-validate-approval entry 'allow-once)
+                            :type 'user-error))
             (setcar selection (list (list :path root :access 'write :recursive t)))
             (mevedel-permission-queue-validate-approval entry 'allow-once)
             (mevedel-permission-queue--on-head-outcome entry 'allow-once)
@@ -1962,6 +1970,11 @@
                                    (file-name-concat external "cache")))
                           (script (file-name-concat root "validate"))
                           (counter (file-name-concat root "counter"))
+                          (sibling (file-name-concat root "sibling" ".git"))
+                          (nested (file-name-concat cache "private"))
+                          (mevedel-protected-paths
+                           (append mevedel-protected-paths
+                                   (when git-p (list (cons (concat nested "/**") 'inaccessible)))))
                           (data-buf (generate-new-buffer " *test-pq-exec-data*"))
                           (view-buf (generate-new-buffer " *test-pq-exec-view*"))
                           (workspace (mevedel-workspace-get-or-create
@@ -1975,6 +1988,12 @@
                            (if git-p
                                (let ((default-directory root))
                                  (should (zerop (process-file "git" nil nil nil "init" "-q")))
+                                 (make-directory (file-name-directory sibling))
+                                 (let ((default-directory (file-name-directory sibling)))
+                                   (should (zerop (process-file "git" nil nil nil "init" "-q"))))
+                                 (make-directory nested)
+                                 (with-temp-file (file-name-concat nested "value")
+                                   (insert "protected nested content"))
                                  (make-directory (file-name-concat root ".scratch"))
                                  (with-temp-file (file-name-concat root ".scratch" "note")
                                    (insert "keep locally")))
@@ -1991,11 +2010,25 @@
                                              (shell-quote-argument cache))
                                      (format "if touch %s 2>/dev/null; then exit 55; fi\n"
                                              (shell-quote-argument (file-name-concat external "unapproved")))
-                                     (if git-p "git rm --cached -r -- .scratch/\n" "")
+                                     (if git-p
+                                         (concat
+                                          (format "if touch %s 2>/dev/null; then exit 56; fi\n"
+                                                  (shell-quote-argument (file-name-concat sibling "unapproved")))
+                                          (format "if cat %s 2>/dev/null; then exit 57; fi\n"
+                                                  (shell-quote-argument (file-name-concat nested "value")))
+                                          (format "if touch %s 2>/dev/null; then exit 58; fi\n"
+                                                  (shell-quote-argument (file-name-concat nested "unapproved")))
+                                          "git rm --cached -r -- .scratch/\n")
+                                       "")
                                      "printf 'confined validation complete'\n"))
                            (set-file-modes script #o700)
                            (setf (mevedel-session-permission-mode session) 'edits
                                  (mevedel-session-sandbox-mode session) 'required)
+                           (when git-p
+                             ;; Reproduce remembered parent profile + exact child.
+                             (setf (mevedel-session-permission-rules session)
+                                   `(("Bash" :pattern ,script :action allow
+                                      :file-system ((:path ,root :access write :recursive t))))))
                            (with-current-buffer data-buf
                              (org-mode)
                              (setq-local mevedel--session session)
@@ -2020,7 +2053,7 @@
                                            (lambda (value) (setq result value))
                                            (append
                                             (list :command script)
-                                            (when (zerop index)
+                                            (when (or (zerop index) (and git-p (= index 1)))
                                               (list :sandbox_permissions "with_additional_permissions"
                                                     :additional_permissions
                                                     (list :file_system (list :write (vector cache)))
@@ -2042,10 +2075,12 @@
                                                         (overlay-start ov) (overlay-end ov))))
                                               (when (and git-p (equal approval "s"))
                                                 (cl-letf (((symbol-function 'completing-read)
-                                                           (lambda (_prompt choices &rest _)
-                                                             (should-not (assoc (format "Write %s (exact)" cache)
-                                                                                choices))
-                                                             choice)))
+                                                           (lambda (prompt choices &rest _)
+                                                             (if (equal prompt "Resource to change: ")
+                                                                 (format "Write %s (exact)" cache)
+                                                               (should-not (assoc (format "Write %s (exact)" cache)
+                                                                                  choices))
+                                                               choice))))
                                                   (call-interactively (lookup-key (overlay-get ov 'keymap) "g")))
                                                 (setq ov (gethash id mevedel-view--interaction-overlays)))
                                               (should (equal "> keep this draft\nand its second line"
@@ -2068,6 +2103,8 @@
                                               (should (zerop (process-file "git" nil t nil "ls-files"))))
                                             (should (string-empty-p (buffer-string)))))
                                         (should-not (file-exists-p (file-name-concat external "unapproved")))
+                                        (should-not (file-exists-p (file-name-concat sibling "unapproved")))
+                                        (should-not (file-exists-p (file-name-concat nested "unapproved")))
                                         (should-not (mevedel-session-permission-queue session)))
                                       (unless remember-p
                                         (setq result nil)
@@ -2101,6 +2138,92 @@
                  "s" t
                  :doc "workspace approval remembers the displayed Git tree"
                  "A" t)
+
+(mevedel-deftest mevedel-permission-queue--protected-child-lifecycle
+  (:quiet t :doc "real Bash preserves child denial, cancellation, reusable authority and revocation")
+  (let* ((root (make-temp-file "mevedel-child-lifecycle-" t))
+         (git (file-name-concat root ".git"))
+         (witness (file-name-concat git "child-witness"))
+         (script (file-name-concat root "validate-child"))
+         (buffer (generate-new-buffer " *test-protected-child-lifecycle*"))
+         (workspace (mevedel-workspace-get-or-create 'project root root "workspace"))
+         (session (mevedel-session-create "main" workspace))
+         (parent-rule `("Bash" :pattern ,script :action allow
+                        :file-system ((:path ,root :access write :recursive t))))
+         (child `(:path ,git :access write :recursive t))
+         (args `(:command ,script :sandbox_permissions "with_additional_permissions"
+                 :additional_permissions (:file_system (:write [,git]))
+                 :justification "Write disposable child marker"))
+         (mevedel-protected-paths '(("**/.git/**" . read-only)))
+         (mevedel-permission-rules nil)
+         (mevedel-permission-reviewer 'user)
+         (_register (mevedel-tool-exec--register))
+         entry result)
+    (unwind-protect
+        (progn
+          (let ((availability (mevedel-sandbox-probe)))
+            (unless (plist-get availability :available)
+              (ert-skip (plist-get availability :reason))))
+          (let ((default-directory root))
+            (should (zerop (process-file "git" nil nil nil "init" "-q"))))
+          (make-directory (file-name-concat root "tmp"))
+          (with-temp-file script
+            (insert "#!/bin/sh\nset -eu\n"
+                    (format "printf 'witness' > %s\n" (shell-quote-argument witness))
+                    "printf 'protected child ran'\n"))
+          (set-file-modes script #o700)
+          (setf (mevedel-session-permission-mode session) 'edits
+                (mevedel-session-sandbox-mode session) 'required
+                (mevedel-session-permission-rules session) (list parent-rule))
+          (with-current-buffer buffer
+            (setq-local mevedel--session session
+                        temporary-file-directory (file-name-concat root "tmp"))
+            (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                       (lambda (item) (setq entry item))))
+              (dolist (outcome '(deny-once aborted))
+                (setq entry nil result nil)
+                (mevedel-pipeline-run-tool (mevedel-tool-get "Bash")
+                                          (lambda (value) (setq result value)) args)
+                (should entry)
+                (should (eq 'ask (mevedel-permission-queue--reevaluate entry)))
+                (if (eq outcome 'aborted)
+                    (mevedel-permission-queue-abort-all session)
+                  (mevedel-permission-queue--on-head-outcome entry outcome))
+                (should result)
+                (should-not (file-exists-p witness))
+                (should-not (mevedel-session-permission-queue session))
+                (should-not (mevedel-session-resource-grants session)))
+              ;; Independent sufficient child authority reuses the exact request
+              ;; without selecting or exposing a broader checkout exception.
+              (setf (mevedel-session-resource-grants session) (list child))
+              (setq entry nil result nil)
+              (mevedel-pipeline-run-tool (mevedel-tool-get "Bash")
+                                        (lambda (value) (setq result value)) args)
+              (let ((deadline (+ (float-time) 15)))
+                (while (and (not result) (< (float-time) deadline))
+                  (accept-process-output nil 0.01)))
+              (should-not entry)
+              (should (string-match-p "protected child ran" result))
+              (should (string-match-p "sandbox: bubblewrap" result))
+              (should (file-exists-p witness))
+              (delete-file witness)
+              (setf (mevedel-session-resource-grants session) nil)
+              (setq entry nil result nil)
+              (mevedel-pipeline-run-tool (mevedel-tool-get "Bash")
+                                        (lambda (value) (setq result value)) args)
+              (should entry)
+              (should (eq 'ask (mevedel-permission-queue--reevaluate entry)))
+              (setf (mevedel-session-resource-grants session) (list child))
+              (should (eq 'allow (mevedel-permission-queue--reevaluate entry)))
+              (setf (mevedel-session-resource-grants session) nil)
+              (should (eq 'ask (mevedel-permission-queue--reevaluate entry)))
+              (mevedel-permission-queue-abort-all session)
+              (should-not (file-exists-p witness)))))
+      (mevedel-permission-queue-abort-all session)
+      (mevedel-execution-teardown-session session)
+      (kill-buffer buffer)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-permission-queue--masked-directory-read
   (:quiet t :doc "human approval mounts a masked read tree without exposing its sibling")

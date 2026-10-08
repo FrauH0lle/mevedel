@@ -55,6 +55,13 @@ grants can admit protected Git metadata. File masks use private mode-000 files,
 and approved exact file mounts replace only their matching masks. These are
 current representability limits, not invitations to broaden a request.
 
+Execution coverage also respects separately protected descendants. A parent
+checkout profile cannot satisfy a new `.git` write request just because its
+path is underneath the approved tree. Missing child authority reaches the
+same scope-displaying card; already approved sufficient child trees are reused.
+The selected child scope survives queued rechecks and redundant-mount removal.
+Native resource coverage is unchanged; see [ADR 0017](0017-confine-protected-paths-by-default.md).
+
 Remembering does not infer unknown requirements, turn a failure into a prompt,
 or replay a process. A model must still issue a new invocation when it discovers
 a capability that no matching approved profile contains. The complete
@@ -128,7 +135,10 @@ write additions and exact reads beneath inaccessible masks now refuse before
 launch; already-readable exact directories need no additional mount. Explicit
 tree grants permit confined staging and committing. Redundant exact mounts
 covered by an approved tree are omitted, while persisted grant identities remain
-separate. Failure does not choose a broader extent or retry the operation.
+separate. An October 2026 overlapping-grant replay refined that rule: only
+execution-equivalent coverage makes a mount redundant, so parent trees do not
+discard meaningful protected-child exceptions. Failure does not choose a
+broader extent or retry the operation.
 
 A real linked-worktree regression then found that a granted shared metadata
 tree was mounted before its protected worktree-specific child, but its own

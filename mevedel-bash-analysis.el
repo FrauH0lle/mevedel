@@ -12,7 +12,6 @@
 (eval-when-compile
   (require 'cl-lib))
 
-(require 'shell)
 (require 'subr-x)
 
 ;; `mevedel-bash-policy'
@@ -20,8 +19,10 @@
                   "mevedel-bash-policy" (argv))
 (autoload 'mevedel-bash-policy-read-only-p "mevedel-bash-policy")
 
-;; `shell'
-(defvar shell-file-name-quote-list)
+;; `mevedel-bash-git'
+(declare-function mevedel-bash-git-prepare "mevedel-bash-git"
+                  (argv &optional temporary-root))
+(autoload 'mevedel-bash-git-prepare "mevedel-bash-git")
 
 ;; `treesit'
 (declare-function treesit-language-available-p "treesit" (language &optional detail))
@@ -84,10 +85,36 @@ alongside negation and pattern operators.")
   "Shell control-flow words rejected by the fallback parser.")
 
 (defun mevedel-bash-analysis--split-command (source)
-  "Split SOURCE using Bash quoting rules on every platform."
-  (let ((shell-file-name-quote-list
-         '(?\| ?& ?< ?> ?\( ?\) ?\; ?\s ?$ ?* ?! ?\" ?' ?` ?# ?\\)))
-    (split-string-shell-command source)))
+  "Split one SOURCE segment into literal argv using Bash quoting rules.
+Unlike shell completion parsing, this reads the whole segment, including
+quoted separator characters.  It does not evaluate expansions."
+  (let ((index 0) (length (length source)) quote word started args)
+    (cl-labels ((finish ()
+                  (when started
+                    (push (apply #'string (nreverse word)) args)
+                    (setq word nil started nil))))
+      (while (< index length)
+        (let ((char (aref source index)))
+          (cond
+           ((eq quote ?')
+            (if (eq char ?') (setq quote nil) (push char word)))
+           ((and quote (eq char ?\")) (setq quote nil))
+           ((and (not quote) (memq char '(?\s ?\t ?\n))) (finish))
+           ((and (not quote) (memq char '(?' ?\")))
+            (setq quote char started t))
+           ((eq char ?\\)
+            (when (= (1+ index) length) (error "Incomplete Bash escape"))
+            (let ((next (aref source (1+ index))))
+              (if (and quote (not (memq next '(?$ ?` ?\" ?\\ ?\n))))
+                  (push char word)
+                (setq index (1+ index))
+                (unless (eq next ?\n) (push next word))))
+            (setq started t))
+           (t (push char word) (setq started t))))
+        (setq index (1+ index)))
+      (when quote (error "Unterminated Bash quote"))
+      (finish)
+      (nreverse args))))
 
 
 ;;
@@ -385,19 +412,22 @@ quotes or escaped with a backslash do not close the substitution."
 ;;
 ;;; Conservative scanner
 
-(defun mevedel-bash-analysis--scan-segments (source)
-  "Return (SEGMENTS REASONS) from SOURCE using the supported shell subset."
+(defun mevedel-bash-analysis--scan-segments (source &optional spans-p)
+  "Return (SEGMENTS REASONS) from SOURCE using the supported shell subset.
+With SPANS-P, append source (START . END) spans for each command."
   (let ((segments nil)
         (current nil)
         (quote nil)
         (escaped nil)
         (reasons nil)
         (index 0)
+        (start 0)
+        (spans nil)
         (length (length source)))
     (cl-labels ((finish-segment
                  ()
-                 (let* ((segment
-                         (string-trim (apply #'string (nreverse current))))
+                 (let* ((raw (apply #'string (nreverse current)))
+                        (segment (string-trim raw))
                         (candidate
                          (mevedel-bash-analysis--candidate-command segment)))
                    (when (and candidate
@@ -407,7 +437,12 @@ quotes or escaped with a backslash do not close the substitution."
                      (push "Background execution is unsupported" reasons))
                    (if (string-empty-p segment)
                        (push "A command separator has an empty operand" reasons)
-                     (push segment segments))
+                     (push segment segments)
+                     (push (cons (+ start (- (length raw)
+                                             (length (string-trim-left raw))))
+                                 (- index (- (length raw)
+                                             (length (string-trim-right raw)))))
+                           spans))
                    (setq current nil))))
       (while (< index length)
         (let* ((char (aref source index))
@@ -418,7 +453,7 @@ quotes or escaped with a backslash do not close the substitution."
            (escaped
             (push char current)
             (setq escaped nil))
-           ((eq char ?\\)
+           ((and (eq char ?\\) (not (eq quote ?')))
             (push char current)
             (setq escaped t))
            ((and (eq char ?') (not (eq quote ?\")))
@@ -466,9 +501,11 @@ quotes or escaped with a backslash do not close the substitution."
             (push char current))
            ((eq char ?\n)
             (push "Newline command separation is unsupported" reasons)
-            (finish-segment))
+            (finish-segment)
+            (setq start (1+ index)))
            ((and (eq char ?&) (eq next ?&))
             (finish-segment)
+            (setq start (+ index 2))
             (setq index (1+ index)))
            ((and (eq char ?&)
                  (or (memq previous '(?> ?< ?|))
@@ -479,11 +516,18 @@ quotes or escaped with a backslash do not close the substitution."
             (push char current))
            ((and (eq char ?|) (eq next ?|))
             (finish-segment)
+            (setq start (+ index 2))
             (setq index (1+ index)))
            ((eq char ?|)
-            (finish-segment))
+            (finish-segment)
+            (setq start (1+ index)))
            ((eq char ?\;)
-            (finish-segment))
+            (finish-segment)
+            (setq start (1+ index)))
+           ((and (eq char ?#)
+                 (or (null current) (memq previous '(?\s ?\t))))
+            (push "Shell comments are unsupported" reasons)
+            (push char current))
            (t
             (push char current))))
         (setq index (1+ index)))
@@ -496,7 +540,8 @@ quotes or escaped with a backslash do not close the substitution."
         (when (and segments
                    (string-match-p "\\(?:&&\\|||\\|[;|]\\)\\s-*\\'" source))
           (push "A command separator has an empty operand" reasons)))
-      (list (nreverse segments) (delete-dups (nreverse reasons))))))
+      (append (list (nreverse segments) (delete-dups (nreverse reasons)))
+              (when spans-p (list (nreverse spans)))))))
 
 (defun mevedel-bash-analysis--argv (segments)
   "Return (COMMANDS REASONS) parsed from SEGMENTS."
@@ -576,13 +621,10 @@ of a denied command would otherwise present nothing to match."
     (insert source)
     (pcase-let* ((`(,scan-segments ,scan-reasons)
                   (mevedel-bash-analysis--scan-segments source))
-                 (newline-p
-                  (member "Newline command separation is unsupported"
-                          scan-reasons))
                  (parser (treesit-parser-create 'bash))
                  (root (treesit-parser-root-node parser))
                  (supported
-                  (and (not newline-p)
+                  (and (null scan-reasons)
                        (mevedel-bash-analysis--treesit-supported-p root)))
                  (segments
                   (if supported
@@ -601,6 +643,46 @@ of a denied command would otherwise present nothing to match."
 
 ;;
 ;;; Public interface
+
+(defun mevedel-bash-analysis--quote-word (word)
+  "Quote literal WORD for Bash, independent of the editor's host shell."
+  (concat "'" (replace-regexp-in-string "'" "'\\''" word t t) "'"))
+
+(defun mevedel-bash-analysis-prepare-read-only (source analysis &optional temporary-root)
+  "Prepare read-only SOURCE for launch using its original ANALYSIS.
+Git and ripgrep command spans use hardened, shell-quoted argv.
+TEMPORARY-ROOT supplies the execution target's authorized native temp path.
+Connectors and other command source stay intact.  Fail closed if the scanner
+and admitted analysis disagree; never execute unhardened Git on failure."
+  (unless (eq (plist-get analysis :class) 'read-only)
+    (error "Cannot prepare a command without read-only analysis"))
+  (setq source (mevedel-bash-analysis--normalize-line-continuations source))
+  (pcase-let* ((`(,segments ,reasons ,spans)
+                (mevedel-bash-analysis--scan-segments source t))
+               (`(,commands ,argv-reasons)
+                (mevedel-bash-analysis--argv segments)))
+    (unless (and (null reasons) (null argv-reasons)
+                 (equal commands (plist-get analysis :commands)))
+      (error "Read-only launch preparation disagrees with Bash analysis"))
+    (let ((offset 0) pieces)
+      (cl-mapc
+       (lambda (argv span)
+         (push (substring source offset (car span)) pieces)
+         (push (cond
+                ((equal (car argv) "git")
+                 (mapconcat #'mevedel-bash-analysis--quote-word
+                            (mevedel-bash-git-prepare argv temporary-root) " "))
+                ((member (car argv) '("rg" "ripgrep"))
+                 ;; Config can inject --pre or other helper-enabling options
+                 ;; not present in the authored argv inspected by policy.
+                 (mapconcat #'mevedel-bash-analysis--quote-word
+                            (append (list (car argv) "--no-config") (cdr argv)) " "))
+                (t (substring source (car span) (cdr span))))
+               pieces)
+         (setq offset (cdr span)))
+       commands spans)
+      (push (substring source offset) pieces)
+      (apply #'concat (nreverse pieces)))))
 
 ;;;###autoload
 (defun mevedel-bash-analysis-analyze (source)
