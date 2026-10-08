@@ -278,7 +278,8 @@ gptel's sentinel through the cleanup advice."
      (skip-unless (and (executable-find "sleep")
                        (not (memq system-type '(windows-nt ms-dos)))))
      (let* ((mevedel-gptel-stream-bridge-insert-batch-delay 0.2)
-            (mevedel-gptel-stream-bridge--paced nil)
+            (mevedel-transport--paused nil)
+            (kill-emacs-hook nil)
             (sentinel-calls nil)
             (buffer (generate-new-buffer " *mevedel-test-stream-pace*"))
             (process (make-process
@@ -307,14 +308,14 @@ gptel's sentinel through the cleanup advice."
     (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
     (should (eq 'stop (mevedel-gptel-stream-bridge-test--await-status
                        process 'stop)))
-    (should (memq process mevedel-gptel-stream-bridge--paced))
+    (should (memq process mevedel-transport--paused))
     ;; A second read while stopped arms no further timer.
-    (let ((timer (process-get process 'mevedel-gptel-stream-bridge--resume-timer)))
+    (let ((timer (process-get process 'mevedel-transport--resume-timer)))
       (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
       (should (eq timer (process-get process
-                                     'mevedel-gptel-stream-bridge--resume-timer))))
+                                     'mevedel-transport--resume-timer))))
     (should (eq 'run (mevedel-gptel-stream-bridge-test--await-status process 'run)))
-    (should-not mevedel-gptel-stream-bridge--paced)
+    (should-not mevedel-transport--paused)
     (should-not sentinel-calls)
     (delete-process process)
     (accept-process-output nil 0.05)
@@ -326,12 +327,12 @@ gptel's sentinel through the cleanup advice."
     (mevedel-gptel-stream-bridge--note-stream-start process)
     (should-not (mevedel-gptel-stream-bridge--stream-ended-p process))
     (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
-    (should (process-get process 'mevedel-gptel-stream-bridge--resume-timer))
+    (should (process-get process 'mevedel-transport--resume-timer))
     ;; This round's own stop reason ends pacing and continues curl at once.
     (plist-put info :stop-reason (copy-sequence "end_turn"))
     (should (mevedel-gptel-stream-bridge--stream-ended-p process))
     (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
-    (should-not (process-get process 'mevedel-gptel-stream-bridge--resume-timer))
+    (should-not (process-get process 'mevedel-transport--resume-timer))
     (should (eq 'run (mevedel-gptel-stream-bridge-test--await-status process 'run))))
 
   :doc "lets a finished OpenAI-compatible stream exit at once"
@@ -339,7 +340,7 @@ gptel's sentinel through the cleanup advice."
     (mevedel-gptel-stream-bridge--note-stream-start process)
     (with-current-buffer buffer (insert "data: {}\n\ndata: [DONE]\n\n"))
     (mevedel-gptel-stream-bridge--pace-reading process "data: [DONE]\n\n")
-    (should-not (process-get process 'mevedel-gptel-stream-bridge--resume-timer))
+    (should-not (process-get process 'mevedel-transport--resume-timer))
     (should (eq 'run (process-status process))))
 
   :doc "keeps reading while curl delivers a backlog"
@@ -347,28 +348,24 @@ gptel's sentinel through the cleanup advice."
     (mevedel-gptel-stream-bridge--note-stream-start process)
     (mevedel-gptel-stream-bridge--pace-reading
      process (make-string mevedel-gptel-stream-bridge--pace-backlog-bytes ?x))
-    (should-not (process-get process 'mevedel-gptel-stream-bridge--resume-timer)))
+    (should-not (process-get process 'mevedel-transport--resume-timer)))
 
   :doc "leaves streams that are not mevedel's alone"
   (mevedel-gptel-stream-bridge-test--with-paced-stream
     (plist-put info :buffer buffer)
     (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
-    (should-not (process-get process 'mevedel-gptel-stream-bridge--resume-timer)))
+    (should-not (process-get process 'mevedel-transport--resume-timer)))
 
   :doc "continues paused streams on exit and uninstall"
   (mevedel-gptel-stream-bridge-test--with-paced-stream
     (mevedel-gptel-stream-bridge--note-stream-start process)
     (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
     (should (eq 'stop (mevedel-gptel-stream-bridge-test--await-status process 'stop)))
-    (let ((kill-emacs-hook nil)
-          (mevedel-gptel-stream-bridge--gptel-stream-advice-installed nil))
-      (cl-letf (((symbol-function 'mevedel-gptel-stream-bridge--install-advice) #'ignore)
-                ((symbol-function 'mevedel-gptel-stream-bridge--uninstall-advice) #'ignore))
-        (mevedel-gptel-stream-bridge-install)
-        (should (memq #'mevedel-gptel-stream-bridge--resume-all kill-emacs-hook))
-        (mevedel-gptel-stream-bridge-uninstall)
-        (should-not kill-emacs-hook)))
-    (should-not mevedel-gptel-stream-bridge--paced)
+    (should (memq #'mevedel-transport-resume-paused kill-emacs-hook))
+    (let ((mevedel-gptel-stream-bridge--gptel-stream-advice-installed t))
+      (cl-letf (((symbol-function 'mevedel-gptel-stream-bridge--uninstall-advice) #'ignore))
+        (mevedel-gptel-stream-bridge-uninstall)))
+    (should-not mevedel-transport--paused)
     (should (eq 'run (mevedel-gptel-stream-bridge-test--await-status process 'run))))
 
   :doc "never stops a stream without batching or a non-subprocess connection"

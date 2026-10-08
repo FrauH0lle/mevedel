@@ -193,7 +193,16 @@ for it; duplicate or late continuations cannot start a cancelled turn."
            (when-let* ((process (and connection
                                      (alist-get :process (mevedel-acp-client connection))))
                        ((process-live-p process)))
-             (accept-process-output process 0 nil 1))
+             (if (not (mevedel-transport-process-paused-p process))
+                 (accept-process-output process 0 nil 1)
+               ;; A paced agent holds the frames the CLI wrote before this
+               ;; call; continue it and give them a moment to arrive.  The
+               ;; continue event itself ends a wait, so wait for output.
+               (mevedel-acp--wake connection)
+               (let ((deadline (+ (float-time) 0.05)))
+                 (while (and (< (float-time) deadline)
+                             (not (accept-process-output
+                                   process (- deadline (float-time)) nil 1)))))))
            (mevedel-transport-run-at-time
             0 (lambda () (enqueue operation terminal reject))))
          (drain ()

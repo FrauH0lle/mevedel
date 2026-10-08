@@ -33,7 +33,13 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-run-at-time
                   "mevedel-transport" (seconds function &rest args))
+(declare-function mevedel-transport-pause-process "mevedel-transport" (process seconds))
+(declare-function mevedel-transport-resume-process "mevedel-transport" (process))
+(declare-function mevedel-transport-resume-paused "mevedel-transport" ())
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
+(autoload 'mevedel-transport-pause-process "mevedel-transport")
+(autoload 'mevedel-transport-resume-process "mevedel-transport")
+(autoload 'mevedel-transport-resume-paused "mevedel-transport")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
@@ -220,10 +226,6 @@ chunk when that stale transformer fails."
 Pausing after such a read capped a large stream at one pipe read per
 pause, about 72 KB a second; Responses API events alone can approach that.")
 
-(defvar mevedel-gptel-stream-bridge--paced nil
-  "Processes stopped by `mevedel-gptel-stream-bridge--pace-reading'.
-They are continued on exit and uninstall: a stopped curl outlives Emacs.")
-
 (defun mevedel-gptel-stream-bridge--stream-info (process)
   "Return the gptel request INFO of PROCESS, or nil."
   (when-let* ((fsm (mevedel-gptel-stream-bridge--gptel-stream-filter-registered-p
@@ -259,55 +261,23 @@ and Bedrock streams finish; OpenAI-compatible chat streams end with
                              t))))))
 
 (defun mevedel-gptel-stream-bridge--pace-reading (process output)
-  "Stop local curl PROCESS after reading OUTPUT until the next batch is due.
-Emacs redisplays after every read of process output, and a pgtk frame
-repaints its whole surface each time: a stream of 32 chunks a second held
-the editor at 59% CPU with nothing animating.  Stopped, curl leaves what
-the server sends in the kernel's socket buffer, and Emacs reads it in one
-burst when curl continues: the same stream cost 17%.
-
-Only a small read pauses: a large one means curl has more to deliver.  A
-finished response continues at once, even when the read that stopped it
-held only part of the final burst: curl must exit for gptel to settle the
-request and run its tools.  Only mevedel's own streams from a real local
-subprocess are paused, on a system with job control; gptel's sentinel
-ignores the stop and continue events."
+  "Pace local curl PROCESS after reading OUTPUT until the next batch is due.
+See `mevedel-transport-pause-process': a stream of 32 chunks a second held
+the editor at 59% CPU with nothing animating, and 17% paced.  Only a small
+read pauses: a large one means curl has more to deliver, and pausing after
+every read held a 1.1 MB stream to 15.6 s.  A finished response continues
+at once, even when the read that stopped curl held only part of the final
+burst: curl must exit for gptel to settle the request and run its tools.
+Only mevedel's own streams are paced; gptel's sentinel ignores the stop
+and continue events."
   (cond
    ((mevedel-gptel-stream-bridge--stream-ended-p process)
-    (mevedel-gptel-stream-bridge--resume-reading process))
-   (t
-    (when-let* ((delay mevedel-gptel-stream-bridge-insert-batch-delay)
-                ((numberp delay))
-                ((> delay 0))
-                ((not (memq system-type '(windows-nt ms-dos))))
-                ((eq (process-type process) 'real))
-                ((eq (process-status process) 'run))
-                ((< (string-bytes output) mevedel-gptel-stream-bridge--pace-backlog-bytes))
-                ((mevedel-gptel-stream-bridge--gptel-stream-info-p
-                  (mevedel-gptel-stream-bridge--stream-info process)))
-                ((not (mevedel--timer-pending-p
-                       (process-get process 'mevedel-gptel-stream-bridge--resume-timer)))))
-      (signal-process process 'SIGSTOP)
-      (push process mevedel-gptel-stream-bridge--paced)
-      (process-put
-       process 'mevedel-gptel-stream-bridge--resume-timer
-       (mevedel-transport-run-at-time
-        delay #'mevedel-gptel-stream-bridge--resume-reading process))))))
-
-(defun mevedel-gptel-stream-bridge--resume-reading (process)
-  "Continue PROCESS stopped by `mevedel-gptel-stream-bridge--pace-reading'."
-  (when-let* ((timer (process-get process 'mevedel-gptel-stream-bridge--resume-timer)))
-    (cancel-timer timer))
-  (process-put process 'mevedel-gptel-stream-bridge--resume-timer nil)
-  (setq mevedel-gptel-stream-bridge--paced
-        (delq process mevedel-gptel-stream-bridge--paced))
-  (when (eq (process-status process) 'stop)
-    (signal-process process 'SIGCONT)))
-
-(defun mevedel-gptel-stream-bridge--resume-all ()
-  "Continue every paced process, so none outlives Emacs or the advice."
-  (mapc #'mevedel-gptel-stream-bridge--resume-reading
-        (copy-sequence mevedel-gptel-stream-bridge--paced)))
+    (mevedel-transport-resume-process process))
+   ((and (< (string-bytes output) mevedel-gptel-stream-bridge--pace-backlog-bytes)
+         (mevedel-gptel-stream-bridge--gptel-stream-info-p
+          (mevedel-gptel-stream-bridge--stream-info process)))
+    (mevedel-transport-pause-process
+     process mevedel-gptel-stream-bridge-insert-batch-delay))))
 
 (defun mevedel-gptel-stream-bridge--gptel-stream-cleanup-advice (orig-fn process status)
   "Call ORIG-FN after wrapping stream transformers for PROCESS.
@@ -323,7 +293,7 @@ was a leading allocator in a profiled session."
 
 (defun mevedel-gptel-stream-bridge--cleanup (process status orig-fn)
   "Settle PROCESS's stream with STATUS through gptel's ORIG-FN sentinel."
-  (mevedel-gptel-stream-bridge--resume-reading process)
+  (mevedel-transport-resume-process process)
   (mevedel--with-gc-batched
   (let* ((entry (alist-get process gptel--request-alist))
          (fsm (car-safe entry))
@@ -486,7 +456,6 @@ the entire filter runs with collections batched."
 (defun mevedel-gptel-stream-bridge-install ()
   "Install gptel stream compatibility advice."
   (setq mevedel-gptel-stream-bridge--gptel-stream-advice-installed t)
-  (add-hook 'kill-emacs-hook #'mevedel-gptel-stream-bridge--resume-all)
   (mevedel-gptel-stream-bridge--install-if-enabled)
   (with-eval-after-load 'gptel
     (mevedel-gptel-stream-bridge--install-if-enabled))
@@ -495,10 +464,9 @@ the entire filter runs with collections batched."
 
 (defun mevedel-gptel-stream-bridge-uninstall ()
   "Remove gptel stream compatibility advice.
-Paused streams continue first: without the advice, gptel's sentinel would
+Paced streams continue first: without the advice, gptel's sentinel would
 take their continue event for the end of the response."
-  (mevedel-gptel-stream-bridge--resume-all)
-  (remove-hook 'kill-emacs-hook #'mevedel-gptel-stream-bridge--resume-all)
+  (mevedel-transport-resume-paused)
   (setq mevedel-gptel-stream-bridge--gptel-stream-advice-installed nil)
   (mevedel-gptel-stream-bridge--uninstall-advice))
 
