@@ -582,8 +582,13 @@ the `event-loop-lag-summary' each settled request records."
   :type 'number
   :group 'mevedel)
 
-(defconst mevedel-telemetry--lag-interval 0.1
-  "Seconds between heartbeats.")
+(defconst mevedel-telemetry--lag-interval 0.5
+  "Seconds between heartbeats.
+Every wakeup costs a redisplay, and a pgtk frame repaints its whole surface
+on each one: a 100 ms heartbeat alone held a 2x-scaled 1536x888 frame at
+23% CPU and its compositor at 12%, for every request and its two-minute
+tail.  Ordinary timers already report their own lateness, so the heartbeat
+only has to cover quiet stretches in which no other timer is due.")
 
 (defconst mevedel-telemetry--lag-count-threshold 0.2
   "Event-loop delay, in seconds, counted in a request's lag summary.")
@@ -598,6 +603,13 @@ the editor as much as the request did.")
 
 (defvar mevedel-telemetry--lag-due nil
   "Float time the next heartbeat is due.")
+
+(defvar mevedel-telemetry--lag-since nil
+  "Float time the previous heartbeat ran, or watching started.")
+
+(defvar mevedel-telemetry--lag-late 0
+  "Seconds the latest timer ran late since the previous heartbeat.
+Lateness the previous heartbeat already saw is not counted again.")
 
 (defvar mevedel-telemetry--lag-slowest nil
   "The slowest timer callback since the last heartbeat, or nil.
@@ -670,10 +682,21 @@ what it does rather than where it was created."
   "Run ORIGINAL on TIMER, remembering the slowest callback since a heartbeat.
 The heartbeat can only tell that the loop was late; this names what held
 it for most stalls, since timers run most of mevedel's deferred work.
-Collection inside the callback is kept apart from its own work."
+Collection inside the callback is kept apart from its own work.
+
+A stall delays every timer due during it, so TIMER's lateness measures the
+loop as well as a heartbeat would.  Idle timers are due relative to input,
+not the clock, and are not counted."
   (let ((start (float-time))
         (gc-count gcs-done)
         (gc-seconds gc-elapsed))
+    (when-let* (((not (timer--idle-delay timer)))
+                (due (timer--time timer))
+                ((car due)))
+      (setq mevedel-telemetry--lag-late
+            (max mevedel-telemetry--lag-late
+                 (- start (max (float-time due)
+                               (or mevedel-telemetry--lag-since start))))))
     (unwind-protect (funcall original timer)
       (let ((elapsed (- (float-time) start)))
         (when (> elapsed (or (plist-get mevedel-telemetry--lag-slowest :seconds) 0))
@@ -687,6 +710,8 @@ Collection inside the callback is kept apart from its own work."
   "Start the heartbeat and callback timing unless they already run."
   (unless mevedel-telemetry--lag-timer
     (setq mevedel-telemetry--lag-due (+ (float-time) mevedel-telemetry--lag-interval)
+          mevedel-telemetry--lag-since (float-time)
+          mevedel-telemetry--lag-late 0
           mevedel-telemetry--lag-slowest nil
           mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
           mevedel-telemetry--lag-cpu (mevedel-telemetry--cpu-seconds)
@@ -702,6 +727,8 @@ Collection inside the callback is kept apart from its own work."
   (when (timerp mevedel-telemetry--lag-timer)
     (cancel-timer mevedel-telemetry--lag-timer))
   (setq mevedel-telemetry--lag-timer nil
+        mevedel-telemetry--lag-since nil
+        mevedel-telemetry--lag-late 0
         mevedel-telemetry--lag-gc nil
         mevedel-telemetry--lag-cpu nil
         mevedel-telemetry--lag-windows nil)
@@ -744,14 +771,19 @@ Collection inside the callback is kept apart from its own work."
     (plist-put counts :max-ms (max ms (or (plist-get counts :max-ms) 0)))))
 
 (defun mevedel-telemetry--lag-tick ()
-  "Record how late this heartbeat ran for every watched session."
+  "Record the loop's worst delay since the previous heartbeat.
+The delay is the later of this heartbeat's own and any timer's since then,
+once per heartbeat for every watched session."
   (let* ((now (float-time))
-         (delay (- now (or mevedel-telemetry--lag-due now)))
+         (delay (max (- now (or mevedel-telemetry--lag-due now))
+                     mevedel-telemetry--lag-late))
          (slowest mevedel-telemetry--lag-slowest)
          (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)))
          (cpu (mevedel-telemetry--cpu-seconds))
          (cpu-before (or mevedel-telemetry--lag-cpu cpu)))
     (setq mevedel-telemetry--lag-due (+ now mevedel-telemetry--lag-interval)
+          mevedel-telemetry--lag-since now
+          mevedel-telemetry--lag-late 0
           mevedel-telemetry--lag-slowest nil
           mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
           mevedel-telemetry--lag-cpu cpu

@@ -305,6 +305,42 @@
             (should-not (plist-get summary :dropped-keys))))
       (delete-directory root t)))
 
+  :doc "counts a stall that delayed another timer, once"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil)
+         (timer (timer-create)))
+    (unwind-protect
+        (progn
+          (mevedel-telemetry-record session 'request-start :request-id "request-4")
+          (timer-set-function timer #'ignore)
+          (setq mevedel-telemetry--lag-since (- (float-time) 5))
+          ;; A timer due 0.7 s ago ran late, though the heartbeat was on time.
+          (timer-set-time timer (time-subtract nil 0.7))
+          (mevedel-telemetry--lag-time-callback #'ignore timer)
+          (setq mevedel-telemetry--lag-due (float-time))
+          (mevedel-telemetry--lag-tick)
+          ;; The same lateness, already seen by that heartbeat, is not counted
+          ;; again when another overdue timer runs after it.
+          (mevedel-telemetry--lag-time-callback #'ignore timer)
+          (setq mevedel-telemetry--lag-due (float-time))
+          (mevedel-telemetry--lag-tick)
+          ;; An idle timer is due relative to input and never counts.
+          (timer-set-idle-time timer 30)
+          (timer-activate-when-idle timer t)
+          (cancel-timer timer)
+          (mevedel-telemetry--lag-time-callback #'ignore timer)
+          (should (= 0 mevedel-telemetry--lag-late))
+          (mevedel-telemetry-record session 'request-settled :request-id "request-4")
+          (let ((lags (test-mevedel-telemetry--events session 'event-loop-lag))
+                (summary (car (test-mevedel-telemetry--events
+                               session 'event-loop-lag-summary))))
+            (should (= 1 (length lags)))
+            (should (<= 700 (plist-get (car lags) :delay-ms) 800))
+            (should (= 1 (plist-get summary :over-500-ms)))
+            (should (= 1 (plist-get summary :over-200-ms)))))
+      (delete-directory root t)))
+
   :doc "does not watch a batch Emacs"
   (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
          (session (test-mevedel-telemetry--session root))

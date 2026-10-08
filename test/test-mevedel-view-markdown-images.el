@@ -88,6 +88,39 @@
               (should (= 2 created)))))
       (delete-file file)))
 
+  :doc "repeats the whole-buffer scan only for a new width or a new image"
+  (let ((file (make-temp-file "mevedel-image-scan-" nil ".png")))
+    (unwind-protect
+        (mevedel-test--with-displayed-buffer
+          (let ((mevedel-view-inline-image-max-width 0.5)
+                (searches 0))
+            (insert (format "![shot](%s)\n" file))
+            (cl-letf* (((symbol-function 'display-images-p)
+                        (lambda (&optional _display) t))
+                       ((symbol-function 'create-image)
+                        (lambda (path &rest args)
+                          (list 'image :file path
+                                :max-width (plist-get args :max-width))))
+                       (search (symbol-function 'text-property-search-forward))
+                       ((symbol-function 'text-property-search-forward)
+                        (lambda (&rest args)
+                          (cl-incf searches)
+                          (apply search args))))
+              (mevedel-view--decorate-local-images-in-range
+               (point-min) (point-max))
+              (mevedel-view--rerender-images)
+              (should (> searches 0))
+              (setq searches 0)
+              (mevedel-view--rerender-images)
+              (should (= 0 searches))
+              (goto-char (point-max))
+              (insert (format "![again](%s)\n" file))
+              (mevedel-view--decorate-local-images-in-range
+               (line-beginning-position 0) (point-max))
+              (mevedel-view--rerender-images)
+              (should (> searches 0)))))
+      (delete-file file)))
+
   :doc "fixed pixel sizing never realigns"
   (let ((file (make-temp-file "mevedel-image-fixed-" nil ".png")))
     (unwind-protect

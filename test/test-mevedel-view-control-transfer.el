@@ -191,6 +191,15 @@
         (mevedel-view-control-transfer-initialize #'ignore drain)
         (should (memq mevedel-view--control-transfer-timer timer-list))))))
 
+(mevedel-deftest mevedel-view--control-transfer-schedule ()
+  ,test
+  (test)
+  :doc "does not poll a session that cannot transfer control"
+  (let ((session (mevedel-session--create :name "local" :authority-mode 'pid-lock)))
+    (test-mevedel-view-control-transfer--with-pair session nil
+      (mevedel-view--control-transfer-schedule view)
+      (should-not mevedel-view--control-transfer-timer))))
+
 (mevedel-deftest mevedel-view-control-transfer-teardown ()
   ,test
   (test)

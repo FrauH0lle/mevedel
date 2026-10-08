@@ -480,7 +480,8 @@
              ((symbol-function 'run-at-time)
               (lambda (time repeat function &rest args)
                 (cond
-                 ((and (equal time 0.1) (equal repeat 0.1))
+                 ((and (equal time mevedel-execution-process--watch-interval)
+                       (equal repeat mevedel-execution-process--watch-interval))
                   (setq watch (lambda () (apply function args)))
                   (funcall original-run-at-time 3600 nil #'ignore))
                  ((eq function

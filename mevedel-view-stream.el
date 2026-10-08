@@ -48,6 +48,7 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--duration-label "mevedel-utilities" (seconds))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
@@ -169,7 +170,17 @@ spinner without a data-buffer request.")
   "Animation phase held while decorative motion is disabled.")
 
 (defvar-local mevedel-view--spinner-timer-period nil
-  "Current visual timer cadence, or nil when no timer is running.")
+  "Fastest cadence of the running timer, or nil when none runs.
+A shimmer moves at this cadence only during its sweep.")
+
+(defvar-local mevedel-view--spinner-timer-plan nil
+  "Plan of the running timer; see `mevedel-view--spinner-next-delay'.")
+
+(defvar-local mevedel-view--spinner-probe-timer nil
+  "Timer rechecking a spinner whose spans were not yet on screen.")
+
+(defvar-local mevedel-view--spinner-probed-targets nil
+  "Spinner spans the visibility probe last rechecked.")
 
 (defvar-local mevedel-view--spinner-main-color-p nil
   "Non-nil when the main style renders color rather than a glyph fallback.")
@@ -290,17 +301,6 @@ The underlying phase continues to advance and resumes without restarting."
     (setq mevedel-view--spinner-last-sample-seconds
           (mevedel-view--animation-seconds))))
 
-(defun mevedel-view--duration-label (seconds)
-  "Return a compact elapsed-time label for SECONDS."
-  (let ((total (max 0 (floor (or seconds 0)))))
-    (cond
-     ((< total 60)
-      (format "%ds" total))
-     ((< total 3600)
-      (format "%dm %02ds" (/ total 60) (% total 60)))
-     (t
-      (format "%dh %02dm" (/ total 3600) (% (/ total 60) 60))))))
-
 (defun mevedel-view--spinner-request ()
   "Return the request that owns the current visible spinner, or nil."
   (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
@@ -318,8 +318,7 @@ The underlying phase continues to advance and resumes without restarting."
                        (time-subtract
                         (current-time)
                         mevedel-view--spinner-start-time))))))
-    (mevedel-view--duration-label
-     seconds)))
+    (mevedel--duration-label seconds)))
 
 (defun mevedel-view--request-progress-active-p (&optional data-buf)
   "Return non-nil when the current view should show request progress.
@@ -385,6 +384,8 @@ the view has already inserted the in-flight markers."
 (defun mevedel-view--clear-request-progress ()
   "Remove the fragment-managed request-progress row."
   (mevedel-view-zone-clear 'progress)
+  (mevedel-view--release-animation-targets
+   mevedel-view--spinner-label-target mevedel-view--spinner-metadata-target)
   (setq mevedel-view--spinner-rendered-state nil
         mevedel-view--spinner-label-target nil
         mevedel-view--spinner-metadata-target nil
@@ -393,6 +394,8 @@ the view has already inserted the in-flight markers."
 (defun mevedel-view--forget-request-progress-region ()
   "Forget the request-progress region after a larger redraw deleted it."
   (mevedel-view-zone-forget 'progress)
+  (mevedel-view--release-animation-targets
+   mevedel-view--spinner-label-target mevedel-view--spinner-metadata-target)
   (setq mevedel-view--spinner-rendered-state nil
         mevedel-view--spinner-label-target nil
         mevedel-view--spinner-metadata-target nil
@@ -530,8 +533,40 @@ FACE defaults to `mevedel-view-spinner'."
       (mevedel-view--request-progress-visible-p)
       (mevedel-view--request-progress-active-p)))
 
+(defvar-local mevedel-view--decorative-tick nil
+  "(TICK . CONTENT) after the latest decorative display write.
+TICK is `buffer-modified-tick' right after it; CONTENT is the tick of the
+last change that was not decorative.")
+
+(defun mevedel-view--content-tick ()
+  "Return the buffer's modification tick, discounting decorative frames.
+Every animation frame rewrites a display property, which advances
+`buffer-modified-tick'; caches keyed on the tick, such as header-line
+answers, must not be invalidated by frames that change only a color."
+  (if (eql (buffer-modified-tick) (car mevedel-view--decorative-tick))
+      (cdr mevedel-view--decorative-tick)
+    (buffer-modified-tick)))
+
+(defun mevedel-view--put-decorative-display (start end value)
+  "Set START..END's display to animation frame VALUE as a decorative write."
+  (let ((content (mevedel-view--content-tick)))
+    (put-text-property start end 'display value)
+    (setq mevedel-view--decorative-tick (cons (buffer-modified-tick) content))))
+
+(defun mevedel-view--release-animation-targets (&rest targets)
+  "Detach the markers of every (START . END) span in TARGETS.
+Spans are recaptured on every semantic render, about once a second for
+the label; an abandoned marker stays attached to the view until garbage
+collection, which mevedel defers while busy, and slows every edit there."
+  (dolist (target targets)
+    (when (consp target)
+      (when (markerp (car target)) (set-marker (car target) nil))
+      (when (markerp (cdr target)) (set-marker (cdr target) nil)))))
+
 (defun mevedel-view--capture-request-animation-target ()
   "Remember the label and metadata spans after a semantic progress render."
+  (mevedel-view--release-animation-targets
+   mevedel-view--spinner-label-target mevedel-view--spinner-metadata-target)
   (setq mevedel-view--spinner-label-target nil
         mevedel-view--spinner-metadata-target nil
         mevedel-view--spinner-sample-frame nil)
@@ -557,6 +592,8 @@ FACE defaults to `mevedel-view-spinner'."
 
 (defun mevedel-view--capture-tool-animation-targets ()
   "Remember the bounded pending-tool spans after live-tail reconciliation."
+  (apply #'mevedel-view--release-animation-targets
+         mevedel-view--spinner-tool-targets)
   (setq mevedel-view--spinner-tool-targets nil)
   (when-let* ((region (mevedel-view-zone-region 'history-live)))
     (let ((pos (overlay-start region))
@@ -627,8 +664,8 @@ Newly inserted tool rows begin at phase zero."
             (when entry
               (unless (equal-including-properties
                        (cadr entry) (get-text-property start 'display))
-                (put-text-property start (marker-position (cdr target))
-                                   'display (cadr entry)))
+                (mevedel-view--put-decorative-display
+                 start (marker-position (cdr target)) (cadr entry)))
               (mevedel-view--record-tool-sample start (caddr entry)))))
       (set-buffer-modified-p modified))))
 
@@ -715,9 +752,9 @@ windows."
                   target 'mevedel-view-inline-spinner-frame))
                mevedel-view--spinner-tool-targets)))
 
-(defun mevedel-view--spinner-visual-period (style &optional main)
+(defun mevedel-view--spinner-visual-period (style &optional glyph-fallback)
   "Return effective time between visual frames for STYLE, or nil.
-MAIN means use the actual color/glyph rendering of the request label."
+GLYPH-FALLBACK means a color STYLE is drawn by its glyph fallback."
   (let ((rate (mevedel-view-power-framerate
                mevedel-view-spinner-framerate
                mevedel-view-spinner-battery-framerate
@@ -725,10 +762,32 @@ MAIN means use the actual color/glyph rendering of the request label."
                mevedel-view-spinner-animate)))
     (when (and (> rate 0) (not (eq style 'static)))
       (max (/ 1.0 rate)
-           (if (and main (memq style '(shimmer breathe bounce))
-                    (not mevedel-view--spinner-main-color-p))
+           (if (and glyph-fallback (memq style '(shimmer breathe bounce)))
                0.12
              (mevedel-view-animation-period style))))))
+
+(defun mevedel-view--spinner-next-delay (plan seconds)
+  "Return seconds until PLAN's next visible change at animation SECONDS.
+PLAN is (MAIN-STYLE MAIN TOOL-STYLE TOOL METADATA) as built by
+`mevedel-view--start-spinner-timer': each style with its frame period,
+or nil when hidden, and the elapsed-metadata period."
+  (pcase-let ((`(,main-style ,main ,tool-style ,tool ,metadata) plan))
+    (apply #'min
+           (delq nil
+                 (list (and main (mevedel-view-animation-next-delay
+                                  main-style seconds main))
+                       (and tool (mevedel-view-animation-next-delay
+                                  tool-style seconds tool))
+                       metadata)))))
+
+(defun mevedel-view--tool-animation-label (target)
+  "Return the text a pending-tool indicator TARGET animates.
+Glyph styles draw a prefix of their own; shimmer animates the row's verb
+and tool name."
+  (if (eq mevedel-view-tool-spinner-style 'shimmer)
+      (buffer-substring-no-properties (marker-position (car target))
+                                      (marker-position (cdr target)))
+    ""))
 
 (defun mevedel-view--animation-wants-power-p (visible)
   "Return non-nil when VISIBLE animation needs automatic power status."
@@ -748,8 +807,12 @@ MAIN means use the actual color/glyph rendering of the request label."
   "Stop the buffer-local spinner animation timer."
   (when (timerp mevedel-view--spinner-timer)
     (mevedel--ui-timer-cancel mevedel-view--spinner-timer))
+  (when (timerp mevedel-view--spinner-probe-timer)
+    (mevedel--ui-timer-cancel mevedel-view--spinner-probe-timer))
   (setq mevedel-view--spinner-timer nil
-        mevedel-view--spinner-timer-period nil)
+        mevedel-view--spinner-timer-period nil
+        mevedel-view--spinner-timer-plan nil
+        mevedel-view--spinner-probe-timer nil)
   (mevedel-view-power-unwatch (current-buffer)))
 
 (defun mevedel-view--refresh-themed-status (&optional force)
@@ -784,7 +847,7 @@ neither the status row nor the composer is rebuilt."
                   (let ((inhibit-read-only t)
                         (buffer-undo-list t))
                     (with-silent-modifications
-                      (put-text-property start end 'display frame))))
+                      (mevedel-view--put-decorative-display start end frame))))
                 (setq mevedel-view--spinner-last-sample-seconds seconds
                       mevedel-view--spinner-sample-frame display-frame))
             (setq pending t))))
@@ -798,7 +861,8 @@ neither the status row nor the composer is rebuilt."
                                      target (eq mevedel-view-tool-spinner-style
                                                 'dots)))
                      (frame (mevedel-view-animation-frame
-                             mevedel-view-tool-spinner-style ""
+                             mevedel-view-tool-spinner-style
+                             (mevedel-view--tool-animation-label target)
                              (if frozen
                                  (mevedel-view--tool-sample-seconds start)
                                seconds)
@@ -808,11 +872,48 @@ neither the status row nor the composer is rebuilt."
                   (let ((inhibit-read-only t)
                         (buffer-undo-list t))
                     (with-silent-modifications
-                      (put-text-property start end 'display frame))))
+                      (mevedel-view--put-decorative-display start end frame))))
                 (unless frozen
                   (mevedel-view--record-tool-sample start seconds)))
             (setq pending t))))
       (setq mevedel-view--spinner-theme-stale-p pending))))
+
+(defun mevedel-view--recheck-spinner-after-redisplay ()
+  "Rearm this view's spinner once the pending redisplay has completed.
+Visibility uses the last completed redisplay's window range.  A scroll
+hook still sees the old range, and so does a label or tool row inserted
+since, so deciding there would freeze a spinner that is about to appear."
+  (unless (mevedel--ui-timer-pending-p mevedel-view--spinner-probe-timer)
+    (let ((buffer (current-buffer))
+          (timer (timer-create)))
+      (timer-set-time timer (time-add nil (seconds-to-time 0.2)))
+      (timer-set-function
+       timer
+       (lambda ()
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (when (eq timer mevedel-view--spinner-probe-timer)
+               (setq mevedel-view--spinner-probe-timer nil)
+               (when (mevedel-view--spinner-active-p)
+                 (mevedel-view--start-spinner-timer t)))))))
+      (mevedel--ui-timer-activate timer)
+      (setq mevedel-view--spinner-probe-timer timer))))
+
+(defun mevedel-view--probe-spinner-visibility ()
+  "Recheck an active spinner whose spans are not yet known to be on screen.
+Nothing else rearms a view that stays attended and unscrolled, so without
+this a new label would stay frozen, elapsed time included.  Each set of
+spans is probed once: a span still off screen waits for scrolling."
+  (let ((targets (list mevedel-view--spinner-label-target
+                       mevedel-view--spinner-metadata-target
+                       mevedel-view--spinner-tool-targets)))
+    (when (and (mevedel-view--spinner-active-p)
+               (cl-some #'car-safe targets)
+               (not (equal targets mevedel-view--spinner-probed-targets))
+               (cl-some #'mevedel-view--animation-window-attended-p
+                        (get-buffer-window-list (current-buffer) nil t)))
+      (setq mevedel-view--spinner-probed-targets targets)
+      (mevedel-view--recheck-spinner-after-redisplay))))
 
 (defun mevedel-view--start-spinner-timer (&optional resumed)
   "Start one view timer at the next needed visual or metadata cadence.
@@ -866,7 +967,12 @@ rechecked without changing the displayed animation phase."
              mevedel-view-spinner-animate))
       (mevedel-view--animation-display-seconds)
     (setq mevedel-view--spinner-frozen-seconds nil))
-  (let* ((visible (mevedel-view--animation-visible-p))
+  (let* ((paused (and-let* ((request (mevedel-view--spinner-request)))
+                    (mevedel-request-active-work-pause-started-at request)))
+         ;; Waiting for the user is not work: hold every indicator still,
+         ;; as the elapsed time already is, instead of animating for as long
+         ;; as a prompt stays unanswered.
+         (visible (and (not paused) (mevedel-view--animation-visible-p)))
          (main-visible (and visible
                             (mevedel-view--animation-target-visible-p
                              mevedel-view--spinner-label-target
@@ -886,38 +992,59 @@ rechecked without changing the displayed animation phase."
                  (setq mevedel-view--spinner-main-color-p main-color)
                  (when main-visible
                    (mevedel-view--spinner-visual-period
-                    mevedel-view-spinner-style t))))
-         (tool (and visible
-                    (cl-some (lambda (target)
-                               (mevedel-view--animation-target-visible-p
-                                target 'mevedel-view-inline-spinner-frame))
-                             mevedel-view--spinner-tool-targets)
+                    mevedel-view-spinner-style (not main-color)))))
+         (tool-target (and visible
+                           (cl-find-if
+                            (lambda (target)
+                              (mevedel-view--animation-target-visible-p
+                               target 'mevedel-view-inline-spinner-frame))
+                            mevedel-view--spinner-tool-targets)))
+         ;; Prepare the shared word's bank here, never in a frame callback.
+         (tool-color (and tool-target
+                          (eq mevedel-view-tool-spinner-style 'shimmer)
+                          (mevedel-view-animation-color-available-p
+                           'shimmer
+                           (mevedel-view--tool-animation-label tool-target)
+                           'mevedel-view-ephemeral
+                           (mevedel-view--animation-target-frame tool-target))))
+         (tool (and tool-target
                     (mevedel-view--spinner-visual-period
-                     mevedel-view-tool-spinner-style)))
+                     mevedel-view-tool-spinner-style (not tool-color))))
          (metadata (and mevedel-view--spinner-status
+                        (not paused)
                         (mevedel-view--spinner-metadata-visible-p)
-                        (not (and-let* ((request (mevedel-view--spinner-request)))
-                               (mevedel-request-active-work-pause-started-at
-                                request)))
                         1.0))
          (periods (delq nil (list main tool metadata)))
-         (period (and periods (apply #'min periods))))
+         (period (and periods (apply #'min periods)))
+         (plan (and period
+                    (list (if main-color mevedel-view-spinner-style 'glyph)
+                          main
+                          (if tool-color 'shimmer 'glyph)
+                          tool
+                          metadata))))
+    (unless period
+      (mevedel-view--probe-spinner-visibility))
     (when (mevedel-view--animation-wants-power-p visible)
       (mevedel-view-power-watch (current-buffer)
                                 #'mevedel-view--start-spinner-timer))
     (unless (mevedel-view--animation-wants-power-p visible)
       (mevedel-view-power-unwatch (current-buffer)))
-    (unless (and period
-                 (equal period mevedel-view--spinner-timer-period)
+    (unless (and plan
+                 (equal plan mevedel-view--spinner-timer-plan)
                  (mevedel--ui-timer-pending-p mevedel-view--spinner-timer))
       (when (timerp mevedel-view--spinner-timer)
         (mevedel--ui-timer-cancel mevedel-view--spinner-timer))
       (setq mevedel-view--spinner-timer nil
-            mevedel-view--spinner-timer-period period)
+            mevedel-view--spinner-timer-period period
+            mevedel-view--spinner-timer-plan plan)
       (when period
         (let ((buffer (current-buffer)) timer)
           (setq timer (timer-create))
-          (timer-set-time timer (time-add nil (seconds-to-time period)))
+          (timer-set-time timer
+                          (time-add nil (seconds-to-time
+                                         (mevedel-view--spinner-next-delay
+                                          plan
+                                          (mevedel-view--animation-seconds)))))
           (timer-set-function
            timer
            (lambda ()
@@ -938,7 +1065,10 @@ rechecked without changing the displayed animation phase."
                            (when (eq timer mevedel-view--spinner-timer)
                              (timer-set-time
                               timer (time-add (current-time)
-                                              (seconds-to-time period)))
+                                              (seconds-to-time
+                                               (mevedel-view--spinner-next-delay
+                                                plan
+                                                (mevedel-view--animation-seconds)))))
                              (mevedel--ui-timer-activate timer)))
                        (error (mevedel-view--stop-spinner-timer)))
                    (mevedel--ui-timer-cancel timer)
@@ -1050,7 +1180,8 @@ animation or elapsed timer remains to notice the new colors."
     (unwind-protect
         (progn
           (when (and (mevedel-view--spinner-visual-period
-                      mevedel-view-spinner-style t)
+                      mevedel-view-spinner-style
+                      (not mevedel-view--spinner-main-color-p))
                      (mevedel-view--animation-target-visible-p
                       mevedel-view--spinner-label-target
                       'mevedel-view-spinner-frame))
@@ -1071,24 +1202,31 @@ animation or elapsed timer remains to notice the new colors."
                   (setq mevedel-view--spinner-sample-frame display-frame)
                   (unless (equal-including-properties
                            frame (get-text-property start 'display))
-                    (put-text-property start end 'display frame))))))
+                    (mevedel-view--put-decorative-display start end frame))))))
           (when (mevedel-view--spinner-visual-period
                  mevedel-view-tool-spinner-style)
             (dolist (target mevedel-view--spinner-tool-targets)
               (when (mevedel-view--animation-target-visible-p
                      target 'mevedel-view-inline-spinner-frame)
                 (let* ((start (marker-position (car target)))
+                       (style mevedel-view-tool-spinner-style)
+                       (label (mevedel-view--tool-animation-label target))
                        (display-frame
                         (mevedel-view--animation-target-frame
-                         target (eq mevedel-view-tool-spinner-style 'dots)))
-                       (frame (mevedel-view-animation-frame
-                               mevedel-view-tool-spinner-style "" seconds
-                               'mevedel-view-ephemeral display-frame)))
-                  (mevedel-view--record-tool-sample start seconds)
-                  (unless (equal-including-properties
-                           frame (get-text-property start 'display))
-                    (put-text-property start (marker-position (cdr target))
-                                       'display frame)))))))
+                         target (eq style 'dots))))
+                  ;; Like the label: a color bank is prepared at semantic
+                  ;; cadence, never inside a frame callback.
+                  (when (or (not (eq style 'shimmer))
+                            (mevedel-view-animation-color-ready-p
+                             style label 'mevedel-view-ephemeral display-frame))
+                    (let ((frame (mevedel-view-animation-frame
+                                  style label seconds
+                                  'mevedel-view-ephemeral display-frame)))
+                      (mevedel-view--record-tool-sample start seconds)
+                      (unless (equal-including-properties
+                               frame (get-text-property start 'display))
+                        (mevedel-view--put-decorative-display
+                         start (marker-position (cdr target)) frame)))))))))
       (set-buffer-modified-p was-modified))))
 
 (defun mevedel-view--start-spinner (&optional status)

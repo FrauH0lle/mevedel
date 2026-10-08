@@ -188,7 +188,7 @@
   (let ((badge (mevedel-view-agent--handle-badge
                 '(:status completed :calls 5 :elapsed 2.3))))
     (should (string-match-p "done" badge))
-    (should (string-match-p "2\\.3s" badge))
+    (should (string-match-p "· 2s ·" badge))
     (should (string-match-p "5 calls" badge)))
 
   :doc "completed without elapsed/calls renders just ✓ done"

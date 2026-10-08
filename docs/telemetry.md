@@ -135,10 +135,16 @@ cancellation releases the fence and leaves the machine retryable.
   status ownership transitions;
 - queued user messages with enqueue/dequeue events and dwell time;
 - `event-loop-lag` whenever the editor's event loop ran more than
-  `mevedel-telemetry-lag-threshold` (0.5 s) late. A 100 ms heartbeat takes
-  the measurement while a request runs and for two minutes after it settles,
-  since journal, collection and publication work follows settlement. The
-  event carries the delay, whether input was pending, whether the request
+  `mevedel-telemetry-lag-threshold` (0.5 s) late. Watching runs while a
+  request runs and for two minutes after it settles, since journal,
+  collection and publication work follows settlement. Every timer delivered
+  meanwhile reports how late it ran, since a stall delays every timer due
+  during it; a 500 ms heartbeat covers quiet stretches without other timers
+  and reports the worst delay since the previous heartbeat, once. Lateness the
+  previous heartbeat already saw is not counted again, and idle timers do not
+  count. The heartbeat was 100 ms until each wakeup was measured to repaint a
+  whole pgtk frame: on a 2x-scaled frame it cost 23% editor CPU on its own.
+  The event carries the delay, whether input was pending, whether the request
   had settled, the running command's name, and the name and duration of
   the slowest timer callback since the previous heartbeat. `:gc-count` and
   `:gc-ms` report garbage collection anywhere since the previous heartbeat;

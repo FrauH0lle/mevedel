@@ -65,9 +65,9 @@
   (let* ((data '(:status error :state completed :outcome failure
                          :termination exited :exit-code 1 :wall-time-seconds 311.7))
          (rendering (mevedel-tool-exec--render-bash "Bash" '(:command "test runner") "failed" data)))
-    (should (equal "Bash: test runner · failed · 311.7s"
+    (should (equal "Bash: test runner · failed · 5m 11s"
                    (plist-get rendering :header)))
-    (should (string-search "failure · exit 1 · 311.7s"
+    (should (string-search "failure · exit 1 · 5m 11s"
                            (plist-get rendering :body))))
   :doc "expected nonzero outcomes stay successful"
   (let ((data '(:status success :state completed :outcome no-match

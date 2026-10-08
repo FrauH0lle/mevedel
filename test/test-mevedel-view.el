@@ -292,7 +292,12 @@
 (mevedel-deftest mevedel-view--unattended-p ()
   ,test
   (test)
-  :doc "a view without a window, or on a terminal frame, is attended"
+  :doc "a hidden view is unattended in an interactive Emacs"
+  (mevedel-view-test--with-buffers
+    (let ((noninteractive nil))
+      (should (mevedel-view--unattended-p view-buf))))
+
+  :doc "a view without a window in batch, or on a terminal frame, is attended"
   (mevedel-view-test--with-buffers
     (should-not (mevedel-view--unattended-p view-buf))
     (let ((window (selected-window))
@@ -351,6 +356,18 @@
             (setq parent-focused t)
             (should-not (mevedel-view--unattended-p view-buf)))
         (set-window-buffer window original)))))
+
+(mevedel-deftest mevedel-view--schedule-render/unattended ()
+  ,test
+  (test)
+  :doc "an unattended view records the render without arming a timer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (cl-letf (((symbol-function 'mevedel-view--unattended-p) (lambda (&rest _) t)))
+        (mevedel-view--schedule-render 'incremental data-buf 0.4)
+        (should-not mevedel-view--render-timer)
+        (should (eq 'incremental mevedel-view--pending-render-kind))
+        (should (eq data-buf mevedel-view--pending-render-data-buffer))))))
 
 (mevedel-deftest mevedel-view--resume-attended-views ()
   ,test
@@ -1604,6 +1621,49 @@
                   #'mevedel-menu)))
 
 
+
+(mevedel-deftest mevedel-view--prompt-on-screen-p ()
+  ,test
+  (test)
+  :doc "keeps its answer until the buffer or the window start changes"
+  (save-window-excursion
+    (with-temp-buffer
+      (insert "Answer\n"
+              (propertize "Prompt\n" 'mevedel-view-prompt-preview "Prompt")
+              "More\n")
+      (set-window-buffer (selected-window) (current-buffer))
+      (set-window-start nil (point-min) t)
+      (let* ((calls 0)
+             (real (symbol-function 'vertical-motion))
+             (window (selected-window)))
+        (cl-letf (((symbol-function 'vertical-motion)
+                   (lambda (&rest args) (cl-incf calls) (apply real args))))
+          (should (mevedel-view--prompt-on-screen-p window))
+          ;; Header lines re-evaluate on every redisplay; nothing changed.
+          (should (mevedel-view--prompt-on-screen-p window))
+          (should (= 1 calls))
+          ;; An animation frame rewrites a display property only.
+          (mevedel-view--put-decorative-display 1 3 "An")
+          (mevedel-view--put-decorative-display 1 3 "AN")
+          (should (mevedel-view--prompt-on-screen-p window))
+          (should (= 1 calls))
+          ;; Hiding the prompt changes the buffer and the answer.
+          (put-text-property (point-min) (point-max) 'invisible t)
+          (should-not (mevedel-view--prompt-on-screen-p window))
+          (should (= 2 calls))
+          (set-window-start nil (1+ (point-min)) t)
+          (mevedel-view--prompt-on-screen-p window)
+          (should (= 3 calls))))))
+
+  :doc "skips the on-screen walk without a compacted continuation prompt"
+  (save-window-excursion
+    (with-temp-buffer
+      (insert "Answer\n")
+      (set-window-buffer (selected-window) (current-buffer))
+      (cl-letf (((symbol-function 'mevedel-view--prompt-on-screen-p)
+                 (lambda (_) (error "Walked the window")))
+                ((symbol-function 'mevedel-view--continuation-prompt) #'ignore))
+        (should-not (mevedel-view--sticky-prompt-line))))))
 
 (provide 'test-mevedel-view)
 

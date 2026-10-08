@@ -306,6 +306,17 @@ Truncation never splits a multibyte character.  MARKER must fit LIMIT."
       (concat (decode-coding-string (string-limit text available nil 'utf-8) 'utf-8)
               marker))))
 
+(defun mevedel--duration-label (seconds)
+  "Return a compact whole-second label for SECONDS, such as \"12s\".
+Longer spans read \"3m 05s\" or \"1h 02m\".  Elapsed time shown to people
+keeps one-second resolution: tenths only flicker, and keeping them
+current would cost a redraw several times a second."
+  (let ((total (max 0 (floor (or seconds 0)))))
+    (cond
+     ((< total 60) (format "%ds" total))
+     ((< total 3600) (format "%dm %02ds" (/ total 60) (% total 60)))
+     (t (format "%dh %02dm" (/ total 3600) (% (/ total 60) 60))))))
+
 (defun mevedel--truncate-display (text width &optional ellipsis)
   "Return TEXT truncated to WIDTH columns, ending with ELLIPSIS.
 

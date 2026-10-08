@@ -143,12 +143,19 @@ Prompt previews stored for header-line redisplay are limited to 512 characters,
 including an ellipsis when truncated, after mailbox filtering and whitespace
 normalization. The original prompt and its navigation target remain in the
 source-backed transcript. Header width measurement never traverses a complete
-multi-kilobyte prompt on each evaluation.
+multi-kilobyte prompt on each evaluation. The archived-prompt check walks the
+window body only when an archived prompt exists and keeps its answer per
+window until the window, buffer or invisibility changes: a Claude Code request
+spent 13% of its editor CPU in that walk, though no session had been compacted.
 
 The default `auto` power policy uses the Emacs UI host's battery information:
-external power permits the configured 60-fps normal ceiling, and battery,
-backup, unknown or stale power information uses the conservative 30-fps
-saving ceiling. `full` forces the normal ceiling; `save` forces the saving
+external power permits the configured 30-fps normal ceiling, and battery,
+backup, unknown or stale power information uses the conservative 15-fps
+saving ceiling. Each decorative frame is a full redisplay and, on pgtk, a
+whole-surface repaint, so the shimmer is cadenced: one one-second sweep
+every four seconds, resting in between with no frames scheduled, and
+pending-tool rows sweep their verb and tool name in the same frames. The
+October 2026 measurement below records why. `full` forces the normal ceiling; `save` forces the saving
 ceiling. The lower ceiling never speeds up a naturally slower animation or
 changes its cycle duration. A saving ceiling of zero freezes decorative
 motion while active elapsed time and status remain current. A shared battery
@@ -1062,3 +1069,49 @@ growing group, so its rows are still re-inserted on each update. Incremental
 group insertion was not adopted, because the measured worst case stays below
 the 0.15 s render debounce.
 
+### October 2026: cadence the shimmer
+
+On the user's Emacs 31.1 pgtk build (KDE Wayland, 2x scale, a 1536x888
+frame), a timer that does nothing but fire ten times a second held `emacs -Q`
+at 23-36% CPU and the compositor at about 21%; a 400x300 frame cost 3%.
+Every wakeup ends in a redisplay that presents the whole frame surface,
+whether or not anything changed, so a frame's cost scales with the window's
+area rather than with the animated span: about 2% editor CPU and 1%
+compositor per wakeup per second on that frame.
+
+A continuous shimmer at the 60-fps ceiling could not keep up. It reached
+about 31 fps and held the editor at 67-82% CPU and the compositor at 30-37%
+during an attended request. Measured in the user's editor with the request
+held in "Thinking...", the label cost 70% at 60 fps, 62% at 30 and 34% at 12;
+a static label cost 8%.
+
+The ceilings were first lowered to 12 and 6 fps. A side-by-side comparison
+in the user's own theme showed visible stepping at 12 fps, so that was
+reversed. The shimmer now follows Codex's cadence: 0.6 seconds after the
+request starts, and every four seconds after that, a cosine band at least
+three columns wide crosses the label in one second; the label rests at its
+dimmed shade in between and no frame is scheduled. With the 30/15-fps
+ceilings restored, the same label costs 29% (22% at 15 fps). Tool rows used a
+continuous braille glyph; they now shimmer their verb and tool name ("Calling
+Bash"; the whole row swept too fast on long commands, and "Calling" alone
+looked detached), in the same frames as the label, so a pending tool adds no
+wakeups of its own. Breathe, bounce
+and the glyph styles still pay their cadence throughout (breathe and bounce
+64% at 30 fps, braille and ascii about 30%); finding cheaper forms for them
+is the next step.
+
+### October 2026: arm indicators after their spans are drawn
+
+Animation eligibility uses the completed redisplay's window range. A label
+or tool row inserted since, and every `window-scroll-functions` call, still
+see the previous range, so a request started in an attended, unscrolled
+view never armed its timer and the label stayed frozen, elapsed time
+included, until a focus or scroll event. A scroll back to the label froze it
+the same way. Both now recheck once after the next redisplay; a span still
+outside the window waits for scrolling, as before.
+
+Each animation frame rewrites a display property and advances
+`buffer-modified-tick`. Header-line caches key on a content tick that
+ignores those decorative writes; otherwise the archived-prompt check walked
+the window body on every frame. Waiting for user input holds every
+indicator still, as the elapsed time already was.

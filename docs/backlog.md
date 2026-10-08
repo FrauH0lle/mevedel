@@ -16,10 +16,34 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Consider making mevedel's data buffers hidden
 - Add optional cached container/VM/WSL detection to environment context for
   local and SSH targets; TRAMP execution targets are already reported.
-- Check the codebase for battery friendliness
 - Lobby: let a lobby open a session whose same-host lock is provably stale
   (dead PID or PID reuse) without the Emacs prompt; today a crash leaves such
   sessions refusable only from the keyboard. See `docs/collaboration.md#the-lobby`.
+
+## Editor CPU
+
+### Remaining per-wakeup costs
+
+On pgtk every wakeup redisplays and presents the whole frame surface, even
+when nothing changed: about 2% editor CPU and 1% compositor per wakeup per
+second on a 2x-scaled 1536x888 frame. The heartbeat, shimmer cadence, tool
+rows, Bash progress and watch timers, stream batching, collection pacing and
+unattended render timers were reduced for this (ADR 0119). Still open:
+
+- Breathe, bounce and the glyph label styles animate continuously (breathe
+  and bounce 64% at 30 fps, braille and ascii about 30%); find cheaper forms
+  with the cadenced shimmer as the reference.
+- `mevedel--gc-maintain` wakes once a second during requests and their
+  30-second grace, to re-apply the threshold after idle tuning such as gcmh
+  lowers it.
+- `mevedel-view--realign-markdown` still wakes once a second while a Bash row
+  refreshes, though the pass itself now returns early.
+- `mevedel-view--status-strip` still evaluates its cache key from several
+  live lookups on every redisplay.
+- `acp.el` routes each output chunk through a zero-delay timer, about 30 a
+  second from the Claude Code adapter.
+- The whole-surface repaint itself is an Emacs pgtk behavior worth reporting
+  upstream.
 
 ## Request lifecycle
 

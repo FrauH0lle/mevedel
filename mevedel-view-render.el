@@ -220,6 +220,7 @@
 (declare-function mevedel-transport-busy-p "mevedel-transport" (target))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--duration-label "mevedel-utilities" (seconds))
 (declare-function mevedel--gc-hold "mevedel-utilities" (key live-p))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
@@ -358,8 +359,6 @@
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--delete-pending-tool-live-lines
                   "mevedel-view-stream" ())
-(declare-function mevedel-view--duration-label
-                  "mevedel-view-stream" (seconds))
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))
 (declare-function mevedel-view--forget-request-progress-region
@@ -3636,19 +3635,35 @@ content without moving ahead of prior transcript turns."
 
 (defun mevedel-view--pending-tool-line-body (label)
   "Return the propertized fragment body for pending tool LABEL.
-Before insertion the display frame is unknown; use a portable first frame."
-  (let ((frame (mevedel-view-animation-frame
-                mevedel-view-tool-spinner-style "" 0 'mevedel-view-ephemeral
-                :multiple)))
-    (concat
-     (propertize frame
-                 'font-lock-face 'mevedel-view-ephemeral
-                 'mevedel-view-inline-spinner-frame t
-                 'mevedel-view-pending-tool-live t
-                 'display frame)
-     (propertize (format "%s\n" label)
-                 'font-lock-face 'mevedel-view-ephemeral
-                 'mevedel-view-pending-tool-live t))))
+Before insertion the display frame is unknown; use a portable first frame.
+Shimmer animates LABEL's verb and tool name in place, \"Calling Bash\"
+without its arguments, resting until its sweep."
+  (if (eq mevedel-view-tool-spinner-style 'shimmer)
+      (let* ((end (or (string-match-p ":" label) (length label)))
+             (word (substring label 0 end)))
+        (concat
+         (propertize word
+                     'font-lock-face 'mevedel-view-ephemeral
+                     'mevedel-view-inline-spinner-frame t
+                     'mevedel-view-pending-tool-live t
+                     'display (mevedel-view-animation-frame
+                               'shimmer word 0 'mevedel-view-ephemeral
+                               (selected-frame)))
+         (propertize (format "%s\n" (substring label end))
+                     'font-lock-face 'mevedel-view-ephemeral
+                     'mevedel-view-pending-tool-live t)))
+    (let ((frame (mevedel-view-animation-frame
+                  mevedel-view-tool-spinner-style "" 0 'mevedel-view-ephemeral
+                  :multiple)))
+      (concat
+       (propertize frame
+                   'font-lock-face 'mevedel-view-ephemeral
+                   'mevedel-view-inline-spinner-frame t
+                   'mevedel-view-pending-tool-live t
+                   'display frame)
+       (propertize (format "%s\n" label)
+                   'font-lock-face 'mevedel-view-ephemeral
+                   'mevedel-view-pending-tool-live t)))))
 
 (defun mevedel-view--pending-tool-fragments (entries)
   "Return live-tail fragments for pending tool ENTRIES."
@@ -5504,7 +5519,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
   "Return the visible request summary line for RENDER-DATA."
   (let ((elapsed (plist-get render-data :elapsed-seconds)))
     (when (numberp elapsed)
-      (format "─ Worked for %s" (mevedel-view--duration-label elapsed)))))
+      (format "─ Worked for %s" (mevedel--duration-label elapsed)))))
 
 (defun mevedel-view--render-request-summary-segment (seg data-buf)
   "Render request-summary SEG from DATA-BUF as an assistant footer."

@@ -107,7 +107,7 @@
                         :result "first full child output")))))
            (children (plist-get rendering :child-calls)))
       (should (string-match-p "1 call" (plist-get rendering :header)))
-      (should (string-match-p "1.2s" (plist-get rendering :header)))
+      (should (string-match-p "· 1s" (plist-get rendering :header)))
       (should (string-match-p "final" (plist-get rendering :body)))
       ;; The envelope body carries only what the script returned; the child
       ;; result travels as its own row for the nested tool's renderer.

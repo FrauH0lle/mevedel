@@ -750,6 +750,12 @@ deferred work, so that case deletes immediately rather than leak."
                  0.02 #'mevedel-execution-process--settle-main-exit
                  child))))))))
 
+(defconst mevedel-execution-process--watch-interval 1.0
+  "Seconds between checks for an exit whose sentinel never ran.
+The sentinel settles almost every child; this only bounds how late a lost
+one is noticed.  Each check is a wakeup, and on pgtk every wakeup repaints
+the whole frame: at 0.1 s, a running command cost ten a second.")
+
 (cl-defun mevedel-execution-process-start
     (child &key name command target coding timeout confined)
   "Launch COMMAND in CHILD and return CHILD, or nil on failure."
@@ -816,7 +822,8 @@ deferred work, so that case deletes immediately rather than leak."
              (mevedel-execution-process--child-process child)))
           (setf (mevedel-execution-process--child-watch-timer child)
                 (run-at-time
-                 0.1 0.1
+                 mevedel-execution-process--watch-interval
+                 mevedel-execution-process--watch-interval
                  (lambda ()
                    (unless
                        (mevedel-execution-process--child-finished-p child)

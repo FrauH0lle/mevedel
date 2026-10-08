@@ -235,10 +235,18 @@ the complete spool remains at the path in the execution facts."
   :group 'mevedel)
 
 (defcustom mevedel-execution-progress-interval 0.25
-  "Seconds between managed Bash progress events.
-Values below 0.25 are clamped so the UI receives at most four per second."
+  "Seconds between managed Bash progress events while output arrives.
+Values below 0.25 are clamped so the UI receives at most four per second.
+A command printing nothing publishes only its elapsed time, once each
+`mevedel-execution--quiet-progress-interval'."
   :type 'number
   :group 'mevedel)
+
+(defconst mevedel-execution--quiet-progress-interval 1.0
+  "Seconds between progress events of a command whose output has not changed.
+Every event redraws the command's row, and on pgtk every wakeup repaints the
+whole frame; a silent `sleep' used to publish four unchanged events and four
+row redraws a second.")
 
 (defconst mevedel-execution-live-limit 64
   "Maximum number of live managed Bash processes in one session.")
@@ -305,6 +313,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   output-tail
   preparation-cancel
   progress-timer
+  progress-emitted-at
   read-offset
   retained-p
   retire-timer
@@ -942,6 +951,7 @@ retained in the transcript and output artifacts."
       (mevedel-execution--telemetry
        record 'execution-first-output :chunk-bytes (string-bytes chunk)))
     (mevedel-execution--retain-output record chunk)
+    (mevedel-execution--hasten-progress record)
     (cl-incf (mevedel-execution--record-newline-count record)
              (cl-count ?\n chunk))
     (setf (mevedel-execution--record-last-byte-newline-p record)
@@ -1130,8 +1140,12 @@ execution's progress cost."
    :text))
 
 (defun mevedel-execution--emit-progress (record)
-  "Publish one bounded progress event for live RECORD."
+  "Publish one bounded progress event for live RECORD.
+The next event waits `mevedel-execution--quiet-progress-interval'; output
+arriving meanwhile brings it forward, see
+`mevedel-execution--hasten-progress'."
   (unless (mevedel-execution--record-finished-p record)
+    (setf (mevedel-execution--record-progress-emitted-at record) (float-time))
     (mevedel-execution--emit-event
      (mevedel-execution--event
       record 'progress
@@ -1141,8 +1155,24 @@ execution's progress cost."
       :output-tail (or (mevedel-execution--record-output-tail record) "")))
     (setf (mevedel-execution--record-progress-timer record)
           (run-at-time
-           (max 0.25 mevedel-execution-progress-interval) nil
+           mevedel-execution--quiet-progress-interval nil
            #'mevedel-execution--emit-progress record))))
+
+(defun mevedel-execution--hasten-progress (record)
+  "Bring RECORD's next progress event forward after new output.
+Before the first event, the initial `mevedel-execution-progress-delay'
+stands.  Afterwards the next event follows the previous one by
+`mevedel-execution-progress-interval' instead of the quiet interval."
+  (when-let* ((emitted (mevedel-execution--record-progress-emitted-at record))
+              (timer (mevedel-execution--record-progress-timer record))
+              ((timerp timer))
+              (due (+ emitted (max 0.25 mevedel-execution-progress-interval)))
+              ;; Rearming lands a hair after DUE; only a quiet wait is late.
+              ((> (float-time (timer--time timer)) (+ due 0.01))))
+    (cancel-timer timer)
+    (setf (mevedel-execution--record-progress-timer record)
+          (run-at-time (max 0 (- due (float-time))) nil
+                       #'mevedel-execution--emit-progress record))))
 
 (defun mevedel-execution--unread-preview (record unread-bytes)
   "Return RECORD's bounded unread preview for UNREAD-BYTES."

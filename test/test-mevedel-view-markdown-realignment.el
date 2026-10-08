@@ -110,7 +110,22 @@
                                             'mevedel-view-table-width)))
             (should (= (point-min) (window-start other))))
         (when (window-live-p other)
-          (delete-window other))))))
+          (delete-window other)))))
+
+  :doc "a pass with no table or image to lay out leaves the view alone"
+  (mevedel-test--with-displayed-buffer
+    (insert "Plain text without tables.\n")
+    (setq mevedel-view--image-layout-width
+          (window-body-width (selected-window) t))
+    (let ((mutations 0))
+      (cl-letf (((symbol-function 'mevedel-view-render-mutate)
+                 (lambda (&rest _) (cl-incf mutations))))
+        (mevedel-view--realign-markdown (current-buffer) (selected-window))
+        (should (= 0 mutations))
+        ;; A new width needs a pass.
+        (setq mevedel-view--image-layout-width 1)
+        (mevedel-view--realign-markdown (current-buffer) (selected-window))
+        (should (= 1 mutations))))))
 
 (mevedel-deftest mevedel-view--realign-on-window-change ()
   ,test

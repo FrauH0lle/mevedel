@@ -428,9 +428,9 @@ the next send.
 | `mevedel-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |
 | `mevedel-view-spinner-animate`                 | Global reduced-motion switch for request and pending-tool indicators. |
 | `mevedel-view-spinner-style`                   | Request label: `shimmer` (default), `breathe`, `bounce`, `dots`, `ellipsis`, `braille`, `ascii`, or `static`. |
-| `mevedel-view-tool-spinner-style`              | Compact pending-tool indicator: `braille` (default), `ascii`, `dots`, or `static`. |
-| `mevedel-view-spinner-framerate`               | Normal animation ceiling, 1–60 frames/second (default 60).          |
-| `mevedel-view-spinner-battery-framerate`       | Energy-saving ceiling, 0–60 frames/second (default 30); 0 freezes decorative motion. |
+| `mevedel-view-tool-spinner-style`              | Pending-tool indicator: `shimmer` (default; sweeps "Calling TOOL" with the label), `braille`, `ascii`, `dots`, or `static`. |
+| `mevedel-view-spinner-framerate`               | Normal animation ceiling, 1–60 frames/second (default 30).          |
+| `mevedel-view-spinner-battery-framerate`       | Energy-saving ceiling, 0–60 frames/second (default 15); 0 freezes decorative motion. |
 | `mevedel-view-spinner-power-policy`            | `auto` (default), `full`, or `save`; see below.                      |
 
 `auto` uses the Emacs host's detected power source: external power uses the
@@ -452,10 +452,10 @@ or `mevedel-view-spinner-animate` set to nil. The former
 were removed; choose a style and rendering ceiling instead.
 
 ```emacs-lisp
-;; Automatic 60 fps on external power, 30 fps on battery or unknown power.
+;; Automatic 30 fps on external power, 15 fps on battery or unknown power.
 (setopt mevedel-view-spinner-power-policy 'auto
-        mevedel-view-spinner-framerate 60
-        mevedel-view-spinner-battery-framerate 30)
+        mevedel-view-spinner-framerate 30
+        mevedel-view-spinner-battery-framerate 15)
 
 ;; Always use the normal ceiling, regardless of power source.
 (setopt mevedel-view-spinner-power-policy 'full)
