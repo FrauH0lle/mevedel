@@ -411,6 +411,31 @@ its own parent"
       (kill-buffer buffer)
       (mevedel-directive-frame-test--reset))))
 
+(mevedel-deftest mevedel-directive-frame--place
+  (:doc "`mevedel-directive-frame--place' keeps the directive readable")
+  ,test
+  (test)
+  :doc "opens below the directive's last line when it fits"
+  (should (equal '(300 . 298)
+                 (mevedel-directive-frame--place
+                  300 100 280 18 1200 360 2000 1060)))
+  :doc "clamps x so the frame stays inside the parent's right edge"
+  (should (= 800 (car (mevedel-directive-frame--place
+                       1500 100 280 18 1200 360 2000 1060))))
+  :doc "flips above the first line, not the last, so the directive stays visible"
+  (let ((y (cdr (mevedel-directive-frame--place
+                 300 520 880 18 1200 360 2000 1060))))
+    (should (= 160 y))
+    (should (<= (+ y 360) 520)))
+  :doc "sits flush above a directive when fitted shorter than the maximum"
+  (should (= 376 (cdr (mevedel-directive-frame--place
+                       300 520 940 18 1200 144 2000 1060))))
+  :doc "takes the larger side, clamped, only when neither side has room"
+  (should (= 660 (cdr (mevedel-directive-frame--place
+                       300 200 700 18 1200 400 2000 1060))))
+  (should (= 0 (cdr (mevedel-directive-frame--place
+                     300 500 900 18 1200 600 2000 1060)))))
+
 (mevedel-deftest mevedel-directive-frame--fit-height
   (:doc "`mevedel-directive-frame--fit-height' never resizes width")
   ,test

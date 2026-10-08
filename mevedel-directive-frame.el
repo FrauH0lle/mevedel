@@ -364,10 +364,33 @@ reparent the frame to the frame being replaced."
                       candidates)
           (car candidates)))))
 
-(defun mevedel-directive-frame--anchor (directive window)
+(defun mevedel-directive-frame--place
+    (anchor-x start-y end-y line-height width height parent-width parent-height)
+  "Return the position (X . Y) for a WIDTH by HEIGHT directive frame.
+ANCHOR-X is the directive's end column, START-Y the top of its first line,
+and END-Y the top of its last line, all in pixels relative to a parent
+of PARENT-WIDTH by PARENT-HEIGHT; LINE-HEIGHT is one line's height.
+
+The frame goes below the directive, else flush above its first line, so
+the directive stays readable.  Only when neither side has room does it
+take the larger side and overlap the directive."
+  (let ((x (max 0 (min anchor-x (- parent-width width))))
+        (below (+ end-y line-height))
+        (above (- start-y height)))
+    (cons x
+          (cond
+           ((<= (+ below height) parent-height) below)
+           ((>= above 0) above)
+           ((> (- parent-height below) start-y)
+            (max 0 (- parent-height height)))
+           (t 0)))))
+
+(defun mevedel-directive-frame--anchor (directive window &optional height)
   "Return the pixel position (X . Y) to place DIRECTIVE's frame in WINDOW.
 Returns nil when DIRECTIVE has no visible source position, in which case
-the caller centers the frame on its parent."
+the caller centers the frame on its parent.  HEIGHT defaults to the live
+frame's actual height, so a frame fitted shorter than the maximum still
+sits flush against its directive."
   (when (and (window-live-p window)
              (overlayp directive)
              (buffer-live-p (overlay-buffer directive)))
@@ -383,21 +406,27 @@ the caller centers the frame on its parent."
              ;; Terminal frames report a native origin of (0, 0), so the
              ;; subtraction is inert there.
              (native (frame-edges frame 'native-edges))
-             (anchor-x (- (car position) (nth 0 native)))
-             (anchor-y (- (cdr position) (nth 1 native)))
+             (start (window-absolute-pixel-position
+                     (overlay-start directive) window))
              (parent-width (frame-pixel-width frame))
-             (parent-height (frame-pixel-height frame))
-             (width (round (* mevedel-directive-frame-width parent-width)))
-             (height (* mevedel-directive-frame-height
-                        (frame-char-height frame)))
-             (line-height (frame-char-height frame))
-             (x (max 0 (min anchor-x (- parent-width width))))
-             (below (+ anchor-y line-height))
-             ;; Flip above the directive when there is no room below.
-             (y (if (<= (+ below height) parent-height)
-                    below
-                  (max 0 (- anchor-y height)))))
-        (cons x y)))))
+             (child mevedel-directive-frame--frame))
+        (mevedel-directive-frame--place
+         (- (car position) (nth 0 native))
+         ;; A first line scrolled above the window leaves the window's top
+         ;; as the directive's highest visible edge; body edges are already
+         ;; relative to the native frame.
+         (if start
+             (- (cdr start) (nth 1 native))
+           (nth 1 (window-body-pixel-edges window)))
+         (- (cdr position) (nth 1 native))
+         (frame-char-height frame)
+         (round (* mevedel-directive-frame-width parent-width))
+         (cond (height)
+               ((frame-live-p child) (frame-pixel-height child))
+               (t (* mevedel-directive-frame-height
+                     (frame-char-height frame))))
+         parent-width
+         (frame-pixel-height frame))))))
 
 (defun mevedel-directive-frame--size (parent)
   "Return the pixel size (WIDTH . HEIGHT) of a frame parented to PARENT."
@@ -594,8 +623,9 @@ an ordinary window when child frames are unavailable."
              (parent (if (window-live-p source)
                          (window-frame source)
                        (window-frame (selected-window))))
-             (anchor (mevedel-directive-frame--anchor directive source))
              (size (mevedel-directive-frame--size parent))
+             (anchor (mevedel-directive-frame--anchor
+                      directive source (cdr size)))
              (frame (mevedel-directive-frame--make view-buffer parent)))
         (unless (eq frame mevedel-directive-frame--frame)
           (setq mevedel-directive-frame--frame frame))
