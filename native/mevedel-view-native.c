@@ -368,7 +368,11 @@ int emacs_module_init(struct emacs_runtime *runtime) {
   if (runtime->size<(ptrdiff_t)sizeof(*runtime)) return 1;
   emacs_env *env=runtime->get_environment(runtime);
   if (env->size<(ptrdiff_t)sizeof(*env)) return 2;
-  struct binding {const char *name;ptrdiff_t arity;emacs_function fn;const char *doc;} bindings[]={
+  /* Spelled out: emacs_function only exists in Emacs 28 and later headers,
+     and prebuilt modules use an older header to load into every Emacs. */
+  struct binding {const char *name;ptrdiff_t arity;
+                  emacs_value (*fn)(emacs_env *,ptrdiff_t,emacs_value *,void *);
+                  const char *doc;} bindings[]={
     {"mevedel-view-native--supported-p",1,supported,"Whether frame ID has a Wayland parent."},
     {"mevedel-view-native--open",6,open_animation,"Present a timed styled-text sequence."},
     {"mevedel-view-native--move",3,move_animation,"Move a live surface; nil means it was closed."},

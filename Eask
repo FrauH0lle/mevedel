@@ -9,7 +9,7 @@
 
 (package-file "mevedel.el")
 (files :defaults
-       '("native" "native/*.c")
+       '("native" "native/*.c" "native/*.eld")
        '("scripts" "scripts/mevedel-mcp-stdio.py")
        '("agents" "agents/*.md")
        '("prompts/context-summary" "prompts/context-summary/*.md")

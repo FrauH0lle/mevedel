@@ -457,8 +457,17 @@ running Emacs (its prefix's `include` directory or its build tree) before the
 compiler's default path, and does not treat warnings as errors, so newer headers
 cannot disable the path. `mevedel-view-native-enabled` disables this path;
 unsupported displays or build/placement failures retain ordinary text animation.
-The internal `mevedel-view-native--load-state` retains a build failure's reason
-for the session; setting it to nil retries. Labels that contain characters XML
+A cached local build is loaded first, then a downloaded prebuilt module, then a
+new local build. `mevedel-view-native-install` downloads the prebuilt module for
+the current source revision and architecture from the project's GitHub release
+`native-HASH` (HASH is the first 16 hex digits of the C source's SHA-256) and
+loads it only when its SHA-256 matches `native/prebuilt.eld`. CI
+(`.github/workflows/native.yml`) builds the x86_64 and aarch64 modules on
+Ubuntu 22.04 against its older `emacs-module.h`, so they load into any newer
+Emacs and glibc 2.27 or later, and records their checksums there. A failure is
+reported once per session in the echo area, naming the next step; the internal
+`mevedel-view-native--load-state` retains its reason, and setting it to nil
+retries. Labels that contain characters XML
 cannot carry, such as control characters from tool arguments, change width once
 escaped, so they keep the ordinary renderer; an error while placing surfaces
 closes those already opened and hands every target back to text animation.
