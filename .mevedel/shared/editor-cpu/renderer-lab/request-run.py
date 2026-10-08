@@ -82,7 +82,8 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
     control = output / 'control.json'
     hold_seconds = args.seconds + (30 if args.acceptance else 8)
     control.write_text(json.dumps(dict(hold=0 if (args.tool and args.tool_count == 1) or args.stream_rate else hold_seconds,
-                                      stream=dict(seconds=hold_seconds, rate=args.stream_rate) if args.stream_rate else None,
+                                      stream=dict(seconds=hold_seconds, rate=args.stream_rate,
+                                                  count_path=str(output / 'stream-count.txt')) if args.stream_rate else None,
                                       tools=[dict(name='Bash', args=dict(command=f'sleep {hold_seconds}', yield_time_ms=30000)) for _ in range(args.tool_count)] if args.tool and args.tool_count == 1 else None)))
     expected_surfaces = 1 + min(args.tool_count, 5) + int(args.tool_count > 5) if args.tool else 1
     with (output / 'mock.log').open('w') as mock_log, (output / 'editor.log').open('w') as editor_log:
@@ -214,6 +215,13 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                 else:
                     raise RuntimeError('Request did not finish')
                 time.sleep(1)
+                if args.stream_rate:
+                    # Every streamed word must reach the transcript, in order.
+                    sent = int((output / 'stream-count.txt').read_text())
+                    received = call('(with-current-buffer cpuh--data (save-excursion (goto-char (point-max)) (re-search-backward "\\\\bword1\\\\b") (let ((n 0)) (while (re-search-forward "\\\\bword\\\\([0-9]+\\\\)\\\\b" nil t) (if (= (string-to-number (match-string 1)) (1+ n)) (setq n (1+ n)) (setq n -1000000))) n)))')
+                    row['stream_words'] = dict(sent=sent, received=int(received))
+                    if int(received) != sent:
+                        raise RuntimeError(f'Stream lost or reordered words: {row["stream_words"]}')
                 stopped = call('(request-lab-state)')
                 if native and ':stats [0 ' not in stopped:
                     raise RuntimeError('Native work survived request completion: ' + stopped)

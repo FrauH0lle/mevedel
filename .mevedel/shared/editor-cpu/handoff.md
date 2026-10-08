@@ -33,6 +33,13 @@ original form of 6. Nothing is merged or pushed. Commits, in order:
    clock ticks; current Markdown layout schedules no idle pass; tool-row
    recovery waits until its source exists. Evidence and protocol:
    [the wakeup lab](wakeup-lab/README.md).
+7. Shared-timer review fixes: the TRAMP retained-timers wrapper no longer
+   holds the shared host timer; untimed timers are rejected; uninstall
+   cancels the queue; heartbeat due time and long progress intervals.
+8. Streamed-read pacing: the stream bridge stops local curl between 0.4 s
+   batches and the view renders each flushed batch in the same wakeup; the
+   native presenter checks placement only when layout inputs change, moves
+   displaced surfaces, reuses its presentation and timelines.
 
 Product behavior is documented in `docs/view.md`, `docs/tools.md`,
 `docs/telemetry.md`, `docs/sessions.md` and ADR 0119; open work is in
@@ -48,11 +55,16 @@ Key numbers (single machine, directional):
 | default config, watched, Bash running, live editor | 73% | 34-39% |
 | breathe/bounce, live editor (ordinary renderer) | 64% | 26% |
 | 30-fps native bounce, isolated disposable editor | 55% ordinary | ~2% |
-| silent request, disposable editor: static / native bounce | — | 8% / 12% |
-| sleeping Bash, native 30-fps status, disposable editor (commit 6) | 18-19% | 8.6-10.1% |
-| prose streaming 8 words/s: static / native / ordinary bounce | — | 38% / 44% / 47% |
+| silent request, disposable editor: static / native bounce | 8% / 12% (before commit 6) | 6% / 8% |
+| sleeping Bash, native 30-fps status, disposable editor (commit 6) | 18-19% | 8.3-9.9% |
+| prose streaming 8 words/s: static / native bounce | 36% / 42% (before commit 8) | 16% / 21% |
+| prose streaming 32 words/s: static / native bounce | 59% / — (before commit 8) | 17% / 22% |
+| sleeping Bash / silent request after commit 8: native | — | 8.0-8.4% / 7.4% |
 
-The streaming row is the largest remaining cost and is not animation.
+Streaming remains the largest request cost; what is left is mostly the
+per-wakeup pgtk presentation of the 0.4-second stream cycle. The renderer
+lab's `request-run.py --stream-rate N` verifies that every streamed word
+arrives, in order.
 
 ## Open work
 

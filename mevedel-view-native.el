@@ -78,6 +78,45 @@ include directory, and one run from its build tree beside the binary."
   "One deferred placement check after layout changes.")
 (defvar-local mevedel-view-native--settling nil
   "Non-nil while changed text or window geometry awaits redisplay.")
+(defvar mevedel-view-native--presented nil
+  "(SPECS . HANDLED) of the presentation running at the redisplay boundary.
+Its rearm callback reschedules the stream's own timers and asks again with
+the same specs; answering from this pair saved a second placement walk.")
+(defvar mevedel-view-native--timelines nil
+  "Recently prepared timelines, most recent first, keyed by their inputs.
+A surface replaced by invalidation reuses its markup instead of escaping
+every sample again.")
+
+(defvar-local mevedel-view-native--checked nil
+  "Alist of each window's layout inputs when its surfaces were last verified.")
+
+(defun mevedel-view-native--layout-key (window)
+  "Return the inputs that can move or uncover this view's surfaces in WINDOW.
+Pixel placement needs `posn-at-point', a display walk from the window
+start: checked before every redisplay, it was 30% of editor CPU while a
+reply streamed.  Placement can change only with the text, the window's
+start, point, size or scroll, frame focus, visible child frames, the
+region, face remapping, font size, line spacing or the surfaces and their
+targets.  Text scaling edits the remapping list in place, so it is copied."
+  (list (buffer-chars-modified-tick)
+        (and (use-region-p) (cons (region-beginning) (region-end)))
+        (copy-tree face-remapping-alist)
+        ;; `window-font-width' realizes faces: 14% of samples per redisplay.
+        ;; Buffer-local fonts are in the remapping; the frame's are here.
+        line-spacing (frame-char-width (window-frame window))
+        (frame-char-height (window-frame window))
+        (window-start window) (window-point window) (window-hscroll window)
+        (window-inside-pixel-edges window)
+        (frame-focus-state (window-frame window))
+        (cl-count-if (lambda (frame)
+                       (and (eq (frame-parent frame) (window-frame window))
+                            (eq (frame-visible-p frame) t)))
+                     (frame-list))
+        (mapcar (lambda (entry)
+                  (list (nth 2 entry)
+                        (marker-position (car (caar entry)))
+                        (marker-position (cdr (caar entry)))))
+                mevedel-view-native--entries)))
 
 (defun mevedel-view-native--load ()
   "Build and load the optional native presenter once at first use."
@@ -150,13 +189,21 @@ include directory, and one run from its build tree beside the binary."
     (apply #'concat (nreverse pieces))))
 
 (defun mevedel-view-native--timeline (style label period face frame)
-  "Prepare native markup for STYLE, LABEL, PERIOD, FACE and FRAME."
-  (when-let* ((sequence (mevedel-view-animation-sequence style label period face frame))
-              (colors (mevedel-view-animation--colors face frame)))
-    (dotimes (i (1- (length sequence)))
-      (let ((entry (aref sequence (1+ i))))
-        (aset entry 1 (mevedel-view-native--markup (aref entry 1) (car colors)))))
-    sequence))
+  "Prepare native markup for STYLE, LABEL, PERIOD, FACE and FRAME.
+The few most recent timelines are kept; the palette is part of their key."
+  (when-let* ((colors (mevedel-view-animation--colors face frame)))
+    (let ((key (list style label period face colors)))
+      (or (cdr (assoc key mevedel-view-native--timelines))
+          (when-let* ((sequence (mevedel-view-animation-sequence
+                                 style label period face frame)))
+            (dotimes (i (1- (length sequence)))
+              (let ((entry (aref sequence (1+ i))))
+                (aset entry 1 (mevedel-view-native--markup
+                               (aref entry 1) (car colors)))))
+            (push (cons key sequence) mevedel-view-native--timelines)
+            (setq mevedel-view-native--timelines
+                  (seq-take mevedel-view-native--timelines 8))
+            sequence)))))
 
 (defun mevedel-view-native--visible-p (target window)
   "Return non-nil when TARGET overlaps WINDOW's displayed buffer range.
@@ -261,13 +308,18 @@ version here.  Decorative display properties leave this version unchanged."
     (setq mevedel-view-native--pending nil)
     ;; Projection writers can delete and reinsert the same row.  Present only
     ;; their final state, at the same boundary as the parent text surface.
-    (let ((inhibit-redisplay nil)
-          (mevedel-view-native--presenting t))
-      (mevedel-view-native-sync (car pending)
-                               (max 0.0 (- (float-time) (cadr pending)))
-                               (nth 2 pending))
+    (let* ((inhibit-redisplay nil)
+           (mevedel-view-native--presenting t)
+           (mevedel-view-native--presented
+            (cons (car pending)
+                  (mevedel-view-native-sync (car pending)
+                                            (max 0.0 (- (float-time) (cadr pending)))
+                                            (nth 2 pending)))))
       (funcall (nth 2 pending))))
   (when (and mevedel-view-native--entries
+             (or (not (window-live-p window))
+                 (not (equal (mevedel-view-native--layout-key window)
+                             (alist-get window mevedel-view-native--checked))))
              (cl-some
               (lambda (entry)
                 (let* ((target (caar entry))
@@ -283,7 +335,13 @@ version here.  Decorative display properties leave this version unchanged."
                                        (mevedel-view-native--placement target window)))))))
               mevedel-view-native--entries))
     (mevedel-view-native--invalidate))
-  (setq mevedel-view-native--content-tick (buffer-chars-modified-tick)))
+  (setq mevedel-view-native--content-tick (buffer-chars-modified-tick))
+  (when (window-live-p window)
+    (setf (alist-get window mevedel-view-native--checked)
+          (mevedel-view-native--layout-key window)))
+  (setq mevedel-view-native--checked
+        (cl-remove-if-not (lambda (entry) (window-live-p (car entry)))
+                          mevedel-view-native--checked)))
 
 
 (defun mevedel-view-native--window-change (_frame)
@@ -306,18 +364,23 @@ run only for windows being redisplayed, and a surface whose teardown waits
 for an unchanged window keeps animating on its own.  An error while
 placing or preparing a surface closes the surfaces opened so far and
 hands every target back to text animation."
-  (if (and (not mevedel-view-native--presenting)
-           (or mevedel-view-native--entries mevedel-view-native--pending
-               (and specs mevedel-view-native-enabled (not noninteractive)
-                    (cl-some #'mevedel-view-native-available-p (frame-list)))))
-      (progn
-        (setq mevedel-view-native--pending (list specs (- (float-time) elapsed) rearm))
-        (unless specs (force-window-update (current-buffer)))
-        (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay nil t)
-        (cl-loop for spec in specs
-                 when (cl-find (car spec) mevedel-view-native--entries
-                               :key #'caar :test #'eq)
-                 collect (car spec)))
+  (cond
+   ((and mevedel-view-native--presenting mevedel-view-native--presented
+         (equal specs (car mevedel-view-native--presented)))
+    (cdr mevedel-view-native--presented))
+   ((and (not mevedel-view-native--presenting)
+         (or mevedel-view-native--entries mevedel-view-native--pending
+             (and specs mevedel-view-native-enabled (not noninteractive)
+                  (cl-some #'mevedel-view-native-available-p (frame-list)))))
+    (progn
+      (setq mevedel-view-native--pending (list specs (- (float-time) elapsed) rearm))
+      (unless specs (force-window-update (current-buffer)))
+      (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay nil t)
+      (cl-loop for spec in specs
+               when (cl-find (car spec) mevedel-view-native--entries
+                             :key #'caar :test #'eq)
+               collect (car spec))))
+   (t
     (setq mevedel-view-native--pending nil)
     (let (handled next opened)
       (when (and specs mevedel-view-native-enabled (not noninteractive)
@@ -344,16 +407,28 @@ hands every target back to text animation."
                                                (list style label face period frame font colors
                                                      (append (seq-subseq geometry 2) nil))))
                                ;; Semantic redraws release their markers even when
-                               ;; the label and its on-screen geometry are unchanged.
+                               ;; the label and its on-screen geometry are unchanged,
+                               ;; and text streamed in above moves it.  Prefer the
+                               ;; surface at the same place; otherwise move one whose
+                               ;; own target is no longer requested.  Reopening
+                               ;; rebuilt every sample's layout and buffers after each
+                               ;; streamed render, about 9% editor CPU.
+                               (unused (lambda (entry)
+                                         (and (eq window (cadar entry))
+                                              (equal signature (cadr entry))
+                                              (not (cl-find
+                                                    (nth 2 entry) (append candidates next)
+                                                    :key (lambda (item) (nth 2 item)))))))
                                (old (or (assoc key mevedel-view-native--entries)
                                         (cl-find-if
                                          (lambda (entry)
-                                           (and (eq window (cadar entry))
-                                                (equal signature (cadr entry))
-                                                (equal placement (nth 3 entry))
-                                                (not (cl-find
-                                                      (nth 2 entry) (append candidates next)
-                                                      :key (lambda (item) (nth 2 item))))))
+                                           (and (funcall unused entry)
+                                                (equal placement (nth 3 entry))))
+                                         mevedel-view-native--entries)
+                                        (cl-find-if
+                                         (lambda (entry)
+                                           (and (funcall unused entry)
+                                                (not (assq (caar entry) specs))))
                                          mevedel-view-native--entries)))
                                handle)
                           (when (and placement colors (mevedel-view-native-available-p frame))
@@ -388,7 +463,7 @@ hands every target back to text animation."
             (cl-remove-if-not (lambda (entry) (assq (car entry) specs))
                               mevedel-view-native--last-samples))
       (unless (and specs mevedel-view-native-enabled) (mevedel-view-native-stop))
-      handled)))
+      handled))))
 
 (defun mevedel-view-native-unload-function ()
   "Release presentations and pending hooks before unloading this feature."

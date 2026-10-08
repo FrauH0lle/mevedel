@@ -56,6 +56,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 send(dict(base, choices=[{"index": 0, "delta": {"content": word}, "finish_reason": None}]))
                 time.sleep(1.0 / stream["rate"])
             send(dict(base, choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]))
+            if stream.get("count_path"):
+                open(stream["count_path"], "w").write(str(count))
         else:
             for w in "Done measuring.".split():
                 send(dict(base, choices=[{"index": 0, "delta": {"content": w + " "}, "finish_reason": None}]))

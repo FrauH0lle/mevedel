@@ -147,10 +147,9 @@ recovery and quiet progress retain whole-second updates; telemetry retains its
 half-second heartbeat and attributes each callback separately. Metadata-only
 views join the whole-second clock. Decorative Lisp animation and output-driven
 progress retain their natural deadlines. Missing execution rows trigger recovery
-only when their source, or their compound parent's source, is in the transcript;
+only when their source, or a compound ancestor's source, is in the transcript;
 progress remains cached until source arrival and normal boundary projection.
-Cancellation removes an owner's work
-without affecting other owners, and the last cancellation removes the host timer.
+Cancellation removes an owner's work without affecting other owners, and the last cancellation removes the host timer.
 Missed periodic observations are skipped after a stall. Batches yield between
 callbacks for input or after 25 ms; individual callbacks still own their own
 responsiveness. Layout hooks avoid scheduling idle callbacks when visible tables
@@ -1273,8 +1272,70 @@ A corrected mock with unique tool IDs and matching compiled dependencies measure
 real sleeping-Bash requests at 18.17–19.33% editor CPU before these changes and
 8.58–10.08% afterward on the same Emacs 31.1 PGTK/Wayland setup, retaining 30-fps
 native status motion. The average reduction is about 50%; a provisional strict
-10% per-sample target narrowly failed. Earlier repeated-request mock samples
+10% per-sample target narrowly failed. Those samples ran on the change before it
+was combined with the streaming-label review fixes; the combined tree measured
+8.25% and 9.92% for the same workload, 7.75% for a silent request (12.0% before)
+and 41.5% while prose streamed at eight words a second (44.3% before), all with
+native 30-fps motion. Earlier repeated-request mock samples
 reused a tool ID and could find a previous source row, so they do not establish
 fresh-tool performance. Protocol, source hashes, full-suite results and separate
 request/execution teardown checks are retained in
 `.mevedel/shared/editor-cpu/wakeup-lab/`.
+
+### October 2026: pace streamed reads
+
+After the wakeup sharing above, streaming was the largest request cost:
+prose at eight words a second cost 36% editor CPU with a static label and 32
+words a second 59%, against 6% for a silent request. A CPU profile attributed
+about 90% of the samples to no Lisp frame: the pgtk presentation after each
+redisplay. Emacs redisplays after every non-empty read of process output
+(`wait_reading_process_output`), and pgtk queues a whole-widget draw at the end
+of every redisplay with no frame parameter to disable it, so the cost scales with
+the provider's chunk rate. `process-adaptive-read-buffering` changed nothing
+measurable. The stream bridge now stops a local curl process with SIGSTOP after
+each read and continues it when the insert batch is due; the server's output
+waits in the kernel socket buffer. The batch grew from 0.2 to 0.4 seconds, the
+view's stream render delay, and a flushed batch renders from a zero-delay timer
+in the same wakeup, so text appears 0-0.4 s after arrival instead of 0.2-0.6 s.
+gptel's sentinel treats every call as the end of the request, so stop and
+continue events are filtered out before it. gptel settles a request, and runs
+its tools, only when curl exits, so pausing after the final read delayed every
+response's end by up to the batch; a finished response (a stop reason new to
+this tool round, since gptel never clears the previous one, or `data: [DONE]`)
+continues at once, even when the read that stopped curl held only part of the
+final burst. The isolated loading test caught the delay: its Emacs exited
+while curl was still stopped. Review measured two more costs and both were
+fixed: pausing after every read capped a 1.1 MB stream at one pipe read per
+pause (15.6 s instead of 0.02 s), so only reads under 4 KiB pause (0.42 s);
+and a stopped curl outlived `kill-emacs`, so paused processes continue on exit
+and uninstall. Pacing applies only to mevedel's own streams. An end-of-stream
+experiment (100 small events) now finishes 0.18 s after the unpaced run,
+against 0.56 s before. Reading the resumed burst inside
+the resume timer saved only 6 of 94 redisplays and was not kept.
+
+The native presenter dominated what remained with animation on: checking each
+surface's pixel placement with `posn-at-point` before every redisplay took 30%
+of samples while text streamed. The check now runs only when an input that can
+move a surface changes (text, window start, point, size, scroll, focus, region,
+face remapping or the surfaces), per window. A surface whose target a streamed
+render replaced and displaced is moved instead of reopened, the presentation's
+rearm callback reuses the result it just computed instead of placing again,
+and the last eight prepared timelines are reused.
+
+Measured in a disposable editor at 32 words a second, with every streamed word
+verified to arrive in order: static label 58.8% to 17.0-17.4%, native bounce
+22.0%; at eight words a second 35.6% to 15.6-16.0% and 41.5% to 21.1%. The
+layout key uses the frame's character size: `window-font-width` realized faces
+on every redisplay and cost 14% of samples. A silent request and
+a running Bash command are unaffected (no stream).
+
+The coalesced queue's review also changed: TRAMP's retained-timers wrapper held
+a newly armed host timer for the whole remote operation, freezing every shared
+callback, including the telemetry heartbeat, which then reported false lag; the
+wrapper leaves the host armed. A coalesced timer without a time is rejected
+instead of breaking the queue, the heartbeat reads its next due time from its
+timer, uninstalling cancels the queue, and a progress interval above one second
+keeps at least that spacing while staying on whole-second ticks. A coalesced
+callback that waits still delays its siblings (unlike ordinary timers); none
+does today.
+

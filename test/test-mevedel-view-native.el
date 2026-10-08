@@ -32,6 +32,23 @@
       (should (equal (aref (aref timeline 2) 1)
                      "<span foreground=\"#ffffff\">\\ Work</span>")))))
 
+(mevedel-deftest mevedel-view-native--timeline/reuse
+  (:doc "Reuses a prepared timeline until its inputs or palette change.")
+  (let ((mevedel-view-native--timelines nil)
+        (palette '("#ffffff" . "#000000"))
+        (prepared 0))
+    (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+               (lambda (&rest _) palette))
+              ((symbol-function 'mevedel-view-animation-sequence)
+               (lambda (&rest _) (cl-incf prepared) (vector 1.0 (vector 0.0 "x")))))
+      (let ((first (mevedel-view-native--timeline 'ascii "Work" 0.24 'default nil)))
+        (should (eq first (mevedel-view-native--timeline 'ascii "Work" 0.24 'default nil)))
+        (should (= prepared 1))
+        (mevedel-view-native--timeline 'ascii "Other" 0.24 'default nil)
+        (setq palette '("#000000" . "#ffffff"))
+        (mevedel-view-native--timeline 'ascii "Work" 0.24 'default nil)
+        (should (= prepared 3))))))
+
 (mevedel-deftest mevedel-view-native-available-p
   (:doc "Disabled and batch displays never trigger module construction.")
   (let ((mevedel-view-native-enabled nil))
@@ -164,6 +181,60 @@
               (should (= 0 (hash-table-count mevedel-view-native--views)))))
         (mevedel-view-native-stop)))))
 
+(mevedel-deftest mevedel-view-native-sync/moved
+  (:doc "Moves the surface of a replaced target that text above displaced.")
+  (with-temp-buffer
+    (insert "Working...\n")
+    (let* ((noninteractive nil)
+           (mevedel-view-native--presenting t)
+           (target (cons (copy-marker 1) (copy-marker 11)))
+           (mevedel-view-native--views (make-hash-table :test #'eq))
+           (y 42) (opens 0) moves closed)
+      (unwind-protect
+          (cl-letf (((symbol-function 'get-buffer-window-list) (lambda (&rest _) '(window)))
+                    ((symbol-function 'mevedel-view-native--visible-p) (lambda (&rest _) t))
+                    ((symbol-function 'mevedel-view-native--placement)
+                     (lambda (&rest _) (list 'frame (vector 8 y 80 21 16) "Mono 16px")))
+                    ((symbol-function 'mevedel-view-native-available-p) (lambda (_) t))
+                    ((symbol-function 'frame-parameter) (lambda (&rest _) "123"))
+                    ((symbol-function 'mevedel-view-animation--colors)
+                     (lambda (&rest _) '("#ffffff" . "#000000")))
+                    ((symbol-function 'mevedel-view-native--timeline) (lambda (&rest _) [1.0]))
+                    ((symbol-function 'mevedel-view-native--open)
+                     (lambda (&rest _) (cl-incf opens)))
+                    ((symbol-function 'mevedel-view-native--move)
+                     (lambda (_handle x y) (push (cons x y) moves) t))
+                    ((symbol-function 'mevedel-view-native--close)
+                     (lambda (handle) (push handle closed))))
+            (mevedel-view-native-sync
+             (list (list target 'ascii "Working" 'default 0.24)) 0 #'ignore)
+            ;; A streamed render recaptures the label two lines lower.
+            (goto-char (point-min))
+            (insert "streamed\ntext\n")
+            (set-marker (car target) nil)
+            (set-marker (cdr target) nil)
+            (setq target (cons (copy-marker 16) (copy-marker 26))
+                  y 84)
+            (should (equal (mevedel-view-native-sync
+                            (list (list target 'ascii "Working" 'default 0.24)) 1 #'ignore)
+                           (list target)))
+            (should (= opens 1))
+            (should (equal moves '((8 . 84))))
+            (should-not closed))
+        (cl-letf (((symbol-function 'mevedel-view-native--close) #'ignore))
+          (mevedel-view-native-stop))))))
+
+(mevedel-deftest mevedel-view-native-sync/presented
+  (:doc "Answers the rearm callback's identical request without placing again.")
+  (with-temp-buffer
+    (let* ((target (cons (copy-marker 1) (copy-marker 1)))
+           (specs (list (list target 'ascii "Working" 'default 0.24)))
+           (mevedel-view-native--presenting t)
+           (mevedel-view-native--presented (cons specs (list target))))
+      (cl-letf (((symbol-function 'mevedel-view-native--placement)
+                 (lambda (&rest _) (ert-fail "Placed again"))))
+        (should (equal (mevedel-view-native-sync specs 0 #'ignore) (list target)))))))
+
 (mevedel-deftest mevedel-view-native-sync/teardown
   (:doc "Queued teardown marks the view's windows for redisplay.")
   (with-temp-buffer
@@ -286,6 +357,45 @@
         (should (= 1.25 (mevedel-view-native-sample target)))
         (mevedel-view-native-stop)
         (should-not (mevedel-view-native-sample target))))))
+
+(mevedel-deftest mevedel-view-native--before-redisplay/cached
+  (:doc "Verifies placement again only after a layout input changes.")
+  (let ((buffer (generate-new-buffer " *mevedel-native-cache*"))
+        (window (selected-window))
+        (previous (window-buffer (selected-window)))
+        (checks 0))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "Working...\n")
+          (set-window-buffer window buffer)
+          (let* ((target (cons (copy-marker 1) (copy-marker 11)))
+                 (placement '(frame [8 42 80 21 16] "Mono 16px")))
+            (setq mevedel-view-native--entries
+                  (list (list (list target window) nil 'handle placement "Working..."))
+                  mevedel-view-native--content-tick (buffer-chars-modified-tick))
+            (cl-letf (((symbol-function 'mevedel-view-native--placement)
+                       (lambda (&rest _) (cl-incf checks) placement))
+                      ((symbol-function 'mevedel-view-native--close) #'ignore))
+              (mevedel-view-native--before-redisplay window)
+              (mevedel-view-native--before-redisplay window)
+              (should (= checks 1))
+              (goto-char (point-max))
+              (insert "more\n")
+              (mevedel-view-native--before-redisplay window)
+              (should (= checks 2))
+              (set-window-point window 3)
+              (mevedel-view-native--before-redisplay window)
+              (should (= checks 3))
+              ;; Text scaling edits the remapping list in place.
+              (text-scale-set 1)
+              (mevedel-view-native--before-redisplay window)
+              (text-scale-set 2)
+              (mevedel-view-native--before-redisplay window)
+              (should (= checks 5))
+              (text-scale-set 0)
+              (mevedel-view-native-stop))))
+      (set-window-buffer window previous)
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-view-native--before-redisplay
   (:doc "Detects inhibited edits and changed geometry without reacting to decoration.")

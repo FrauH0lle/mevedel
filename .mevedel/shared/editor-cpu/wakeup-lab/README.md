@@ -1,7 +1,10 @@
 # Remaining editor wakeups: results and review handoff
 
-The completed follow-up to `9b6a6f5e` is on `fix/cpu-wakeups`; review the range
-from that base through the commit containing this report.
+This follow-up was measured as `219b4974` on `fix/cpu-wakeups`, directly on
+`9b6a6f5e`. It was then replayed onto the review fixes on `review/cpu-wakeups`;
+the source hashes and the 9,789-case suite below describe `219b4974`. The
+combined tree passed 9,797 cases with zero unexpected results and measured
+8.25% and 9.92% for the running-tool workload (see "Combined tree" below).
 A real request waiting for a managed Bash process now uses **8.58–10.08% editor
 CPU**, compared with **18.17–19.33%** at the starting revision: about **50% lower
 on average**. Native status animation remains at 30 fps. These improvements are
@@ -186,3 +189,17 @@ other frame sizes and other display backends can change the figures materially.
 The work does not promise all requests stay below 10%. Native animation already
 avoids per-frame Lisp wakeups; further reductions should be evaluated against
 lag detection, progress latency and Emacs's presentation behavior.
+
+## Combined tree (after replay onto the review fixes)
+
+Disposable editor, same machine, `request-run.py --focus-kwin`, single runs:
+
+| Workload | Static label | Native 30-fps bounce |
+| --- | ---: | ---: |
+| Running sleeping Bash (12 s) | — | 8.25%, 9.92% |
+| Silent request (8 s) | 5.75% | 7.75% |
+| Prose streaming at 8 words/s (8 s) | 35.62% | 41.50% |
+
+Before this follow-up, with the review fixes, the silent request measured
+7.75% / 12.0% and streaming 38.0% / 44.25%
+(`renderer-lab/results/streaming/`).

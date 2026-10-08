@@ -1,0 +1,31 @@
+;;; -*- lexical-binding: t -*-
+(setq package-user-dir (getenv "PKGDIR")) (package-initialize)
+(setq load-prefer-newer t)
+(require 'gptel)
+(require 'mevedel-gptel-stream-bridge)
+(require 'mevedel-utilities) (require 'mevedel-transport)
+(let* ((paced (equal (getenv "PACE") "1"))
+       (mevedel-gptel-stream-bridge-insert-batch-delay 0.4)
+       (port (getenv "PORT"))
+       (buf (generate-new-buffer " out"))
+       (reads 0) (stops 0) (t0 (float-time)) done)
+  (cl-letf (((symbol-function 'mevedel-gptel-stream-bridge--gptel-stream-info-p) #'always))
+    (let ((p (make-process
+              :name "curl" :buffer buf
+              :command (list "curl" "--silent" "-N" "-XPOST" "-d" "x" (concat "http://127.0.0.1:" port "/"))
+              :connection-type 'pipe :noquery t
+              :filter (lambda (proc out)
+                        (cl-incf reads)
+                        (with-current-buffer (process-buffer proc)
+                          (goto-char (point-max)) (insert out))
+                        (when paced
+                          (let ((before (process-get proc 'mevedel-gptel-stream-bridge--resume-timer)))
+                            (mevedel-gptel-stream-bridge--pace-reading proc out)
+                            (when (and (process-get proc 'mevedel-gptel-stream-bridge--resume-timer)
+                                       (not (eq before (process-get proc 'mevedel-gptel-stream-bridge--resume-timer))))
+                              (cl-incf stops)))))
+              :sentinel (lambda (proc _s)
+                          (unless (memq (process-status proc) '(stop run))
+                            (setq done (float-time)))))))
+      (while (not done) (accept-process-output nil 0.05))
+      (message "paced=%s elapsed=%.2f reads=%d stops=%d bytes=%d" paced (- done t0) reads stops (buffer-size buf)))))

@@ -36,20 +36,26 @@ open:
   another native backend. They keep the accepted 8-fps breathe/bounce and
   half-speed glyph cadences; native surfaces cover PGTK/Wayland only.
   Burst-and-pause glyph variants were rejected.
-- Housekeeping, quiet progress and metadata now share callbacks, and current
-  Markdown layout does not schedule another idle pass. The remaining 2-Hz
-  telemetry heartbeat still incurs presentation work; investigate lowering that
-  cost while preserving useful lag detection and timely progress observation.
+- The 2-Hz telemetry heartbeat still incurs presentation work during
+  requests; lower that cost while keeping useful lag detection.
 - `mevedel-view--status-strip` still evaluates its cache key from several
   live lookups on every redisplay.
 - `acp.el` routes each output chunk through a zero-delay timer, about 30 a
   second from the Claude Code adapter.
 - The whole-surface repaint itself is an Emacs pgtk behavior worth reporting
   upstream.
-- Streaming prose at eight words a second cost 38% editor CPU in a
-  disposable editor with a static label, against 8% for a silent request;
-  bounce animation added 6 (native) to 9 (ordinary) points. The stream's own
-  render and batch cadence is the larger remaining cost; profile it next.
+- Streaming still costs 16-17% editor CPU with a static label after read
+  pacing (ADR 0119), mostly the per-wakeup pgtk presentation of the 0.4-second
+  cycle. ACP and Claude Code streams are not paced; measure their chunk rate.
+  An upstream pgtk fix (draw only damaged areas) would help every case.
+- A coalesced callback that waits for input or output delays its siblings.
+- A curl stream paused when Emacs crashes stays stopped, holding its socket,
+  until killed; a crash leaves no hook to continue it.
+- Native surfaces recheck placement only when their layout inputs change;
+  invisibility or overlay changes that leave the character tick alone keep a
+  stale position until the next edit, scroll or resize.
+- `test/test-mevedel-chat.el` fails `mevedel-abort/test@4` when run alone
+  (it passes in the partitioned suite); find the ordering dependency.
 
 ### Animation and native presenter follow-ups
 

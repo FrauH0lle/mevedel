@@ -291,3 +291,26 @@ in every sample while text arrived, and native opened 2. Editor CPU over 8 s
 while streaming: static label 38%, native bounce 44%, ordinary bounce 47%;
 a silent request: static 7.8%, native bounce 12%. Single runs in
 `results/streaming/`; the stream's own render cost dominates.
+
+## Streamed-read pacing (review, 2026-10-08)
+
+Profiles (`results/streaming/paced/*-profile.txt`) put about 90% of a
+streaming request's samples outside Lisp: the pgtk presentation after each
+redisplay. Emacs redisplays after every non-empty read of process output, so
+CPU followed the chunk rate (static label, 8 s: 2/s 18.9%, 8/s 35.3%,
+32/s 58.8%; `stream-rate-*.json`). Diagnostics in `diagnostics/` are loaded
+with `request-run.py --diagnostic-lisp FILE --diagnostic-case CASE`:
+
+| Diagnostic | Case | 32 words/s, static label |
+| --- | --- | ---: |
+| `adaptive.el` | `process-adaptive-read-buffering` t | 58.6% (no change) |
+| `throttle.el` | SIGSTOP/SIGCONT curl, 0.2 s | 25.0% |
+| `batch.el` | product pacing, batch 0.2 / 0.4 s | 26.6% / 17.6% |
+| `absorb.el` | read the burst inside the resume timer | 17.1% (vs 17.4%) |
+
+The product now pauses curl for the 0.4-second batch and renders each flushed
+batch in the same wakeup (`final-*.json`, every streamed word verified in
+order): static 16.0% at 8 words/s and 17.0% at 32; native bounce 20.4% and
+23.1% after the presenter stopped re-checking placement on every redisplay
+(`stream-profile-native*-profile.txt`, `final2-*.json`).
+

@@ -1,0 +1,23 @@
+;;; absorb.el --- Read the resumed burst inside the resume timer -*- lexical-binding: t -*-
+(let ((case (getenv "MEVEDEL_LAB_CASE")))
+  (when (string-match "\\`\\([a-z]+\\)-\\([0-9.]+\\)\\'" case)
+    (setq mevedel-gptel-stream-bridge-insert-batch-delay
+          (string-to-number (match-string 2 case)))
+    (when (equal (match-string 1 case) "absorb")
+      (defun mevedel-gptel-stream-bridge--pace-reading (process)
+        (when-let* ((delay mevedel-gptel-stream-bridge-insert-batch-delay)
+                    ((> delay 0))
+                    ((eq (process-type process) 'real))
+                    ((process-live-p process))
+                    ((not (process-get process 'lab-paused))))
+          (process-put process 'lab-paused t)
+          (signal-process process 'SIGSTOP)
+          (run-at-time delay nil #'mevedel-gptel-stream-bridge--resume-reading process)))
+      (defun mevedel-gptel-stream-bridge--resume-reading (process)
+        (when (process-live-p process)
+          (process-put process 'lab-reading t)
+          (process-put process 'lab-paused nil)
+          (signal-process process 'SIGCONT)
+          ;; Read the backlog now, in this wakeup; the filter pauses again.
+          (accept-process-output process 0.02 nil t))))))
+(provide 'absorb)
