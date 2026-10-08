@@ -202,8 +202,9 @@ leave that entire final cluster unanimated."
 
 (defun mevedel-view-animation--sweep-sample (head palette tick)
   "Return HEAD shaded from PALETTE at shimmer sweep TICK, 0 being at rest.
-A cosine band at least three columns wide fades toward the background as
-it crosses HEAD; outside it and at rest the text keeps its normal foreground."
+A cosine band fades toward the background as it crosses HEAD, reaching a
+tenth of HEAD's width to each side and at least three columns; outside
+it and at rest the text keeps its normal foreground."
   (let* ((width (float (string-width head)))
          (half (max 3.0 (* 0.1 width)))
          (position (and (> tick 0)

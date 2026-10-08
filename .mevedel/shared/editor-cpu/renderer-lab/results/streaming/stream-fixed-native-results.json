@@ -1,0 +1,22 @@
+{
+  "metadata": "(\"31.1\" 1545 864 \"/tmp/mevedel-request-lab-brwly2jq/elpa/gptel-20260925.357/gptel.elc\")",
+  "source_hashes": {
+    "mevedel-view-native.el": "d5e47b629516a1f1b15f22b2a2dc887383c331bf8fa9f48e85d65cff36440a6b",
+    "mevedel-view-stream.el": "34684ca286ba569e9e988979356386fc24f9e66e38faea26cf14f5e21b0039ec",
+    "native/mevedel-view-native.c": "317bd7ddd182632b28900635ea672dd80aecc448edf6cbf272b55ee7cda18bf1"
+  },
+  "samples": [
+    {
+      "label": "native",
+      "tool_count": 0,
+      "synthetic_tool_events": false,
+      "editor_cpu": 44.25,
+      "compositor_cpu": 25.25,
+      "seconds": 8.000075331001426,
+      "first_use_seconds": 1.3332027509895852,
+      "before": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 1 :stats [1 83 82 0] :load ready :focused t :tools 0 :entries 1)",
+      "after": "(:visible t :busy t :status \"Thinking...\" :plan ((metadata . 1.0)) :native 1 :stats [1 314 308 0] :load ready :focused t :tools 0 :entries 1)",
+      "stopped": "(:visible t :busy nil :status nil :plan nil :native 0 :stats [0 463 455 0] :load ready :focused t :tools 0 :entries 0)"
+    }
+  ]
+}

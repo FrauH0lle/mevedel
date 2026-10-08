@@ -15,6 +15,7 @@
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
+(require 'mevedel-transport)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -80,7 +81,18 @@
                (lambda (seconds &rest _) (setq delay seconds) nil)))
       (mevedel-execution--emit-progress record))
     (should (= mevedel-execution--quiet-progress-interval delay))
-    (should (mevedel-execution--record-progress-emitted-at record))))
+    (should (mevedel-execution--record-progress-emitted-at record)))
+
+  :doc "honours an output interval longer than the quiet interval"
+  (let ((record (mevedel-execution--record-create))
+        (mevedel-execution-progress-interval 3)
+        delay)
+    (cl-letf (((symbol-function 'mevedel-execution--event) #'ignore)
+              ((symbol-function 'mevedel-execution--emit-event) #'ignore)
+              ((symbol-function 'run-at-time)
+               (lambda (seconds &rest _) (setq delay seconds) nil)))
+      (mevedel-execution--emit-progress record))
+    (should (= 3 delay))))
 
 (mevedel-deftest mevedel-execution--hasten-progress ()
   ,test
@@ -110,7 +122,22 @@
         (let ((timer (mevedel-execution--record-progress-timer record)))
           (mevedel-execution--hasten-progress record)
           (should (eq timer (mevedel-execution--record-progress-timer record))))
-      (cancel-timer (mevedel-execution--record-progress-timer record)))))
+      (cancel-timer (mevedel-execution--record-progress-timer record))))
+
+  :doc "leaves a wait it cannot cancel from a suspended timer section"
+  (let* ((record (mevedel-execution--record-create
+                  :progress-emitted-at (- (float-time) 0.1)
+                  :progress-timer (run-at-time 0.9 nil #'ignore)))
+         (old (mevedel-execution--record-progress-timer record)))
+    (unwind-protect
+        (progn
+          (mevedel-transport-with-exclusive-connection
+            (mevedel-execution--hasten-progress record))
+          (should (eq old (mevedel-execution--record-progress-timer record)))
+          (should (memq old timer-list))
+          (should-not (cl-find #'mevedel-execution--emit-progress timer-list
+                               :key #'timer--function)))
+      (cancel-timer old))))
 
 (mevedel-deftest mevedel-execution--user-snapshot ()
   ,test

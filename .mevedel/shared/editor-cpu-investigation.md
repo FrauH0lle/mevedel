@@ -25,12 +25,14 @@ Request held open by a local mock server; focus check bypassed; same view.
 | shimmer label (old default 60 fps / new cadence) | **70% / 34%**   | **29% / 15%**   |
 | shimmer label on battery (30 fps / cadence 15)   | 62% / 31%       | 23% / 11%       |
 | running `Bash` (sleep), everything static        | **42% / 11%**   | **21% / 10%**   |
-| telemetry heartbeat alone (10 Hz / 2 Hz)         | 30% / 12%       | 18% / 9%        |
+| telemetry heartbeat + static label (10 Hz / 2 Hz) | 30% / 12%      | 18% / 9%        |
 | **default config, watched, Bash running**        | **73% / 21%**   | **39% / 18%**   |
 | same, on battery                                 | —               | 34% / 16%       |
 
-Continuous styles are unchanged and remain expensive: breathe/bounce at
-30 fps 64% / 30%, braille/ascii ~30% / 13%, dots 21%, ellipsis 17%.
+At this first commit, continuous styles were unchanged and remained
+expensive: breathe/bounce at 30 fps 64% / 30%, braille/ascii ~30% / 13%,
+dots 21%, ellipsis 17%. The follow-up below lowered their cadences, and the
+native presenter (see the end) removes per-frame redraws on PGTK/Wayland.
 
 ## Claude Code backend
 
@@ -189,3 +191,11 @@ The CPU measurements above predate this contrast-only adjustment.
 The final contrast changes pass all 220 isolated animation/stream tests,
 including light and dark themes, and all 241 package files compile without
 warnings. Compiled animation code is loaded into the live editor and its preview.
+
+## Later work
+
+The upstream-investigation suggestion above was superseded: a mevedel-side
+native presenter now draws animation on Wayland subsurfaces. Its experiments
+and measurements are in [the renderer lab](editor-cpu/renderer-lab/README.md);
+the current state, the 2026-10-08 review and its fixes are summarized in
+[the handoff](editor-cpu/handoff.md).

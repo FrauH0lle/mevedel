@@ -1082,7 +1082,11 @@ envelope removed from its expanded body.
 
 Managed executions publish transient progress after two seconds: at most four
 times per second while output arrives, and once a second while the command is
-silent, which keeps its whole-second elapsed time current. Each event redraws
+silent, which keeps its whole-second elapsed time current. A longer
+`mevedel-execution-progress-interval` slows both. Output read while a remote
+operation holds the editor's timers cannot move the pending event, which
+sits on the suspended list, so the quiet cadence stands until output arrives
+outside that section; moving it there armed a second chain of events. Each event redraws
 the row, and every redraw wakes the editor. The existing Bash row receives the
 bounded live output tail and updates its status and elapsed time without
 creating another output owner. A missed exit sentinel is noticed within a

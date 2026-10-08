@@ -182,6 +182,12 @@ A shimmer moves at this cadence only during its sweep.")
 (defvar-local mevedel-view--spinner-timer-plan nil
   "Plan of the running timer; see `mevedel-view--spinner-next-delay'.")
 
+(defvar mevedel-view--spinner-delivering nil
+  "The spinner timer whose callback is running, which rearms it afterwards.
+A delivered one-shot timer has left the timer list, so without this the
+once-a-second semantic rescheduling inside the callback replaced the
+timer and its closure on every tick, even with an unchanged plan.")
+
 (defvar-local mevedel-view--spinner-probe-timer nil
   "Timer rechecking a spinner whose spans were not yet on screen.")
 
@@ -606,8 +612,13 @@ collection, which mevedel defers while busy, and slows every edit there."
                           (overlay-end region))
                          (overlay-end region)))
           (metadata-end (1- (overlay-end region))))
+      ;; Text streamed in just before the row lands at the label's start.
+      ;; A start marker that stayed put took it into the span, whose start
+      ;; then lacked the label property: the label read as hidden and froze
+      ;; until the next semantic render, most of the time while a reply
+      ;; streamed.  Rewrites of the label itself recapture these markers.
       (setq mevedel-view--spinner-label-target
-            (cons (copy-marker pos) (copy-marker label-end t))
+            (cons (copy-marker pos t) (copy-marker label-end t))
             mevedel-view--spinner-sample-frame
             (mevedel-view--animation-buffer-frame))
       ;; The fragment ends with a newline.  Its suffix can remain visible
@@ -631,7 +642,8 @@ collection, which mevedel defers while busy, and slows every edit there."
         (let ((span-end (or (next-single-property-change
                              pos 'mevedel-view-inline-spinner-frame nil end)
                             end)))
-          (push (cons (copy-marker pos) (copy-marker span-end t))
+          ;; As for the label: text inserted at a row's start precedes it.
+          (push (cons (copy-marker pos t) (copy-marker span-end t))
                 mevedel-view--spinner-tool-targets)
           (setq pos span-end))))
     (setq mevedel-view--spinner-tool-targets
@@ -943,7 +955,8 @@ since, so deciding there would freeze a spinner that is about to appear."
   "Recheck an active spinner whose spans are not yet known to be on screen.
 Nothing else rearms a view that stays attended and unscrolled, so without
 this a new label would stay frozen, elapsed time included.  Each set of
-spans is probed once: a span still off screen waits for scrolling."
+spans is probed once: a span still off screen waits for scrolling or
+a window resize."
   (let ((targets (list mevedel-view--spinner-label-target
                        mevedel-view--spinner-metadata-target
                        mevedel-view--spinner-tool-targets)))
@@ -1107,7 +1120,10 @@ rechecked without changing the displayed animation phase."
       (mevedel-view-power-unwatch (current-buffer)))
     (unless (and plan
                  (equal plan mevedel-view--spinner-timer-plan)
-                 (mevedel--ui-timer-pending-p mevedel-view--spinner-timer))
+                 (or (mevedel--ui-timer-pending-p mevedel-view--spinner-timer)
+                     (and mevedel-view--spinner-timer
+                          (eq mevedel-view--spinner-timer
+                              mevedel-view--spinner-delivering))))
       (when (timerp mevedel-view--spinner-timer)
         (mevedel--ui-timer-cancel mevedel-view--spinner-timer))
       (setq mevedel-view--spinner-timer nil
@@ -1134,7 +1150,8 @@ rechecked without changing the displayed animation phase."
                               (mevedel-view--spinner-metadata-visible-p)))
                      (condition-case nil
                          (progn
-                           (mevedel-view--spinner-tick)
+                           (let ((mevedel-view--spinner-delivering timer))
+                             (mevedel-view--spinner-tick))
                            ;; A one-shot timer cannot replay deadlines missed
                            ;; during a stall.  Reuse its object after each
                            ;; delivered tick to avoid frame-rate allocation.

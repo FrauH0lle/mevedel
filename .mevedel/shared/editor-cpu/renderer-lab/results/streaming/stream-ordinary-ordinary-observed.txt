@@ -1,0 +1,4 @@
+(:counts ((mevedel-view-native-sync . 41)) :samples 61)
+((:native 0 :entries 0 :settling nil :plan (bounce metadata) :label-visible t :point-in-label nil) . 25)
+((:native 0 :entries 0 :settling nil :plan (metadata) :label-visible nil :point-in-label nil) . 26)
+((:native 0 :entries 0 :settling nil :plan nil :label-visible nil :point-in-label nil) . 10)

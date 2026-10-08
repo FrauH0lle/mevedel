@@ -449,9 +449,7 @@ styles; Braille and dots indicators use same-speed ASCII substitutes when
 their glyphs cannot be rendered. Motion
 settings can be changed through Customize during an active request. Elapsed
 time and status updates continue even with `static`, a zero saving ceiling,
-or `mevedel-view-spinner-animate` set to nil. The former
-`mevedel-view-spinner-frames` and `mevedel-view-spinner-interval` settings
-were removed; choose a style and rendering ceiling instead.
+or `mevedel-view-spinner-animate` set to nil.
 
 On Linux with PGTK/Wayland, mevedel can present the same animation samples on
 small independent surfaces, avoiding a full editor repaint per frame. This

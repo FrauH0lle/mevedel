@@ -447,7 +447,24 @@
       (cl-loop repeat 30 while mevedel-view-render--batch do
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
       (should-not mevedel-view-render--batch)
-      (should (equal "> draft\nsecond line while paused" (mevedel-view--input-text)))))
+      (should (equal "> draft\nsecond line while paused" (mevedel-view--input-text))))
+  :doc "a paused job releases its collection hold until it resumes"
+  (mevedel-batch-test--with-history
+    (let ((holds (make-hash-table :test #'eq)))
+      (cl-letf (((symbol-function 'mevedel--gc-hold)
+                 (lambda (key predicate) (puthash key predicate holds)))
+                ((symbol-function 'mevedel--gc-release)
+                 (lambda (key) (remhash key holds))))
+        (mevedel-batch-test--start-projection view-buf)
+        (let ((job mevedel-view-render--batch))
+          (should (gethash job holds))
+          (cl-letf (((symbol-function 'mevedel-view--unattended-p) (lambda (&rest _) t)))
+            (mevedel-view-render--batch-step view-buf job))
+          (should-not (gethash job holds))
+          (mevedel-view--resume-render-if-attended view-buf)
+          (should (gethash job holds))
+          (should (funcall (gethash job holds)))
+          (mevedel-view-render-cancel-batch))))))
   :doc "transport contention postpones a turn without consuming its source"
   (mevedel-batch-test--with-history
     (mevedel-batch-test--start-projection view-buf)

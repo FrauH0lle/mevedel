@@ -588,7 +588,7 @@ Every wakeup costs a redisplay, and a pgtk frame repaints its whole surface
 on each one: a 100 ms heartbeat alone held a 2x-scaled 1536x888 frame at
 23% CPU and its compositor at 12%, for every request and its two-minute
 tail.  Ordinary timers already report their own lateness, so the heartbeat
-only has to cover quiet stretches in which no other timer is due.")
+only samples quiet stretches in which no other timer is due.")
 
 (defconst mevedel-telemetry--lag-count-threshold 0.2
   "Event-loop delay, in seconds, counted in a request's lag summary.")
@@ -773,56 +773,59 @@ not the clock, and are not counted."
 (defun mevedel-telemetry--lag-tick ()
   "Record the loop's worst delay since the previous heartbeat.
 The delay is the later of this heartbeat's own and any timer's since then,
-once per heartbeat for every watched session."
-  (let* ((now (float-time))
-         (delay (max (- now (or mevedel-telemetry--lag-due now))
-                     mevedel-telemetry--lag-late))
-         (slowest mevedel-telemetry--lag-slowest)
-         (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)))
-         (cpu (mevedel-telemetry--cpu-seconds))
-         (cpu-before (or mevedel-telemetry--lag-cpu cpu)))
-    (setq mevedel-telemetry--lag-due (+ now mevedel-telemetry--lag-interval)
-          mevedel-telemetry--lag-since now
-          mevedel-telemetry--lag-late 0
-          mevedel-telemetry--lag-slowest nil
-          mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
-          mevedel-telemetry--lag-cpu cpu
-          mevedel-telemetry--lag-windows
-          (seq-filter (lambda (entry)
-                        (let ((until (plist-get (cdr entry) :until)))
-                          (or (null until) (< now until))))
-                      mevedel-telemetry--lag-windows))
-    (when (> delay mevedel-telemetry--lag-count-threshold)
-      (let ((input-pending (and (input-pending-p) t)))
-        (dolist (entry mevedel-telemetry--lag-windows)
-          (let ((window (cdr entry)))
-            (unless (plist-get window :until)
-              (setf (plist-get (cdr entry) :counts)
-                    (mevedel-telemetry--lag-count
-                     (plist-get window :counts) delay input-pending)))
-            (when (> delay mevedel-telemetry-lag-threshold)
-              (apply #'mevedel-telemetry-record
-                     (car entry) 'event-loop-lag
-                     :request-id (plist-get window :request-id)
-                     :delay-ms (round (* 1000 delay))
-                     :input-pending input-pending
-                     :settled (and (plist-get window :until) t)
-                     :command-name (and (symbolp this-command) this-command
-                                        (symbol-name this-command))
-                     ;; Collection anywhere since the previous heartbeat:
-                     ;; timers, process output, redisplay and commands.
-                     :gc-count (- gcs-done (car gc))
-                     :gc-ms (round (* 1000 (- gc-elapsed (cdr gc))))
-                     ;; Near the delay for a busy editor, near zero for a
-                     ;; suspended machine or a blocking wait on a child.
-                     :cpu-ms (round (* 1000 (- cpu cpu-before)))
-                     (and slowest
-                          (list :timer-callback (plist-get slowest :name)
-                                :timer-ms (round (* 1000 (plist-get slowest :seconds)))
-                                :timer-gc-count (plist-get slowest :gc-count)
-                                :timer-gc-ms (round (* 1000 (plist-get slowest :gc-seconds)))))))))))
-    (unless mevedel-telemetry--lag-windows
-      (mevedel-telemetry--lag-stop))))
+once per heartbeat for every watched session.  Disabling telemetry stops
+watching: the request it would close never reports settling."
+  (if (not mevedel-telemetry-enabled)
+      (mevedel-telemetry--lag-stop)
+    (let* ((now (float-time))
+           (delay (max (- now (or mevedel-telemetry--lag-due now))
+                       mevedel-telemetry--lag-late))
+           (slowest mevedel-telemetry--lag-slowest)
+           (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)))
+           (cpu (mevedel-telemetry--cpu-seconds))
+           (cpu-before (or mevedel-telemetry--lag-cpu cpu)))
+      (setq mevedel-telemetry--lag-due (+ now mevedel-telemetry--lag-interval)
+            mevedel-telemetry--lag-since now
+            mevedel-telemetry--lag-late 0
+            mevedel-telemetry--lag-slowest nil
+            mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
+            mevedel-telemetry--lag-cpu cpu
+            mevedel-telemetry--lag-windows
+            (seq-filter (lambda (entry)
+                          (let ((until (plist-get (cdr entry) :until)))
+                            (or (null until) (< now until))))
+                        mevedel-telemetry--lag-windows))
+      (when (> delay mevedel-telemetry--lag-count-threshold)
+        (let ((input-pending (and (input-pending-p) t)))
+          (dolist (entry mevedel-telemetry--lag-windows)
+            (let ((window (cdr entry)))
+              (unless (plist-get window :until)
+                (setf (plist-get (cdr entry) :counts)
+                      (mevedel-telemetry--lag-count
+                       (plist-get window :counts) delay input-pending)))
+              (when (> delay mevedel-telemetry-lag-threshold)
+                (apply #'mevedel-telemetry-record
+                       (car entry) 'event-loop-lag
+                       :request-id (plist-get window :request-id)
+                       :delay-ms (round (* 1000 delay))
+                       :input-pending input-pending
+                       :settled (and (plist-get window :until) t)
+                       :command-name (and (symbolp this-command) this-command
+                                          (symbol-name this-command))
+                       ;; Collection anywhere since the previous heartbeat:
+                       ;; timers, process output, redisplay and commands.
+                       :gc-count (- gcs-done (car gc))
+                       :gc-ms (round (* 1000 (- gc-elapsed (cdr gc))))
+                       ;; Near the delay for a busy editor, near zero for a
+                       ;; suspended machine or a blocking wait on a child.
+                       :cpu-ms (round (* 1000 (- cpu cpu-before)))
+                       (and slowest
+                            (list :timer-callback (plist-get slowest :name)
+                                  :timer-ms (round (* 1000 (plist-get slowest :seconds)))
+                                  :timer-gc-count (plist-get slowest :gc-count)
+                                  :timer-gc-ms (round (* 1000 (plist-get slowest :gc-seconds)))))))))))
+      (unless mevedel-telemetry--lag-windows
+        (mevedel-telemetry--lag-stop)))))
 
 
 ;;

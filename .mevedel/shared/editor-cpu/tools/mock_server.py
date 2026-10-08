@@ -1,5 +1,6 @@
 # OpenAI-compatible SSE mock for animation measurements.
-# Behavior per request comes from CONTROL (JSON): {"hold": seconds, "tool": {...} | null}.
+# Behavior per request comes from CONTROL (JSON): {"hold": seconds, "tool": {...} | null,
+#   "stream": {"seconds": S, "rate": words/s} | null}.
 # - A request whose messages already contain a tool result gets a short text answer.
 # - Otherwise, after HOLD seconds of silence, it streams the tool call (if any) or a short text.
 # The first request body is saved to BODY for schema inspection.
@@ -42,6 +43,18 @@ class H(http.server.BaseHTTPRequestHandler):
                 for index, tool in enumerate(tools)]},
                 "finish_reason": None}]))
             send(dict(base, choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]))
+        elif ctl.get("stream") and not has_tool_result:
+            # Prose arriving for a while, a line break every ten words, as a
+            # long answer streams above the progress row.
+            stream = ctl["stream"]
+            deadline = time.monotonic() + stream["seconds"]
+            count = 0
+            while time.monotonic() < deadline:
+                count += 1
+                word = "word%d" % count + ("\n\n" if count % 10 == 0 else " ")
+                send(dict(base, choices=[{"index": 0, "delta": {"content": word}, "finish_reason": None}]))
+                time.sleep(1.0 / stream["rate"])
+            send(dict(base, choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]))
         else:
             for w in "Done measuring.".split():
                 send(dict(base, choices=[{"index": 0, "delta": {"content": w + " "}, "finish_reason": None}]))

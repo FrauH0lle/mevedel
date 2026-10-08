@@ -2847,6 +2847,26 @@
                          (car mevedel-view--spinner-label-target)))))
           (mevedel-view--stop-spinner)))))
 
+  :doc "text streamed in at the label's start stays outside its span"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-power-policy 'full))
+        (unwind-protect
+            (progn
+              (mevedel-view--start-spinner "Thinking...")
+              (let* ((target mevedel-view--spinner-label-target)
+                     (label (buffer-substring-no-properties
+                             (car target) (cdr target))))
+                (let ((inhibit-read-only t))
+                  (save-excursion
+                    (goto-char (car target))
+                    (insert "streamed words\n")))
+                (should (equal label (buffer-substring-no-properties
+                                      (car target) (cdr target))))
+                (should (eq t (get-text-property
+                               (car target) 'mevedel-view-spinner-frame)))))
+          (mevedel-view--stop-spinner)))))
+
   :doc "a request waiting for input holds its indicators still"
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--with-visible-view
@@ -2863,6 +2883,23 @@
               (mevedel-request-set-active-work-paused request nil)
               (mevedel-view--start-spinner-timer)
               (should (mevedel--ui-timer-pending-p mevedel-view--spinner-timer)))
+          (mevedel-view--stop-spinner)))))
+
+  :doc "a semantic tick with an unchanged plan rearms the delivered timer"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-power-policy 'full))
+        (unwind-protect
+            (progn
+              (mevedel-view--start-spinner "Thinking...")
+              (let ((timer mevedel-view--spinner-timer))
+                (should (mevedel--ui-timer-pending-p timer))
+                ;; Deliver it as Emacs does: off the list, then its callback.
+                (mevedel--ui-timer-cancel timer)
+                (setq mevedel-view--spinner-last-second nil)
+                (funcall (timer--function timer))
+                (should (eq timer mevedel-view--spinner-timer))
+                (should (mevedel--ui-timer-pending-p timer))))
           (mevedel-view--stop-spinner)))))
 
   :doc "shimmer tool rows animate their verb and tool name"
@@ -4818,15 +4855,15 @@
                      (lambda (&rest _) (cl-incf reconciles)))
                     ((symbol-function 'mevedel-view--refresh-pending-tool-lines)
                      (lambda (&rest _) (cl-incf reconciles))))
-            (mevedel-view--resume-on-window-scroll (selected-window) (point-min))
+            (mevedel-view--resume-on-window-layout (selected-window) (point-min))
             (mevedel-view--resume-render-if-attended view-buf)
             (should (= 0 reconciles)))
           (fundamental-mode)
           (should-not (mevedel--timer-pending-p timer))
           (should-not (gethash view-buf mevedel-view-power--watchers)))))))
 
-(mevedel-deftest mevedel-view--resume-on-window-scroll
-  (:doc "Scrolling defers the decision until the scrolled range is drawn.")
+(mevedel-deftest mevedel-view--resume-on-window-layout
+  (:doc "Scrolling or resizing defers the decision until the new range is drawn.")
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--with-visible-view
       (let ((mevedel-view-spinner-style 'ascii)
@@ -4838,11 +4875,13 @@
                 ;; Inside the hook the old range would read as hidden.
                 (cl-letf (((symbol-function 'mevedel-view--animation-visible-p)
                            #'ignore))
-                  (mevedel-view--resume-on-window-scroll (selected-window)
+                  (mevedel-view--resume-on-window-layout (selected-window)
                                                          (point-min)))
                 (should (mevedel--ui-timer-pending-p timer))
                 (should (mevedel--ui-timer-pending-p
-                         mevedel-view--spinner-probe-timer))))
+                         mevedel-view--spinner-probe-timer))
+                (should (memq #'mevedel-view--resume-on-window-layout
+                              window-size-change-functions))))
           (mevedel-view--stop-spinner))))))
 
 (mevedel-deftest mevedel-view-animation-window-departure

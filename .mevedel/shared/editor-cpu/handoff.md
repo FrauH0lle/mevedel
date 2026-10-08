@@ -1,136 +1,76 @@
-# Handoff: editor CPU and wakeups — independent review and investigation
+# Handoff: editor CPU and wakeups
 
-## Current independent review entry point
+## Current state
 
-Review the native renderer change on `fix/cpu-wakeups`, in
-`.worktrees/cpu-wakeups`, against `a9f58a80`:
+The user's laptop fans spun up during mevedel requests. On their Emacs 31.1
+pgtk build (KDE Wayland, 2x scale, ~1536x888 logical frame) every Lisp/process
+wakeup ends in a redisplay that presents the **whole frame surface**, even when
+nothing changed: **~2% editor CPU + ~1% compositor per wakeup per second.** A
+do-nothing 10 Hz timer costs 23-36% in `emacs -Q` at that size and 3% in a
+400x300 frame.
 
-```sh
-git diff a9f58a80..HEAD
-```
+Work lives on branch `review/cpu-wakeups` (worktree
+`.worktrees/cpu-wakeups-review`), which extends `fix/cpu-wakeups`
+(`.worktrees/cpu-wakeups`). Both are based on `3df91e1d`; master has moved
+since (`abb09d64` and later), and a merge will likely conflict in `README.md`.
+Nothing is merged or pushed. Commits, in order:
 
-That base already contains the earlier scheduler/contrast fixes. The historical
-tasks below explain their context; the new change is the native presenter and
-its integration. Start with the [renderer report](renderer-lab/README.md) for
-reproduction commands, measured comparisons, source hashes and test scope.
+1. `339c8702` wakeup reductions: telemetry heartbeat, cadenced shimmer, tool-row
+   shimmer, spinner arming after redisplay, input-pause freeze, Bash progress
+   and watch, collection pacing, unattended render timers, header caches.
+2. `0f6585ec` this handoff and the measurement tools.
+3. `a9f58a80` independent follow-up: per-tool banks, freeze consistency,
+   accepted 8-fps breathe/bounce and half-speed glyphs, reversed contrast.
+4. `9b6a6f5e` native presenter: `mevedel-view-native.el` and
+   `native/mevedel-view-native.c` draw animation samples on Wayland
+   subsurfaces without Emacs redisplay; ordinary text animation is the
+   fallback everywhere else.
+5. The review commit on `review/cpu-wakeups` (see "Review, 2026-10-08" below).
 
-Review priorities:
+Product behavior is documented in `docs/view.md`, `docs/tools.md`,
+`docs/telemetry.md`, `docs/sessions.md` and ADR 0119; open work is in
+`docs/backlog.md` under "Editor CPU". Evidence: `../editor-cpu-investigation.md`
+(live-editor measurements) and `renderer-lab/README.md` (native presenter
+experiments, disposable editors).
 
-1. C ownership and Wayland ordering: parent lookup, synchronized initial/moved
-   presentation, callback cancellation, buffer releases and partial failures.
-2. Lisp presentation ownership: coalescing at redisplay, invalidation, marker
-   replacement, multiple windows, focus/occlusion, freeze phases and teardown.
-3. Feature-boundary build/load, ordinary fallback, packaging and installation.
-4. Measurement validity: distinguish isolated animation from total request CPU;
-   synthetic concurrent tool events from actual sleeping Bash; earlier results
-   from final results. Do not infer per-timer CPU attribution from counts alone.
+Key numbers (single machine, directional):
 
-The full 9,776-case suite predates two final Lisp changes (pre-command hook
-removal and unload cleanup); the final 237-case focused suite covers both.
-The later C positioning fix has a failing-before/passing-after protocol check,
-30 graphical lifecycle checks, a passing CPU/delivery gate, and user-confirmed
-absence of the refocus flicker. Eask compilation and C compilation are clean.
-No performance claim is made for non-Wayland platforms, and the remaining
-non-animation request wakeups are a separate follow-up in `docs/backlog.md`.
+| scenario | before branch | now |
+|---|---:|---:|
+| shimmer label, live editor | 70% | 26-29% |
+| default config, watched, Bash running, live editor | 73% | 34-39% |
+| breathe/bounce, live editor (ordinary renderer) | 64% | 26% |
+| 30-fps native bounce, isolated disposable editor | 55% ordinary | ~2% |
+| silent request, disposable editor: static / native bounce | — | 8% / 12% |
+| prose streaming 8 words/s: static / native / ordinary bounce | — | 38% / 44% / 47% |
 
-## Situation
+The streaming row is the largest remaining cost and is not animation.
 
-The user's laptop fans spun up during mevedel requests. Root cause: on their
-Emacs 31.1 pgtk build (KDE Wayland, 2x scale, ~1536x888 logical frame) every
-Lisp/process wakeup — a timer firing, process output — ends in a redisplay that presents the
-**whole frame surface**, even when nothing changed. Rule of thumb on that frame:
-**~2% editor CPU + ~1% compositor per wakeup per second.** A do-nothing 10 Hz
-timer costs 23-36% in `emacs -Q` at that size and 3% in a 400x300 frame.
+## Open work
 
-Fix commit: `339c8702` on branch `fix/cpu-wakeups`
-(worktree `.worktrees/cpu-wakeups`), based on `3df91e1d`. Master has moved
-(`abb09d64`, another agent's Claude Code work); merging will likely conflict in
-`README.md`. Full numbers and the fix list: `../editor-cpu-investigation.md`.
-Remaining known costs: `docs/backlog.md`, "Editor CPU".
+All open items are concise entries in `docs/backlog.md`, "Editor CPU": the
+streaming render cost, GC maintenance, markdown realign, status strip, ACP
+chunk timers, the upstream pgtk report, non-PGTK presentation costs, and the
+review's unfixed lower-severity findings (frozen mid-sweep shimmer band,
+native background with remapped faces, C display globals, natively closed
+surfaces, header memo key, hidden tool-row refreshes, collection idle
+threshold, executions-list sorting).
 
-Measured in the user's live Emacs (frame visible, 10 s windows):
+## Measuring
 
-| scenario                                  | before        | after         |
-|-------------------------------------------|---------------|---------------|
-| shimmer label (60 fps / cadenced 30)      | 70% / 34% kwin | 29% / 15%    |
-| running Bash, all indicators static       | 42% / 11%     | 21% / 10%     |
-| default config, watched, Bash running     | 73% / 21%     | 39% / 18%     |
-| breathe/bounce @30 (unchanged design)     | —             | 64% / 30%     |
-| braille/ascii label (unchanged design)    | 26%           | ~30%          |
-
-## Your tasks
-
-Work independently; do not take the previous agent's conclusions on trust.
-
-### A. Review commit 339c8702 for correctness
-
-Read `docs/development.md` first. Highest-risk areas:
-
-1. **Spinner scheduler** (`mevedel-view-stream.el`,
-   `mevedel-view--start-spinner-timer`, `--spinner-next-delay`): the timer is
-   reused when the *plan* (styles + periods) is `equal`; the callback computes
-   each delay from the plan. Check the plan always changes when cadence must
-   change (color fallback, power transitions, tool rows appearing/leaving).
-2. **Arming after redisplay** (`--probe-spinner-visibility`,
-   `--recheck-spinner-after-redisplay`): a new span is probed once per target
-   set; scroll hooks defer to a 0.2 s recheck. Check no path loops and that a
-   genuinely off-screen span stays quiet.
-3. **Cadenced shimmer** (`mevedel-view-animation.el`): 61-frame sweep bank
-   (index 0 = rest), `--sweep-phase`, `--next-delay`; interaction with frozen
-   (0 fps) motion, theme invalidation, multi-frame `:multiple` fallback,
-   `mevedel-view--animation-display-seconds`.
-4. **Shimmer tool rows** (`mevedel-view--pending-tool-line-body`): the span is
-   the label up to ":" ("Calling Bash"); check snapshot/restore of tool phases,
-   live-tail line matching (`mevedel-view-render.el` ~7440), overflow rows.
-5. **Unattended now includes undisplayed views** in an interactive Emacs
-   (`mevedel-view--unattended-p`). Every caller defers work until a resume
-   hook. Check resumption through every way a view can reappear (other frame,
-   tab-bar, persp-mode, `display-buffer` in a fresh window) and that nothing
-   correct-by-construction depended on rendering a hidden view.
-6. **Input pause** holds indicators still; the interaction sync rearms.
-7. **Telemetry lateness** (`mevedel-telemetry--lag-time-callback`,
-   `--lag-tick`): delay = max(own, timer lateness since previous tick); summary
-   counts are now one per 0.5 s heartbeat window.
-8. **Bash progress** (`mevedel-execution--hasten-progress`): quiet 1 s, 0.25 s
-   while output flows; watch interval 1 s; elapsed shown in whole seconds.
-9. **Collection pacing** (`mevedel-session-collection--arm`, `--retry`): slices
-   1 s apart, retries 1→8 s. Pitfall found here: `setf` on `plist-get` for an
-   *absent* key conses a new list instead of mutating, breaking `eq` identity
-   checks — keys must be present in the initial plist.
-10. **Decorative content tick** (`mevedel-view--content-tick`,
-    `--put-decorative-display`) used by the header-line cache; the markdown
-    realign precheck and image-layout memo; control-transfer polling skipped
-    for non-portable sessions.
-
-### B. Verify the measurements independently
-
-`tools/measure.sh OUT-DIR` drives the whole matrix in the live Emacs and cleans
-up after itself (`QUICK=1` for a smoke test). It is the previous agent's tool:
-read it before trusting it. Also confirm on the branch that a new request's
-spinner starts **without** the simulated focus event (`REARM=0`), and that on
-`3df91e1d` it stays frozen.
-
-### C. Open investigations
-
-1. **Continuous styles** (breathe, bounce, braille, ascii, dots, ellipsis):
-   the user wants cheaper variants with the cadenced shimmer as the reference.
-   They rejected pausing glyph/breathe styles for three seconds between bursts
-   ("looks stupid"). `tools/spinner-demo.el` and `tools/shimmer-demo.el` show
-   variants side by side in the user's theme; `tools/tool-demo.el` shows
-   synchronized tool rows. Possible directions: lower natural cadences, fewer
-   distinct glyph states, color-cadenced equivalents, removal (no backwards
-   compatibility is required; see CLAUDE.md).
-2. `mevedel--gc-maintain` repeats every second during requests and a 30 s
-   grace: it re-applies the GC threshold after idle tuning (gcmh lowers it
-   after its own collection, so `post-gc-hook` alone cannot replace it).
-3. `mevedel-view--realign-markdown` still wakes ~1/s while a Bash row
-   refreshes (each pass now returns early).
-4. `mevedel-view--status-strip` still builds its cache key from several live
-   lookups on every redisplay (tab-line `:eval`).
-5. `acp.el` (upstream dependency) drains each output chunk with a zero-delay
-   timer, ~30/s from the Claude Code adapter.
-6. Upstream Emacs: the pgtk whole-surface present per wakeup. A minimal repro
-   is `emacs -Q` with `(run-at-time 0.1 0.1 #'ignore)` at two frame sizes.
+- Live editor (the user's): `tools/measure.sh OUT-DIR` (`QUICK=1` smoke test,
+  `REARM=0` to check startup without a focus event) with
+  `tools/cpuh-harness.el`. Ask first; see the safety rules.
+- Disposable editor (preferred for experiments): from the worktree root,
+  after `npx @emacs-eask/cli compile`,
+  `python3 .mevedel/shared/editor-cpu/renderer-lab/request-run.py --output
+  .scratch/renderer-lab/NAME --modes static ordinary native --seconds 8`.
+  `--stream-rate N` streams prose at N words/s instead of a silent hold;
+  `--observe S` records, for S seconds after the CPU sample, which renderer
+  owns the label and how often surfaces open, close and invalidate (the
+  sampler is a 10 Hz wakeup, so it runs after the CPU sample). The window
+  needs focus throughout; a run aborts if it loses focus. Clean bytecode
+  afterwards (`npx @emacs-eask/cli clean elc`) before running tests.
 
 ## Safety rules learned the hard way
 
@@ -164,92 +104,58 @@ spinner starts **without** the simulated focus event (`REARM=0`), and that on
 ## Files
 
 - `tools/cpuh-harness.el` — counters, session driver, focus bypass, cleanup.
-- `tools/measure.sh` — scenario matrix; `tools/mock_server.py` — SSE mock that
-  holds a request or issues a `Bash` tool call.
+- `tools/measure.sh` — live-editor scenario matrix; `tools/mock_server.py` —
+  SSE mock that holds a request, streams prose, or issues `Bash` tool calls.
 - `tools/cpuh-prof.el` — bounded CPU+memory profile summaries.
 - `tools/sampler.py` — per-second CPU of a process tree and the compositor.
 - `tools/*-demo.el` — visual comparisons; `q` closes and cancels their timers.
+- `renderer-lab/` — native presenter probes, the disposable request runner
+  (`request-run.py`, `request.el`) and retained results.
 
-## Follow-up review completed (2026-10-08)
+## Review, 2026-10-08
 
-The independent follow-up is recorded in
-[the investigation](../editor-cpu-investigation.md#independent-review-and-follow-up-2026-10-08).
-It reproduces the startup fix and frame-size effect; fixes stale overflow text,
-incomplete/evicted tool banks, and phase advancement while awaiting input; and
-implements the user's visually accepted 8-fps breathe/bounce and half-speed
-glyphs. See the investigation for measurements, test results and limitations.
+Four independent reviews (native module, scheduler, non-view changes, docs)
+covered `3df91e1d..9b6a6f5e`. Fixed, each with a test, on `review/cpu-wakeups`:
 
-[Canvas/native-module research](canvas-research.md) traces the Emacs 32 API and
-its PGTK presentation path. At that earlier checkpoint Canvas had not been benchmarked and no native module
-or custom Emacs build had been added; the investigation below supersedes it. Remaining presentation, GC,
-markdown, status-strip and ACP costs remain in the backlog.
+- **Streaming froze the label (pre-existing, both renderers).** Text streamed
+  in at the label's start marker was absorbed into the span, whose start then
+  lacked the label property, so the label read as hidden in about half of the samples
+  and the native presenter tore its surface down after insertions. Start
+  markers now advance; the label animated in every streaming sample and the
+  presenter opened 2 surfaces in 6 s.
+- **Native surface leak.** A label with XML-invalid characters (control
+  characters from tool arguments) signalled mid-sync after opening other
+  surfaces, which stayed alive with their timers. Escaping now drops such
+  characters (the width check then declines) and any mid-sync error closes
+  the surfaces opened so far.
+- **Native teardown in an unredisplayed window.** Releasing surfaces waits
+  for the parent redisplay, which runs pre-redisplay hooks only for windows
+  being redisplayed; the view's windows are now marked for redisplay.
+- **Native build robustness.** Runtime builds no longer use `-Werror`, find
+  `emacs-module.h` beside the running Emacs, and resolve the source through
+  `mevedel-library-source-directory`.
+- **Hidden view held the GC threshold.** A batched history render parked on
+  an unattended view kept its collection hold and the 1 Hz maintenance timer
+  indefinitely; parking now releases it and resuming takes it again.
+- **Resize did not rearm.** A span revealed by a resize stayed frozen;
+  `window-size-change-functions` now rechecks after redisplay.
+- **Timer churn.** Every semantic tick replaced the spinner timer and its
+  closure; the delivered timer is now kept when the plan is unchanged.
+- **Duplicate Bash progress under TRAMP.** Output read inside a section that
+  suspends timers armed a second self-rearming progress chain; hastening now
+  leaves a suspended event alone. A progress interval above one second is
+  honoured.
+- **Telemetry heartbeat outlived disabling telemetry**; it now stops at its
+  next tick. A missing autoload in control-transfer polling was added.
+- Docs and ADR 0119 corrections (band width, input-pause freeze in the
+  current decision, unattended definition, 30/15 fps wording).
 
+## Earlier history
 
-The user subsequently approved reversing animation contrast: shimmer and bounce
-now fade a moving band over normal foreground text, and breathe fades from
-normal foreground and back. Glyph styles retain their normal text. This visual
-follow-up preserves the measured cadences; see the investigation's visual
-contrast follow-up for final validation.
-
-
-## New investigation goal: unrestricted approaches (2026-10-08)
-
-Find and validate a substantially lower-CPU way to display smooth mevedel
-status and tool animations. Explore any promising approach: Canvas, native
-modules, and Emacs rendering patches are examples, not constraints or a
-required sequence. The user authorizes measurements, tests, and experiments
-and prefers a solution implemented entirely on mevedel's side. Preserve the
-accepted visual behavior when assessing candidates. Implement and validate a
-justified solution if found; otherwise retain reproducible experiments,
-measurements, and a clear account of the remaining limitation.
-
-The user recreated and activated this unrestricted goal after clarifying its
-scope. The earlier pause is superseded.
-
-
-## Broader renderer investigation: implemented and validated
-
-The [renderer lab](renderer-lab/README.md) retains the reproducible experiments,
-measurements, source hashes, screenshots and acceptance results. A mevedel-side
-native module now presents the existing animation samples on independent Wayland
-surfaces, without modifying Emacs. It builds automatically on first supported
-animation use. Ordinary text animation remains the fallback.
-
-At 30 fps, isolated native bounce uses about 1.5–2.6% editor CPU, versus 55–56%
-for ordinary 30-Hz text/no-op Lisp wakeups. Canvas on an isolated Emacs 32 build
-still used about 55%. The final repeated real sleeping-Bash + main status test
-used 22–23% total editor CPU with native 30-fps bounce, versus 38.7% for ordinary
-8-fps bounce. Warm static baseline was 18.7%. Semantic updates no longer churn
-native surfaces: they coalesce at parent redisplay and retain unchanged text and
-geometry. Remaining non-animation CPU costs are separate backlog items.
-
-The accepted normal-text contrast, faded moving band, continuous color motion,
-glyph cadence, freeze policy and phase semantics are preserved. Native main
-color motion can use the configured 30 fps again. Construction failures,
-unsupported displays and unsuitable geometry keep the ordinary renderer.
-
-Validation includes all seven exact-sample styles; full request/tool lifecycle;
-seven concurrent presentation events and changing overflow counts; theme/font,
-splits, clipping, cursor/selection, child-frame and focus changes; composer draft
-preservation; allocation failures and 50 actual create/close cycles with stable
-file descriptors. Full Eask suite: 9,776 cases, zero unexpected, 31 conditional
-skips. Final focused suite after local cleanup changes: 237 passed. Package
-compilation: 242 files, no warnings. Details and exact scope are in the lab report.
-
-Implementation: `mevedel-view-native.el`, `native/mevedel-view-native.c`, with
-sample preparation and stream scheduling changes. README, view/module docs,
-ADR 0119 and backlog reflect the implemented path. Native requires Linux
-PGTK/Wayland, Emacs modules, cc/pkg-config and GTK 3/Wayland development headers.
-The results do not claim the same acceleration on other platforms.
-
-All graphical native checks ran in disposable editors. The user's live editor
-was not loaded with the native module. The native renderer and evidence are
-committed together on `fix/cpu-wakeups` for independent review.
-
-The user then spotted a top-left flash on refocusing the standalone preview.
-It was a native positioning race, not steady-state animation: a child image
-could commit before its parent's pending position. The C presenter now stays
-synchronized through the parent frame callback at creation/movement, then
-resumes independent animation. The protocol reproduction fails before the fix
-(17 premature commits), passes afterward, and the user confirmed the flicker
-is gone. See `renderer-lab/results/positioning.json` and `check-positioning.py`.
+The earlier task list for the first independent review (review areas,
+measurement verification, continuous-style investigation) is complete; see
+the investigation's "Independent review and follow-up" section and
+`renderer-lab/README.md`. The user accepted 8-fps breathe/bounce and
+half-speed glyphs (third speed looked laggy), rejected burst-and-pause glyph
+variants, approved the reversed contrast (a faded band over normal text), and
+confirmed that the native presenter's refocus flash is gone.

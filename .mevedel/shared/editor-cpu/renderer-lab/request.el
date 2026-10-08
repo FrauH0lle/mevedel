@@ -165,4 +165,65 @@ These exercise concurrent presentation without executing concurrent commands."
       ('draft-retained
        (string-suffix-p "> retained draft\nsecond line" (buffer-string)))
       (_ (error "Unknown check: %s" step)))))
+(defvar request-lab-observations nil)
+(defvar request-lab-counts nil)
+(defun request-lab--counter (name)
+  "Return advice counting calls under NAME."
+  (lambda (&rest _) (cl-incf (alist-get name request-lab-counts 0))))
+(defun request-lab-observe (seconds path)
+  "Sample native/Lisp ownership every 0.1 s for SECONDS; write PATH.
+Counts surface opens, closes and invalidations meanwhile.  The sampler is
+itself a 10 Hz wakeup, so CPU is measured in a separate pass."
+  (setq request-lab-observations nil request-lab-counts nil)
+  (dolist (name '(mevedel-view-native--open mevedel-view-native--close
+                  mevedel-view-native--invalidate mevedel-view-native-sync))
+    (advice-add name :before (request-lab--counter name) '((name . request-lab))))
+  (let* ((end (+ (float-time) seconds))
+         (timer nil))
+    (setq timer
+          (run-at-time
+           0 0.1
+           (lambda ()
+             (with-current-buffer (cpuh-view)
+               (let ((target mevedel-view--spinner-label-target))
+                 (push (list :native (length mevedel-view--native-animation-targets)
+                             :entries (length mevedel-view-native--entries)
+                             :settling mevedel-view-native--settling
+                             :plan (mapcar #'car mevedel-view--spinner-timer-plan)
+                             :label-visible
+                             (and target (marker-position (car target))
+                                  (mevedel-view--animation-target-visible-p
+                                   target 'mevedel-view-spinner-frame)
+                                  t)
+                             :point-in-label
+                             (and target (marker-position (car target))
+                                  (<= (car target) (window-point) (cdr target)))
+                             ;; Where the label sits against the stored range.
+                             :geometry
+                             (and (getenv "MEVEDEL_LAB_GEOMETRY") target
+                                  (marker-position (car target))
+                                  (let ((window (get-buffer-window)))
+                                    (list (- (cdr target) (car target))
+                                          (get-text-property (car target) 'mevedel-view-spinner-frame)
+                                          (buffer-substring-no-properties
+                                           (car target) (min (point-max) (+ (car target) 12)))
+                                          (- (window-end window) (car target))
+                                          (- (point-max) (window-point window))
+                                          (and (pos-visible-in-window-p
+                                                (car target) window)
+                                               t)))))
+                       request-lab-observations)))
+             (when (> (float-time) end)
+               (cancel-timer timer)
+               (dolist (name '(mevedel-view-native--open mevedel-view-native--close
+                               mevedel-view-native--invalidate mevedel-view-native-sync))
+                 (advice-remove name 'request-lab))
+               (with-temp-file path
+                 (insert (format "%S\n" (list :counts request-lab-counts
+                                              :samples (length request-lab-observations))))
+                 (let (seen)
+                   (dolist (row request-lab-observations)
+                     (cl-incf (alist-get row seen 0 nil #'equal)))
+                   (dolist (row seen) (insert (format "%S\n" row))))))))))
+  t)
 (provide 'request-lab)

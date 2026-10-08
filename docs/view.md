@@ -337,7 +337,10 @@ buffer scrolling changes reevaluate scheduling. A scroll hook and a just-inserte
 label or tool row both see the previous redisplay's range, so they reevaluate
 once after the next redisplay instead; without that a new request's indicator
 stayed frozen, elapsed time included, until the next focus or scroll event. A
-span still outside the window after that check waits for scrolling. Theme and display-frame changes
+span still outside the window after that check waits for scrolling or a
+window resize, which rechecks the same way. A target's start marker advances
+past text inserted at it, so a reply streaming in just above the progress row
+stays outside the label's span. Theme and display-frame changes
 repaint eligible labels at their displayed or frozen phase; labels outside the
 visible buffer range wait until they return. Frozen glyphs recheck display
 fallbacks on these events without restarting decorative motion. The
@@ -370,7 +373,7 @@ The foreground request label supports `shimmer`, `breathe`, `bounce`, `dots`,
 rows use `shimmer`, `braille`, `ascii`, `dots`, or `static` (`shimmer` by
 default), independently of the request label. Shimmer is cadenced: 0.6 seconds
 after a request starts, and then every four seconds, a cosine band at least
-three columns wide fades toward the background as it sweeps the label in one
+six columns wide (a tenth of the label each side, minimum three) fades toward the background as it sweeps the label in one
 second. Text outside the band and between sweeps keeps its normal foreground;
 between sweeps the view schedules no frames. Tool rows
 shimmer their verb and tool name ("Calling Bash", not its arguments), in the
@@ -448,9 +451,16 @@ scheduled animation work, not necessarily battery drain proportionally.
 The optional native presenter requires Linux PGTK/Wayland, Emacs module support,
 `cc`, `pkg-config`, and Emacs/GTK 3/Wayland development headers. It compiles once
 on first eligible animation and caches the module by source/build identity under
-`mevedel-user-dir/native/`. `mevedel-view-native-enabled` disables this path;
+`mevedel-user-dir/native/`. The build looks for `emacs-module.h` beside the
+running Emacs (its prefix's `include` directory or its build tree) before the
+compiler's default path, and does not treat warnings as errors, so newer headers
+cannot disable the path. `mevedel-view-native-enabled` disables this path;
 unsupported displays or build/placement failures retain ordinary text animation.
-The internal `mevedel-view-native--load-state` retains a build failure's reason.
+The internal `mevedel-view-native--load-state` retains a build failure's reason
+for the session; setting it to nil retries. Labels that contain characters XML
+cannot carry, such as control characters from tool arguments, change width once
+escaped, so they keep the ordinary renderer; an error while placing surfaces
+closes those already opened and hands every target back to text animation.
 
 The presenter matches the frame's opaque window ID against live GTK toplevels;
 it never dereferences that ID. Native ownership includes three bounded pixel
@@ -464,7 +474,10 @@ frames run independently, preventing a brief image at the initial `(0, 0)`.
 
 Projection writers inhibit redisplay while deleting and reconstructing rows.
 Native synchronization coalesces to their latest intent at the parent redisplay
-boundary, retaining unchanged surfaces even when markers are replaced. The stream
+boundary, retaining unchanged surfaces even when markers are replaced. Releasing
+every surface still waits for that boundary, but marks the view's windows for
+redisplay, because pre-redisplay hooks run only for windows being redisplayed.
+The stream
 owner keeps metadata cadence, power policy and the last presented phase for freezes;
 the native presenter owns pixels and placement. Stopping the view releases surfaces,
 timers, observers, pending parent callbacks and pending presentation.
@@ -660,8 +673,7 @@ Terminology:
   interaction zones. Its elapsed value measures active request work, excluding
   time spent awaiting an Ask answer, permission decision, Plan approval,
   ApplyPatch review decision, or direct request input. During those waits it
-  reads `Waiting for input`; decorative motion continues only if enabled by
-  style, animation switch and power policy. Queued
+  reads `Waiting for input` and every indicator holds still. Queued
   Pending Inputs and an armed session fork do not pause active elapsed time.
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
@@ -1290,7 +1302,10 @@ minutes at about 160 ms each. Each hold carries a liveness check, so an
 aborted or replaced request cannot keep the threshold raised, and a value
 someone else set meanwhile is left in place. Save As, fork, and rewind hold
 the same threshold for their transaction: a large Save As allocated 350 MB and
-collected 21 times. A batch Emacs is unaffected.
+collected 21 times. A batched history render parked on an unattended view
+(unfocused, or shown in no window) releases its hold until it resumes, so
+a view hidden mid-render does not keep the threshold raised and the
+maintenance timer waking. A batch Emacs is unaffected.
 
 The busy threshold still let a collection land in the middle of typing: a
 settled root refresh allocates about 40 MB, and on a long session's heap one

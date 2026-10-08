@@ -28,12 +28,14 @@ On the measured pgtk build, Lisp/process wakeups present the whole frame surface
 when nothing changed: about 2% editor CPU and 1% compositor per wakeup per
 second on a 2x-scaled 1536x888 frame. The heartbeat, shimmer cadence, tool
 rows, Bash progress and watch timers, stream batching, collection pacing and
-unattended render timers were reduced for this (ADR 0119). Still open:
+unattended render timers were reduced for this (ADR 0119; `telemetry.md`,
+`tools.md` and `sessions.md` for the heartbeat, Bash and collection). Still
+open:
 
-- Independent native animation avoids per-frame Lisp wakeups on PGTK/Wayland.
-  Other displays retain the accepted 8-fps breathe/bounce and half-speed glyph
-  cadences; investigate their presentation costs before adding another native
-  backend. Burst-and-pause glyph variants were rejected.
+- Investigate animation presentation cost on non-PGTK displays before adding
+  another native backend. They keep the accepted 8-fps breathe/bounce and
+  half-speed glyph cadences; native surfaces cover PGTK/Wayland only.
+  Burst-and-pause glyph variants were rejected.
 - `mevedel--gc-maintain` wakes once a second during requests and their
   30-second grace, to re-apply the threshold after idle tuning such as gcmh
   lowers it.
@@ -45,6 +47,46 @@ unattended render timers were reduced for this (ADR 0119). Still open:
   second from the Claude Code adapter.
 - The whole-surface repaint itself is an Emacs pgtk behavior worth reporting
   upstream.
+- Streaming prose at eight words a second cost 38% editor CPU in a
+  disposable editor with a static label, against 8% for a silent request;
+  bounce animation added 6 (native) to 9 (ordinary) points. The stream's own
+  render and batch cadence is the larger remaining cost; profile it next.
+
+### Animation and native presenter follow-ups
+
+- Freezing (input pause, zero fps) during a shimmer sweep holds the faded
+  band for the whole pause. Consider snapping a frozen shimmer to its rest
+  frame.
+- The native surface paints the frame's default background, ignoring
+  buffer-local face remapping, `hl-line` and `alpha-background`; such rows
+  show a mismatched box.
+- The C module caches the Wayland display and globals for the session and
+  never resets them when that display closes (daemon, `delete-terminal`).
+  Reset on the GDK display's `closed` signal.
+- A native surface the module closes itself (unmap, scale change, cairo
+  failure) stays excluded from Lisp ticks until the view's next semantic
+  update; with only pending-tool rows and no status label nothing triggers
+  one.
+- A move while the previous position callback is pending can show one or two
+  frames at the old position.
+- Native placement, geometry translation and the C module have no automated
+  coverage beyond mocks; their checks are lab scripts in
+  `work://shared/editor-cpu/renderer-lab/`.
+- A label whose native placement or timeline keeps failing reopens and closes
+  the surfaces of the labels before it on each semantic update (about once a
+  second). Remember failing signatures until the label changes.
+
+### Wakeup review follow-ups
+
+- `mevedel-view--prompt-on-screen-p` keys its memo on content, invisibility,
+  start, size and the input marker, but not line wrapping, text scale, line
+  spacing or font; a header can stay stale until the next edit or scroll.
+- Tool-row refreshes recorded while a view is hidden are cleared when a later
+  turn settles before it is shown, leaving an older row's progress stale.
+- Publication collection arms its idle timer at the current idle time plus
+  the wait; one armed during a long absence then needs that much idle time
+  again after the user returns.
+- The executions list sorts its Elapsed column as text.
 
 ## Request lifecycle
 

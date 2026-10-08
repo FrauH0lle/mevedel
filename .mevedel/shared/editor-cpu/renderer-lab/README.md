@@ -49,8 +49,9 @@ did not. Compilation CPU is not counted as editor CPU, but overlapping load
 can still affect timings. See `results/environment.json`.
 
 Gprofng places 86% of sampled CPU in Pixman pixel operations. The call tree
-includes GDK frame preparation and fills; the complete profile is disposable
-material in `.scratch/renderer-lab/profile-baseline/profile.er`. A function
+includes GDK frame preparation and fills; the complete profile was disposable
+material in the original worktree's `.scratch/renderer-lab/profile-baseline/`
+and is not retained. A function
 summary is retained in `results/profile-functions.txt`. The experiment refines
 the original diagnosis: **Lisp/process wakeups** trigger the expensive redisplay
 path, while native GLib callbacks can execute without it. Rendering through a
@@ -58,8 +59,7 @@ normal GTK widget or Canvas still pays the expensive presentation cost here.
 
 ## Reproduce
 
-Run from the `fix/cpu-wakeups` worktree, with the temporary editor visible.
-The live editor's old comparison timer has been stopped. The runner creates
+Run from the branch worktree, with the temporary editor visible. The runner creates
 its own server, compiles copied Lisp into a temporary directory, measures
 `/proc` CPU using actual clock tick frequency and elapsed time, then closes
 only its own editor. It never loads experimental modules into the live editor.
@@ -271,3 +271,15 @@ Useful primary references:
 - [Wayland subsurface protocol](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_subsurface)
 - [GTK queue_draw_area](https://docs.gtk.org/gtk3/method.Widget.queue_draw_area.html)
 - [Canvas upstream/backport](https://github.com/minad/emacs-canvas-patch)
+
+## Streaming prose (review, 2026-10-08)
+
+`request-run.py --stream-rate 8 --observe 6` streams prose above the progress
+row and then samples renderer ownership every 0.1 s. Before the start-marker
+fix, the label read as hidden in 26 of the 51 samples taken while text arrived
+(ordinary; 27 for native), and the native presenter opened and closed 5
+surfaces in 6 s; afterwards the label animated
+in every sample while text arrived, and native opened 2. Editor CPU over 8 s
+while streaming: static label 38%, native bounce 44%, ordinary bounce 47%;
+a silent request: static 7.8%, native bounce 12%. Single runs in
+`results/streaming/`; the stream's own render cost dominates.

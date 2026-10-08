@@ -20,6 +20,10 @@ parser.add_argument('--tool', action='store_true')
 parser.add_argument('--tool-count', type=int, default=1)
 parser.add_argument('--trace-native', action='store_true')
 parser.add_argument('--acceptance', action='store_true')
+parser.add_argument('--observe', type=float, default=0,
+                    help='after sampling CPU, record ownership for this many seconds')
+parser.add_argument('--stream-rate', type=float, default=0,
+                    help='stream prose at this many words/s instead of holding silently')
 args = parser.parse_args()
 lab = Path(__file__).resolve().parent
 root = lab.parents[3]
@@ -65,7 +69,8 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                         str(package / 'cpuh-harness.el')], env=env, check=True, stdout=log, stderr=log)
     control = output / 'control.json'
     hold_seconds = args.seconds + (30 if args.acceptance else 8)
-    control.write_text(json.dumps(dict(hold=0 if args.tool and args.tool_count == 1 else hold_seconds,
+    control.write_text(json.dumps(dict(hold=0 if (args.tool and args.tool_count == 1) or args.stream_rate else hold_seconds,
+                                      stream=dict(seconds=hold_seconds, rate=args.stream_rate) if args.stream_rate else None,
                                       tools=[dict(name='Bash', args=dict(command=f'sleep {hold_seconds}', yield_time_ms=30000)) for _ in range(args.tool_count)] if args.tool and args.tool_count == 1 else None)))
     expected_surfaces = 1 + min(args.tool_count, 5) + int(args.tool_count > 5) if args.tool else 1
     with (output / 'mock.log').open('w') as mock_log, (output / 'editor.log').open('w') as editor_log:
@@ -107,7 +112,8 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                 before = call('(request-lab-state)')
                 if ':busy t' not in before or ':focused t' not in before:
                     raise RuntimeError('Request not visibly active: ' + before)
-                if native and (f':native {expected_surfaces}' not in before):
+                # Streaming moves the label; surfaces can be settling at any instant.
+                if native and not args.stream_rate and (f':native {expected_surfaces}' not in before):
                     raise RuntimeError('Native renderer did not attach: ' + before)
                 call('(cpuh-start)')
                 e0, k0 = ticks(editor.pid), ticks(compositor)
@@ -119,6 +125,9 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                 if ':busy t' not in after or ':focused t' not in after:
                     raise RuntimeError('Request lost activity or focus during sampling: ' + after)
                 call(f'(progn (cpuh-stop) (cpuh-dump {json.dumps(str(output / "timers.txt"))} {json.dumps(label)}))')
+                if args.observe:
+                    call(f'(request-lab-observe {args.observe} {json.dumps(str(output / (label + "-observed.txt")))})')
+                    time.sleep(args.observe + 1)
                 factor = 100 / os.sysconf('SC_CLK_TCK') / seconds
                 row = dict(label=label, tool_count=args.tool_count if args.tool else 0, synthetic_tool_events=args.tool and args.tool_count > 1, editor_cpu=round((e1-e0)*factor, 2), compositor_cpu=round((k1-k0)*factor, 2),
                            seconds=seconds, first_use_seconds=first_use, before=before, after=after)
