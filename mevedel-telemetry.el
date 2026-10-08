@@ -790,8 +790,8 @@ watching: the request it would close never reports settling."
            (cpu (mevedel-telemetry--cpu-seconds))
            (cpu-before (or mevedel-telemetry--lag-cpu cpu)))
       (setq mevedel-telemetry--lag-due
-            (float-time (timer-next-integral-multiple-of-time
-                         nil mevedel-telemetry--lag-interval))
+            ;; The dispatcher has already moved the timer to its next tick.
+            (float-time (timer--time mevedel-telemetry--lag-timer))
             mevedel-telemetry--lag-since now
             mevedel-telemetry--lag-late 0
             mevedel-telemetry--lag-slowest nil

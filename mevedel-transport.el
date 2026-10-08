@@ -303,13 +303,17 @@ Use this around a process filter whose library schedules ordinary one-shot
 continuations with `run-at-time'.  Inside a TRAMP handler frame those timers can
 land on a temporarily bound `timer-list' and vanish with it; they are held and
 armed once the outermost frame returns.  Outside one THUNK runs unchanged, so
-its `cancel-timer' calls still reach the real timer list."
+its `cancel-timer' calls still reach the real timer list.  The shared
+host timer of `mevedel--ui-timer-activate' is left armed: it lives on the
+top-level list, and holding it froze every coalesced callback, the
+telemetry heartbeat included, for the whole remote operation."
   (if (not (mevedel-transport-nested-p))
       (funcall thunk)
     (let ((before (copy-sequence timer-list)))
       (unwind-protect (funcall thunk)
         (dolist (timer timer-list)
-          (unless (memq timer before)
+          (unless (or (memq timer before)
+                      (eq timer mevedel--coalesced-timer))
             (cancel-timer timer)
             (push timer mevedel-transport--held-timers)))))))
 

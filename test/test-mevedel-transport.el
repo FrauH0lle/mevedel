@@ -118,6 +118,22 @@
           (should (eq 'argument delivered)))
       (when timer (cancel-timer timer))))
 
+  :doc "leaves the shared host timer armed during a TRAMP wait"
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        owned host)
+    (unwind-protect
+        (mevedel-transport-call-as-remote-operation
+         (lambda ()
+           (mevedel-transport-call-with-retained-timers
+            (lambda ()
+              (setq owned (mevedel--run-periodic-timer 1 #'ignore)
+                    host mevedel--coalesced-timer)))
+           (should host)
+           (should-not (mevedel-transport-held-timer-p host))
+           (should (memq host (default-toplevel-value 'timer-list)))))
+      (mevedel--ui-timer-cancel owned)))
+
   :doc "holds a filter's timer scheduled during a TRAMP wait until the wait ends"
   (let (timer held delivered)
     (unwind-protect

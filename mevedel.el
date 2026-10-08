@@ -852,6 +852,16 @@ always prompt for the session name."
     (mevedel-transport-uninstall))
   (when (featurep 'mevedel-execution)
     (mevedel-execution-teardown-all))
+  ;; Shared periodic callbacks belong to mevedel; their host timer would
+  ;; otherwise outlive it.  Stop owners that remember their timer first, so
+  ;; a later install starts them again and the threshold is restored.
+  (clrhash mevedel--gc-holds)
+  (mevedel--gc-maintain)
+  (when (featurep 'mevedel-telemetry)
+    (mevedel-telemetry--lag-stop))
+  (mapc #'mevedel--ui-timer-cancel (copy-sequence mevedel--coalesced-timers))
+  (mevedel--ui-timer-cancel mevedel--coalesced-timer)
+  (setq mevedel--coalesced-timer nil)
   ;; Remove tools
   (setf (alist-get "mevedel" gptel--known-tools nil 'remove #'equal) nil)
   (remove-hook 'mevedel-execution-event-functions

@@ -1143,9 +1143,9 @@ execution's progress cost."
 (defun mevedel-execution--emit-progress (record)
   "Publish one bounded progress event for live RECORD.
 Quiet events share integral multiples of
-`mevedel-execution--quiet-progress-interval', or of
-`mevedel-execution-progress-interval' when that is longer, at least 250 ms
-after this event.  Output arriving meanwhile brings the next event forward,
+`mevedel-execution--quiet-progress-interval', at least 250 ms after this
+event, or at least `mevedel-execution-progress-interval' after it when
+that is longer.  Output arriving meanwhile brings the next event forward,
 see `mevedel-execution--hasten-progress'."
   (unless (mevedel-execution--record-finished-p record)
     (setf (mevedel-execution--record-progress-emitted-at record) (float-time))
@@ -1161,9 +1161,11 @@ see `mevedel-execution--hasten-progress'."
       (mevedel--ui-timer-cancel timer)
       (timer-set-time
        timer (timer-next-integral-multiple-of-time
-              (time-add nil 0.25)
-              (max mevedel-execution--quiet-progress-interval
-                   mevedel-execution-progress-interval)))
+              (time-add nil (if (> mevedel-execution-progress-interval
+                                   mevedel-execution--quiet-progress-interval)
+                                mevedel-execution-progress-interval
+                              0.25))
+              mevedel-execution--quiet-progress-interval))
       (timer-set-function timer #'mevedel-execution--emit-progress (list record))
       (setf (mevedel-execution--record-progress-timer record) timer)
       (mevedel--ui-timer-activate timer t))))

@@ -146,6 +146,16 @@
             (should (eq caller (current-buffer))))
         (kill-buffer other)))))
 
+(mevedel-deftest mevedel--ui-timer-activate/untimed
+  (:doc "rejects a coalesced timer without a time instead of breaking the queue")
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        (untimed (timer-create)))
+    (timer-set-function untimed #'ignore)
+    (should-error (mevedel--ui-timer-activate untimed t))
+    (should-not mevedel--coalesced-timers)
+    (should-not mevedel--coalesced-timer)))
+
 (mevedel-deftest mevedel--ui-timer-activate
   (:doc "schedules on the host list during TRAMP without disturbing foreign timers")
   (let ((earlier (run-at-time 60 nil #'ignore))

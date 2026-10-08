@@ -764,6 +764,9 @@ one host wakeup; repeating timers use integral clock multiples and skip
 missed ticks.  Otherwise use Emacs's ordinary timer delivery."
   (if coalesced
       (progn
+        ;; One timer without a time would break every later arm.
+        (unless (timer--high-seconds timer)
+          (error "Coalesced timer has no time: %S" (timer--function timer)))
         (cl-pushnew timer mevedel--coalesced-timers :test #'eq)
         (mevedel--coalesced-timer-arm))
     (let ((timer-list (default-toplevel-value 'timer-list)))
@@ -832,7 +835,8 @@ This boundary also allows telemetry to time each callback individually."
               (when (and (memq timer mevedel--coalesced-timers)
                          (not (time-less-p now (timer--time timer))))
                 ;; Bound a batch between callbacks.  An individual callback
-                ;; still owns its own responsiveness, as with ordinary timers.
+                ;; still owns its own responsiveness; unlike ordinary timers,
+                ;; its siblings cannot run while it waits for input or output.
                 (when (and delivered
                            (or (input-pending-p) (time-less-p until nil)))
                   (throw 'yield nil))

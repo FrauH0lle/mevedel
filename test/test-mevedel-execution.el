@@ -105,9 +105,11 @@
                   ((symbol-function 'mevedel-execution--emit-event) #'ignore))
           (mevedel-execution--emit-progress record)
           (setq timer (mevedel-execution--record-progress-timer record))
-          (let ((due (float-time (timer--time timer))))
-            (should (= 0 (mod (floor due) 3)))
-            (should (<= 0.25 (- due (float-time)) 3.26))))
+          (let ((due (float-time (timer--time timer)))
+                (emitted (mevedel-execution--record-progress-emitted-at record)))
+            ;; At least the interval apart, still on a shared whole second.
+            (should (= due (floor due)))
+            (should (<= 3 (- due emitted) 4.01))))
       (mevedel--ui-timer-cancel timer)))
 
   :doc "terminal cleanup cancels shared quiet progress without stopping other jobs"

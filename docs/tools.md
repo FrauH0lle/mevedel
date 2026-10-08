@@ -1086,8 +1086,8 @@ silent, which keeps its whole-second elapsed time current. Quiet updates share
 whole-second clock ticks with housekeeping and elapsed metadata. The transition
 from an output-driven update to that clock waits 250 ms to 1.25 seconds, preserving
 the four-updates-per-second bound. A longer
-`mevedel-execution-progress-interval` slows both and aligns quiet updates to
-its multiples. Output read while a remote operation binds the editor's timer
+`mevedel-execution-progress-interval` slows both: quiet updates then come at
+least that long apart, still on whole-second ticks. Output read while a remote operation binds the editor's timer
 list away moves the pending event on the top-level list rather than arming a
 second chain of events. Each event refreshes the row; callbacks due
 together share a host wakeup. The existing Bash row receives the
