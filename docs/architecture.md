@@ -469,7 +469,10 @@ Direct via `gptel-request` and `gptel-fsm`. Tools registered in
 order (later parents win, then the child). Ordinary preset keys resolve to
 `mevedel-foo`/`mevedel--foo` before gptel variables and use gptel's value
 composition semantics. Persistent application is buffer- and session-local;
-request-only application is dynamically scoped. The built-ins are
+request-only application is dynamically scoped for variables. Its agent roster
+and tool catalog are read by tool calls after dispatch, so they last until the
+request ends, when teardown reinstalls the session preset's. Directive dispatch
+applies the default chat preset only to a session without one. The built-ins are
 `mevedel-discuss` and `mevedel-implement`. Request changes
 and Retry use ordinary implementation authority and focused prompt context,
 not another preset. Presets can also merge named model tiers and workload maps.
