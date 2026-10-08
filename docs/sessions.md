@@ -515,9 +515,15 @@ provider, including direct `gptel-menu`, prefixed send and mevedel's bridge menu
 It refuses before opening the transient or changing bridge return state, and
 points to mevedel's model and tools menus. Model and reported effort choices
 remain supported there. Temperature and output-limit controls in gptel's HTTP
-menu do not configure Claude's native loop. Mid-turn steering is unavailable;
-sending from a busy Claude composer visibly queues a separate turn in FIFO
-order. Explicit queued follow-ups and interruption remain available.
+menu do not configure Claude's native loop. Sending from a busy Claude composer
+queues steering for the running turn, as on HTTP providers; explicit queued
+follow-ups and interruption remain available. Steering reaches the native turn
+at its next tool batch, or as a further prompt in the same turn when the native
+prompt ends first (see [Native context delivery](#native-context-delivery)). A
+native turn cannot wait at a held boundary: steering still held by the Pending
+Inputs cockpit or an unresolved interaction when the turn succeeds becomes the
+first follow-ups, in submission order. A failed or interrupted turn marks it
+`Needs review`, as on HTTP.
 
 ### Native context delivery
 
@@ -539,9 +545,9 @@ completion, a hook preview or an offloaded file never counts as delivery.
   MIME types and order. Text receipts alone do not establish image delivery.
 - **Tool-batch hook.** After each native tool batch, a `PostToolBatch` hook
   carries selected observations changed since the last accepted snapshot,
-  queued turn events, newly available direct children and mail. It is received
-  only by a successful SDK `hook_response` for that event whose output matches
-  exactly. A receipt can trail the next tool boundary; that boundary leaves its
+  queued turn events, newly available direct children, the root turn's
+  deliverable steering and mail. It is received only by a successful SDK
+  `hook_response` for that event whose output matches exactly. A receipt can trail the next tool boundary; that boundary leaves its
   updates queued.
 
 Receipt runs the captured commits, such as reminder firing marks, mention
@@ -555,6 +561,16 @@ compaction. Unreceived mail stays unread; mailbox consumption keeps its deferred
 persistence, so process loss before saving can redeliver mail. Except for a
 mail-only hook batch, an unreceived delivery fails the next tool call and turns
 a successful terminal response into an error.
+
+Root steering joins a delivery only while it is not held; a turn that ends at a
+boundary takes none. Each entry is expanded like an HTTP steering prompt and
+sent after a fixed header telling the model to treat it as direct user input,
+because hook context is not a user message. Receipt consumes the entry, commits
+its mention, skill and prompt-submission effects, and records its transcript
+text and hook audits as user input; the header stays on the wire. Steering left
+when a native prompt ends successfully, with no continuation pending, is sent as
+a further prompt in the same turn and received by its exact echo, so the turn
+settles once. Media cannot steer, as on HTTP.
 
 Claude's inline hook output limit is 10,000 UTF-16 code units. A hook update
 beyond it, including a single mail message, stops the native prompt at that

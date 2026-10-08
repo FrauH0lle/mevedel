@@ -49,6 +49,12 @@ blocks. The receipt correlation marker stays on the wire. The shared record
 preserves source types and lets the normal renderer place initial deliveries
 with the user prompt and later deliveries at their point in assistant activity.
 
+Root steering uses the same receipts. It rides the next tool-batch hook under a
+header that gives it user authority, or a further prompt when the native prompt
+ends first, and is consumed only on receipt. A native turn cannot park at a
+held boundary the way a gptel state machine waits, so steering still held when
+the turn succeeds becomes the first follow-ups.
+
 External history changes what the transcript can faithfully reconstruct.
 Claude compaction publishes a successor transcript segment; selected context
 must be acknowledged again before subsequent tools. Cross-engine continuation
@@ -167,6 +173,14 @@ Receipt establishes SDK acceptance, not model understanding or retention
 through later compaction.
 
 ## Decision history
+
+- **Steering:** busy Claude input first became queued follow-ups, because the
+  native loop offered no same-turn user input mevedel could observe. The
+  receipt-backed tool-batch hook already delivered mail and turn events inside
+  the running turn, so steering now rides it and keeps HTTP's "next boundary,
+  never abort" contract. The adapter's own `_session/steering` request was
+  rejected: it pre-empts the current generation, moves a running tool call to
+  the background, and splits one turn into several results.
 
 - **Tool hook decisions:** review found that native turns called post-tool
   hooks but ignored their decisions, allowing a stopped turn to execute another

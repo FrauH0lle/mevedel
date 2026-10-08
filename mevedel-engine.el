@@ -51,6 +51,20 @@ native gptel state machine.")
   "Return REQUEST's native engine owner or its external request context."
   (and request (or (mevedel-request-fsm request) request)))
 
+(cl-defgeneric mevedel-engine-steerable-p (owner)
+  "Return whether turn OWNER can still take steering at a later boundary.")
+
+(cl-defmethod mevedel-engine-steerable-p ((owner gptel-fsm))
+  (not (memq (gptel-fsm-state owner) '(DONE ERRS ABRT))))
+
+(cl-defmethod mevedel-engine-steerable-p ((owner mevedel-request))
+  ;; Its tool-batch hook and prompt continuation deliver steering until the
+  ;; native turn settles or stops at a boundary.
+  (let ((info (mevedel-engine-info owner)))
+    (and (plist-get info :external-history)
+         (not (plist-get info :mevedel-acp-outcome))
+         (not (plist-get info :mevedel-end-turn)))))
+
 (cl-defgeneric mevedel-engine-external-p (backend)
   "Return whether BACKEND owns retained history outside mevedel.")
 

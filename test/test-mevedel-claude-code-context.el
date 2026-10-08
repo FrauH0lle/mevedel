@@ -345,6 +345,13 @@
                                        (list :hookEventName "PostToolBatch"
                                              :additionalContext body))))))))
 
+(defun mevedel-claude-code-context-test--steer (session request text)
+  "Queue TEXT in SESSION as steering for REQUEST or a request id."
+  (mevedel-session-enqueue-pending-input
+   session 'steering
+   (list :input text :model-input text :transcript-payload text
+         :request-id (if (stringp request) request (mevedel-request-id request)))))
+
 (defun mevedel-claude-code-context-test--prompt-text (owner history)
   "Return the text OWNER's prompt with native HISTORY submits."
   (mapconcat (lambda (part) (or (alist-get 'text part) ""))
@@ -404,7 +411,70 @@
     (let ((types (mapcan (lambda (record)
                            (mapcar (lambda (item) (plist-get item :type)) (plist-get record :items)))
                          (mevedel-transcript-audit-records (buffer-string)))))
-      (should (memq 'context-environment types)))))
+      (should (memq 'context-environment types))))
+
+  :doc "steering for this request rides the hook and becomes user input only on receipt"
+  (mevedel-engine-test--with-session
+    (insert "Question?\n\n")
+    (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+    (mevedel-claude-code-context-system request "sys")
+    (mevedel-claude-code-context-test--steer session request "STEER-7731")
+    (mevedel-claude-code-context-test--steer session "another-request" "OTHER-STEER")
+    (let ((body (mevedel-claude-code-context-prepare request)))
+      (should (string-search mevedel-claude-code-context--steering-header body))
+      (should (string-search "STEER-7731" body))
+      (should-not (string-search "OTHER-STEER" body))
+      ;; Sending is not delivery: the entry stays queued and tools wait.
+      (should (= 2 (length (mevedel-session-pending-steering session))))
+      (should-error (mevedel-claude-code-context-check request))
+      (mevedel-claude-code-context-observe
+       request (mevedel-claude-code-context-test--hook-receipt body)))
+    (should (equal '("OTHER-STEER")
+                   (mapcar (lambda (entry) (plist-get entry :input))
+                           (mevedel-session-pending-steering session))))
+    (should-not (mevedel-claude-code-context-check request))
+    (should (= 1 (how-many "STEER-7731" (point-min) (point-max))))
+    (should-not (string-search mevedel-claude-code-context--steering-header (buffer-string))))
+
+  :doc "held steering stays queued at the tool boundary"
+  (mevedel-engine-test--with-session
+    (setf (mevedel-engine-info request) (list :buffer buffer))
+    (mevedel-claude-code-context-system request "sys")
+    (mevedel-claude-code-context-test--steer session request "HELD-STEER")
+    (mevedel-session-set-pending-input-paused session t)
+    (should-not (mevedel-claude-code-context-prepare request))
+    (should (= 1 (length (mevedel-session-pending-steering session))))))
+
+(mevedel-deftest mevedel-claude-code-context-next-prompt (:quiet t)
+  ,test
+  (test)
+  :doc "steering left at a prompt's end continues the turn without the overflow preamble"
+  (mevedel-engine-test--with-session
+    (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+    (mevedel-claude-code-context-system request "sys")
+    (mevedel-claude-code-context-test--steer session request "LATE-STEER-2290")
+    (let* ((content (mevedel-claude-code-context-next-prompt request))
+           (text (mapconcat (lambda (part) (alist-get 'text part)) content "\n")))
+      (should (string-search "LATE-STEER-2290" text))
+      (should-not (string-search "Continue the current task" text))
+      (should (= 1 (length (mevedel-session-pending-steering session))))
+      (mevedel-claude-code-context-observe
+       request `((method . "_claude/sdkMessage")
+                 (params (message (type . "user")
+                                  (message (role . "user") (content . ,content)))))))
+    (should-not (mevedel-session-pending-steering session))
+    (should (= 1 (how-many "LATE-STEER-2290" (point-min) (point-max)))))
+
+  :doc "nothing continues a turn that already ends or has no steering"
+  (mevedel-engine-test--with-session
+    (setf (mevedel-engine-info request) (list :buffer buffer))
+    (mevedel-claude-code-context-system request "sys")
+    (should-not (mevedel-claude-code-context-next-prompt request))
+    (mevedel-claude-code-context-test--steer session request "ENDING-STEER")
+    (setf (mevedel-engine-info request)
+          (plist-put (mevedel-engine-info request) :mevedel-end-turn 'user))
+    (should-not (mevedel-claude-code-context-next-prompt request))
+    (should (= 1 (length (mevedel-session-pending-steering session))))))
 
 (mevedel-deftest mevedel-claude-code-context-prompt (:quiet t)
   ,test

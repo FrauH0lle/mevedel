@@ -1803,10 +1803,6 @@ Non-nil means later input is a follow-up.  The symbol is one of
       "An unfinished Goal owns this session -- /goal resume continues it")
      (_ "The workflow is occupied -- use C-c TAB for a follow-up"))))
 
-(defun mevedel-view--steerable-root-request-p (request)
-  "Return non-nil when REQUEST is an ordinary root provider turn."
-  (and request (mevedel-request-fsm request)))
-
 (defun mevedel-view--delete-skill-argument-hint ()
   "Remove the composer skill argument hint overlay."
   (when (overlayp mevedel-view--skill-argument-hint-overlay)
@@ -2460,8 +2456,6 @@ instead of the composer, preserving its draft."
 		(funcall restore)
 		(mevedel-view--occupied-root-workflow-error
 		 occupied))
-               ((plist-get (mevedel-request-context active-request) :external-history)
-                (mevedel-view--queue-follow-up input))
                ((not (mevedel-view--steerable-root-request-p active-request))
 		(funcall restore)
 		(user-error
