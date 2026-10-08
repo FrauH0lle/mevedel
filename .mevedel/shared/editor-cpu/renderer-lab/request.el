@@ -8,7 +8,7 @@
 (require 'mevedel-view-stream)
 (require 'mevedel-plugin-registry)
 (require 'mevedel-permission-mode)
-(require 'mevedel-view-native)
+(require 'mevedel-view-native nil t)
 (require 'server)
 (add-to-list 'display-buffer-alist '("\\*Warnings\\*" (display-buffer-no-window) (allow-no-window . t)))
 (setq inhibit-startup-screen t
@@ -40,19 +40,111 @@
 (declare-function cpuh-start "cpuh-harness" ())
 (declare-function cpuh-stop "cpuh-harness" ())
 (declare-function cpuh-dump "cpuh-harness" (file label))
+(defvar mevedel-claude-code--aliases)
+(defvar mevedel-claude-code-executable)
+(defvar mevedel-claude-code-adapter-executable)
+(defvar mevedel-claude-code-directory)
+(declare-function mevedel-claude-code-register "mevedel-claude-code-backend" ())
+(declare-function mevedel-model-set-session-provider "mevedel-models" (session provider buffer))
+(declare-function mevedel-model-resolve-provider "mevedel-models" (spec))
+(defvar request-lab--claude-launch nil "The real `mevedel-claude-code-launch'.")
+(defun request-lab--claude-session-info (model)
+  "Return the capabilities Claude's adapter reports for MODEL (test support copy)."
+  (let ((levels (cdr (assoc model mevedel-claude-code--aliases))))
+    `((configOptions
+       . ,(vconcat
+           (list `((id . "model") (category . "model") (type . "select")
+                   (currentValue . ,model)
+                   (options . ,(vconcat (mapcar (lambda (alias) `((value . ,(car alias))))
+                                                mevedel-claude-code--aliases)))))
+           (when levels
+             (list `((id . "effort") (category . "thought_level") (type . "select")
+                     (currentValue . "default")
+                     (options . ,(vconcat (mapcar (lambda (level) `((value . ,level)))
+                                                  (cons "default" (mapcar #'symbol-name levels)))))))))))))
+(defun request-lab--claude-launch (&rest args)
+  "Launch the streaming peer in place of Claude Code's adapter, as the tests do."
+  (let* ((python (executable-find "python3"))
+         (launch (let ((mevedel-claude-code-executable python)
+                       (mevedel-claude-code-adapter-executable python))
+                   (apply request-lab--claude-launch args)))
+         (meta (append
+                `((streamRate . ,(string-to-number (getenv "MEVEDEL_LAB_CLAUDE")))
+                  (streamSeconds . ,(string-to-number (getenv "MEVEDEL_LAB_STREAM_SECONDS")))
+                  (streamCountPath . ,(getenv "MEVEDEL_LAB_COUNT_PATH"))
+                  (sessionInfo . ,(request-lab--claude-session-info (nth 2 args))))
+                (when (nth 5 args) `((hookCommand . ,(nth 5 args))))
+                (plist-get launch :meta))))
+    (setq launch (plist-put launch :command python))
+    (setq launch (plist-put launch :args (list (getenv "MEVEDEL_LAB_PEER"))))
+    (setq launch (plist-put launch :prepare-launch nil))
+    (plist-put launch :meta meta)))
+(defvar gptel--openai-oauth-token-file)
+(declare-function gptel-make-openai-oauth "gptel-openai-oauth" (name &rest args))
+(defun request-lab--use-real-gptel (model)
+  "Make the measured session use the user's ChatGPT login with MODEL.
+The token is a copy: the experiment never refreshes or writes the user's."
+  (require 'gptel-openai-oauth)
+  (setq gptel--openai-oauth-token-file (getenv "MEVEDEL_LAB_OAUTH_TOKEN"))
+  (gptel-make-openai-oauth "Codex" :models (list (intern model)))
+  (let ((data (buffer-local-value 'mevedel--data-buffer (cpuh-view))))
+    (mevedel-model-set-session-provider
+     (buffer-local-value 'mevedel--session data)
+     (mevedel-model-resolve-provider (concat "Codex:" model)) data)))
+(defun request-lab--use-real-claude ()
+  "Make the measured session a real Claude Code session on the user's login.
+Claude's CLI finds its credentials under HOME, so its subprocesses get the
+real one; the editor itself started with the disposable HOME."
+  (require 'mevedel-claude-code-backend)
+  (require 'mevedel-claude-code)
+  (setenv "HOME" (getenv "MEVEDEL_LAB_REAL_HOME"))
+  (setq mevedel-claude-code-directory (getenv "MEVEDEL_LAB_CLAUDE_DIR"))
+  (mevedel-claude-code-register)
+  (let ((data (buffer-local-value 'mevedel--data-buffer (cpuh-view))))
+    (mevedel-model-set-session-provider
+     (buffer-local-value 'mevedel--session data)
+     (mevedel-model-resolve-provider "Claude Code:sonnet") data)))
+(defun request-lab--use-claude ()
+  "Make the measured session a Claude Code session backed by the streaming peer."
+  (require 'mevedel-claude-code-backend)
+  ;; Capture the loaded definition: an autoload would replace the override.
+  (require 'mevedel-claude-code)
+  (setq mevedel-claude-code-directory
+        (file-name-concat (getenv "MEVEDEL_LAB_HOME") "claude"))
+  (unless request-lab--claude-launch
+    (setq request-lab--claude-launch (symbol-function 'mevedel-claude-code-launch))
+    (fset 'mevedel-claude-code-launch #'request-lab--claude-launch))
+  (mevedel-claude-code-register)
+  (let ((data (buffer-local-value 'mevedel--data-buffer (cpuh-view))))
+    (mevedel-model-set-session-provider
+     (buffer-local-value 'mevedel--session data)
+     (mevedel-model-resolve-provider "Claude Code:sonnet") data)))
+
 (defun request-lab-start (style native)
   "Begin a mock request with STYLE and optional NATIVE presentation."
   (unless (cpuh-view)
     (cpuh-session-string (getenv "MEVEDEL_LAB_WORKSPACE") 'cpu-mock)
-    (with-current-buffer (cpuh-view) (mevedel-rename-session "Animation experiment")))
+    (with-current-buffer (cpuh-view) (mevedel-rename-session "Animation experiment"))
+    (cond ((getenv "MEVEDEL_LAB_REAL_GPTEL")
+           (request-lab--use-real-gptel (getenv "MEVEDEL_LAB_REAL_GPTEL")))
+          ((getenv "MEVEDEL_LAB_REAL_CLAUDE") (request-lab--use-real-claude))
+          ((getenv "MEVEDEL_LAB_CLAUDE") (request-lab--use-claude))))
   (switch-to-buffer (cpuh-view))
   (delete-other-windows)
   (mevedel-permission-mode-transition 'full-auto)
-  (setq mevedel-view-native-enabled native)
-  (customize-set-variable 'mevedel-view-spinner-style style)
-  (customize-set-variable 'mevedel-view-tool-spinner-style
-                          (if (eq style 'static) 'static 'shimmer))
-  (cpuh-send "measure animation")
+  (if (eq style 'default)
+      ;; The revision's own defaults, as a user who changed nothing sees them.
+      (dolist (option '(mevedel-view-spinner-style mevedel-view-tool-spinner-style
+                        mevedel-view-spinner-framerate
+                        mevedel-view-spinner-battery-framerate
+                        mevedel-view-spinner-power-policy mevedel-view-native-enabled))
+        (when (get option 'standard-value)
+          (custom-reevaluate-setting option)))
+    (setq mevedel-view-native-enabled native)
+    (customize-set-variable 'mevedel-view-spinner-style style)
+    (customize-set-variable 'mevedel-view-tool-spinner-style
+                            (if (eq style 'static) 'static 'shimmer)))
+  (cpuh-send (or (getenv "MEVEDEL_LAB_PROMPT") "measure animation"))
   t)
 (defvar mevedel--coalesced-timers)
 (declare-function cpuh--name "cpuh-harness" (fn))
@@ -70,16 +162,17 @@
           :executions (mevedel-execution-count-user
                        (buffer-local-value 'mevedel--session mevedel--data-buffer))
           :status mevedel-view--spinner-status
-          :plan mevedel-view--spinner-timer-plan
-          :native (length mevedel-view--native-animation-targets)
+          :plan (bound-and-true-p mevedel-view--spinner-timer-plan)
+          :style mevedel-view-spinner-style
+          :native (length (bound-and-true-p mevedel-view--native-animation-targets))
           :stats (when (fboundp 'mevedel-view-native--stats) (mevedel-view-native--stats))
-          :load mevedel-view-native--load-state
+          :load (bound-and-true-p mevedel-view-native--load-state)
           :focused (frame-focus-state)
           :focus-losses request-lab-focus-losses
           :coalesced (mapcar (lambda (timer) (cpuh--name (timer--function timer)))
                              (bound-and-true-p mevedel--coalesced-timers))
           :tools (length mevedel-view--spinner-tool-targets)
-          :entries (length mevedel-view-native--entries))))
+          :entries (length (bound-and-true-p mevedel-view-native--entries)))))
 (defun request-lab-trace-invalidation (&rest _)
   "Record bounded invalidation evidence in the disposable experiment."
   (when-let* ((path (getenv "MEVEDEL_LAB_TRACE")))

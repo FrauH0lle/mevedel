@@ -541,7 +541,14 @@ finished (a stop reason new to this tool round, or an OpenAI-compatible
 `data: [DONE]`) continues at once, so curl exits and gptel settles the
 request. Paused processes continue on exit and uninstall; an Emacs crash
 leaves one stopped. Pacing needs a real local subprocess on a system with job
-control; other transports keep batching alone. Setting the
+control; other transports keep batching alone. `mevedel-acp.el` paces Claude
+Code's adapter the same way during a turn, but only in a steady text stream
+(three reads in a row holding only text chunks and the SDK's matching
+`content_block_delta` events): a receipt, tool call, reply or request leaves the
+adapter running, and every message to it, the end of the turn and an MCP tool
+call continue it first. An MCP call reaches Emacs on its own channel, so it
+also waits up to 50 ms for the frames the CLI wrote before it, which the
+adapter may still hold. Pauses never exceed 0.5 s, whatever the batch delay. Setting the
 delay to nil or zero disables batching and pacing. These mechanisms preserve the data buffer as the
 transcript authority; view redraw scheduling remains separate.
 `mevedel-gptel-bridge.el` routes native steering commands through the root

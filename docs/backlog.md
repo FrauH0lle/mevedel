@@ -40,14 +40,13 @@ open:
   requests; lower that cost while keeping useful lag detection.
 - `mevedel-view--status-strip` still evaluates its cache key from several
   live lookups on every redisplay.
-- `acp.el` routes each output chunk through a zero-delay timer, about 30 a
-  second from the Claude Code adapter.
 - The whole-surface repaint itself is an Emacs pgtk behavior worth reporting
   upstream.
-- Streaming still costs 16-17% editor CPU with a static label after read
-  pacing (ADR 0119), mostly the per-wakeup pgtk presentation of the 0.4-second
-  cycle. ACP and Claude Code streams are not paced; measure their chunk rate.
-  An upstream pgtk fix (draw only damaged areas) would help every case.
+- Streaming still costs 16-23% editor CPU after read pacing (ADR 0119), for
+  gptel and Claude Code alike, mostly the per-wakeup pgtk presentation of the
+  0.4-second cycle. An upstream pgtk fix (draw only damaged areas) would help
+  every case. The measured Claude Code chunk rates come from a scripted peer;
+  check a real adapter's rate and burst sizes.
 - A coalesced callback that waits for input or output delays its siblings.
 - A curl stream paused when Emacs crashes stays stopped, holding its socket,
   until killed; a crash leaves no hook to continue it.

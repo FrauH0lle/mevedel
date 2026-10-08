@@ -1,0 +1,38 @@
+{
+  "metadata": "(\"31.1\" 1545 864 \"/tmp/mevedel-request-lab-sfwskhab/elpa/gptel-20260925.357/gptel.elc\")",
+  "source_hashes": {
+    "mevedel-view-stream.el": "b6f724a34aacf5530a601ed72cc34f4d2fb6c354db2777d9c5c9e196f0e206e0",
+    "mevedel-utilities.el": "6698d357721aaf90c302d3ef1ac3a116ea815b0a8ddd807635f14b6c05e60419",
+    "mevedel-telemetry.el": "3790d3caaa57d8083fa8d19a98a42f729a34c52cccf75a78c5aa5ac4d302ae4e",
+    "mevedel-execution.el": "c59e0534adbedb09e1aea1dba57f5195011075a5c8ad0988e77b1932ad69dd7b",
+    "mevedel-execution-process.el": "5c286c51d22d0b829e900084ea307d1da11c4a57cb16b3c25d3d2dbb8fe11711",
+    "mevedel-view-markdown.el": "1fae4dd159d12ea9df01a4548bfee0fcd831c67321b3b5cc5f720ca558bee712",
+    "mevedel-view.el": "47bc9ed3289d134ec1ae4bd920710e49920ebc5f69a2bdf3047ee9278c8c9245"
+  },
+  "harness_hashes": {
+    "request.el": "a400b6383ed3d6b179f38bae673c8c36c22ee2f40c2ae59b72b07c2203afc62a",
+    "cpuh-harness.el": "06a3cc27491f7796c416a453217e06513884572b1ded69ed106688176558b12e",
+    "mock_server.py": "06a076ecfbcb89154f11c5eb0927969c7cf4baa87f1c2fa5981cf5e821c109b2"
+  },
+  "mock_tool_ids": "unique_per_request",
+  "samples": [
+    {
+      "label": "default",
+      "tool_count": 0,
+      "synthetic_tool_events": false,
+      "editor_cpu": 66.75,
+      "compositor_cpu": 33.75,
+      "diagnostic_case": "baseline",
+      "seconds": 8.00007931800792,
+      "first_use_seconds": 0.9065919530112296,
+      "before": "(:visible t :busy t :executions 0 :status \"Thinking...\" :plan nil :style shimmer :native 0 :stats nil :load nil :focused t :focus-losses 0 :coalesced nil :tools 0 :entries 0)",
+      "after": "(:visible t :busy t :executions 0 :status \"Thinking...\" :plan nil :style shimmer :native 0 :stats nil :load nil :focused t :focus-losses 0 :coalesced nil :tools 0 :entries 0)",
+      "stream_words": {
+        "sent": 128,
+        "received": 128
+      },
+      "stopped": "(:visible t :busy nil :executions 0 :status nil :plan nil :style shimmer :native 0 :stats nil :load nil :focused t :focus-losses 0 :coalesced nil :tools 0 :entries 0)",
+      "execution_stopped": "(:visible t :busy nil :executions 0 :status nil :plan nil :style shimmer :native 0 :stats nil :load nil :focused t :focus-losses 0 :coalesced nil :tools 0 :entries 0)"
+    }
+  ]
+}

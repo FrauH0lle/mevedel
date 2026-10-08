@@ -16,7 +16,7 @@ parser.add_argument('--output', required=True)
 parser.add_argument('--source-root', type=Path)
 parser.add_argument('--seconds', type=float, default=8)
 parser.add_argument('--screenshots', action='store_true')
-parser.add_argument('--modes', nargs='+', choices=['static', 'ordinary', 'native'], default=['static', 'ordinary', 'native', 'static'])
+parser.add_argument('--modes', nargs='+', choices=['static', 'ordinary', 'native', 'default'], default=['static', 'ordinary', 'native', 'static'])
 parser.add_argument('--tool', action='store_true')
 parser.add_argument('--tool-count', type=int, default=1)
 parser.add_argument('--trace-native', action='store_true')
@@ -26,6 +26,19 @@ parser.add_argument('--observe', type=float, default=0,
                     help='after sampling CPU, record ownership for this many seconds')
 parser.add_argument('--stream-rate', type=float, default=0,
                     help='stream prose at this many words/s instead of holding silently')
+parser.add_argument('--claude', action='store_true',
+                    help='measure a Claude Code session; --stream-rate sets the peer rate')
+parser.add_argument('--real-claude', action='store_true',
+                    help="measure a real Claude Code request on the user's own login")
+parser.add_argument('--claude-dir', default='~/.emacs.d/.local/etc/mevedel/claude-code',
+                    help="the user's mevedel-claude-code-directory, holding the adapter")
+parser.add_argument('--real-gptel', metavar='MODEL',
+                    help="measure a real request on the user's ChatGPT login (backend Codex)")
+parser.add_argument('--oauth-token', default='~/.emacs.d/.cache/gptel-openai/openai-oauth-token',
+                    help='ChatGPT token file; the experiment uses a copy')
+parser.add_argument('--prompt', help='prompt to send instead of the mock trigger')
+parser.add_argument('--settle', type=float, default=3,
+                    help='seconds between sending and sampling')
 parser.add_argument('--max-editor-cpu', type=float)
 parser.add_argument('--diagnostic-lisp', type=Path)
 parser.add_argument('--diagnostic-case', default='baseline')
@@ -44,7 +57,9 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
     if not (package / 'mevedel.elc').exists():
         raise RuntimeError('Compile the worktree through Eask first')
     for directory in ('native', 'prompts', 'agents', 'scripts'):
-        shutil.copytree(root / directory, package / directory)
+        # Older revisions predate the native presenter.
+        if (root / directory).exists():
+            shutil.copytree(root / directory, package / directory)
     # Freeze the exact dependencies used by this isolated mock experiment.
     shutil.copytree(root / '.eask/31.1/elpa', temp / 'elpa')
     workspace = temp / 'workspace'
@@ -62,6 +77,23 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
         env['MEVEDEL_LAB_DIAGNOSTIC'] = str(package / 'diagnostic.elc')
         env['MEVEDEL_LAB_CASE'] = args.diagnostic_case
         env['MEVEDEL_LAB_TIMELINE'] = str(output / 'timeline.el')
+    if args.real_claude:
+        env['MEVEDEL_LAB_REAL_CLAUDE'] = '1'
+        env['MEVEDEL_LAB_REAL_HOME'] = os.environ['HOME']
+        env['MEVEDEL_LAB_CLAUDE_DIR'] = os.path.expanduser(args.claude_dir)
+    if args.real_gptel:
+        token = temp / 'openai-oauth-token'
+        shutil.copy(os.path.expanduser(args.oauth_token), token)
+        token.chmod(0o600)
+        env['MEVEDEL_LAB_REAL_GPTEL'] = args.real_gptel
+        env['MEVEDEL_LAB_OAUTH_TOKEN'] = str(token)
+    if args.prompt:
+        env['MEVEDEL_LAB_PROMPT'] = args.prompt
+    if args.claude:
+        env['MEVEDEL_LAB_CLAUDE'] = str(args.stream_rate or 8)
+        env['MEVEDEL_LAB_PEER'] = str(lab / 'acp-stream-peer.py')
+        env['MEVEDEL_LAB_STREAM_SECONDS'] = str(args.seconds + 8)
+        env['MEVEDEL_LAB_COUNT_PATH'] = str(output / 'stream-count.txt')
     if args.trace_native:
         env['MEVEDEL_LAB_TRACE'] = str(output / 'native-invalidations.txt')
     for key in ('CACHE', 'CONFIG', 'DATA', 'STATE'):
@@ -130,13 +162,15 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                     finally:
                         subprocess.run(['qdbus6', 'org.kde.KWin', '/Scripting', 'unloadScript', script_name],
                                        check=True, stdout=subprocess.DEVNULL)
-                style, native = ('static' if label == 'static' else 'bounce'), label == 'native'
+                # `default' keeps the revision's own customization defaults.
+                style = {'static': 'static', 'default': 'default'}.get(label, 'bounce')
+                native = label == 'native'
                 start = time.monotonic()
                 call(f'(request-lab-start \'{style} {"t" if native else "nil"})')
                 if args.tool and args.tool_count > 1:
                     call(f'(request-lab-tools {args.tool_count})')
                 first_use = time.monotonic() - start
-                time.sleep(3)
+                time.sleep(args.settle)
                 before = call('(request-lab-state)')
                 if ':busy t' not in before or ':focused t' not in before:
                     raise RuntimeError('Request not visibly active: ' + before)
@@ -240,7 +274,7 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                     raise RuntimeError('Execution periodic work survived completion: ' + execution_stopped)
             metadata = call('(list emacs-version (frame-pixel-width) (frame-pixel-height) (locate-library "gptel"))')
             hashes = {str(p.relative_to(package)): hashlib.sha256(p.read_bytes()).hexdigest()
-                      for p in [package / 'mevedel-view-native.el', package / 'mevedel-view-stream.el', package / 'native/mevedel-view-native.c', package / 'mevedel-utilities.el', package / 'mevedel-telemetry.el', package / 'mevedel-execution.el', package / 'mevedel-execution-process.el', package / 'mevedel-view-markdown.el', package / 'mevedel-view.el']}
+                      for p in [package / 'mevedel-view-native.el', package / 'mevedel-view-stream.el', package / 'native/mevedel-view-native.c', package / 'mevedel-utilities.el', package / 'mevedel-telemetry.el', package / 'mevedel-execution.el', package / 'mevedel-execution-process.el', package / 'mevedel-view-markdown.el', package / 'mevedel-view.el'] if p.exists()}
             harness_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                               for p in [package / 'request.el', package / 'cpuh-harness.el',
                                         lab.parent / 'tools/mock_server.py']}
@@ -248,6 +282,13 @@ with tempfile.TemporaryDirectory(prefix='mevedel-request-lab-') as name:
                                                                 harness_hashes=harness_hashes,
                                                                 mock_tool_ids='unique_per_request', samples=results), indent=2) + '\n')
         finally:
+            try:
+                # Bounded tail of the editor's messages, for failed runs.
+                (output / 'messages.txt').write_text(call(
+                    '(with-current-buffer "*Messages*" (buffer-substring-no-properties'
+                    ' (max (point-min) (- (point-max) 4000)) (point-max)))'))
+            except Exception:
+                pass
             try:
                 call('(kill-emacs)')
             except Exception:

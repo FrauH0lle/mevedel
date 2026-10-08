@@ -1339,3 +1339,41 @@ keeps at least that spacing while staying on whole-second ticks. A coalesced
 callback that waits still delays its siblings (unlike ordinary timers); none
 does today.
 
+### October 2026: pace Claude Code streams
+
+A scripted ACP peer that relays a separate producer, as Claude's adapter
+relays its CLI, streamed text at 8 and 32 chunks a second: 31.6% and 67.4%
+editor CPU after the gptel pacing above, against 19.7% and 22.6% for paced
+gptel streams. Each chunk is its own read and redisplay, and acp.el arms a
+zero-delay drain per message. `mevedel-acp.el` now stops the adapter after a
+small read holding only `agent_message_chunk` or `agent_thought_chunk` frames
+and continues it at the next batch: 18.5-20.1% and 22.1-23.6%, with every
+streamed word verified in order. The original revision cost 66.8% and 75.4%.
+
+Pausing the adapter can reorder its frames against MCP tool calls, which
+reach Emacs on their own socket: the CLI writes its message receipt through
+the adapter before calling a tool, and mevedel requires that receipt first.
+Only a steady stream pauses, three streamed-text reads in a row; any other frame
+keeps the adapter running and restarts the count. A tool phase alternates
+short status text with tool frames, and pausing after each text delayed every
+step: a scripted memory review with tool batches no longer settled within its
+five-second test budget. Every
+message to the adapter, the end of a turn and an MCP call continue it, and an
+MCP call that finds the adapter paused waits up to 50 ms for its frames;
+the continue event alone ends `accept-process-output`, so the wait loops until
+output arrives. Pauses are capped at 0.5 s: a test with a 60-second batch
+stalled the turn. The pause and resume primitives moved to
+`mevedel-transport.el`, shared with the gptel stream bridge.
+
+A real Claude Code request (Sonnet, about 1200 words of prose, no tools)
+confirmed the cost and showed that the scripted peer was too simple: the real
+adapter sends every delta twice, as an ACP `agent_message_chunk` and as the
+SDK's raw `stream_event` `content_block_delta`, about 30 deltas and 38 reads a
+second. Counting only ACP chunks as text, pacing never engaged. Treating the
+SDK's content deltas as streamed text too (its message receipts are other
+types), the same request took 96 reads instead of 733 and 27.5% editor CPU
+instead of 74.5%; compositor CPU fell from 36.9% to 13.8%. The same prompt
+through gptel's ChatGPT (Codex) backend cost 28.9% unpaced and 25.3% paced: that
+endpoint delivers about five reads a second of 2.6 KB, so the mock's 32
+chunks a second overstated gptel's real cost and its pacing gain.
+

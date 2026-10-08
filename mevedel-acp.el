@@ -13,6 +13,9 @@
 (require 'seq)
 (require 'mevedel-transport)
 
+;; `mevedel-gptel-stream-bridge'
+(defvar mevedel-gptel-stream-bridge-insert-batch-delay)
+
 (cl-defstruct (mevedel-acp (:constructor mevedel-acp--create))
   "Runtime state for one external model conversation."
   client launch session-id capabilities commands prepared checked
@@ -30,8 +33,77 @@
     (cancel-timer timer)
     (setf (mevedel-acp-timer connection) nil)))
 
+(defconst mevedel-acp--pace-backlog-bytes 4096
+  "Reads at least this large mean the agent has more output waiting.")
+
+(defconst mevedel-acp--pace-after-text-reads 3
+  "Consecutive text-only reads that mark a steady stream worth pacing.
+A tool phase alternates short status text with tool frames; pausing there
+only delayed each step, by up to a pause per tool call.")
+
+(defun mevedel-acp--process (connection)
+  "Return CONNECTION's agent process, or nil."
+  (alist-get :process (mevedel-acp-client connection)))
+
+(defun mevedel-acp--wake (connection)
+  "Continue CONNECTION's agent if it is paused for output pacing.
+Every message to the agent and the end of a turn continue it first: a
+stopped agent would answer late, and a full pipe would block the write."
+  (when-let* ((process (mevedel-acp--process connection)))
+    (mevedel-transport-resume-process process)))
+
+(defun mevedel-acp--streaming-only-p (output)
+  "Return non-nil when OUTPUT holds only complete streamed-text frames.
+Claude's adapter sends each delta twice: as an ACP text or thought chunk
+and as the SDK's raw `content_block_delta' stream event.  The SDK's
+message receipts, which tool calls must not overtake, are other types."
+  (and (string-suffix-p "\n" output)
+       (seq-every-p
+        (lambda (line)
+          (or (string-empty-p line)
+              (string-match-p
+               "\"sessionUpdate\": *\"agent_\\(?:message\\|thought\\)_chunk\""
+               line)
+              (and (string-match-p "\"_claude/sdkMessage\"" line)
+                   (string-match-p "\"type\": *\"stream_event\"" line)
+                   (string-match-p
+                    "\"event\": *{\"type\": *\"content_block_delta\"" line))))
+        (split-string output "\n"))))
+
+(defun mevedel-acp--pace (connection process output)
+  "Pause CONNECTION's agent PROCESS after a small text-only OUTPUT read.
+Each streamed chunk arrives as its own read, and Emacs redisplays after
+every read: a turn streaming 32 chunks a second cost 67% editor CPU.
+Stopped until the text batch is due, the agent leaves the CLI's output in
+its pipe and Emacs reads it in one burst.  Any other frame -- a tool call,
+a message receipt, a response or a request -- leaves the agent running:
+MCP tool calls reach Emacs on another channel and must not overtake them.
+Only a steady text stream pauses, see `mevedel-acp--pace-after-text-reads'.
+acp.el's sentinel ignores stop and continue events."
+  (process-put process 'mevedel-acp--text-reads
+               (if (mevedel-acp--streaming-only-p output)
+                   (1+ (or (process-get process 'mevedel-acp--text-reads) 0))
+                 0))
+  (when (and (eq (mevedel-acp-state connection) 'prompting)
+             (< (string-bytes output) mevedel-acp--pace-backlog-bytes)
+             (>= (process-get process 'mevedel-acp--text-reads)
+                 mevedel-acp--pace-after-text-reads)
+             (boundp 'mevedel-gptel-stream-bridge-insert-batch-delay))
+    (mevedel-transport-pause-process
+     process mevedel-gptel-stream-bridge-insert-batch-delay)))
+
+(defun mevedel-acp--pace-output (connection)
+  "Pace CONNECTION's agent output during turns, once per process."
+  (when-let* ((process (mevedel-acp--process connection))
+              ((not (process-get process 'mevedel-acp--paced))))
+    (process-put process 'mevedel-acp--paced t)
+    (add-function :after (process-filter process)
+                  (lambda (process output)
+                    (mevedel-acp--pace connection process output)))))
+
 (defun mevedel-acp--finish (connection turn outcome)
   "Deliver OUTCOME once for CONNECTION's captured TURN."
+  (mevedel-acp--wake connection)
   (when (eq turn (mevedel-acp-active connection))
     (mevedel-acp--cancel-timer connection)
     (setf (mevedel-acp-active connection) nil)
@@ -49,6 +121,7 @@
 
 (defun mevedel-acp--shutdown (connection outcome)
   "Close CONNECTION and deliver terminal OUTCOME to its owner."
+  (mevedel-acp--wake connection)
   (unless (eq (mevedel-acp-state connection) 'closed)
     (let ((starting (eq (mevedel-acp-state connection) 'starting)))
       (setf (mevedel-acp-state connection) 'closed)
@@ -93,6 +166,7 @@ so a dead process fails the connection instead."
 
 (defun mevedel-acp--send (connection request success)
   "Send REQUEST on CONNECTION and deliver SUCCESS, closing on failure."
+  (mevedel-acp--wake connection)
   (condition-case err
       (when (mevedel-acp--live-p connection)
         (acp-send-request
@@ -234,6 +308,7 @@ string if startup fails.  Return the runtime connection immediately."
        :client client
        :on-request
        (lambda (request)
+         (mevedel-acp--wake connection)
          (acp-send-response
           :client client
           :response
@@ -326,6 +401,7 @@ notifications.  COMPLETE receives one plist with :status, :stop-reason and raw
                                                      (mevedel-acp-capabilities connection))))))
     (user-error "ACP agent does not support image input"))
   (let ((turn (list :event event :complete complete)))
+    (mevedel-acp--pace-output connection)
     (setf (mevedel-acp-active connection) turn
           (mevedel-acp-state connection) 'prompting)
     (mevedel-acp--send
@@ -357,6 +433,7 @@ Wait for the terminal acknowledgement before accepting more input."
                           (eq turn (mevedel-acp-active connection)))
                  (mevedel-acp--fail connection "ACP cancellation timed out")))))
       (setf (mevedel-acp-timer connection) timer))
+    (mevedel-acp--wake connection)
     (condition-case err
         (when (mevedel-acp--live-p connection)
           (acp-send-notification

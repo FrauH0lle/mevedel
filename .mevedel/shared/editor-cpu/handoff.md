@@ -40,6 +40,9 @@ original form of 6. Nothing is merged or pushed. Commits, in order:
    batches and the view renders each flushed batch in the same wakeup; the
    native presenter checks placement only when layout inputs change, moves
    displaced surfaces, reuses its presentation and timelines.
+9. Claude Code pacing: the ACP adapter pauses after text-only reads; MCP
+   calls and every message to it continue it; shared pause primitives in
+   `mevedel-transport.el`. Before/after table in `renderer-lab/README.md`.
 
 Product behavior is documented in `docs/view.md`, `docs/tools.md`,
 `docs/telemetry.md`, `docs/sessions.md` and ADR 0119; open work is in

@@ -314,3 +314,44 @@ order): static 16.0% at 8 words/s and 17.0% at 32; native bounce 20.4% and
 23.1% after the presenter stopped re-checking placement on every redisplay
 (`stream-profile-native*-profile.txt`, `final2-*.json`).
 
+## Before and after (2026-10-08)
+
+`request-run.py --modes default` keeps each revision's own customization
+defaults; `--source-root` measures another checkout (here the original
+`3df91e1d`, compiled through Eask). `--claude` drives a Claude Code session
+whose adapter is `acp-stream-peer.py`, a copy of the test peer that relays a
+separate producer process, as Claude's adapter relays its CLI. Editor CPU,
+two runs each (`results/comparison/`), every streamed word verified:
+
+| Workload | 3df91e1d | Final branch |
+| --- | ---: | ---: |
+| Waiting for the model | 71.3%, 72.2% | 6.2%, 6.2% |
+| Running sleeping Bash | 73.8%, 75.5% | 6.8%, 7.1% |
+| gptel stream, 8 chunks/s | 66.2%, 66.8% | 20.0%, 19.7% |
+| gptel stream, 32 chunks/s | 74.1%, 73.5% | 21.3%, 21.5% |
+| Claude Code stream, 8 chunks/s | 66.8% | 18.5%, 20.1% |
+| Claude Code stream, 32 chunks/s | 75.4% | 23.5%, 23.6% |
+
+Compositor CPU fell from 33-38% to 6-13%. Before ACP pacing, the final
+branch's Claude Code stream cost 31.6% and 67.4%.
+
+A real Claude Code request (`--real-claude --prompt ... --settle 10`, Sonnet,
+about 1200 words of prose, the user's own login and installed adapter;
+`diagnostics/acp-trace.el` counts reads and frame kinds, never content):
+74.5% editor and 36.9% compositor CPU unpaced (`--diagnostic-case nopace`,
+733 reads in 19 s), 27.5% and 13.8% paced (96 reads, 40 pauses). Each delta
+arrives as an ACP chunk plus an SDK `content_block_delta` event, which the
+scripted peer did not reproduce; `results/comparison/real-claude-*`.
+
+The same prompt on the user's ChatGPT login (`--real-gptel gpt-6-sol`, backend
+Codex, a copy of the token file; `diagnostics/gptel-trace.el`): 28.9% editor
+CPU unpaced (102 reads in 19 s, 2.6 KB each on average) and 25.3% paced (46
+reads, 27 pauses). The Codex endpoint delivers text in larger pieces than
+Claude Code's adapter, so pacing matters far less there;
+`results/comparison/real-gptel-*`.
+
+Without the native presenter -- a system without a C compiler or GTK
+headers, where the build fails and text animates (`diagnostics/no-native.el`)
+-- the final branch's defaults cost 22.7% waiting, 21.1% with Bash running
+and 32.9% for a 32-chunk gptel stream (`results/comparison/nonative-*`).
+

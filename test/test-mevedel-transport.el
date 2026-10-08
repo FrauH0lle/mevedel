@@ -870,6 +870,51 @@
           (should (zerop (hash-table-count table))))
       (mevedel-transport-cancel-idle table 'test-input))))
 
+(mevedel-deftest mevedel-transport-pause-process ()
+  ,test
+  (test)
+  :doc "stops a local child until resumed, and continues it on exit"
+  (skip-unless (and (executable-find "sleep")
+                    (not (memq system-type '(windows-nt ms-dos)))))
+  (let ((mevedel-transport--paused nil)
+        (kill-emacs-hook nil)
+        (process (make-process :name "mevedel-test-pause" :command '("sleep" "30")
+                               :connection-type 'pipe :noquery t)))
+    (unwind-protect
+        (progn
+          (should (mevedel-transport-pause-process process 30))
+          (should (mevedel-transport-process-paused-p process))
+          ;; Long batches are capped so the producer never stalls.
+          (should (< (float-time (time-subtract
+                                  (timer--time (process-get process 'mevedel-transport--resume-timer))
+                                  nil))
+                     0.6))
+          (with-timeout (2 nil)
+            (while (not (eq 'stop (process-status process)))
+              (accept-process-output nil 0.01)))
+          (should (eq 'stop (process-status process)))
+          ;; Already paused: no second stop or timer.
+          (should-not (mevedel-transport-pause-process process 30))
+          (should (memq #'mevedel-transport-resume-paused kill-emacs-hook))
+          (run-hooks 'kill-emacs-hook)
+          (should-not (mevedel-transport-process-paused-p process))
+          (should-not (process-get process 'mevedel-transport--resume-timer))
+          (with-timeout (2 nil)
+            (while (not (eq 'run (process-status process)))
+              (accept-process-output nil 0.01)))
+          (should (eq 'run (process-status process))))
+      (delete-process process)))
+
+  :doc "never stops a connection that is not a subprocess"
+  (let ((mevedel-transport--paused nil)
+        (process (make-pipe-process :name "mevedel-test-pause-pipe")))
+    (unwind-protect
+        (progn
+          (should-not (mevedel-transport-pause-process process 1))
+          (should-not (mevedel-transport-pause-process process nil))
+          (should-not mevedel-transport--paused))
+      (delete-process process))))
+
 (provide 'test-mevedel-transport)
 
 ;;; test-mevedel-transport.el ends here

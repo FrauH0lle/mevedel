@@ -35,6 +35,48 @@
        (mevedel-acp-close connection)
        (delete-directory directory t))))
 
+(defvar mevedel-gptel-stream-bridge-insert-batch-delay)
+
+(mevedel-deftest mevedel-acp--pace ()
+  ,test
+  (test)
+  :doc "pauses a turn's agent after small reads and wakes it before messages"
+  (skip-unless (and (executable-find "sleep")
+                    (not (memq system-type '(windows-nt ms-dos)))))
+  (let* ((mevedel-gptel-stream-bridge-insert-batch-delay 30)
+         (mevedel-transport--paused nil)
+         (kill-emacs-hook nil)
+         (process (make-process :name "mevedel-test-acp-pace" :command '("sleep" "30")
+                                :connection-type 'pipe :noquery t))
+         (connection (mevedel-acp--create :client (list (cons :process process))
+                                          :state 'prompting))
+         ;; Claude's adapter sends each delta as an ACP chunk and an SDK event.
+         (text (concat "{\"method\":\"session/update\",\"params\":{\"update\":"
+                       "{\"sessionUpdate\":\"agent_message_chunk\"}}}\n"
+                       "{\"method\":\"_claude/sdkMessage\",\"params\":{\"message\":"
+                       "{\"type\":\"stream_event\",\"event\":{\"type\":"
+                       "\"content_block_delta\"}}}}\n")))
+    (unwind-protect
+        (progn
+          (mevedel-acp--pace connection process (make-string 4096 ?x))
+          (should-not mevedel-transport--paused)
+          ;; Receipts, tool calls and replies must not wait behind a pause.
+          (mevedel-acp--pace connection process
+                             "{\"method\":\"_claude/sdkMessage\",\"params\":{\"message\":{\"type\":\"user\"}}}\n")
+          (should-not mevedel-transport--paused)
+          ;; A steady stream: only the third text read in a row pauses.
+          (mevedel-acp--pace connection process text)
+          (mevedel-acp--pace connection process text)
+          (should-not mevedel-transport--paused)
+          (mevedel-acp--pace connection process text)
+          (should (memq process mevedel-transport--paused))
+          (mevedel-acp--wake connection)
+          (should-not mevedel-transport--paused)
+          (setf (mevedel-acp-state connection) 'idle)
+          (mevedel-acp--pace connection process text)
+          (should-not mevedel-transport--paused))
+      (delete-process process))))
+
 (mevedel-deftest mevedel-acp-prompt ()
   ,test
   (test)
