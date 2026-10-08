@@ -30,7 +30,10 @@ tool policy.
 
 ToolCall has a static description; ToolSearch returns callable contracts without
 changing the role's native core. A provably direct call returns the underlying
-tool result and supported media, rendered as that tool. A composed program returns
+tool result and supported media, rendered as that tool. Settled collapsed
+activity summaries use that same specialist presentation name; the cached
+canonical child, provider name and envelope audit remain ToolCall.
+A composed program returns
 its final value with a separate child audit. A direct text result retains only
 a bounded preview in the redundant child audit; the outer result carries the
 returned value. Instruction/interaction tools may

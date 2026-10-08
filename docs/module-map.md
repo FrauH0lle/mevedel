@@ -43,8 +43,10 @@ Data model
   mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
   mevedel-bash-policy.el      Bash classification and reusable rules
+  mevedel-bash-git.el         argument-aware Git inspection and hardened launch argv
   mevedel-transport.el        remote reentrancy detection and idle-transport deferral
   mevedel-execution-target.el immutable local/TRAMP target, path domains, readiness
+  mevedel-execution-grants.el protected-boundary-aware child authority coverage
   mevedel-execution.el        managed execution registry, admission, and facade
   mevedel-execution-process.el opaque child, process-group, and spool lifecycle
   mevedel-execution-transcript.el durable execution render data and archive reconciliation

@@ -30,6 +30,15 @@ covered path prompt without authorizing any command form.  Grants are stored
 separately and never rewrite protected-path policy, so revocation immediately
 restores the underlying confinement restriction.
 
+Execution grant coverage follows the mount boundary: a broad ancestor tree
+does not reopen a separately protected descendant. Capability admission,
+queued rechecks, approval validation and mount normalization share this rule.
+An exact protected-directory request that needs a directory bind requires an
+explicitly approved recursive child scope; the human card displays that scope.
+Meaningful exact child-file grants survive normalization. Neither stored parent
+authority nor normalization silently widens a new exact directory request.
+Native resource-grant semantics are independent and unchanged.
+
 Final path validation remains in the editor and checks the filesystem afresh.
 Writable-symlink checks inspect only prefixes inside the shallowest covering
 writable root. Restriction sorting computes each depth once. Git pointer files
@@ -52,6 +61,15 @@ retain inaccessible credential masks; read-only protection does not prohibit
 inspection.
 
 ## Decision history
+
+An October 2026 deterministic replay showed generic grant coverage accepting
+a requested exact `.git` write under a recursive checkout grant, then dropping
+the child as redundant. The mount plan correctly retained `.git` protection,
+so Git still failed with a read-only-filesystem error. Protected-aware execution
+coverage replaces that generic shortcut; explicitly approved child-tree scopes
+now survive through launch while sibling and deeper masks remain intact.
+The historical failing command's approved scope is unknown; the replay, not
+an inferred historical grant, establishes this failure mode.
 
 The September 2026 permission audit found repeated outside-read approvals and
 the user explicitly chose Full Access semantics. Protected defaults therefore

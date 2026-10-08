@@ -42,7 +42,12 @@ links resolved once per projection. Boundary bookkeeping steps by property
 runs rather than characters. A tool/reasoning/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; an individual completed call can still join a
 growing group. Grouped rows retain their individual source identities across
-changes in presentation. Nested compound rows retain their own metadata and
+changes in presentation. A settled direct ToolCall caches its recognized
+specialist as the group presentation name while retaining its canonical
+ToolCall child record. Collapsed summaries and expanded rows therefore agree
+without reparsing hidden results or changing execution identity. Live/composed
+programs and invalid/failed envelopes retain the outer presentation.
+Nested compound rows retain their own metadata and
 depth, so disclosure replacement removes descendants without consuming siblings.
 Failed tool calls split activity groups and start
 collapsed with a red `×`; warning rows remain groupable and mark their group
@@ -295,6 +300,13 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 2026: separate grouped presentation from canonical tool identity
+
+A direct Eval row expanded as Eval but collapsed into “ran 1 script” because
+its group cache retained the outer ToolCall name. Group summaries now cache the
+already-recognized specialist name, while the canonical child stays unchanged.
+This fixes the mismatch without adding result parsing to collapsed redraws.
 
 ### September 2026: separate visible animation from status maintenance
 

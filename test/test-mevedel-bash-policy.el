@@ -34,19 +34,38 @@
              ("rg" "TODO" "src")
              ("base64" "file")
              ("sed" "-n" "1,5p" "file")
-             ("awk" "{print $1}" "file")))
+             ("awk" "{print $1}" "file")
+             ("diff" "-u" "one" "two")
+             ("cmp" "--bytes=10" "one" "two")
+             ("readlink" "-f" "file")
+             ("realpath" "--relative-to=." "file")
+             ("du" "-sh" ".")
+             ("uniq")
+             ("uniq" "-ci" "input")
+             ("uniq" "--" "input" "-")
+             ("test" "-f" "file")
+             ("[" "1" "=" "2" "]")
+             ("test" "1" "-eq" "2")))
     (should (mevedel-bash-policy-read-only-p argv)))
   :doc "Git variants:
-`mevedel-bash-policy-read-only-p' rejects all Git inspection arguments"
+`mevedel-bash-policy-read-only-p' accepts hardened Git inspection arguments"
   (dolist (argv
            '(("git" "status")
              ("git" "--no-pager" "log" "-1")
              ("git" "branch" "--show-current")))
-    (should-not (mevedel-bash-policy-read-only-p argv)))
+    (should (mevedel-bash-policy-read-only-p argv)))
   :doc "unsafe variants:
 `mevedel-bash-policy-read-only-p' rejects writing and helper execution"
   (dolist (argv
            '(("git" "diff" "--output=file")
+             ("diff" "--output=out" "one" "two")
+             ("du" "--unknown" ".")
+             ("uniq" "input" "output")
+             ("uniq" "input" "-c")
+             ("uniq" "--unknown")
+             ("test" "-v" "x[$(touch marker)]")
+             ("test" "x[$(touch marker)]" "-eq" "1")
+             ("[" "-f" "file")
              ("git" "-c" "core.pager=cat" "log")
              ("git" "branch" "new-name")
              ("find" "." "-delete")
@@ -59,6 +78,178 @@
              ("awk" "BEGIN { f = \"sys\" \"tem\"; @f(\"id\") }")
              ("awk" "{print $1 > \"out\"}" "file")))
     (should-not (mevedel-bash-policy-read-only-p argv))))
+
+(mevedel-deftest mevedel-bash-policy--uniq-read-only-p ()
+  ,test
+  (test)
+  :doc "recognized uniq flags and numeric values preserve stdout-only invocations"
+  (dolist (argv
+           '(("uniq") ("uniq" "input") ("uniq" "-") ("uniq" "-" "-")
+             ("uniq" "input" "-") ("uniq" "--" "-named-input" "-")
+             ("uniq" "--") ("uniq" "-cdiuz" "input") ("uniq" "-D" "input")
+             ("uniq" "-cf" "2" "input") ("uniq" "-f2" "-s" "3" "-w4" "input")
+             ("uniq" "-if+2" "input")
+             ("uniq" "--skip-fields=2" "--skip-chars" "0" "--check-chars=10" "input")
+             ("uniq" "--count" "--repeated" "--ignore-case" "--zero-terminated" "input")
+             ("uniq" "--unique" "input") ("uniq" "--help") ("uniq" "--version")
+             ("uniq" "--all-repeated" "input")
+             ("uniq" "--all-repeated=none" "input")
+             ("uniq" "--all-repeated=prepend" "input")
+             ("uniq" "--all-repeated=separate" "input")
+             ("uniq" "--group" "input") ("uniq" "--group=separate" "input")
+             ("uniq" "--group=prepend" "input") ("uniq" "--group=append" "input")
+             ("uniq" "--group=both" "input" "-")))
+    (should (mevedel-bash-policy--uniq-read-only-p argv)))
+  :doc "GNU option case remains significant regardless of ambient case folding"
+  (dolist (ambient '(t nil))
+    (let ((case-fold-search ambient))
+      (should (mevedel-bash-policy--uniq-read-only-p '("uniq" "-cdiuz" "input")))
+      (should (mevedel-bash-policy-read-only-p '("uniq" "-cd" "input")))
+      (dolist (argv '(("uniq" "-cD" "input") ("uniq" "-C" "input")
+                      ("uniq" "-I" "input") ("uniq" "-F1" "input")
+                      ("uniq" "--GROUP=both" "input")
+                      ("uniq" "--group=BOTH" "input")
+                      ("uniq" "--SKIP-FIELDS=1" "input")))
+        (should-not (mevedel-bash-policy--uniq-read-only-p argv)))
+      (should (eq case-fold-search ambient))))
+  :doc "output files, post-input options and malformed or unknown variants fail closed"
+  (dolist (argv
+           '(("uniq" "input" "output") ("uniq" "-c" "input" "output")
+             ("uniq" "--" "input" "-c") ("uniq" "--" "input" "--output=out")
+             ("uniq" "input" "-c") ("uniq" "input" "--help")
+             ("uniq" "input" "-c" "-") ("uniq" "input" "-f" "1")
+             ("uniq" "input" "-" "extra") ("uniq" "--" "input" "-" "extra")
+             ("uniq" "--output=out") ("uniq" "--unknown") ("uniq" "--cou")
+             ("uniq" "-Q") ("uniq" "-cQ") ("uniq" "-2")
+             ("uniq" "-f") ("uniq" "-cf") ("uniq" "-f" "input")
+             ("uniq" "-f-1") ("uniq" "-f1x") ("uniq" "-f" "-1")
+             ("uniq" "--skip-fields") ("uniq" "--skip-chars=")
+             ("uniq" "--check-chars=1k") ("uniq" "--skip-fields" "-")
+             ("uniq" "--group=") ("uniq" "--group=unknown")
+             ("uniq" "--all-repeated=both") ("uniq" "--count=yes")
+             ("uniq" "--group" "-c") ("uniq" "--group" "-d")
+             ("uniq" "--group" "-D") ("uniq" "--group" "-u")
+             ("uniq" "-cD") ("uniq" "--count" "--all-repeated")
+             ("uniq" nil) ("uniq" 3) ("cat" "input") nil))
+    (should-not (mevedel-bash-policy--uniq-read-only-p argv)))
+  (should-not (mevedel-bash-policy--uniq-read-only-p
+               (list "uniq" (concat "input" (string 0))))))
+
+(mevedel-deftest mevedel-bash-policy-uniq-plan-fixture ()
+  ,test
+  (test)
+  :doc "Plan rejects real uniq output writes while stdout forms leave the fixture unchanged"
+  (skip-unless (executable-find "uniq"))
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-uniq-policy-" t)))
+         (default-directory root)
+         (process-environment (copy-sequence process-environment))
+         (mevedel-permission-rules nil)
+         (input (file-name-concat root "input")))
+    (unwind-protect
+        (progn
+          (with-temp-file input (insert "one\none\ntwo\n"))
+          (dolist (directive '(nil t))
+            (let* ((session (mevedel-session--create
+                             :authority-mode 'pid-lock :name "uniq-inspection"
+                             :plan-mode (not directive)
+                             :directive-planning
+                             (when directive '(:directive-id "d1" :phase planning))))
+                   (mevedel--current-request
+                    (when directive
+                      (mevedel-request--create :session session :plan-read-only t))))
+              (dolist (mode '(ask edits full-auto))
+                (let ((context (list :mode mode :session session :buckets nil
+                                     :execution-directory root :allowed-roots (list root))))
+                  (dolist (source '("uniq input" "uniq -c input" "uniq input -"
+                                    "uniq -- input -"))
+                    (should (eq 'allow (mevedel-bash-policy-check-permission
+                                       source :permission-context context))))
+                  (dolist (source '("uniq input output" "uniq -c input output"
+                                    "uniq input -c" "uniq -- input -c"))
+                    (should (eq 'deny (mevedel-bash-policy-check-permission
+                                      source :permission-context context))))))))
+          (dolist (posix '(nil "1"))
+            (setenv "POSIXLY_CORRECT" posix)
+            (dolist (args '(("input") ("input" "-") ("--" "input" "-")))
+              (with-temp-buffer
+                (should (equal (apply #'process-file "uniq" nil t nil args) 0))
+                (should (equal (buffer-string) "one\ntwo\n"))))
+            (should (equal (directory-files root nil "\\`[^.]") '("input"))))
+          ;; Positive controls bypass policy intentionally, only inside our root.
+          (setenv "POSIXLY_CORRECT" nil)
+          (with-temp-buffer
+            (should (equal (process-file "uniq" nil t nil "input" "output") 0))
+            (should (equal (buffer-string) "")))
+          (should (equal (with-temp-buffer
+                           (insert-file-contents (file-name-concat root "output"))
+                           (buffer-string))
+                         "one\ntwo\n"))
+          (setenv "POSIXLY_CORRECT" "1")
+          (with-temp-buffer
+            (should (equal (process-file "uniq" nil t nil "input" "-c") 0))
+            (should (equal (buffer-string) "")))
+          (should (equal (with-temp-buffer
+                           (insert-file-contents (file-name-concat root "-c"))
+                           (buffer-string))
+                         "one\ntwo\n"))
+          (should (equal (with-temp-buffer (insert-file-contents input) (buffer-string))
+                         "one\none\ntwo\n")))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-bash-policy-plan-inspection ()
+  ,test
+  (test)
+  :doc "inspection families and compositions work in standalone and directive Plan"
+  (dolist (directive '(nil t))
+    (let* ((mevedel-permission-rules nil)
+           (session (mevedel-session--create
+                     :authority-mode 'pid-lock :name "inspection"
+                     :plan-mode (not directive)
+                     :directive-planning
+                     (when directive '(:directive-id "d1" :phase planning))))
+           (mevedel--current-request
+            (when directive
+              (mevedel-request--create :session session :plan-read-only t))))
+      (dolist (mode '(ask edits full-auto))
+        (let ((context (list :mode mode :session session :buckets nil
+                             :execution-directory default-directory
+                             :allowed-roots (list default-directory))))
+          (dolist (source '("diff -u one two" "cmp one two"
+                            "readlink -f file" "realpath file" "du -sh ."
+                            "test -f file" "[ 1 -eq 2 ]"
+                            "git status --short && git diff --stat"
+                            "cat file | head -10 || pwd; ls"))
+            (should (eq 'allow (mevedel-bash-policy-check-permission
+                               source :permission-context context))))
+          (dolist (source '("cat file >out" "git status && touch file"
+                            "git reset --hard" "find . -delete"
+                            "git diff --ext-diff" "unknown-reader file"))
+            (should (eq 'deny (mevedel-bash-policy-check-permission
+                              source :permission-context context))))))))
+  :doc "retained agents inherit reading permission but not mutation authority"
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "parent" :plan-mode t))
+         (mevedel-permission-rules nil))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create :parent-session session))
+      (let ((context '(:mode edits :buckets nil)))
+        (should (eq 'allow (mevedel-bash-policy-check-permission
+                           "git status --short && git diff --stat"
+                           :permission-context context)))
+        (should (eq 'deny (mevedel-bash-policy-check-permission
+                          "git status && touch file"
+                          :permission-context context))))))
+  :doc "explicit denies still override reading classification"
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "deny" :plan-mode t))
+         (mevedel-permission-rules nil)
+         (context '(:mode edits :buckets
+                   ((:session ("Bash" :pattern "git diff:*" :action deny))))))
+    (setq context (plist-put context :session session))
+    (should (eq 'deny (mevedel-bash-policy-check-permission
+                      "git status --short && git diff --stat"
+                      :permission-context context)))))
 
 (mevedel-deftest mevedel-bash-policy-commands-summary ()
   ,test
@@ -210,6 +401,11 @@
   (let ((mevedel-permission-rules nil))
     (dolist (command
              '("find . -name '*.el'"
+               "git status"
+               "git --no-pager log -1"
+               "git diff -p"
+               "git show HEAD"
+               "git branch --show-current"
                "rg TODO src"
                "base64 file"
                "sed -n 1,5p file"
@@ -220,13 +416,7 @@
 \`mevedel-bash-policy-check-permission' asks for unproven command variants"
   (let ((mevedel-permission-rules nil))
     (dolist (command
-             '("git status"
-               "git --no-pager log -1"
-               "git diff -p"
-               "git show HEAD"
-               "git branch"
-               "git branch --show-current"
-               "git diff --output=file"
+             '("git diff --output=file"
                "git -c core.pager=cat log"
                "git --paginate log"
                "git branch new-name"

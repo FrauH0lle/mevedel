@@ -262,8 +262,10 @@
       (mevedel-view-animation-check-colors)
       (should-not mevedel-view-animation--cache))))
 
-(mevedel-deftest mevedel-view-animation--color-frame
-  (:doc "Prepared color samples are bounded, reusable, and time indexed.")
+(mevedel-deftest mevedel-view-animation--color-frame ()
+  ,test
+  (test)
+  :doc "Prepared color samples are bounded, reusable, and time indexed."
   (let ((mevedel-view-animation--cache nil))
     (cl-letf (((symbol-function 'mevedel-view-animation--colors)
                (lambda (_face _frame) '("#ffffff" . "#000000"))))
@@ -284,7 +286,32 @@
         (mevedel-view-animation-frame 'shimmer (format "Status %d" i)
                                       0 'default))
       (should (<= (length mevedel-view-animation--cache)
-                  mevedel-view-animation--cache-limit)))))
+                  mevedel-view-animation--cache-limit))))
+  :doc "Equal labels retain separate banks for remapped views and in-place edits."
+  (let ((mevedel-view-animation--cache nil))
+    (cl-letf (((symbol-function 'display-color-p) (lambda (&optional _) t))
+              ((symbol-function 'display-color-cells) (lambda (&optional _) 256)))
+      (with-temp-buffer
+        (setq major-mode 'mevedel-view-mode)
+        (setq-local face-remapping-alist
+                    (list (list 'default (list :foreground "#ffffff" :background "#000000")
+                                'default)))
+        (let ((dark (mevedel-view-animation-frame 'shimmer "Working" 1 'default)))
+          (with-temp-buffer
+            (setq major-mode 'mevedel-view-mode)
+            (setq-local face-remapping-alist
+                        '((default (:foreground "#000000" :background "#ffffff") default)))
+            (should-not (equal-including-properties
+                         dark (mevedel-view-animation-frame 'shimmer "Working" 1 'default)))
+            ;; Maintenance must resolve each shared bank with its own remapping.
+            (mevedel-view-animation-check-colors)
+            (should (= 2 (length mevedel-view-animation--cache))))
+          (should (eq dark (mevedel-view-animation-frame 'shimmer "Working" 1 'default)))
+          (setf (plist-get (cadr (assq 'default face-remapping-alist)) :foreground)
+                "#ff0000")
+          (should-not (mevedel-view-animation-color-ready-p 'shimmer "Working" 'default nil))
+          (should-not (equal-including-properties
+                       dark (mevedel-view-animation-frame 'shimmer "Working" 1 'default))))))))
 
 (mevedel-deftest mevedel-view-animation--colors
   (:doc "Unavailable display colors select a readable fixed-width fallback.")
@@ -299,7 +326,23 @@
           (should (string-match-p "Working" a))
           (should (= (string-width a) (string-width b)))))
       (should (= resolutions 3))))
-  (should-not (mevedel-view-animation--colors 'nonexistent-face nil))))
+  (should-not (mevedel-view-animation--colors 'nonexistent-face nil))
+  (with-temp-buffer
+    (let ((face-remapping-alist
+           '((default (:background "#21242b") default)
+             (mevedel-view-spinner (:foreground "#5b6268") mevedel-view-spinner)
+             (mevedel-view-tool-name (:foreground "#51afef") mevedel-view-tool-name))))
+      (cl-letf (((symbol-function 'display-color-p) (lambda (&optional _) t))
+                ((symbol-function 'display-color-cells) (lambda (&optional _) 256)))
+        (should (equal (mevedel-view-animation--colors 'mevedel-view-spinner nil)
+                       '("#5b6268" . "#21242b")))
+        (should (equal (mevedel-view-animation--colors 'mevedel-view-tool-name nil)
+                       '("#51afef" . "#21242b")))
+        ;; Anonymous remaps and inherited remaps use Emacs's own resolver.
+        (setf (cdr (assq 'default face-remapping-alist))
+              '((:foreground "#bbc2cf" :background "#282c34") default))
+        (should (equal (mevedel-view-animation--colors 'mevedel-view-tool-summary nil)
+                       '("#bbc2cf" . "#282c34"))))))))
 
 (mevedel-deftest mevedel-view-animation-low-color-terminal
   (:doc "Low-color terminals use glyphs even when faces resolve to valid colors.")
@@ -309,10 +352,15 @@
               ((symbol-function 'display-graphic-p) (lambda (&optional _frame) nil))
               ((symbol-function 'display-color-cells)
                (lambda (&optional _frame) cells))
-              ((symbol-function 'face-foreground)
-               (lambda (&rest _) "#ffffff"))
-              ((symbol-function 'face-background)
-               (lambda (&rest _) "#000000")))
+              ((symbol-function 'face-attributes-as-vector)
+               (lambda (&rest _)
+                 (let ((attributes (make-vector (length internal-lisp-face-attributes)
+                                                'unspecified)))
+                   (aset attributes (cl-position :foreground internal-lisp-face-attributes)
+                         "#ffffff")
+                   (aset attributes (cl-position :background internal-lisp-face-attributes)
+                         "#000000")
+                   attributes))))
       (dolist (style '(shimmer breathe bounce))
         (should-not (mevedel-view-animation--colors 'default nil))
         (let ((sample (mevedel-view-animation-frame

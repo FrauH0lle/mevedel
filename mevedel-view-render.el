@@ -194,6 +194,10 @@
 		  (seg-start seg-end &optional limit))
 (declare-function mevedel-transcript--tool-id-in-range
 		  "mevedel-transcript" (start end))
+(declare-function mevedel-transcript-scan-cancel "mevedel-transcript" (job))
+(declare-function mevedel-transcript-scan-result "mevedel-transcript" (job))
+(declare-function mevedel-transcript-scan-start "mevedel-transcript" (start end))
+(declare-function mevedel-transcript-scan-step "mevedel-transcript" (job))
 (declare-function mevedel-transcript-segments "mevedel-transcript"
 		  (start end))
 (defvar mevedel-transcript--tool-block-index)
@@ -2906,7 +2910,9 @@ finish before this function invokes registered renderers or reads live events."
       ;; Grouping needs the same normalized result and render data.  Carry
       ;; them with this one computation; the cache drops the payload below
       ;; so a collapsed header does not retain a large result indefinitely.
-      (setq rendering (plist-put rendering :group-tool name))
+      (setq rendering
+            (plist-put rendering :group-tool
+                       (or (plist-get direct-child :tool) name)))
       (setq rendering
             (plist-put
              rendering :group-child

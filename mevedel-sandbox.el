@@ -44,7 +44,8 @@
 (declare-function mevedel-sandbox--mount-plan
                   "mevedel-sandbox-grants" (restrictions grants))
 (declare-function mevedel-sandbox--resolve-filesystem-permissions
-                  "mevedel-sandbox-grants" (permissions &optional inaccessible-paths))
+                  "mevedel-sandbox-grants"
+                  (permissions &optional inaccessible-paths restrictions))
 (autoload 'mevedel-sandbox--fd-backed-command "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--mount-plan "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--resolve-filesystem-permissions
@@ -885,7 +886,8 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                     (plist-get additional-permissions :file-system))
                    (cl-loop for restriction in restrictions
                             when (eq (plist-get restriction :mode) 'inaccessible)
-                            collect (plist-get restriction :path))))
+                            collect (plist-get restriction :path))
+                   restrictions))
                  (plan (mevedel-sandbox--mount-plan
                         restrictions filesystem-permissions))
                  (network-access-p

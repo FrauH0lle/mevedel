@@ -17,6 +17,7 @@
 (require 'mevedel-bash-analysis)
 (require 'mevedel-bash-policy)
 (require 'mevedel-execution-target)
+(require 'mevedel-execution-grants)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-persistence)
 (require 'mevedel-permission-rules)
@@ -97,9 +98,6 @@
                   "mevedel-permission-rules" (buckets tool-name pattern))
 (declare-function mevedel-permission-rules-qualified-buckets
                   "mevedel-permission-rules" (buckets qualifier value))
-(declare-function mevedel-permission-rules-resource-granted-p
-                  "mevedel-permission-rules"
-                  (path access grants &optional recursive))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--apply-prompt-result
@@ -608,6 +606,28 @@ remembered direct user authority."
                        (eq eval-mode 'batch))
                    (mevedel-tool-exec-permission--remembered-additional-profile
                     tool-name operation permission-context)))))
+        ;; Reuse an already approved tree at the requested directory, never an
+        ;; unapproved protected exception or an unrepresentable exact mount.
+        (when (plist-get profile :file-system)
+          (let ((authority (append (mevedel-tool-exec-permission--direct-resource-grants
+                                    permission-context)
+                                   (plist-get (mevedel-tool-exec-permission--remembered-additional-profile
+                                               tool-name operation permission-context)
+                                              :file-system)))
+                (target (and (plist-get permission-context :session)
+                             (mevedel-session-execution-target
+                              (plist-get permission-context :session)))))
+            (setq profile
+                  (plist-put profile :file-system
+                             (mapcar
+                              (lambda (grant)
+                                (if (and (file-directory-p (plist-get grant :path))
+                                         (mevedel-execution-grants-covering-grant
+                                          (plist-get grant :path) (plist-get grant :access)
+                                          authority t target))
+                                    (plist-put (copy-sequence grant) :recursive t)
+                                  grant))
+                              (plist-get profile :file-system))))))
         (if profile
             (let ((copy (copy-sequence request)))
               (setq copy (plist-put copy :level 'additive))
@@ -657,9 +677,12 @@ remembered direct user authority."
          ((eq action 'deny)
           (setq deny-via 'sandbox-filesystem))
          ((and (not (eq action 'ask))
-               (mevedel-permission-rules-resource-granted-p
+               (mevedel-execution-grants-covering-grant
                 (plist-get grant :path) (plist-get grant :access) grants
-                (plist-get grant :recursive)))
+                (plist-get grant :recursive)
+                (and (plist-get permission-context :session)
+                     (mevedel-session-execution-target
+                      (plist-get permission-context :session)))))
           (push grant granted-grants))
          (t (push grant missing-grants)))))
     (list

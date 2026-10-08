@@ -31,6 +31,10 @@
                   "mevedel-bash-analysis" (source))
 (defvar mevedel-bash-dangerous-commands)
 
+;; `mevedel-bash-git'
+(declare-function mevedel-bash-git-read-only-p "mevedel-bash-git" (argv))
+(autoload 'mevedel-bash-git-read-only-p "mevedel-bash-git")
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
@@ -102,7 +106,7 @@
 (defconst mevedel-bash-policy--simple-read-only-commands
   '("cat" "cd" "cut" "echo" "expr" "false" "grep" "head" "id" "ls"
     "nl" "paste" "pwd" "rev" "seq" "stat" "tail" "tr" "true" "uname"
-    "uniq" "wc" "which" "whoami")
+    "wc" "which" "whoami")
   "Commands whose argument handling does not introduce child effects.")
 
 (defconst mevedel-bash-policy--unsafe-find-options
@@ -139,6 +143,57 @@
           (string-prefix-p "--pre=" argument)))
     (cdr argv))))
 
+(defun mevedel-bash-policy--uniq-read-only-p (argv)
+  "Return non-nil for supported uniq ARGV writing only to standard output.
+Recognize ordinary GNU flags, numeric option values and optional group methods.
+Allow at most INPUT and a literal `-' OUTPUT.  Options must precede operands:
+POSIXLY_CORRECT can turn an option after INPUT into an output filename.  Unknown
+options, missing values and contradictory grouping modes remain unclassified."
+  (and (consp argv)
+       (proper-list-p argv)
+       (equal (car argv) "uniq")
+       (cl-every (lambda (word)
+                   (and (stringp word) (not (string-match-p "\0" word))))
+                 argv)
+       (let ((case-fold-search nil)
+             (args (cdr argv)) (valid t) operands (modes "") group)
+         (while (and valid args)
+           (let ((word (pop args)))
+             (cond
+              ((equal word "--") (setq operands args args nil))
+              ((or (equal word "-") (not (string-prefix-p "-" word)))
+               (setq operands (cons word args) args nil))
+              ((member word '("--count" "--repeated" "--unique" "--ignore-case"
+                              "--zero-terminated" "--help" "--version"))
+               (setq modes (concat modes (pcase word
+                                           ("--count" "c")
+                                           ("--repeated" "d")
+                                           ("--unique" "u")
+                                           (_ "")))))
+              ((string-match-p
+                "\\`--all-repeated\\(?:=\\(?:none\\|prepend\\|separate\\)\\)?\\'" word)
+               (setq modes (concat modes "D")))
+              ((string-match-p
+                "\\`--group\\(?:=\\(?:separate\\|prepend\\|append\\|both\\)\\)?\\'" word)
+               (setq group t))
+              ((member word '("--skip-fields" "--skip-chars" "--check-chars"))
+               (unless (and args (string-match-p "\\`[+]?[0-9]+\\'" (pop args)))
+                 (setq valid nil)))
+              ((string-match-p
+                "\\`--\\(?:skip-fields\\|skip-chars\\|check-chars\\)=[+]?[0-9]+\\'" word))
+              ((string-match "\\`-\\([cduDiz]*\\)\\(?:[fsw]\\([+]?[0-9]+\\)?\\)?\\'" word)
+               (setq modes (concat modes (match-string 1 word)))
+               (when (string-match-p "[fsw]\\'" word)
+                 (unless (and args (string-match-p "\\`[+]?[0-9]+\\'" (pop args)))
+                   (setq valid nil))))
+              (t (setq valid nil)))))
+         (and valid
+              (<= (length operands) 2)
+              (or (< (length operands) 2) (equal (cadr operands) "-"))
+              (not (and group (string-match-p "[cduD]" modes)))
+              (not (and (string-match-p "c" modes)
+                        (string-match-p "D" modes)))))))
+
 (defun mevedel-bash-policy--sed-address-p (program)
   "Return non-nil when PROGRAM is one numeric print address."
   (and program
@@ -168,6 +223,91 @@
                "\\(?:@[[:space:]]*[[:alpha:]_]\\|\\_<\\(?:close\\|getline\\|system\\)\\_>\\|[>|]\\)"
                program)))))
 
+(defun mevedel-bash-policy--inspection-options-p (args flags values short)
+  "Validate inspection ARGS against FLAGS, VALUES and SHORT options.
+FLAGS are complete long options without operands; VALUES take an operand.
+SHORT is a regexp matching one entire short option (possibly with its value).
+After `--', remaining words are literal operands."
+  (let ((valid t))
+    (while (and valid args)
+      (let ((word (pop args)))
+        (cond
+         ((equal word "--") (setq args nil))
+         ((or (equal word "-") (not (string-prefix-p "-" word))))
+         ((member word flags))
+         ((member word values)
+          (if args (pop args) (setq valid nil)))
+         ((cl-some (lambda (option)
+                     (string-prefix-p (concat option "=") word))
+                   values))
+         ((and short (string-match-p short word)))
+         (t (setq valid nil)))))
+    valid))
+
+(defun mevedel-bash-policy--inspection-read-only-p (argv)
+  "Return non-nil for supported file-inspection ARGV.
+These GNU utility options only read inputs and emit to standard output;
+unrecognized variants remain unknown rather than inheriting name authority."
+  (pcase (car argv)
+    ("diff"
+     (mevedel-bash-policy--inspection-options-p
+      (cdr argv)
+      '("--normal" "--brief" "--report-identical-files" "--context"
+        "--unified" "--ed" "--rcs" "--side-by-side" "--left-column"
+        "--suppress-common-lines" "--show-c-function" "--recursive"
+        "--new-file" "--unidirectional-new-file" "--ignore-case"
+        "--ignore-all-space" "--ignore-space-change" "--ignore-blank-lines"
+        "--strip-trailing-cr" "--no-dereference" "--text" "--binary"
+        "--minimal" "--speed-large-files" "--help" "--version")
+      '("--context" "--unified" "--width" "--label" "--exclude"
+        "--exclude-from" "--from-file" "--to-file" "--ignore-matching-lines")
+      "\\`-\\(?:[qscuenypPrNaiwbBtTd]+\\|[CUWILxXSF]\\(?:.*\\)\\)\\'"))
+    ("cmp"
+     (mevedel-bash-policy--inspection-options-p
+      (cdr argv) '("--silent" "--quiet" "--verbose" "--print-bytes"
+                   "--help" "--version")
+      '("--ignore-initial" "--bytes")
+      "\\`-\\(?:[slb]+\\|[in].*\\)\\'"))
+    ((or "readlink" "realpath")
+     (mevedel-bash-policy--inspection-options-p
+      (cdr argv)
+      '("--canonicalize" "--canonicalize-existing" "--canonicalize-missing"
+        "--logical" "--physical" "--no-symlinks" "--strip" "--zero"
+        "--no-newline" "--quiet" "--silent" "--verbose" "--help" "--version")
+      '("--relative-to" "--relative-base") "\\`-[efmLPsnqvz]+\\'"))
+    ("du"
+     (mevedel-bash-policy--inspection-options-p
+      (cdr argv)
+      '("--all" "--apparent-size" "--bytes" "--total" "--human-readable"
+        "--si" "--count-links" "--dereference" "--no-dereference"
+        "--separate-dirs" "--summarize" "--one-file-system" "--null"
+        "--help" "--version")
+      '("--block-size" "--max-depth" "--exclude" "--exclude-from"
+        "--files0-from" "--threshold" "--time" "--time-style")
+      "\\`-\\(?:[abcDhHklLmPsSx0]+\\|[BdXt].*\\)\\'"))))
+
+(defun mevedel-bash-policy--test-read-only-p (argv)
+  "Return non-nil for literal file/string/integer test ARGV.
+Exclude variable lookup and arithmetic expressions that Bash can evaluate
+recursively, even when the original shell word is quoted."
+  (let ((args (cdr argv)))
+    (when (equal (car argv) "[")
+      (setq args (and (equal (car (last args)) "]") (butlast args))))
+    (and (or (equal (car argv) "test") (equal (car (last argv)) "]"))
+         (pcase (length args)
+           ((or 0 1) t)
+           (2 (or (member (car args)
+                          '("-b" "-c" "-d" "-e" "-f" "-g" "-h" "-k"
+                            "-L" "-p" "-r" "-s" "-S" "-u" "-w" "-x"
+                            "-O" "-G" "-N" "-n" "-z"))
+                  (and (equal (car args) "-t")
+                       (string-match-p "\\`[0-9]+\\'" (cadr args)))))
+           (3 (or (member (cadr args) '("=" "==" "!=" "-ef" "-nt" "-ot"))
+                  (and (member (cadr args) '("-eq" "-ne" "-lt" "-le" "-gt" "-ge"))
+                       (cl-every (lambda (word)
+                                   (string-match-p "\\`[+-]?[0-9]+\\'" word))
+                                 (list (car args) (caddr args))))))))))
+
 
 ;;
 ;;; Public interface
@@ -180,6 +320,12 @@
          (not (string-match-p "/" command))
          (cond
           ((member command mevedel-bash-policy--simple-read-only-commands) t)
+          ((string-equal command "git")
+           (mevedel-bash-git-read-only-p argv))
+          ((member command '("diff" "cmp" "readlink" "realpath" "du"))
+           (mevedel-bash-policy--inspection-read-only-p argv))
+          ((member command '("test" "["))
+           (mevedel-bash-policy--test-read-only-p argv))
           ((string-equal command "awk")
            (mevedel-bash-policy--awk-read-only-p argv))
           ((string-equal command "base64")
@@ -189,7 +335,9 @@
           ((string-equal command "rg")
            (mevedel-bash-policy--rg-read-only-p argv))
           ((string-equal command "sed")
-           (mevedel-bash-policy--sed-read-only-p argv))))))
+           (mevedel-bash-policy--sed-read-only-p argv))
+          ((string-equal command "uniq")
+           (mevedel-bash-policy--uniq-read-only-p argv))))))
 
 (defun mevedel-bash-policy--context-directory (permission-context)
   "Return the resource directory captured by PERMISSION-CONTEXT."

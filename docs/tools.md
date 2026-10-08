@@ -87,6 +87,18 @@ Provider projection adds hook context and repair feedback, persists oversized
 output when declared, queues any Goal-budget warning, then attaches render data
 and media. It does not feed that presentation back into a nested ToolCall.
 
+Bash checks session mutation authority at managed execution admission, using
+the analyzed command after hook rewrites. The pipeline does not apply Bash's
+static mutating-tool flag to initialize session storage before permission:
+read-only inspections and denied Plan commands must not modify repository
+metadata as a side effect of that initialization. Mutating Bash still requires
+the owning execution boundary's authority check before launch.
+Read-only Bash reuses already initialized artifact storage without updating Git
+exclusions; an unsaved session uses the execution owner's temporary spool.
+Oversized provider projections likewise use only existing storage or truncate
+the presentation; they do not initialize an unsaved session. Complete execution
+output remains available through the managed spool while that execution is retained.
+
 
 Synchronous handlers receive `(args)` and asynchronous handlers receive
 `(callback args)`, where args is a keyword plist. The
@@ -245,7 +257,12 @@ the agent's own interrupted-turn handling instead.
 
 A syntactically direct expression renders using the underlying tool's normal
 renderer and status, while retaining the ToolCall envelope and child IDs in the
-transcript audit. The redundant direct-call text result in that audit is a
+transcript audit. Collapsed activity summaries use the same settled specialist
+name as the row: a direct Eval contributes “evaluated 1 form”, not “ran 1
+script”. The cached presentation name is separate from the canonical ToolCall
+child record, so expansion and redraw preserve source and envelope identity.
+Live/composed programs, malformed audits and failed envelopes retain ToolCall
+presentation. The redundant direct-call text result in that audit is a
 bounded preview; the outer result remains the displayed result. Non-text values,
 arguments, render data, IDs, and supported media retain their ordinary direct-call
 semantics. Its result and supported media reach the model unchanged
