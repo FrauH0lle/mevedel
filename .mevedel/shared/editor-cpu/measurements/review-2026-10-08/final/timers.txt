@@ -1,0 +1,154 @@
+== idle (no request)  pre-redisplay-calls=18
+      4 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+      1 flycheck-display-error-at-point
+      1 mevedel-session-durability-lease-renew
+== label static  pre-redisplay-calls=49
+     11 jinx--timer-handler
+     10 mevedel--gc-maintain
+     10 closure:mevedel--ui-timer-cancel
+      4 mevedel-view--control-transfer-refresh
+      2 show-paren-function
+      1 undo-auto--boundary-timer
+      1 gcmh-idle-garbage-collect
+      1 which-key--update
+      1 jit-lock-context--update
+      1 diff-hl-flydiff-update
+      1 mevedel-view--realign-markdown
+      1 flycheck-display-error-at-point
+      1 anonymous
+== label shimmer @30  pre-redisplay-calls=128
+     97 closure:mevedel--ui-timer-cancel
+     10 mevedel--gc-maintain
+      7 jinx--timer-handler
+      4 mevedel-view--control-transfer-refresh
+      3 closure:mevedel-transport-run-when-idle
+      3 mevedel-session-collection--step
+      1 undo-auto--boundary-timer
+      1 mevedel-session-persistence--checkpoint-tick
+      1 mevedel-session-durability-lease-renew
+== label shimmer @15  pre-redisplay-calls=88
+     52 closure:mevedel--ui-timer-cancel
+     10 jinx--timer-handler
+     10 mevedel--gc-maintain
+      8 mevedel-session-collection--step
+      4 mevedel-view--control-transfer-refresh
+      1 mevedel-session-durability-lease-renew
+      1 undo-auto--boundary-timer
+== label breathe @30  pre-redisplay-calls=111
+     80 closure:mevedel--ui-timer-cancel
+     10 mevedel--gc-maintain
+      9 jinx--timer-handler
+      6 mevedel-session-collection--step
+      4 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+== label bounce @30  pre-redisplay-calls=118
+     79 closure:mevedel--ui-timer-cancel
+     10 mevedel-session-collection--step
+     10 jinx--timer-handler
+     10 mevedel--gc-maintain
+      4 mevedel-view--control-transfer-refresh
+      3 closure:mevedel-transport-run-when-idle
+      1 undo-auto--boundary-timer
+      1 mevedel-session-persistence--checkpoint-tick
+      1 mevedel-session-durability-lease-renew
+== label dots  pre-redisplay-calls=58
+     21 closure:mevedel--ui-timer-cancel
+     10 mevedel--gc-maintain
+     10 mevedel-session-collection--step
+      9 jinx--timer-handler
+      4 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+      1 mevedel-session-durability-lease-renew
+== label ellipsis  pre-redisplay-calls=44
+     10 closure:mevedel--ui-timer-cancel
+     10 mevedel-session-collection--step
+     10 mevedel--gc-maintain
+      9 jinx--timer-handler
+      4 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+== label braille  pre-redisplay-calls=81
+     42 closure:mevedel--ui-timer-cancel
+     10 mevedel-session-collection--step
+     10 jinx--timer-handler
+     10 mevedel--gc-maintain
+      4 mevedel-view--control-transfer-refresh
+      3 closure:mevedel-transport-run-when-idle
+      1 mevedel-session-persistence--checkpoint-tick
+      1 mevedel-session-durability-lease-renew
+      1 undo-auto--boundary-timer
+== label ascii  pre-redisplay-calls=69
+     42 closure:mevedel--ui-timer-cancel
+     10 mevedel--gc-maintain
+      9 jinx--timer-handler
+      4 mevedel-view--control-transfer-refresh
+      1 mevedel-session-durability-lease-renew
+      1 undo-auto--boundary-timer
+== tool static (label static)  pre-redisplay-calls=67
+     10 jinx--timer-handler
+     10 closure:mevedel--ui-timer-cancel
+     10 mevedel--gc-maintain
+     10 mevedel-session-collection--step
+     10 mevedel-execution--emit-progress
+     10 closure:mevedel-execution-process--ended
+      4 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+== tool shimmer (label static)  pre-redisplay-calls=172
+     96 closure:mevedel--ui-timer-cancel
+     18 jinx--timer-handler
+     10 mevedel--gc-maintain
+     10 mevedel-execution--emit-progress
+     10 closure:mevedel-execution-process--ended
+      8 mevedel-view--realign-markdown
+      4 mevedel-view--control-transfer-refresh
+      3 closure:mevedel-transport-run-when-idle
+      1 mevedel-session-persistence--checkpoint-tick
+      1 closure:mevedel-view--spinner-active-p
+      1 flycheck-display-error-at-point
+      1 mevedel-view--flush-scheduled-render
+      1 mevedel-session-durability-lease-renew
+      1 undo-auto--boundary-timer
+== tool braille (label static)  pre-redisplay-calls=123
+     42 closure:mevedel--ui-timer-cancel
+     21 jinx--timer-handler
+     10 mevedel--gc-maintain
+     10 mevedel-session-collection--step
+     10 mevedel-view--realign-markdown
+     10 mevedel-execution--emit-progress
+     10 closure:mevedel-execution-process--ended
+      4 mevedel-view--control-transfer-refresh
+      1 mevedel-session-durability-lease-renew
+      1 undo-auto--boundary-timer
+== heartbeat (label static)  pre-redisplay-calls=47
+     20 mevedel-telemetry--lag-tick
+     10 jinx--timer-handler
+     10 closure:mevedel--ui-timer-cancel
+     10 mevedel--gc-maintain
+      4 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+== defaults: shimmer + shimmer tool + heartbeat, Bash  pre-redisplay-calls=183
+     95 closure:mevedel--ui-timer-cancel
+     20 mevedel-telemetry--lag-tick
+     10 jinx--timer-handler
+     10 mevedel-session-collection--step
+     10 mevedel-view--realign-markdown
+     10 mevedel--gc-maintain
+     10 mevedel-execution--emit-progress
+     10 closure:mevedel-execution-process--ended
+      4 mevedel-view--control-transfer-refresh
+      3 closure:mevedel-transport-run-when-idle
+      1 mevedel-session-persistence--checkpoint-tick
+      1 undo-auto--boundary-timer
+      1 mevedel-session-durability-lease-renew
+== defaults on battery (15 fps), Bash  pre-redisplay-calls=129
+     52 closure:mevedel--ui-timer-cancel
+     20 mevedel-telemetry--lag-tick
+     10 mevedel--gc-maintain
+     10 jinx--timer-handler
+     10 mevedel-view--realign-markdown
+     10 mevedel-execution--emit-progress
+     10 closure:mevedel-execution-process--ended
+      4 mevedel-view--control-transfer-refresh
+      3 mevedel-session-collection--step
+      2 mevedel-session-durability-lease-renew
+      1 undo-auto--boundary-timer

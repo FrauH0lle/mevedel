@@ -1,0 +1,20 @@
+== idle (no request)  pre-redisplay-calls=17
+      4 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+      1 mevedel-session-durability-lease-renew
+== label static  pre-redisplay-calls=31
+     10 mevedel--gc-maintain
+     10 jinx--timer-handler
+     10 closure:mevedel--ui-timer-cancel
+      4 mevedel-view--control-transfer-refresh
+      1 undo-auto--boundary-timer
+== label shimmer @30  pre-redisplay-calls=130
+     95 closure:mevedel--ui-timer-cancel
+     10 mevedel--gc-maintain
+     10 jinx--timer-handler
+      4 mevedel-view--control-transfer-refresh
+      3 closure:mevedel-transport-run-when-idle
+      3 mevedel-session-collection--step
+      2 mevedel-session-durability-lease-renew
+      1 undo-auto--boundary-timer
+      1 mevedel-session-persistence--checkpoint-tick

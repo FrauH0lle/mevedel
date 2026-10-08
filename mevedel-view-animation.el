@@ -4,11 +4,11 @@
 
 ;; Pure time-based animation samples for the view's request and tool indicators.
 ;; Scheduling, status ownership, and buffer writes belong to the view stream.
-;; Shimmer is cadenced: a brightness band sweeps the label for one second every
-;; four and the label rests in between, so a view wakes only while it moves.
+;; Shimmer is cadenced: a faded band sweeps the label for one second every
+;; four.  Between sweeps the label keeps its normal foreground without wakeups.
 ;; Color banks hold only a bounded animated prefix; the entire label remains
 ;; readable.  Six shared banks reuse frames between views; each live view can
-;; pin four banks so another view cannot evict its active sample.  Theme changes
+;; pin their active banks so another view cannot evict its active sample.  Theme changes
 ;; discard both caches before the next sample.
 
 ;;; Code:
@@ -46,8 +46,9 @@ in four lets each sweep run smoothly at a fraction of that.")
 (defconst mevedel-view-animation--cache-limit 6
   "Maximum number of prepared color banks retained across labels and frames.")
 
-(defconst mevedel-view-animation--view-cache-limit 4
-  "Maximum prepared color banks retained by each active view.")
+(defvar-local mevedel-view-animation--view-cache-limit 4
+  "Maximum prepared banks retained by this view.
+The scheduler sizes this to cover the bounded set of registered labels.")
 
 (defconst mevedel-view-animation-prefixes
   (append (mapcar (lambda (char) (concat (string char) " "))
@@ -68,6 +69,17 @@ Unlike the shared reuse cache, these banks cannot be evicted by other views.")
 
 (defvar mevedel-view-animation--dots-cache nil
   "Recent dots glyph support readings (FRAME . SUPPORTED).")
+
+(defun mevedel-view-animation-reserve (labels)
+  "Reserve this view's prepared banks for LABELS active indicator spans.
+Keep at least four reusable banks; shrink obsolete capacity immediately.
+Call at semantic scheduling boundaries, never on each decorative frame."
+  (setq mevedel-view-animation--view-cache-limit (max 4 labels))
+  (when (> (length mevedel-view-animation--view-cache)
+           mevedel-view-animation--view-cache-limit)
+    (setcdr (nthcdr (1- mevedel-view-animation--view-cache-limit)
+                    mevedel-view-animation--view-cache)
+            nil)))
 
 (defun mevedel-view-animation-reset-glyph-support ()
   "Retry dots glyph support after a display or font change."
@@ -135,10 +147,11 @@ The caller may choose a slower rendering ceiling without changing the
 time-based animation phase.  Shimmer moves at this period only during
 its sweep; see `mevedel-view-animation-next-delay'."
   (pcase style
-    ((or 'shimmer 'breathe 'bounce) (/ 1.0 60))
-    ((or 'braille 'ascii) 0.12)
-    ('dots 0.24)
-    ('ellipsis 0.48)
+    ('shimmer (/ 1.0 60))
+    ((or 'breathe 'bounce) (/ 1.0 8))
+    ((or 'braille 'ascii) 0.24)
+    ('dots 0.48)
+    ('ellipsis 0.96)
     (_ nil)))
 
 (defun mevedel-view-animation--colors (face frame)
@@ -189,8 +202,8 @@ leave that entire final cluster unanimated."
 
 (defun mevedel-view-animation--sweep-sample (head palette tick)
   "Return HEAD shaded from PALETTE at shimmer sweep TICK, 0 being at rest.
-A cosine band at least three columns wide crosses HEAD's columns; outside
-it the text keeps the palette's resting shade."
+A cosine band at least three columns wide fades toward the background as
+it crosses HEAD; outside it and at rest the text keeps its normal foreground."
   (let* ((width (float (string-width head)))
          (half (max 3.0 (* 0.1 width)))
          (position (and (> tick 0)
@@ -207,7 +220,7 @@ it the text keeps the palette's resting shade."
                                        half))
                          1.0))
              (intensity (* 0.5 (+ 1 (cos (* float-pi distance)))))
-             (shade (aref palette (min 63 (max 0 (round (* 63 intensity)))))))
+             (shade (aref palette (min 63 (max 0 (round (* 63 (- 1 intensity))))))))
         (setq column (+ column glyph))
         (put-text-property i (1+ i) 'face `(:foreground ,shade) sample)))
     sample))
@@ -238,7 +251,7 @@ it the text keeps the palette's resting shade."
                             (or breath
                                 (max 0.0 (- 1 (/ (abs (- i center)) 2.5)))))
                            (shade (aref palette
-                                        (min 63 (max 0 (round (* 63 intensity)))))))
+                                        (min 63 (max 0 (round (* 63 (- 1 intensity))))))))
                       (put-text-property i (1+ i) 'face
                                          `(:foreground ,shade) sample)))
                   sample))))
@@ -297,8 +310,17 @@ it the text keeps the palette's resting shade."
   "Return non-nil when color STYLE has a prepared bank on FRAME.
 Call when (re)arming a view, not on every animation frame.  Reuse the
 bounded bank prepared for the first visible frame when available."
-  (and (memq style '(shimmer breathe bounce))
-       (mevedel-view-animation--color-frame style label 0 face frame)))
+  (when (memq style '(shimmer breathe bounce))
+    (let* ((frame (or frame (selected-frame)))
+           (sample (mevedel-view-animation--color-frame style label 0 face frame))
+           (entry (assoc (list style label face frame)
+                         mevedel-view-animation--view-cache)))
+      ;; Promote only during semantic preparation.  Otherwise old-frame banks
+      ;; can evict an active label already visited by this preparation pass.
+      ;; Decorative cache hits stay allocation-free at the retention boundary.
+      (when entry
+        (mevedel-view-animation--remember-view-bank (car entry) (cdr entry)))
+      sample)))
 
 (defun mevedel-view-animation-color-ready-p (style label face frame)
   "Return non-nil if a current color or glyph-fallback bank is cached.
@@ -353,7 +375,7 @@ the result is only its prefix, including a separating space.  Static with
 an empty LABEL returns an empty string.  Colorless displays use the braille
 glyph fallback.  SECONDS is elapsed animation time, not a frame counter."
   (let ((label (or label ""))
-        (tick (floor (+ 1e-8 (/ (max 0.0 seconds) 0.12)))))
+        (tick (floor (+ 1e-8 (/ (max 0.0 seconds) 0.24)))))
     (when (and (eq style 'braille)
                (not (mevedel-view-animation--braille-supported-p frame)))
       (setq style 'ascii))

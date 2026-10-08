@@ -1,0 +1,16 @@
+idle (no request)                                    emacs   4.0%  compositor  10.7%  timers/s   0.7
+label static                                         emacs   9.4%  compositor  10.5%  timers/s   4.5
+label shimmer @30                                    emacs  27.1%  compositor  18.7%  timers/s  12.7
+label shimmer @15                                    emacs  19.7%  compositor  16.6%  timers/s   8.6
+label breathe @30                                    emacs  25.7%  compositor  18.2%  timers/s  11.0
+label bounce @30                                     emacs  25.9%  compositor  17.9%  timers/s  11.9
+label dots                                           emacs  12.4%  compositor  13.1%  timers/s   5.6
+label ellipsis                                       emacs   9.6%  compositor  11.5%  timers/s   4.4
+label braille                                        emacs  17.8%  compositor  15.2%  timers/s   8.2
+label ascii                                          emacs  15.0%  compositor  13.9%  timers/s   6.7
+tool static (label static)                           emacs  14.5%  compositor  13.8%  timers/s   6.5
+tool shimmer (label static)                          emacs  35.4%  compositor  22.2%  timers/s  16.5
+tool braille (label static)                          emacs  25.5%  compositor  17.2%  timers/s  11.9
+heartbeat (label static)                             emacs  10.5%  compositor  10.7%  timers/s   5.5
+defaults: shimmer + shimmer tool + heartbeat, Bash   emacs  34.7%  compositor  21.0%  timers/s  18.5
+defaults on battery (15 fps), Bash                   emacs  27.6%  compositor  18.2%  timers/s  13.2

@@ -362,15 +362,23 @@ The foreground request label supports `shimmer`, `breathe`, `bounce`, `dots`,
 `ellipsis`, `braille`, `ascii`, and `static` (`shimmer` by default). Pending-tool
 rows use `shimmer`, `braille`, `ascii`, `dots`, or `static` (`shimmer` by
 default), independently of the request label. Shimmer is cadenced: 0.6 seconds
-after a request starts, and then every four seconds, a cosine brightness band at
-least three columns wide sweeps the label in one second; between sweeps the
-label rests at its dimmed shade and the view schedules no frames. Tool rows
+after a request starts, and then every four seconds, a cosine band at least
+three columns wide fades toward the background as it sweeps the label in one
+second. Text outside the band and between sweeps keeps its normal foreground;
+between sweeps the view schedules no frames. Tool rows
 shimmer their verb and tool name ("Calling Bash", not its arguments), in the
 same frames as the label, so they add no wakeups of their own. Color styles use 64 theme-derived shades;
-breathe and bounce use a continuous 3.6-second cycle. Prepared frames are
-cached with a bounded animated prefix so long labels remain readable. A live view pins up to four
-prepared banks independently of the shared six-bank reuse cache, so other views
-cannot evict its active frame. Theme changes clear both caches. If colors
+breathe and bounce use a continuous 3.6-second cycle sampled at at most 8 fps.
+Breathe starts at normal foreground, fades toward the background, and returns;
+bounce moves a faded band over otherwise normal text. Prepared frames are
+cached with a bounded animated prefix so long labels remain readable. A live view reserves a prepared bank for every registered tool label, including
+the overflow row, plus the main label (with a four-bank minimum). This working
+set is bounded by the visible-tool row cap and retained independently of the
+shared six-bank reuse cache, so other views cannot evict active frames. The
+scheduler prepares every eligible label at semantic boundaries. Color and
+portable glyph rows may coexist and each keeps its own cadence. Frozen rows
+adopt their destination display on visibility changes; a changed overflow count
+updates its text while retaining its displayed phase. Theme changes clear both caches. If colors
 cannot be resolved on a display, color styles fall back to a glyph indicator;
 when Braille is unavailable on its target display, the indicator uses ASCII.
 Terminal palettes
@@ -383,8 +391,7 @@ until its display is known. If the same indicator is visible in multiple display
 frames, color styles use a portable glyph rather than a palette prepared for
 only one frame; configured glyph styles retain their cadence (with ASCII
 substitution only where a target display lacks the glyphs). Glyph animations
-keep their natural cadence (roughly 120 ms for braille/ascii, slower for
-dots/ellipsis); raising the frame-rate ceiling does not accelerate them.
+keep their natural cadence (240 ms for braille/ascii, 480 ms for dots and 960 ms for ellipsis); raising the frame-rate ceiling does not accelerate them.
 A color style falling back to a glyph also uses that glyph cadence, not
 a needless color-rate timer.
 Changes to styles, colors, and labels invalidate affected prepared frames;

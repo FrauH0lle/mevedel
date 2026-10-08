@@ -1,0 +1,16 @@
+{
+  "branch": "fix/cpu-wakeups",
+  "base": "0f6585ec",
+  "emacs": "31.1 pgtk",
+  "frame_logical": [
+    1536,
+    888
+  ],
+  "scale": 2,
+  "loaded_gptel": "/home/roland/.emacs.d/straight/build/gptel/gptel-request.elc",
+  "sha256": {
+    "mevedel-view-animation.el": "de1303c1c6489e399ad2f0abc28163b0c00207cc9b02e127ac0f5820f64d8051",
+    "mevedel-view-stream.el": "a6c2722818ad036c29b7d87eabb95c9363306061fbf52e7cf22683696abf2dc6",
+    "/home/roland/.emacs.d/straight/build/gptel/gptel-request.elc": "eb6f93078fdd92f219fb55b837cd7805a0d2bb5d379744c8d278d8a94b02fe1b"
+  }
+}

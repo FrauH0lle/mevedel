@@ -7,13 +7,14 @@
 # Starts the mock server, loads cpuh-harness.el, runs every scenario for 10 s,
 # then restores the user's settings and unloads the harness.  QUICK=1 stops
 # after the first shimmer scenario, as a smoke test.
-set -u
+set -euo pipefail
 K=$(cd "$(dirname "$0")" && pwd); OUT=${1:?output directory}; mkdir -p "$OUT"
 RES=$OUT/results.txt; TIM=$OUT/timers.txt; : > "$RES"; : > "$TIM"
 CTL=$OUT/control.json; echo '{"hold": 0, "tool": null}' > "$CTL"
 WS=$(mktemp -d); (cd "$WS" && git init -q && echo "# cpu" > README.md && git add -A && git -c user.email=t@t -c user.name=t commit -qm init)
 python3 -I "$K/mock_server.py" 8766 "$CTL" "$OUT/body.json" > "$OUT/mock.log" 2>&1 & MOCK=$!
-trap 'kill $MOCK 2>/dev/null; emacsclient --eval "(when (fboundp (quote cpuh-unload)) (cpuh-unload))" >/dev/null; rm -rf "$WS"' EXIT
+trap 'kill "$MOCK" 2>/dev/null || true; emacsclient --eval "(when (fboundp (quote cpuh-unload)) (cpuh-unload))" >/dev/null || true; rm -rf "$WS"' EXIT
+HZ=$(getconf CLK_TCK)
 EPID=$(emacsclient --eval '(emacs-pid)'); KPID=$(pgrep -x kwin_wayland || pgrep -x gnome-shell || echo 1)
 cpu() { awk '{print $14+$15}' /proc/$1/stat; }
 emacsclient --eval "(progn (load \"$K/cpuh-harness.el\" nil t) t)" >/dev/null
@@ -22,12 +23,22 @@ rearm() { emacsclient --eval '(with-current-buffer (cpuh-view) (mevedel-view--st
 sample() { # LABEL: 10 s of emacs/compositor CPU and timer callbacks
   [ "${REARM:-1}" = 1 ] && rearm
   emacsclient --eval '(cpuh-start)' >/dev/null
-  local e0=$(cpu $EPID) k0=$(cpu $KPID); sleep 10; local e1=$(cpu $EPID) k1=$(cpu $KPID)
+  local e0 k0 e1 k1 start end
+  e0=$(cpu "$EPID"); k0=$(cpu "$KPID"); start=$(date +%s.%N)
+  sleep 10
+  e1=$(cpu "$EPID"); k1=$(cpu "$KPID"); end=$(date +%s.%N)
   emacsclient --eval "(cpuh-dump \"$TIM\" \"$1\")" >/dev/null; emacsclient --eval '(cpuh-stop)' >/dev/null
   local t=$(awk -v l="== $1 " 'index($0,l)==1{f=1;next} /^==/{f=0} f{s+=$1} END{print s+0}' "$TIM")
-  awk -v l="$1" -v e=$((e1-e0)) -v k=$((k1-k0)) -v t=$t 'BEGIN{printf "%-52s emacs %5.1f%%  compositor %5.1f%%  timers/s %5.1f\n", l, e/10, k/10, t/10}' | tee -a "$RES"
+  awk -v l="$1" -v e=$((e1-e0)) -v k=$((k1-k0)) -v t="$t" -v hz="$HZ" -v start="$start" -v end="$end" 'BEGIN{dt=end-start; printf "%-52s emacs %5.1f%%  compositor %5.1f%%  timers/s %5.1f\n", l, 100*e/hz/dt, 100*k/hz/dt, t/dt}' | tee -a "$RES"
 }
-wait_idle() { for i in $(seq 1 60); do [ "$(emacsclient --eval '(cpuh-busy-p)')" = nil ] && return; sleep 1; done; }
+wait_idle() {
+  for i in $(seq 1 60); do
+    [ "$(emacsclient --eval '(cpuh-busy-p)')" = nil ] && return
+    sleep 1
+  done
+  echo "Measured request did not settle within 60 seconds" >&2
+  return 1
+}
 scenario() { # LABEL STYLE TOOL-STYLE FPS TELEMETRY HOLD TOOL-JSON
   emacsclient --eval "(progn (mevedel-telemetry--lag-stop) (cpuh-set '$2 '$3 $4 $5))" >/dev/null
   echo "{\"hold\": $6, \"tool\": $7}" > "$CTL"

@@ -1,0 +1,3 @@
+idle (no request)                                    emacs   2.7%  compositor   8.6%  timers/s   0.6
+label static                                         emacs   5.8%  compositor   8.3%  timers/s   3.5
+label shimmer @30                                    emacs  26.3%  compositor  12.0%  timers/s  12.9

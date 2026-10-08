@@ -136,3 +136,24 @@ spinner starts **without** the simulated focus event (`REARM=0`), and that on
 - `tools/cpuh-prof.el` — bounded CPU+memory profile summaries.
 - `tools/sampler.py` — per-second CPU of a process tree and the compositor.
 - `tools/*-demo.el` — visual comparisons; `q` closes and cancels their timers.
+
+## Follow-up review completed (2026-10-08)
+
+The independent follow-up is recorded in
+[the investigation](../editor-cpu-investigation.md#independent-review-and-follow-up-2026-10-08).
+It reproduces the startup fix and frame-size effect; fixes stale overflow text,
+incomplete/evicted tool banks, and phase advancement while awaiting input; and
+implements the user's visually accepted 8-fps breathe/bounce and half-speed
+glyphs. See the investigation for measurements, test results and limitations.
+
+[Canvas/native-module research](canvas-research.md) traces the Emacs 32 API and
+its PGTK presentation path. Canvas is merged, but has not been benchmarked here;
+no native module or custom Emacs build was added. Remaining presentation, GC,
+markdown, status-strip and ACP costs remain in the backlog.
+
+
+The user subsequently approved reversing animation contrast: shimmer and bounce
+now fade a moving band over normal foreground text, and breathe fades from
+normal foreground and back. Glyph styles retain their normal text. This visual
+follow-up preserves the measured cadences; see the investigation's visual
+contrast follow-up for final validation.

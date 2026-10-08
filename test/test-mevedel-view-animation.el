@@ -90,12 +90,12 @@
   (:doc "Natural frame cadence is independent of the caller's frame ceiling.")
   (progn
   (should (= (mevedel-view-animation-period 'shimmer) (/ 1.0 60)))
-  (should (= (mevedel-view-animation-period 'breathe) (/ 1.0 60)))
-  (should (= (mevedel-view-animation-period 'bounce) (/ 1.0 60)))
-  (should (= (mevedel-view-animation-period 'braille) 0.12))
-  (should (= (mevedel-view-animation-period 'ascii) 0.12))
-  (should (= (mevedel-view-animation-period 'dots) 0.24))
-  (should (= (mevedel-view-animation-period 'ellipsis) 0.48))
+  (should (= (mevedel-view-animation-period 'breathe) (/ 1.0 8)))
+  (should (= (mevedel-view-animation-period 'bounce) (/ 1.0 8)))
+  (should (= (mevedel-view-animation-period 'braille) 0.24))
+  (should (= (mevedel-view-animation-period 'ascii) 0.24))
+  (should (= (mevedel-view-animation-period 'dots) 0.48))
+  (should (= (mevedel-view-animation-period 'ellipsis) 0.96))
   (should-not (mevedel-view-animation-period 'static))))
 
 (mevedel-deftest mevedel-view-animation-sweep-phase ()
@@ -122,25 +122,28 @@
   ;; Rounding just short of a sweep does not wake twice.
   (should (= 0.05 (mevedel-view-animation-next-delay 'shimmer (- 4.6 1e-12) 0.05)))
   ;; Other styles move continuously.
-  (should (= 0.12 (mevedel-view-animation-next-delay 'braille 1.6 0.12))))
+  (should (= 0.24 (mevedel-view-animation-next-delay 'braille 1.6 0.24))))
 
 (mevedel-deftest mevedel-view-animation--sweep-sample ()
   ,test
   (test)
-  :doc "rests evenly and brightens a band while sweeping"
-  (let* ((palette (mevedel-view-animation--palette "#ffffff" "#000000"))
-         (shades (lambda (tick)
-                   (let ((sample (mevedel-view-animation--sweep-sample
-                                  "Thinking..." palette tick)))
-                     (mapcar (lambda (i)
-                               (plist-get (get-text-property i 'face sample)
-                                          :foreground))
-                             (number-sequence 0 10))))))
-    (should (equal (list (aref palette 0)) (delete-dups (funcall shades 0))))
-    (let ((middle (funcall shades 30)))
-      ;; A band of distinct shades rises above the resting text around it.
-      (should (> (length (delete-dups (copy-sequence middle))) 3))
-      (should (member (aref palette 0) middle)))))
+  :doc "keeps normal foreground at rest and fades only the moving band"
+  (dolist (colors '(("#ffffff" . "#000000") ("#000000" . "#ffffff")))
+    (let* ((palette (mevedel-view-animation--palette (car colors) (cdr colors)))
+           (shades (lambda (tick)
+                     (let ((sample (mevedel-view-animation--sweep-sample
+                                    "Thinking..." palette tick)))
+                       (mapcar (lambda (i)
+                                 (plist-get (get-text-property i 'face sample)
+                                            :foreground))
+                               (number-sequence 0 10))))))
+      (should (equal (list (aref palette 63)) (delete-dups (funcall shades 0))))
+      (let ((middle (funcall shades 30)))
+        ;; Both themes keep normal text around a band faded toward the background.
+        (should (> (length (delete-dups (copy-sequence middle))) 3))
+        (should (equal (car middle) (aref palette 63)))
+        (should (equal (car (last middle)) (aref palette 63)))
+        (should-not (equal (nth 5 middle) (aref palette 63)))))))
 
 (mevedel-deftest mevedel-view-animation-prefixes
   (:doc "All non-static tool prefixes are discoverable without matching all rows.")
@@ -154,7 +157,7 @@
   (should-not (member "" mevedel-view-animation-prefixes))))
 
 (mevedel-deftest mevedel-view-animation-frame
-  (:doc "Glyph styles have stable geometry and time-derived phase.")
+  (:doc "Styles retain geometry; color motion fades from normal foreground.")
   (progn
   (dolist (style '(braille ascii dots ellipsis static))
     (let* ((first (mevedel-view-animation-frame style "Working" 0 'default))
@@ -171,11 +174,36 @@
   (should (equal (mevedel-view-animation-frame 'dots "" 0 'default)
                  "●··· "))
   (should (equal (mevedel-view-animation-frame 'braille "Work" 0 'default)
-                 (mevedel-view-animation-frame 'braille "Work" 1.2 'default)))
-  (should (equal (mevedel-view-animation-frame 'braille "Work" 0.12 'default)
+                 (mevedel-view-animation-frame 'braille "Work" 2.4 'default)))
+  (should (equal (mevedel-view-animation-frame 'braille "Work" 0.24 'default)
                  "⠙ Work"))
-  (should (equal (mevedel-view-animation-frame 'ellipsis "Work" 0.48 'default)
-                 "Work.  "))))
+  (should (equal (mevedel-view-animation-frame 'ellipsis "Work" 0.96 'default)
+                 "Work.  "))
+  (dolist (colors '(("#ffffff" . "#000000") ("#000000" . "#ffffff")))
+    (let* ((mevedel-view-animation--cache nil)
+           (palette (mevedel-view-animation--palette (car colors) (cdr colors)))
+           (normal (aref palette 63))
+           (faded (aref palette 0)))
+      (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                 (lambda (_face _frame) colors)))
+        ;; Breathe starts at normal contrast, fades out, then returns.
+        (dolist (seconds '(0 1.8 3.6))
+          (let ((sample (mevedel-view-animation-frame
+                         'breathe "Working..." seconds 'default)))
+            (dotimes (i (length sample))
+              (should (equal (plist-get (get-text-property i 'face sample)
+                                        :foreground)
+                             (if (= seconds 1.8) faded normal))))))
+        ;; Bounce moves the faded band; surrounding letters remain normal.
+        (dolist (seconds '(0 1.8))
+          (let ((sample (mevedel-view-animation-frame
+                         'bounce "Working..." seconds 'default)))
+            (should (equal (plist-get (get-text-property 0 'face sample)
+                                      :foreground)
+                           (if (zerop seconds) faded normal)))
+            (should (equal (plist-get (get-text-property 7 'face sample)
+                                      :foreground)
+                           (if (zerop seconds) normal faded))))))))))
 
 (mevedel-deftest mevedel-view-animation--palette
   (:doc "A theme-derived palette contains exactly 64 shades.")
@@ -330,12 +358,12 @@
                           'dots "Working" 0 'default)
                          "*... Working"))
           (should (equal (mevedel-view-animation-frame
-                          'dots "Working" 0.24 'default)
+                          'dots "Working" 0.48 'default)
                          ".*.. Working"))
           (should (= (string-width (mevedel-view-animation-frame
                                     'dots "Working" 0 'default))
                      (string-width (mevedel-view-animation-frame
-                                    'dots "Working" 0.24 'default)))))))
+                                    'dots "Working" 0.48 'default)))))))
     (let ((mevedel-view-animation--dots-cache nil))
       (cl-letf (((symbol-function 'char-displayable-p)
                  (lambda (_char) t)))
@@ -364,7 +392,7 @@
                       'dots "Working" 0 'default (list visible))))
       (should (equal "·●·· Working"
                      (mevedel-view-animation-frame
-                      'dots "Working" 0.24 'default (list visible))))
+                      'dots "Working" 0.48 'default (list visible))))
       (should (= queries 1))
       (should (equal "*... Working"
                      (mevedel-view-animation-frame
@@ -392,6 +420,37 @@
       (should (equal (mevedel-view-animation-frame 'dots "Working" 0 'default)
                      "*... Working"))
       (should (= queries 2)))))
+
+(mevedel-deftest mevedel-view-animation-reserve
+  (:doc "Retains all active labels and releases excess banks after rows leave.")
+  (with-temp-buffer
+    (mevedel-view-animation-reserve 9)
+    (should (= mevedel-view-animation--view-cache-limit 9))
+    (setq mevedel-view-animation--view-cache (number-sequence 1 9))
+    (mevedel-view-animation-reserve 2)
+    (should (equal mevedel-view-animation--view-cache '(1 2 3 4)))
+    (should (= mevedel-view-animation--view-cache-limit 4))))
+
+(mevedel-deftest mevedel-view-animation-color-available-p
+  (:doc "Semantic preparation protects earlier active banks during a frame move.")
+  (let ((mevedel-view-animation--cache nil))
+    (with-temp-buffer
+      (setq major-mode 'mevedel-view-mode)
+      (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                 (lambda (&rest _) nil)))
+        (dolist (label '("A" "B" "C" "D"))
+          (mevedel-view-animation-color-available-p
+           'shimmer label 'default nil))
+        (dolist (label '("A" "B" "C"))
+          (mevedel-view-animation-color-available-p
+           'shimmer label 'default nil))
+        (mevedel-view-animation-color-available-p 'shimmer "D" 'default :multiple)
+        (setq mevedel-view-animation--cache nil)
+        (dolist (label '("A" "B" "C"))
+          (should (mevedel-view-animation-color-ready-p
+                   'shimmer label 'default nil)))
+        (should (mevedel-view-animation-color-ready-p
+                 'shimmer "D" 'default :multiple))))))
 
 (provide 'test-mevedel-view-animation)
 ;;; test-mevedel-view-animation.el ends here

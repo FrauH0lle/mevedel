@@ -1627,5 +1627,12 @@ CAPTURE, when non-nil, is called with the stub's arguments."
     (should (string-match-p "^ 4$" (mevedel--unified-diff original changed 6)))
     (should-not (string-match-p "^ 4$" (mevedel--unified-diff original changed)))))
 
+(mevedel-deftest mevedel--duration-label
+  (:doc "Uses whole seconds with safe zero and minute/hour boundaries.")
+  (dolist (entry '((nil . "0s") (-1 . "0s") (0.99 . "0s")
+                   (59.99 . "59s") (60 . "1m 00s") (185 . "3m 05s")
+                   (3600 . "1h 00m") (3720 . "1h 02m")))
+    (should (equal (mevedel--duration-label (car entry)) (cdr entry)))))
+
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

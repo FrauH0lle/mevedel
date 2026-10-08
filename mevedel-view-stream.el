@@ -284,15 +284,21 @@ immediately, then use this delay for the heavier transcript render."
   (max 0.0 (- (float-time) (or mevedel-view--spinner-phase-start
                                 (float-time)))))
 
+(defun mevedel-view--animation-frozen-p ()
+  "Return non-nil when motion is disabled or the request awaits input."
+  (or (and-let* ((request (mevedel-view--spinner-request)))
+        (mevedel-request-active-work-pause-started-at request))
+      (zerop (mevedel-view-power-framerate
+              mevedel-view-spinner-framerate
+              mevedel-view-spinner-battery-framerate
+              mevedel-view-spinner-power-policy
+              mevedel-view-spinner-animate))))
+
 (defun mevedel-view--animation-display-seconds ()
   "Return the phase for a newly rendered progress label.
 Semantic redraws must not advance the glyph when motion is disabled.
 The underlying phase continues to advance and resumes without restarting."
-  (if (zerop (mevedel-view-power-framerate
-             mevedel-view-spinner-framerate
-             mevedel-view-spinner-battery-framerate
-             mevedel-view-spinner-power-policy
-             mevedel-view-spinner-animate))
+  (if (mevedel-view--animation-frozen-p)
       (or mevedel-view--spinner-frozen-seconds
           (setq mevedel-view--spinner-frozen-seconds
                 (or mevedel-view--spinner-last-sample-seconds
@@ -636,7 +642,7 @@ Newly inserted tool rows begin at phase zero."
       (push (cons id seconds) mevedel-view--spinner-tool-samples))))
 
 (defun mevedel-view--snapshot-tool-animation-targets ()
-  "Return live tool (ID DISPLAY PHASE) samples before replacing their rows."
+  "Return live tool (ID DISPLAY PHASE LABEL) samples before replacing rows."
   (when (eq mevedel-view--spinner-rendered-tool-style
             mevedel-view-tool-spinner-style)
     (delq nil
@@ -647,7 +653,8 @@ Newly inserted tool rows begin at phase zero."
                                 (id (get-text-property
                                      start 'mevedel-view-zone-id)))
                       (list id (get-text-property start 'display)
-                            (mevedel-view--tool-sample-seconds start))))
+                            (mevedel-view--tool-sample-seconds start)
+                            (mevedel-view--tool-animation-label target))))
                   mevedel-view--spinner-tool-targets))))
 
 (defun mevedel-view--restore-tool-animation-targets (previous)
@@ -662,10 +669,19 @@ Newly inserted tool rows begin at phase zero."
                  (entry (assoc (get-text-property start 'mevedel-view-zone-id)
                                previous)))
             (when entry
-              (unless (equal-including-properties
-                       (cadr entry) (get-text-property start 'display))
-                (mevedel-view--put-decorative-display
-                 start (marker-position (cdr target)) (cadr entry)))
+              (let* ((label (mevedel-view--tool-animation-label target))
+                     ;; Stable fragment identity does not imply stable text:
+                     ;; overflow counts change even while motion is frozen.
+                     (display (if (equal label (nth 3 entry))
+                                  (cadr entry)
+                                (mevedel-view-animation-frame
+                                 mevedel-view-tool-spinner-style label
+                                 (caddr entry) 'mevedel-view-ephemeral
+                                 (mevedel-view--animation-buffer-frame)))))
+                (unless (equal-including-properties
+                         display (get-text-property start 'display))
+                  (mevedel-view--put-decorative-display
+                   start (marker-position (cdr target)) display)))
               (mevedel-view--record-tool-sample start (caddr entry)))))
       (set-buffer-modified-p modified))))
 
@@ -763,22 +779,19 @@ GLYPH-FALLBACK means a color STYLE is drawn by its glyph fallback."
     (when (and (> rate 0) (not (eq style 'static)))
       (max (/ 1.0 rate)
            (if (and glyph-fallback (memq style '(shimmer breathe bounce)))
-               0.12
+               (mevedel-view-animation-period 'braille)
              (mevedel-view-animation-period style))))))
 
 (defun mevedel-view--spinner-next-delay (plan seconds)
   "Return seconds until PLAN's next visible change at animation SECONDS.
-PLAN is (MAIN-STYLE MAIN TOOL-STYLE TOOL METADATA) as built by
-`mevedel-view--start-spinner-timer': each style with its frame period,
-or nil when hidden, and the elapsed-metadata period."
-  (pcase-let ((`(,main-style ,main ,tool-style ,tool ,metadata) plan))
-    (apply #'min
-           (delq nil
-                 (list (and main (mevedel-view-animation-next-delay
-                                  main-style seconds main))
-                       (and tool (mevedel-view-animation-next-delay
-                                  tool-style seconds tool))
-                       metadata)))))
+PLAN contains (STYLE . PERIOD) entries for eligible indicators and metadata.
+Color and glyph tool rows can coexist on different display frames; each
+retains its own cadence, including while color shimmer rests."
+  (apply #'min
+         (mapcar (lambda (entry)
+                   (mevedel-view-animation-next-delay
+                    (car entry) seconds (cdr entry)))
+                 plan)))
 
 (defun mevedel-view--tool-animation-label (target)
   "Return the text a pending-tool indicator TARGET animates.
@@ -822,11 +835,7 @@ without a theme change.  Hidden targets retain the pending refresh;
 neither the status row nor the composer is rebuilt."
   (when (or force mevedel-view--spinner-theme-stale-p)
     (let ((seconds (mevedel-view--animation-display-seconds))
-          (frozen (zerop (mevedel-view-power-framerate
-                          mevedel-view-spinner-framerate
-                          mevedel-view-spinner-battery-framerate
-                          mevedel-view-spinner-power-policy
-                          mevedel-view-spinner-animate)))
+          (frozen (mevedel-view--animation-frozen-p))
           (pending nil))
       (when (and mevedel-view--spinner-status
                  (not (eq mevedel-view-spinner-style 'static)))
@@ -919,6 +928,11 @@ spans is probed once: a span still off screen waits for scrolling."
   "Start one view timer at the next needed visual or metadata cadence.
 RESUMED means visibility or focus changed, so frozen glyph support can be
 rechecked without changing the displayed animation phase."
+  ;; Keep every registered label pinned, including the overflow row and
+  ;; main label.  The row cap bounds this working set; a fixed four-bank
+  ;; cache predates distinct tool labels and evicted still-visible rows.
+  (mevedel-view-animation-reserve
+   (1+ (length mevedel-view--spinner-tool-targets)))
   ;; A shared display property cannot carry separate palettes for two frames.
   ;; Repaint on a frame move even when this view has no decorative or elapsed
   ;; timer to notice it; defer the repaint while the label is hidden.
@@ -936,11 +950,7 @@ rechecked without changing the displayed animation phase."
         (setq mevedel-view--spinner-theme-stale-p t))))
   (let ((frozen-glyphs
          (and resumed
-              (zerop (mevedel-view-power-framerate
-                      mevedel-view-spinner-framerate
-                      mevedel-view-spinner-battery-framerate
-                      mevedel-view-spinner-power-policy
-                      mevedel-view-spinner-animate))
+              (mevedel-view--animation-frozen-p)
               (or (memq mevedel-view-spinner-style '(braille dots))
                   (and mevedel-view--spinner-tool-targets
                        (memq mevedel-view-tool-spinner-style
@@ -952,19 +962,17 @@ rechecked without changing the displayed animation phase."
     ;; A hidden color label can remain stale while tools keep animating.  A
     ;; theme event or visibility rearm probes its rows once, not on each tool
     ;; frame; both enter this scheduler with RESUMED non-nil.
-    (when (or (and resumed mevedel-view--spinner-theme-stale-p)
-              frozen-glyphs)
-      (mevedel-view--refresh-themed-status frozen-glyphs)))
+    (let ((tool-colors (and resumed mevedel-view--spinner-tool-targets
+                            (eq mevedel-view-tool-spinner-style 'shimmer))))
+      (when (or (and resumed mevedel-view--spinner-theme-stale-p)
+                frozen-glyphs tool-colors)
+        (mevedel-view--refresh-themed-status (or frozen-glyphs tool-colors)))))
   (when (and (mevedel-view--spinner-active-p)
              (not mevedel-view--spinner-phase-start))
     (setq mevedel-view--spinner-phase-start (float-time)))
   ;; Latch on a zero-fps transition even when the next redraw is delayed.
   ;; An ordinary rearm must not record the clock phase as a displayed sample.
-  (if (zerop (mevedel-view-power-framerate
-             mevedel-view-spinner-framerate
-             mevedel-view-spinner-battery-framerate
-             mevedel-view-spinner-power-policy
-             mevedel-view-spinner-animate))
+  (if (mevedel-view--animation-frozen-p)
       (mevedel-view--animation-display-seconds)
     (setq mevedel-view--spinner-frozen-seconds nil))
   (let* ((paused (and-let* ((request (mevedel-view--spinner-request)))
@@ -993,35 +1001,44 @@ rechecked without changing the displayed animation phase."
                  (when main-visible
                    (mevedel-view--spinner-visual-period
                     mevedel-view-spinner-style (not main-color)))))
-         (tool-target (and visible
-                           (cl-find-if
-                            (lambda (target)
-                              (mevedel-view--animation-target-visible-p
-                               target 'mevedel-view-inline-spinner-frame))
-                            mevedel-view--spinner-tool-targets)))
-         ;; Prepare the shared word's bank here, never in a frame callback.
-         (tool-color (and tool-target
-                          (eq mevedel-view-tool-spinner-style 'shimmer)
-                          (mevedel-view-animation-color-available-p
-                           'shimmer
-                           (mevedel-view--tool-animation-label tool-target)
-                           'mevedel-view-ephemeral
-                           (mevedel-view--animation-target-frame tool-target))))
-         (tool (and tool-target
-                    (mevedel-view--spinner-visual-period
-                     mevedel-view-tool-spinner-style (not tool-color))))
-         (metadata (and mevedel-view--spinner-status
-                        (not paused)
-                        (mevedel-view--spinner-metadata-visible-p)
-                        1.0))
-         (periods (delq nil (list main tool metadata)))
-         (period (and periods (apply #'min periods)))
-         (plan (and period
-                    (list (if main-color mevedel-view-spinner-style 'glyph)
-                          main
-                          (if tool-color 'shimmer 'glyph)
-                          tool
-                          metadata))))
+         (tool-targets (and visible
+                            (cl-remove-if-not
+                             (lambda (target)
+                               (mevedel-view--animation-target-visible-p
+                                target 'mevedel-view-inline-spinner-frame))
+                             mevedel-view--spinner-tool-targets)))
+         ;; Prepare every visible label before frame callbacks.  Some spans
+         ;; can use color while others need the portable multi-frame glyph.
+         (tool-kinds
+          (let (kinds)
+            (dolist (target tool-targets)
+              (cl-pushnew
+               (if (and (eq mevedel-view-tool-spinner-style 'shimmer)
+                        (mevedel-view-animation-color-available-p
+                         'shimmer (mevedel-view--tool-animation-label target)
+                         'mevedel-view-ephemeral
+                         (mevedel-view--animation-target-frame target)))
+                   'shimmer 'glyph)
+               kinds))
+            kinds))
+         (plan
+          (delq nil
+                (append
+                 (list (and main
+                            (cons (if main-color mevedel-view-spinner-style
+                                    'glyph) main)))
+                 (mapcar
+                  (lambda (kind)
+                    (when-let* ((period (mevedel-view--spinner-visual-period
+                                        mevedel-view-tool-spinner-style
+                                        (eq kind 'glyph))))
+                      (cons kind period)))
+                  (sort tool-kinds #'string-lessp))
+                 (list (and mevedel-view--spinner-status
+                            (not paused)
+                            (mevedel-view--spinner-metadata-visible-p)
+                            '(metadata . 1.0))))))
+         (period (and plan (apply #'min (mapcar #'cdr plan)))))
     (unless period
       (mevedel-view--probe-spinner-visibility))
     (when (mevedel-view--animation-wants-power-p visible)
@@ -1173,13 +1190,15 @@ animation or elapsed timer remains to notice the new colors."
       ;; back).  Re-evaluate the actual cadence only on this semantic tick.
       (mevedel-view--start-spinner-timer)))
   (let ((seconds (mevedel-view--animation-seconds))
+        (moving (not (mevedel-view--animation-frozen-p)))
         (was-modified (buffer-modified-p))
         (inhibit-read-only t)
         (inhibit-modification-hooks t)
         (buffer-undo-list t))
     (unwind-protect
         (progn
-          (when (and (mevedel-view--spinner-visual-period
+          (when (and moving
+                     (mevedel-view--spinner-visual-period
                       mevedel-view-spinner-style
                       (not mevedel-view--spinner-main-color-p))
                      (mevedel-view--animation-target-visible-p
@@ -1203,8 +1222,8 @@ animation or elapsed timer remains to notice the new colors."
                   (unless (equal-including-properties
                            frame (get-text-property start 'display))
                     (mevedel-view--put-decorative-display start end frame))))))
-          (when (mevedel-view--spinner-visual-period
-                 mevedel-view-tool-spinner-style)
+          (when (and moving (mevedel-view--spinner-visual-period
+                             mevedel-view-tool-spinner-style))
             (dolist (target mevedel-view--spinner-tool-targets)
               (when (mevedel-view--animation-target-visible-p
                      target 'mevedel-view-inline-spinner-frame)
