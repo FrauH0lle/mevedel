@@ -392,7 +392,7 @@
                    :dropped-file-grants (list (cdr spec)))))
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session)
+                (lambda (input _session &optional _fresh)
                   (when (equal input "fails")
                     (error "Expansion failed"))
                   (list :text input))))
@@ -430,7 +430,7 @@
                  :dropped-file-grants (list dropped)))
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session)
+                (lambda (input _session &optional _fresh)
                   (list :text input :media-contexts (list :image dropped)))))
             (should-error
              (mevedel-tools--handle-steering-inject fsm)
@@ -461,7 +461,7 @@
                  :dropped-file-grants (list dropped)))
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session) (list :text input)))
+                (lambda (input _session &optional _fresh) (list :text input)))
                ((symbol-function
                  'mevedel-tools--insert-session-injected-prompt)
                 (lambda (&rest _) (error "Transcript insertion failed"))))
@@ -498,7 +498,7 @@
              (list :input input :request-id "request-partial")))
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session)
+                (lambda (input _session &optional _fresh)
                   (when (equal input "fails")
                     (error "Expansion failed"))
                   (list :text input))))

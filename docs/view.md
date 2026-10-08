@@ -1803,6 +1803,12 @@ that injection waits for the following boundary. It never aborts the request.
 Root `WaitAgent` uses the same steering path and wakes the wait at the next
 possible boundary rather than creating a mailbox message.
 
+A Claude Code turn takes steering the same way. It arrives with the next native
+tool batch, or as a further prompt of the same turn when the native prompt ends
+first. A native turn cannot wait at a held boundary, so steering still held by
+the cockpit or an unresolved interaction when it succeeds becomes the first
+follow-ups ([Sessions](sessions.md#native-context-delivery)).
+
 A plain send refused because the workflow is occupied names the occupying
 cause: a retained accepted-plan implementation hints
 `mevedel-retry-plan-implementation`, a normal unfinished Goal hints

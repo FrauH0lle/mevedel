@@ -107,6 +107,9 @@
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-pending-inputs" (fsm))
 (autoload 'mevedel-view--schedule-follow-up-drain "mevedel-pending-inputs")
+(declare-function mevedel-pending-inputs-requeue-steering
+                  "mevedel-pending-inputs" (session request-id))
+(autoload 'mevedel-pending-inputs-requeue-steering "mevedel-pending-inputs")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel--implementation-permission-mode-restore
@@ -771,6 +774,28 @@ The terminal admission hold stays live between publication and this phase."
     (with-current-buffer chat-buffer
       (mevedel-request-end))))
 
+(defun mevedel--turn-request-id (info)
+  "Return the request id of the turn whose context is INFO.
+Call in the turn's chat buffer, before the request ends."
+  (if mevedel--current-request
+      (mevedel-request-id mevedel--current-request)
+    (plist-get info :mevedel-request-id)))
+
+(defun mevedel--turn-requeue-steering (fsm)
+  "Requeue steering FSM's successful turn left undelivered as first follow-ups.
+A gptel turn cannot complete with its steering pending; an external turn
+cannot wait at a held boundary, so its held steering starts the next turns."
+  (when-let* ((info (mevedel-engine-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when (and mevedel--session
+                 (mevedel-pending-inputs-requeue-steering
+                  mevedel--session (mevedel--turn-request-id info))
+                 (buffer-live-p mevedel--view-buffer))
+        (with-current-buffer mevedel--view-buffer
+          (mevedel-view--interaction-rebuild))))))
+
 (defun mevedel--turn-fail-pending-input (fsm)
   "Mark undelivered steering for FSM's dead turn as requiring review."
   (when-let* ((info (mevedel-engine-info fsm))
@@ -778,9 +803,7 @@ The terminal admission hold stays live between publication and this phase."
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when mevedel--session
-        (let* ((request-id (if mevedel--current-request
-                               (mevedel-request-id mevedel--current-request)
-                             (plist-get info :mevedel-request-id)))
+        (let* ((request-id (mevedel--turn-request-id info))
                (entries (mevedel-session-pending-steering mevedel--session))
                (failed nil)
                (updated
@@ -1077,6 +1100,7 @@ inverting them drops the turn's file-history checkpoints."
      fsm
      (list (lambda (machine)
              (mevedel--turn-record-settlement machine 'success))
+           #'mevedel--turn-requeue-steering
            (lambda (machine)
              (mevedel--turn-settle-plan-handoff machine 'success))
            #'mevedel-goal-settle-turn

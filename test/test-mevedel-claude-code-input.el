@@ -25,14 +25,81 @@
                 (insert input)
                 (mevedel-view-send)
                 (should (equal "" (mevedel-view--input-text)))))
-            (let ((entries (mevedel-session-pending-follow-ups session)))
+            ;; A busy Claude turn takes the composer as steering, like HTTP.
+            (let ((entries (mevedel-session-pending-steering session)))
               (should (equal '("> Keep this next\nwith its second line" "Then continue")
                              (mapcar (lambda (entry) (plist-get entry :input)) entries)))
+              (should (equal (list (mevedel-request-id request) (mevedel-request-id request))
+                             (mapcar (lambda (entry) (plist-get entry :request-id)) entries)))
               (should-not (equal (plist-get (car entries) :id)
                                  (plist-get (cadr entries) :id))))
+            (should-not (mevedel-session-pending-follow-ups session))
             (should (eq request mevedel--current-request))
             (should (= 0 (mevedel-session-turn-count session))))
         (when (buffer-live-p view) (kill-buffer view))))))
+
+;; Steering is queued at a hook or prompt boundary so its moment is exact.
+(mevedel-deftest mevedel--send-request/claude-steering (:quiet t)
+  (dolist (mode '(hook mismatch final held))
+    (mevedel-engine-test--with-claude-session
+      (let ((file (file-name-concat root "evidence.txt"))
+            steered)
+        (write-region "Evidence" nil file nil 'silent)
+        (setq-local gptel-system-prompt "Steering fixture"
+                    gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+        (when (eq mode 'held)
+          (mevedel-session-set-pending-input-paused session t))
+        (cl-labels ((steer ()
+                      (unless steered
+                        (setq steered t)
+                        (mevedel-session-enqueue-pending-input
+                         session 'steering
+                         (list :input "STEER-4417" :model-input "STEER-4417"
+                               :transcript-payload "STEER-4417"
+                               :request-id (mevedel-request-id request))))))
+          (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                     (mevedel-engine-test--claude-launch
+                      (lambda (_system _mcp _model _effort &optional _id hook)
+                        (list :control (lambda (owner event)
+                                         (unless (eq mode 'final) (steer))
+                                         (mevedel-claude-code--control owner event))
+                              :complete-prompt (lambda (owner outcome)
+                                                 (when (eq mode 'final) (steer))
+                                                 (mevedel-claude-code--complete-prompt owner outcome))
+                              :meta `((hookCommand . ,hook)
+                                      (hookAcknowledgement . ,(if (eq mode 'mismatch) "mismatch" t))
+                                      (responseText . "Done")
+                                      (continuationPrompts . [((responseText . "Steered reply"))])
+                                      (toolBatches
+                                       . ,(apply #'vector
+                                                 (mapcar (lambda (id)
+                                                           (vector `((name . "Read") (id . ,id)
+                                                                     (args . ((file_path . ,file))))))
+                                                         (if (eq mode 'final) '("only")
+                                                           '("first" "second")))))))))))
+            (insert "Read the evidence")
+            (mevedel--send-request "Read the evidence")
+            (mevedel-test--await 5 "Steering turn did not settle"
+              (not (mevedel-turn-busy-p buffer)))))
+        (ert-info ((format "mode=%S" mode))
+          (should (eq (if (eq mode 'mismatch) 'error 'success)
+                      (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
+          (should (= (if (memq mode '(hook final)) 1 0)
+                     (how-many "STEER-4417" (point-min) (point-max))))
+          (should (eq (eq mode 'final) (and (string-search "Steered reply" (buffer-string)) t)))
+          (pcase mode
+            ((or 'hook 'final)
+             (should-not (mevedel-session-pending-steering session))
+             (should-not (mevedel-session-pending-follow-ups session)))
+            ('mismatch
+             (should (eq 'failed-turn
+                         (plist-get (car (mevedel-session-pending-steering session)) :state))))
+            ('held
+             ;; A native turn cannot park: held steering leads the follow-ups.
+             (should-not (mevedel-session-pending-steering session))
+             (should (equal '("STEER-4417")
+                            (mapcar (lambda (entry) (plist-get entry :input))
+                                    (mevedel-session-pending-follow-ups session)))))))))))
 
 (mevedel-deftest gptel-send/claude-session (:quiet t)
   (dolist (route '(raw paired init))

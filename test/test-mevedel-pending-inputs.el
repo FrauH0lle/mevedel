@@ -851,6 +851,47 @@
       (should (eq 'reserved
                   (mevedel-prompt-submission-state submission))))))
 
+(mevedel-deftest mevedel-pending-inputs-requeue-steering ()
+  ,test
+  (test)
+  :doc "a settled turn's steering leads the follow-ups in order, its submission restored"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((context-entries '((:event SessionStart :body "restore me")))
+           (submission
+            (mevedel-prompt-submission-create
+             :input "first" :display-text "first" :session session
+             :context-entries context-entries :state 'reserved))
+           (first (mevedel-session-enqueue-pending-input
+                   session 'steering
+                   (list :input "first" :model-input "prepared" :request-id "settled"
+                         :submission submission)))
+           (other (mevedel-session-enqueue-pending-input
+                   session 'steering '(:input "other turn" :request-id "live")))
+           (second (mevedel-session-enqueue-pending-input
+                    session 'steering '(:input "second" :request-id "settled")))
+           (older (mevedel-session-enqueue-pending-input
+                   session 'follow-up '(:input "older"))))
+      (should (equal (list first second)
+                     (mevedel-pending-inputs-requeue-steering session "settled")))
+      (should (equal (list other) (mevedel-session-pending-steering session)))
+      (let ((queue (mevedel-session-pending-follow-ups session)))
+        (should (equal '("first" "second" "older")
+                       (mapcar (lambda (entry) (plist-get entry :input)) queue)))
+        (should (equal (plist-get first :id) (plist-get (car queue) :id)))
+        (should (eq 'follow-up (plist-get (car queue) :category)))
+        (should-not (plist-member (car queue) :request-id))
+        (should-not (plist-member (car queue) :submission))
+        (should (eq older (nth 2 queue))))
+      (should (equal context-entries (mevedel-session-hook-context-pending session)))))
+
+  :doc "a turn without leftover steering leaves both queues untouched"
+  (mevedel-pending-inputs-test--with-session
+    (let ((steering (mevedel-session-pending-steering session))
+          (follow-ups (mevedel-session-pending-follow-ups session)))
+      (should-not (mevedel-pending-inputs-requeue-steering session "settled"))
+      (should (eq steering (mevedel-session-pending-steering session)))
+      (should (eq follow-ups (mevedel-session-pending-follow-ups session))))))
+
 (mevedel-deftest mevedel-pending-inputs-make-steering ()
   ,test
   (test)

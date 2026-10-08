@@ -245,6 +245,50 @@ as full restoration.  The native system already retains the complete baseline."
                                                 (plist-get instructions :commits)))))
         (car batch)))))
 
+;;; Steering
+
+(defconst mevedel-claude-code-context--steering-header
+  "The user sent this message while you were working. Treat it as their direct input with the authority of a user prompt; address it, then continue."
+  "Model-visible framing for steering delivered inside a running native turn.
+Hook context is not a user message, so the header restores its authority.")
+
+(defun mevedel-claude-code-context--steering-entries (owner)
+  "Return root request OWNER's steering deliverable now, in FIFO order.
+A turn ending at a boundary takes none, and held delivery waits."
+  (when-let* (((mevedel-request-p owner))
+              (info (mevedel-engine-info owner))
+              ((not (plist-get info :mevedel-end-turn)))
+              (session (mevedel-request-session owner))
+              ((not (mevedel-tools-steering-held-p session (plist-get info :buffer)))))
+    (mevedel-tools-steering-entries session (mevedel-request-id owner))))
+
+(defun mevedel-claude-code-context--steering (owner)
+  "Prepare OWNER's deliverable steering, or nil.
+Return a plist of the model-visible :body, the user-role :transcript, mention
+reminder :entries and the receipt :commits that consume each entry."
+  (when-let* ((entries (mevedel-claude-code-context--steering-entries owner)))
+    (let* ((info (mevedel-engine-info owner))
+           (session (mevedel-request-session owner))
+           (fresh (or (mevedel-request-directive-uuid owner)
+                      (plist-get info :mevedel-native-isolated)))
+           body transcript reminders commits)
+      (dolist (entry entries)
+        (let ((expansion (with-current-buffer (plist-get info :buffer)
+                           (mevedel-tools-steering-expand session entry fresh))))
+          (setq body (concat body mevedel-claude-code-context--steering-header "\n\n"
+                             (plist-get expansion :text) "\n")
+                transcript (concat transcript
+                                   (or (plist-get entry :transcript-payload) (plist-get entry :input))
+                                   "\n"
+                                   (mapconcat #'mevedel--format-hook-audit-record
+                                              (plist-get entry :hook-audits) "")))
+          (dolist (item (plist-get expansion :reminder-items))
+            (push (list :type (cons 'mention (plist-get item :key)) :body (plist-get item :body))
+                  reminders))
+          (push (lambda () (mevedel-tools-steering-commit session entry expansion fresh)) commits)))
+      (list :body body :transcript transcript
+            :entries (nreverse reminders) :commits (nreverse commits)))))
+
 (defun mevedel-claude-code-context-check (owner)
   "Reject tool work for OWNER until required context is acknowledged."
   (let ((info (mevedel-engine-info owner)))
@@ -256,7 +300,7 @@ as full restoration.  The native system already retains the complete baseline."
       (error "Claude did not acknowledge required context before continuing"))))
 
 (defun mevedel-claude-code-context-prepare (owner &optional prompt-p extra)
-  "Prepare OWNER's observations, turn events, child roster and mail for delivery.
+  "Prepare OWNER's observations, events, roster, steering and mail for delivery.
 Never dequeue on send.  A hook receipt can trail the next boundary; until it
 arrives, everything else stays queued for a later one.  A prompt echo precedes
 every tool, so its absence fails closed.  Oversized whole messages and changes
@@ -280,17 +324,19 @@ plist of further typed `:entries' and their `:commits'."
              (events (mevedel-reminders--stage-turn-events (plist-get info :buffer)))
              (roster (and context (mevedel-tools-agent-roster owner)))
              (reminders (when prompt-p (mevedel-reminders-collect owner)))
+             (steering (unless pending (mevedel-claude-code-context--steering owner)))
              (entries (append (mevedel-claude-code-context--observation-entries changed)
                               (plist-get events :entries)
                               (plist-get extra :entries)
                               (plist-get reminders :entries)
+                              (plist-get steering :entries)
                               (when roster (list (list :type 'agent-roster :body (plist-get roster :body)))))))
         (when (and pending entries)
           (error "Claude's unacknowledged delivery prevents required context updates"))
         (unless pending
           (let* ((batch (mevedel-claude-code-context--batch entries (if prompt-p 'turn-start 'mid-turn)))
-                 (body (car batch))
-                 (transcript (cdr batch))
+                 (body (concat (car batch) (plist-get steering :body)))
+                 (transcript (concat (cdr batch) (plist-get steering :transcript)))
                  (overflow (and (not prompt-p) (not (mevedel-claude-code-context-hook-fits-p body))))
                  (messages (and context (mevedel-agent-control-context-mailbox context)))
                  selected)
@@ -305,7 +351,7 @@ plist of further typed `:entries' and their `:commits'."
                                   transcript (concat transcript block))
                             t)))
               (push (pop messages) selected))
-            (when (or entries selected (plist-get reminders :commits))
+            (when (or entries steering selected (plist-get reminders :commits))
               (setf (mevedel-engine-info owner)
                     (plist-put info :mevedel-claude-context-pending
                                (list :context context :messages (nreverse selected) :body body
@@ -314,15 +360,18 @@ plist of further typed `:entries' and their `:commits'."
                                      :commits (append (and entries (plist-get events :commits))
                                                       (plist-get extra :commits)
                                                       (plist-get reminders :commits)
+                                                      (plist-get steering :commits)
                                                       (when roster (list (plist-get roster :commit))))
                                      :route (cond (prompt-p 'prompt) (overflow 'continuation) (t 'hook))
                                      :event "PostToolBatch")))
               body)))))))
 
 (defun mevedel-claude-code-context-next-prompt (owner)
-  "Return OWNER's full overflow context for a clean native prompt continuation.
-Delivery still requires the exact SDK user receipt.  A user boundary stop
-discards only these unsubmitted batches; their underlying events remain queued."
+  "Return OWNER's next native prompt content within the same turn, or nil.
+Full overflow context continues the turn, as does steering the user queued
+after its last tool boundary.  Delivery still requires the exact SDK user
+receipt.  A user boundary stop discards only these unsubmitted batches; their
+underlying events remain queued."
   (let ((info (mevedel-engine-info owner)) content)
     (dolist (key '(:mevedel-claude-context-pending :mevedel-claude-restoration-pending))
       (when-let* ((pending (plist-get info key))
@@ -332,7 +381,11 @@ discards only these unsubmitted batches; their underlying events remain queued."
           (plist-put pending :route 'prompt)
           (push `((type . "text") (text . ,(plist-get pending :body))) content))))
     (setf (mevedel-engine-info owner) info)
-    (when content
+    (if (not content)
+        (when-let* (((not (plist-get info :mevedel-claude-context-pending)))
+                    ((mevedel-claude-code-context--steering-entries owner))
+                    (body (mevedel-claude-code-context-prepare owner t)))
+          (vector `((type . "text") (text . ,body))))
       ;; Restoration occupies its own receipt slot.  Capture prompt reminders
       ;; too, including a child's newly reserved final-sample warning.
       (unless (plist-get info :mevedel-claude-context-pending)

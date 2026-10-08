@@ -58,6 +58,7 @@
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
 (declare-function mevedel-cockpit-setup-tabulated-surface
                   "mevedel-cockpit" (surface))
+(defvar mevedel-cockpit--context)
 (declare-function mevedel-cockpit-surface-context
                   "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-refresh
@@ -558,6 +559,10 @@ explicitly selected skills applied together, with the same admission recheck."
               (null value))
              (_ nil))))
 
+(defun mevedel-view--steerable-root-request-p (request)
+  "Return non-nil when REQUEST is a root turn that can still take steering."
+  (and request (mevedel-engine-steerable-p (mevedel-engine-owner request))))
+
 (defun mevedel-view--prepare-steering-entry (submission request)
   "Return a validated steering entry for SUBMISSION and REQUEST.
 Return nil and leave the submission pending when the live request contract no
@@ -566,7 +571,6 @@ longer accepts the prepared input."
          (outcome (mevedel-prompt-submission-outcome submission))
          (request-context (plist-get outcome :request-context))
          (model-input (plist-get outcome :model-input))
-         (fsm (and request (mevedel-request-fsm request)))
          (current-request
           (and (buffer-live-p mevedel--data-buffer)
                (buffer-local-value 'mevedel--current-request
@@ -580,8 +584,7 @@ longer accepts the prepared input."
       (message "mevedel: skill policy cannot steer; use C-c TAB")
       nil)
      ((or (not (eq request current-request))
-          (not fsm)
-          (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT)))
+          (not (mevedel-view--steerable-root-request-p request)))
       (message "mevedel: request can no longer be steered; use C-c TAB")
       nil)
      (t
@@ -1448,7 +1451,6 @@ first character of a real draft."
          (entry (plist-get item :entry))
          (id (plist-get item :id))
          (request (mevedel-pending-inputs--current-request context))
-         (fsm (and request (mevedel-request-fsm request)))
          (view (mevedel-cockpit-context-view-buffer context))
          (cockpit (current-buffer))
          (original-grants
@@ -1482,8 +1484,7 @@ first character of a real draft."
       (user-error "Guest invocations cannot be converted to steering"))
     (when mevedel-pending-inputs--converting-id
       (user-error "Pending-input conversion is still running"))
-    (unless (and fsm
-                 (not (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))))
+    (unless (mevedel-view--steerable-root-request-p request)
       (user-error "No steerable root turn is active"))
     (unless (buffer-live-p view)
       (user-error "No live owning view"))
@@ -1551,36 +1552,60 @@ first character of a real draft."
                 (eq (plist-get entry :state) 'failed-turn))
       (user-error "Pending input is already a follow-up"))
     (mevedel-session-artifacts-assert-new-mutation-authority session)
-    (when-let* ((submission (plist-get entry :submission)))
-      (mevedel-prompt-submission-restore submission))
-    (let ((replacement
-           (append
-            (list
-            :id id
-            :category 'follow-up
-            :input (mevedel-pending-inputs--copy-input entry)
-            :dropped-file-grants
-            (copy-sequence (plist-get entry :dropped-file-grants))
-            :queued-at-time (float-time)
-            :queued-at-goal-id
-            (when-let* ((goal (mevedel-session-goal session)))
-              (mevedel-goal-id goal))
-            :queued-at-turn
-            (or (mevedel-session-turn-count session) 0)
-            :state 'pending)
-            ;; Keep guest attribution, attachment ownership, directive scope,
-            ;; and skill restrictions when retrying retained input.
-            (cl-loop for key in mevedel-recovery--input-keys
-                     unless (memq key '(:id :category :input :dropped-file-grants
-                                        :queued-at-time :queued-at-goal-id
-                                        :queued-at-turn :state :request-id :blocked))
-                     when (plist-member entry key)
-                     append (list key (copy-tree (plist-get entry key)))))))
-      (mevedel-pending-inputs--set-queues
-       session 'steering (remq entry (mevedel-session-pending-steering session))
-       'follow-up (append (remq entry (mevedel-session-pending-follow-ups session))
-                          (list replacement)))
-      (mevedel-pending-inputs--refresh id))))
+    (mevedel-pending-inputs--set-queues
+     session 'steering (remq entry (mevedel-session-pending-steering session))
+     'follow-up (append (remq entry (mevedel-session-pending-follow-ups session))
+                        (list (mevedel-pending-inputs--as-follow-up session entry))))
+    (mevedel-pending-inputs--refresh id)))
+
+(defun mevedel-pending-inputs--as-follow-up (session entry)
+  "Return pending ENTRY of SESSION as a fresh follow-up with the same id.
+Restore its reserved prompt submission, which the follow-up turn prepares
+again."
+  (when-let* ((submission (plist-get entry :submission)))
+    (mevedel-prompt-submission-restore submission))
+  (append
+   (list
+    :id (plist-get entry :id)
+    :category 'follow-up
+    :input (mevedel-pending-inputs--copy-input entry)
+    :dropped-file-grants
+    (copy-sequence (plist-get entry :dropped-file-grants))
+    :queued-at-time (float-time)
+    :queued-at-goal-id
+    (when-let* ((goal (mevedel-session-goal session)))
+      (mevedel-goal-id goal))
+    :queued-at-turn
+    (or (mevedel-session-turn-count session) 0)
+    :state 'pending)
+   ;; Keep guest attribution, attachment ownership, directive scope,
+   ;; and skill restrictions when retrying retained input.
+   (cl-loop for key in mevedel-recovery--input-keys
+            unless (memq key '(:id :category :input :dropped-file-grants
+                               :queued-at-time :queued-at-goal-id
+                               :queued-at-turn :state :request-id :blocked))
+            when (plist-member entry key)
+            append (list key (copy-tree (plist-get entry key))))))
+
+(defun mevedel-pending-inputs-requeue-steering (session request-id)
+  "Move SESSION's steering left by REQUEST-ID's settled turn to the follow-up head.
+An external turn cannot park at a held boundary the way a gptel turn waits, so
+input it could not take becomes the next turns, in submission order."
+  (when-let* ((entries (cl-remove-if-not
+                        (lambda (entry) (equal request-id (plist-get entry :request-id)))
+                        (mevedel-session-pending-steering session))))
+    (mevedel-pending-inputs--set-queues
+     session 'steering (cl-remove-if (lambda (entry) (memq entry entries))
+                                   (mevedel-session-pending-steering session))
+     'follow-up (append (mapcar (lambda (entry) (mevedel-pending-inputs--as-follow-up session entry))
+                                entries)
+                        (mevedel-session-pending-follow-ups session)))
+    (when-let* ((cockpit (get-buffer mevedel-pending-inputs-buffer-name))
+                ((eq session (mevedel-cockpit-context-session
+                              (buffer-local-value 'mevedel-cockpit--context cockpit)))))
+      (with-current-buffer cockpit
+        (mevedel-pending-inputs--refresh (tabulated-list-get-id))))
+    entries))
 
 (defun mevedel-pending-inputs-mark-delete ()
   "Mark the selected pending input for deletion."

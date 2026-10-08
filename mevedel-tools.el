@@ -550,17 +550,61 @@ sync with what the model actually saw."
          (message "mevedel: insert session injected prompt failed: %S"
                   err))))))
 
+;;
+;;; Steering
+
+(defun mevedel-tools-steering-entries (session request-id)
+  "Return SESSION's pending steering for REQUEST-ID in FIFO order."
+  (and session request-id
+       (cl-remove-if-not
+        (lambda (entry) (equal request-id (plist-get entry :request-id)))
+        (mevedel-session-pending-steering session))))
+
+(defun mevedel-tools-steering-held-p (session buffer)
+  "Return non-nil while SESSION's steering delivery is held.
+The cockpit or a failure pauses delivery; an unresolved interaction in root
+data BUFFER's view postpones it."
+  (or (mevedel-session-pending-input-delivery-paused-p session)
+      (when-let* (((buffer-live-p buffer))
+                  (view (buffer-local-value 'mevedel--view-buffer buffer))
+                  ((buffer-live-p view)))
+        (mevedel-view-interaction-blocking-p view))))
+
+(defun mevedel-tools-steering-expand (session entry &optional fresh)
+  "Expand steering ENTRY for SESSION from the current request buffer.
+Expansion reads a dropped file through a real Read check, so ENTRY's grants
+are activated first; the caller restores them when delivery fails.  FRESH
+excludes historical mention deduplication.  Media cannot steer."
+  (mevedel-session-activate-dropped-file-grants
+   session (plist-get entry :dropped-file-grants))
+  (let ((expansion (mevedel-mentions-expand-user-input
+                    (or (plist-get entry :model-input) (plist-get entry :input))
+                    session fresh)))
+    (when (plist-get expansion :media-contexts)
+      (error "Media steering cannot be delivered"))
+    expansion))
+
+(defun mevedel-tools-steering-commit (session entry expansion &optional fresh)
+  "Consume delivered steering ENTRY and commit its EXPANSION for SESSION.
+FRESH skips the mention deduplication a separate conversation never saw."
+  (mevedel-session-set-pending-inputs
+   session 'steering
+   (cl-remove (plist-get entry :id) (mevedel-session-pending-steering session)
+              :key (lambda (pending) (plist-get pending :id)) :test #'equal))
+  (unless fresh
+    (mevedel-mentions-commit-expansion session expansion))
+  (mevedel-skills-commit-invoked-records
+   session (plist-get (plist-get entry :request-context) :invoked-skills))
+  (when-let* ((submission (plist-get entry :submission)))
+    (mevedel-prompt-submission-commit submission)))
+
 (defun mevedel-tools--pending-steering-p (info)
   "Return non-nil when INFO's root request has pending steering."
   (when-let* ((buffer (plist-get info :buffer))
               ((buffer-live-p buffer))
               ((not (mevedel-tools--buffer-local-agent-invocation buffer)))
-              (session (mevedel-tools--buffer-local-session buffer))
-              (request-id (plist-get info :mevedel-request-id)))
-    (cl-some
-     (lambda (entry)
-       (equal request-id (plist-get entry :request-id)))
-     (mevedel-session-pending-steering session))))
+              (session (mevedel-tools--buffer-local-session buffer)))
+    (mevedel-tools-steering-entries session (plist-get info :mevedel-request-id))))
 
 (defun mevedel-tools--handle-steering-inject
     (fsm &optional skip-compaction-gate)
@@ -572,31 +616,15 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
           (and (buffer-live-p buffer)
                (not (mevedel-tools--buffer-local-agent-invocation buffer))
                (mevedel-tools--buffer-local-session buffer)))
-         (request-id (plist-get info :mevedel-request-id))
-         (paused
-          (and session
-               (mevedel-session-pending-input-delivery-paused-p session)))
-         (interaction
-          (and session
-               (buffer-live-p buffer)
-               (when-let* ((view (buffer-local-value
-                                  'mevedel--view-buffer buffer))
-                           ((buffer-live-p view)))
-                 (mevedel-view-interaction-blocking-p view))))
-         (matching
-          (and session request-id
-               (cl-remove-if-not
-                (lambda (entry)
-                  (equal request-id (plist-get entry :request-id)))
-                (mevedel-session-pending-steering session))))
+         (held (and session (mevedel-tools-steering-held-p session buffer)))
+         (matching (mevedel-tools-steering-entries
+                    session (plist-get info :mevedel-request-id)))
          (compaction
           (and (not skip-compaction-gate)
                matching
                (mevedel--compact-defer-steering-p fsm)))
-         (snapshot
-          (and (not paused) (not interaction) (not compaction) matching)))
-    (plist-put info :mevedel-pending-input-hold
-               (and matching (or paused interaction) t))
+         (snapshot (and (not held) (not compaction) matching)))
+    (plist-put info :mevedel-pending-input-hold (and matching held t))
     (when snapshot
       (let ((backend (plist-get info :backend))
             (data (plist-get info :data)))
@@ -617,30 +645,19 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
              (car (gptel--parse-list
                    backend (list (cons 'response response)))))))
         (dolist (entry snapshot)
-          ;; Expansion reads the dropped file through a real Read check, so
-          ;; the grant is provisional until the prompt reaches the request.
+          ;; The grant is provisional until the prompt reaches the request.
           (let ((restore
                  (copy-sequence
                   (mevedel-session-active-dropped-file-grants session)))
                 delivered)
             (unwind-protect
-                (let* ((input (or (plist-get entry :model-input)
-                                  (plist-get entry :input)))
-                       (_
-                        (mevedel-session-activate-dropped-file-grants
-                         session
-                         (plist-get entry :dropped-file-grants)))
-                       (expansion
+                (let* ((expansion
                         (with-current-buffer buffer
-                          (mevedel-mentions-expand-user-input input session)))
-                       (media-contexts
-                        (plist-get expansion :media-contexts))
-                       (block (plist-get expansion :text))
+                          (mevedel-tools-steering-expand session entry)))
                        (prompt
                         (car (gptel--parse-list
-                              backend (list (cons 'prompt block))))))
-                  (when media-contexts
-                    (error "Media steering cannot be delivered"))
+                              backend
+                              (list (cons 'prompt (plist-get expansion :text)))))))
                   (gptel--inject-prompt backend data prompt)
                   ;; Mention reminders ride the reminder injector,
                   ;; which runs later in this same WAIT.
@@ -649,27 +666,13 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                      fsm (or (plist-get item :key) 'mention)
                      (plist-get item :body)))
                   (setq delivered t)
-                  (mevedel-session-set-pending-inputs
-                   session 'steering
-                   (cl-remove
-                    (plist-get entry :id)
-                    (mevedel-session-pending-steering session)
-                    :key (lambda (pending)
-                           (plist-get pending :id))
-                    :test #'equal))
                   (mevedel-tools--insert-session-injected-prompt
                    session fsm entry
                    (or (plist-get entry :transcript-payload)
                        (plist-get entry :input)))
                   ;; The steering prompt is already in the payload, so
                   ;; the dedup commit may run directly.
-                  (mevedel-mentions-commit-expansion session expansion)
-                  (mevedel-skills-commit-invoked-records
-                   session
-                   (plist-get (plist-get entry :request-context)
-                              :invoked-skills))
-                  (when-let* ((submission (plist-get entry :submission)))
-                    (mevedel-prompt-submission-commit submission)))
+                  (mevedel-tools-steering-commit session entry expansion))
               ;; A delivered entry keeps its grant: the model can act on the
               ;; prompt even if a later commit step fails.
               (unless delivered
