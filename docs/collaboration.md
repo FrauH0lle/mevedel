@@ -425,7 +425,13 @@ The project's own listing is the authority. It is `project-files` for the
 lobby's workspace root -- the VC backend's tracked and untracked files minus
 ignored ones in a repository, the transient project's ignores elsewhere --
 with the workspace state under `.mevedel/` removed, because it holds the
-lobby credentials, permissions and memory. A guest names files and folders by
+lobby credentials, permissions and memory. A Git repository cloned inside a
+Git project without being tracked or ignored there, such as a reference
+repository, contributes the same listing of its own root by its own rules;
+Git reports it as a single directory entry, which `project-files` drops
+although the model's search tools read its files. Registered submodules come
+from project.el itself (`project-vc-merge-submodules`), and with
+`project-vc-include-untracked` off no untracked clone is listed. A guest names files and folders by
 their path relative to the root, but a path is accepted only when the
 listing shows it: a file must be listed, and a folder must hold a listed
 file. The resolved name is then re-verified beneath the root with
