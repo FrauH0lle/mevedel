@@ -1,7 +1,7 @@
-;;; migrate-session-v0.5.6.el --- Convert v0.5.6/v0.5.9 sessions to v0.5.10 -*- lexical-binding: t -*-
+;;; migrate-session-v0.5.6.el --- Convert v0.5.6-v0.5.10 sessions to v0.5.11 -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Explicit v0.5.6/v0.5.9 -> v0.5.10 conversion, outside the runtime loader.
+;; Explicit v0.5.6/v0.5.9/v0.5.10 -> v0.5.11 conversion, outside the runtime loader.
 ;; The file keeps the name of its first source format.
 ;; Copy a closed local session to a new directory; never change the source.
 ;; Convert all retained publication sidecars and their manifest checksums.
@@ -64,16 +64,16 @@
     (secure-hash 'sha256 (current-buffer))))
 
 (defun mevedel-migrate-session--sidecar (data)
-  "Return DATA converted to v0.5.10, preserving existing durable fields."
-  (unless (equal mevedel-session-codec-format-version "v0.5.10")
-    (error "This converter targets v0.5.10; use its matching mevedel checkout"))
+  "Return DATA converted to v0.5.11, preserving existing durable fields."
+  (unless (equal mevedel-session-codec-format-version "v0.5.11")
+    (error "This converter targets v0.5.11; use its matching mevedel checkout"))
   (setq data (copy-tree data))
   (pcase (plist-get data :version)
     ("v0.5.6"
      (when (plist-member data :external-conversations)
        (error "Unexpected external histories in a v0.5.6 sidecar"))
      (setq data (plist-put data :external-conversations nil)))
-    ((or "v0.5.9" "v0.5.10") nil)
+    ((or "v0.5.9" "v0.5.10" "v0.5.11") nil)
     (_ (error "Unsupported migration source version: %s" (plist-get data :version))))
   ;; v0.5.6 and early v0.5.9 Goals predate incomplete-usage tracking.  The
   ;; loader drops an invalid Goal silently, so validate it here instead.
@@ -81,7 +81,7 @@
     (unless (plist-member goal :tokens-incomplete-p)
       (setq data (plist-put data :goal (plist-put goal :tokens-incomplete-p nil))))
     (mevedel-session-codec--goal-from-plist (plist-get data :goal)))
-  (unless (equal (plist-get data :version) "v0.5.10")
+  (unless (member (plist-get data :version) '("v0.5.10" "v0.5.11"))
     ;; Older formats never persisted input queues or recovery issues.  Do not
     ;; silently discard unexpected values or invent previously unsaved work.
     (cl-loop for (key value) on '(:recovery-issues nil
@@ -90,8 +90,13 @@
                                  :pending-input-failure-paused nil) by #'cddr do
              (when (plist-member data key)
                (error "Unexpected recovery field %s in legacy sidecar" key))
-             (setq data (plist-put data key value)))
-    (setq data (plist-put data :version "v0.5.10")))
+             (setq data (plist-put data key value))))
+  (unless (equal (plist-get data :version) "v0.5.11")
+    ;; Older formats predate the artifact store: no session is attached yet.
+    (when (plist-member data :attached-artifacts)
+      (error "Unexpected attached artifacts in legacy sidecar"))
+    (setq data (plist-put data :attached-artifacts nil))
+    (setq data (plist-put data :version "v0.5.11")))
   (mevedel-session-codec-validate-current-sidecar data))
 
 (defun mevedel-migrate-session--closed (directory)

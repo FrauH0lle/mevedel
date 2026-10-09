@@ -13,6 +13,14 @@
 
 (require 'json)
 
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-delete
+                  "mevedel-artifact-store" (workspace id))
+(declare-function mevedel-artifact-store-directory
+                  "mevedel-artifact-store" (workspace))
+(autoload 'mevedel-artifact-store-delete "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--guest
                   "mevedel-collaboration" (room peer))
@@ -20,8 +28,7 @@
                   "mevedel-collaboration" (room &optional err))
 (declare-function mevedel-collaboration--publish
                   "mevedel-collaboration" (room))
-(declare-function mevedel-collaboration--room-for-session
-                  "mevedel-collaboration" (session))
+(declare-function mevedel-collaboration--room-list "mevedel-collaboration" ())
 
 ;; `mevedel-collaboration-artifact-projection'
 (declare-function mevedel-collaboration--artifacts-dir
@@ -51,17 +58,18 @@
   "mevedel-collaboration-artifact-comments")
 
 ;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-artifacts-dir
-                  "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-delete-files
                   "mevedel-session-artifacts" (session paths))
-(autoload 'mevedel-session-artifacts-artifacts-dir "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-delete-files "mevedel-session-artifacts")
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-within-root-p
                   "mevedel-resource" (path root))
 (autoload 'mevedel-resource-within-root-p "mevedel-resource")
+
+;; `mevedel-structs'
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 
 (defconst mevedel-collaboration--artifact-fetch-window 1.0
@@ -188,24 +196,22 @@ every frame was written."
               start end)))
     sent))
 
-(defun mevedel-collaboration-delete-artifact (session name)
-  "Delete SESSION's artifact NAME with its comments and update its room.
-NAME is the path relative to the artifacts folder, as cards and the
-artifacts cockpit show it.  Whiteboards and documents keep their state
-below `shared-editing/' and are deleted as items, not as files."
-  (let ((directory (mevedel-session-artifacts-artifacts-dir
-                    (or (mevedel-session-save-path session)
-                        (error "This session has no artifacts folder")))))
-    (when (string-prefix-p "shared-editing/" name)
-      (error "Delete whiteboards and documents from Shared work"))
+(defun mevedel-collaboration-delete-artifact (workspace name &optional session)
+  "Delete WORKSPACE's store artifact NAME and update the workspace's rooms.
+NAME is the path relative to the store, as cards show it; the whole
+artifact directory it lies in goes, with metadata and versions.  SESSION,
+when given, also loses its comments on NAME."
+  (let ((slash (string-search "/" name)))
+    (if slash
+        (mevedel-artifact-store-delete workspace (substring name 0 slash))
+      (delete-file (expand-file-name
+                    name (mevedel-artifact-store-directory workspace)))))
+  (when-let* ((save-path (and session (mevedel-session-save-path session))))
     (mevedel-session-artifacts-delete-files
      session
-     (list (expand-file-name name directory)
-           (file-name-concat (mevedel-session-save-path session)
-                             (mevedel-collaboration--artifact-comment-logical name))))
-    ;; Only a loaded collaboration can have a room to tell.
-    (when (featurep 'mevedel-collaboration)
-      (mevedel-collaboration-notify-artifacts-changed session))))
+     (list (file-name-concat
+            save-path (mevedel-collaboration--artifact-comment-logical name)))))
+  (mevedel-collaboration-notify-artifacts-changed workspace))
 
 (defun mevedel-collaboration--handle-artifact-delete (room peer frame)
   "Delete the published artifact FRAME names for writable guest PEER in ROOM.
@@ -226,17 +232,22 @@ refusal is answered to the sender."
               (unless (and record (not (plist-get record :missing)))
                 (error "This artifact is no longer on the host"))
               (mevedel-collaboration-delete-artifact
-               (plist-get room :session) (plist-get record :artifact))
+               (mevedel-session-workspace (plist-get room :session))
+               (plist-get record :artifact) (plist-get room :session))
               (list :ok t :artifact (plist-get record :artifact)))
           (error (list :error (error-message-string err)))))))))
 
-(defun mevedel-collaboration-notify-artifacts-changed (session)
-  "Re-publish SESSION after its artifact folder changed on disk."
-  (mevedel-collaboration--artifact-stat-invalidate)
-  (when-let* ((room (mevedel-collaboration--room-for-session session)))
-    (condition-case err
-        (mevedel-collaboration--publish room)
-      (error (mevedel-collaboration--observer-failure room err)))))
+(defun mevedel-collaboration-notify-artifacts-changed (workspace)
+  "Re-publish every room of WORKSPACE after its artifact store changed."
+  ;; Only a loaded collaboration can have a room to tell.
+  (when (featurep 'mevedel-collaboration)
+    (mevedel-collaboration--artifact-stat-invalidate)
+    (dolist (room (mevedel-collaboration--room-list))
+      (when-let* ((session (plist-get room :session))
+                  ((eq workspace (mevedel-session-workspace session))))
+        (condition-case err
+            (mevedel-collaboration--publish room)
+          (error (mevedel-collaboration--observer-failure room err)))))))
 
 (provide 'mevedel-collaboration-artifact)
 ;;; mevedel-collaboration-artifact.el ends here

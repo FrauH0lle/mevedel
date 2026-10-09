@@ -124,11 +124,14 @@
 
   :doc "real wrapped patch retains artifact cards and pending execution identity"
   (let* ((root (make-temp-file "mevedel-present-artifact-" t))
-         (path (file-name-concat root "artifacts" "example.html")))
+         (path (file-name-concat root ".mevedel" "artifacts" "example.html")))
     (unwind-protect
         (with-temp-buffer
           (org-mode)
-          (setq-local mevedel--session (mevedel-session--create :name "fixture" :save-path root))
+          (setq-local mevedel--session
+                      (mevedel-session--create
+                       :name "fixture" :save-path root
+                       :workspace (mevedel-workspace--create :type 'project :id "w" :root root)))
           (make-directory (file-name-directory path) t)
           (write-region "<h1>Fixture</h1>" nil path nil 'silent)
           (insert (propertize

@@ -24,7 +24,8 @@
           (workspace (mevedel-session-workspace session))
           (old (cl-loop for (key value) on (mevedel-session-codec-serialize session) by #'cddr
                         unless (or (memq key '(:recovery-issues :pending-follow-ups :pending-steering
-                                                                :pending-input-next-id :pending-input-paused :pending-input-failure-paused))
+                                                                :pending-input-next-id :pending-input-paused :pending-input-failure-paused
+                                                                :attached-artifacts))
                                    (and (equal ,version "v0.5.6") (eq key :external-conversations)))
                         append (list key value)))
           (head ".publications/generation-bbbbbbbbbbbbbbbbbbbb/manifest.el")
@@ -69,7 +70,8 @@
                      :token-budget 100 :tokens-used 20 :time-used-seconds 1
                      :turns-run 1 :plan-reference nil :created-at "created" :updated-at "updated")))
     (dolist (key '(:external-conversations :recovery-issues :pending-follow-ups :pending-steering
-                                           :pending-input-next-id :pending-input-paused :pending-input-failure-paused))
+                                           :pending-input-next-id :pending-input-paused :pending-input-failure-paused
+                                           :attached-artifacts))
       (cl-remf data key))
     (setq data (plist-put (plist-put data :version "v0.5.6") :goal goal))
     (let ((restored (mevedel-session-codec--goal-from-plist
@@ -86,7 +88,7 @@
            (data (plist-put (copy-tree old) :external-conversations history))
            (converted (mevedel-migrate-session--sidecar data))
            (loaded (plist-get (mevedel-session-codec-deserialize converted workspace) :session)))
-      (should (equal "v0.5.10" (plist-get converted :version)))
+      (should (equal "v0.5.11" (plist-get converted :version)))
       (should (equal history (plist-get converted :external-conversations)))
       (should (equal "v0.5.9" (plist-get data :version)))
       (should-not (plist-member data :pending-follow-ups))
@@ -113,6 +115,18 @@
       (should-error (mevedel-migrate-session--sidecar
                      (plist-put (copy-tree old) :goal
                                 (plist-put (copy-tree goal) :status 'unknown))))))
+
+  :doc "v0.5.10 keeps its fields and starts with no attached artifacts"
+  (let ((data (test-mevedel-session-persistence--complete-sidecar
+               '(:version "v0.5.10" :pending-input-next-id 4))))
+    (cl-remf data :attached-artifacts)
+    (let ((converted (mevedel-migrate-session--sidecar data)))
+      (should (equal "v0.5.11" (plist-get converted :version)))
+      (should (= 4 (plist-get converted :pending-input-next-id)))
+      (should (plist-member converted :attached-artifacts))
+      (should-not (plist-get converted :attached-artifacts))
+      (should-error (mevedel-migrate-session--sidecar
+                     (plist-put (copy-tree data) :attached-artifacts '("x"))))))
 
   :doc "current sidecars retain queued input and recovery state unchanged"
   (let ((data (test-mevedel-session-persistence--complete-sidecar nil)))
@@ -145,7 +159,7 @@
                                destination (concat ".publications/generation-" name "/manifest.el")))
                  (data (mevedel-session-codec-read (plist-get publication :sidecar)))
                  (loaded (plist-get (mevedel-session-codec-deserialize data workspace) :session)))
-            (should (equal "v0.5.10" (plist-get data :version)))
+            (should (equal "v0.5.11" (plist-get data :version)))
             (should (plist-member data :external-conversations))
             (should-not (mevedel-session-external-conversations loaded))
             (should (equal (mevedel-session-session-id session) (mevedel-session-session-id loaded)))
@@ -192,7 +206,7 @@
     (setf (plist-get (plist-get old :workspace) :type) 'file)
     (mevedel-migrate-session--write (file-name-concat source "session.meta.el") old)
     (should (= 1 (mevedel-migrate-session-copy source destination)))
-    (should (equal "v0.5.10"
+    (should (equal "v0.5.11"
                    (plist-get (mevedel-session-codec-read
                                (file-name-concat destination "session.meta.el")) :version))))
 

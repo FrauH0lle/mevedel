@@ -1140,37 +1140,71 @@ and, when its bearer link permits it, submits typed input and interaction
 answers. See [Browser collaboration](collaboration.md) for sharing, link tiers,
 remote controls, notifications, and connection recovery.
 
-## Session artifacts
+## Artifact store
 
-A settled ApplyPatch whose selected render data creates, updates, or moves a
-file into `<save-path>/artifacts/` publishes that file as a session artifact:
-an HTML mockup, a Markdown document, or an image the user is meant to open.
-The folder remains the host cockpit's inventory and byte source; the settled
-transcript record is collaboration publication authority. There is no new
-mutation tool or artifact registry.
-The bundled `artifact` skill carries the conventions (write there,
-self-contained, keep it small) and resolves the concrete directory at
-invocation. In Emacs, the artifacts cockpit (cockpit `A`) lists the
-folder's files and the session's whiteboards and documents, opens a file
-locally or an item in the session's room (see
-[shared editing](shared-editing.md)), and deletes either. A file goes with its artifact comments; a
-whiteboard or document is deleted as a shared item (see
-[deleting](shared-editing.md#deleting)). A project session commits each
-deletion at once, so Resume, Save As and Fork cannot bring it back before the
-next full save. A live room learns of it; the item state below
-`artifacts/shared-editing/` never lists as files. Everything except opening
-an item works with no room and no relay.
+Artifacts live in the workspace artifact store,
+`<workspace>/.mevedel/artifacts/`, owned by `mevedel-artifact-store.el`.
+Each artifact is one directory whose name is its stable id. It holds the
+artifact file (an HTML mockup, a Markdown document, or an image the user is
+meant to open) plus host bookkeeping: `meta.el` (kind, title, primary file)
+and `versions/` (numbered copies and `index.el`).
+
+```
+.mevedel/artifacts/
+  ID/
+    meta.el          ; kind, title, primary file, created
+    <name>           ; the artifact file the model writes
+    versions/        ; NNNNNN.<ext> copies plus index.el
+```
+
+Sessions do not own artifacts; they attach to them. A session persists only
+the list of attached ids (`:attached-artifacts` in its sidecar), and Fork and
+Save As carry that list, so a fork points at the same artifacts. Deleting a
+session leaves its artifacts in place.
+
+The model writes artifacts with ordinary ApplyPatch; there is no artifact
+tool. After a settled ApplyPatch, `mevedel-tool-patch-apply` reports its
+writes to the store:
+
+- a write into a new id directory creates the artifact; the host writes its
+  `meta.el`, with the kind from the file type and the title from the file name;
+- each write of an artifact's primary file records a version;
+- either attaches the writing session.
+
+ApplyPatch matches hunks against current content, so a write planned on an
+older copy fails and the model rereads; that is the store's concurrency
+check, without a lease. Writes that bypass ApplyPatch (Bash) change the file
+but record no version until the next settled write. Only the primary file, the
+first written into the id directory, is versioned; other files there (assets)
+change without versions.
+
+Versions are capped per artifact by `mevedel-artifact-store-max-versions`
+(default 20) and `mevedel-artifact-store-max-version-bytes` (default 64 MiB).
+The oldest are dropped first; the latest always stays. Restoring a version
+copies it back as a new version.
+
+The bundled `artifact` skill carries the conventions (start an artifact in a
+new id directory, self-contained, keep it small) and resolves the store
+directory at invocation. Whether the store is committed to Git is the
+project's choice; mevedel adds no ignore rule for it.
+
+In Emacs, the artifacts cockpit (cockpit `A`, or `M-x mevedel-artifacts` from
+any project buffer) lists the store with each artifact's kind, attachment to
+the current session, version count, modification time and size; `t` toggles
+between all and attached artifacts. It opens an artifact locally (`o`, `e`),
+attaches it to the current session (`a`), views or restores a version (`v`),
+duplicates it into an independent artifact (`D`), and deletes it with its
+versions (`d`). In a session it also lists the session's whiteboards and
+documents, opens one in the session's room (see
+[shared editing](shared-editing.md)), and deletes it as a shared item (see
+[deleting](shared-editing.md#deleting)); their state below
+`artifacts/shared-editing/` stays session-owned. Every change reaches the
+live rooms of the workspace. Everything except opening an item works with no
+room and no relay. The session menu's Artifacts row shows how many artifacts
+are attached to the session and how many the project has.
 
 See [Browser artifact viewing](collaboration.md#artifact-viewing) for cards,
 on-demand transfer, sandboxed HTML, and supported formats.
-
-Artifact files are ordinary session-owned state. PID-lock sessions carry the
-folder through their existing directory transactions. Portable sessions add
-its recursive regular-file bytes to the immutable publication manifest and
-commit deletions as tombstones, so Resume, Save As, Conversation Fork, and
-Worktree Fork resolve the same bytes without trusting fixed caches. Rewind
-preserves the current artifact folder; free-form artifacts are not historical
-turn snapshots.
 
 ## Managed-zone chrome
 

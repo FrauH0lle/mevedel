@@ -57,6 +57,7 @@
 ;; loaded, also from a source checkout without generated autoloads.  Mode-local
 ;; and transient suffix commands load with the owner that binds them.
 (autoload 'mevedel-abort "mevedel-chat" nil t)
+(autoload 'mevedel-artifacts "mevedel-artifacts-list" nil t)
 (autoload 'mevedel-buddy-abort "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-clear-changes "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-dismiss-note "mevedel-buddy-note" nil t)
@@ -161,6 +162,8 @@
 (autoload 'mevedel--start-chat "mevedel-chat")
 (autoload 'mevedel--start-directive-discussion "mevedel-directive-request")
 (autoload 'mevedel--transform-expand-mentions "mevedel-mentions")
+;; The bundled artifact skill resolves the store path while it is invoked.
+(autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
 (autoload 'mevedel-execution-teardown-all "mevedel-execution")
 (autoload 'mevedel-gptel-bridge-install "mevedel-gptel-bridge")
 (autoload 'mevedel-gptel-bridge-uninstall "mevedel-gptel-bridge")

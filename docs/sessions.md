@@ -126,9 +126,10 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.10`, including recovery issues, retained input and pause state.
+The closed sidecar schema is `v0.5.11`, including recovery issues, retained input and pause state,
+and the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`).
 Other schemas are rejected by the runtime loader; older sessions are converted
-only by the [explicit migration](#explicit-migration-to-v0510). Recovery records
+only by the [explicit migration](#explicit-migration-to-v0511). Recovery records
 contain issue messages, never credentials.
 Queued follow-ups retain text, attribution, scope and attachment grants. Live
 submission objects are excluded. Undelivered steering reloads as requiring review,
@@ -244,9 +245,9 @@ Layout:
   local/                              ; lazy session-owned shared resources
     plans/current.md                 ; mutable Plan draft/proposal
     plans/accepted-*.md              ; immutable accepted plans
-  artifacts/                         ; durable session artifacts (mockups,
-                                     ; documents); cockpit inventory and
-                                     ; collaboration byte source
+  artifacts/shared-editing/          ; whiteboard, document and artifact
+                                     ; comment state (artifact files live
+                                     ; in the workspace artifact store)
   tool-results/                      ; retained oversized tool output and media
   agents/                            ; logical agent transcripts; physical
                                      ; numbered compaction recovery archives
@@ -649,10 +650,10 @@ confirmation; declining aborts resume, while accepting binds the conversation
 to the opened workspace and discards copied session permission rules, resource
 grants, and additional roots.  The next save records the opened workspace's
 identity. Superseded sidecar shapes are not migrated during resume; the
-[explicit migration](#explicit-migration-to-v0510) runs separately.
+[explicit migration](#explicit-migration-to-v0511) runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.10`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.11`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions
@@ -1567,10 +1568,10 @@ An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
 
-### Explicit migration to v0.5.10
+### Explicit migration to v0.5.11
 
 The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-session-v0.5.6.el) converts
-v0.5.6 and v0.5.9 sessions to v0.5.10. Close the source session first, then run
+v0.5.6, v0.5.9 and v0.5.10 sessions to v0.5.11. Close the source session first, then run
 from the repository root with a new destination outside the source directory:
 
 ```bash
@@ -1584,7 +1585,8 @@ heads, updating sidecar checksums. A Goal saved before incomplete-usage
 tracking gains an explicit complete-usage flag; an invalid Goal refuses
 conversion instead of being dropped silently by the runtime loader. New recovery fields start empty because older
 formats did not persist queued input; previously unsaved queues cannot be recovered.
-Existing v0.5.10 sidecars retain their recovery state. Restoring an interrupted
+Existing v0.5.10 sidecars retain their recovery state. Every converted session
+starts with no attached artifacts. Restoring an interrupted
 native conversation still requires explicit continuation through the current
 reader's recovery rules.
 

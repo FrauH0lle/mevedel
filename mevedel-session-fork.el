@@ -145,6 +145,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-agent-turn-capacity "mevedel-structs" (cl-x))
+(declare-function mevedel-session-attached-artifacts "mevedel-structs" (cl-x))
 (declare-function mevedel-session-buffer-name "mevedel-structs" (session-name workspace))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
@@ -275,7 +276,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     worktree-branch worktree-base-commit prompt-index file-snapshots
     ptc-checkpoints persisted-first-user-message durable-tree-ensured
     agent-transcripts invoked-skills permission-queue pending-plan-approval
-    plan-metadata goal)
+    plan-metadata goal attached-artifacts)
   "Every `mevedel-session' slot decided by the logical clone constructor.")
 
 (defun mevedel-session-fork--assert-clone-slot-completeness ()
@@ -455,7 +456,10 @@ The identity and timestamp keywords describe the new materialized child."
                             (copy-tree
                              (mevedel-session-plan-metadata session) t))
            :goal (unless fork-p
-                   (copy-tree (mevedel-session-goal session) t)))))
+                   (copy-tree (mevedel-session-goal session) t))
+           ;; Forks share the attached artifacts by reference.
+           :attached-artifacts
+           (copy-sequence (mevedel-session-attached-artifacts session)))))
     (when (and fork-p turn)
       (setf (mevedel-session-agent-transcripts child)
             (mevedel-session-rewind-reduce-agent-transcripts

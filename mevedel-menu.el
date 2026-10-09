@@ -688,11 +688,11 @@ unavailable until it changes."
   "Return the top-level artifacts row description."
   (let* ((session (mevedel-cockpit-context-session
                    (mevedel-menu--context)))
-         (count (mevedel-artifacts-list-count session)))
+         (counts (mevedel-artifacts-list-count session)))
     (mevedel-menu--state-description
      "Artifacts"
-     (format "%d file%s" count (if (= 1 count) "" "s"))
-     (if (> count 0) 'warning 'transient-inactive-value))))
+     (format "%d attached · %d in project" (car counts) (cdr counts))
+     (if (> (car counts) 0) 'warning 'transient-inactive-value))))
 
 (defun mevedel-menu--skills-description ()
   "Return the top-level skills row description."

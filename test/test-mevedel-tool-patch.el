@@ -1417,7 +1417,41 @@
            (lambda () (setq called t)))
           (should called)
           (should (equal "x" (mevedel-tool-patch--read-file path))))
-      (delete-file path))))
+      (delete-file path)))
+
+  :doc "Records store writes as artifact versions of the attached session"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-patch-store-" t)))
+         (workspace (mevedel-workspace--create :type 'project :id "w"
+                                               :root root :name "w"))
+         (path (file-name-concat root ".mevedel/artifacts/flow/index.html"))
+         (one (mevedel-session--create :workspace workspace :session-id "one"))
+         (two (mevedel-session--create :workspace workspace :session-id "two"))
+         (data (generate-new-buffer " *patch-store-data*")))
+    (unwind-protect
+        (cl-flet ((write (session content)
+                    (with-current-buffer data
+                      (setq-local mevedel--session session))
+                    (mevedel-tool-patch-apply
+                     data (list (list :action 'write :path path :content content))
+                     #'ignore)))
+          (write one "<p>one</p>\n")
+          (write two "<p>two</p>\n")
+          (should (equal '("flow") (mevedel-session-attached-artifacts one)))
+          (should (equal '("flow") (mevedel-session-attached-artifacts two)))
+          (should (equal '("one" "two")
+                         (mapcar (lambda (row) (plist-get row :session))
+                                 (mevedel-artifact-store-versions workspace "flow"))))
+          ;; A hunk planned against the copy session one read no longer
+          ;; matches after session two's write: the model rereads instead
+          ;; of overwriting.
+          (should-error
+           (mevedel-tool-patch-apply-hunks
+            (mevedel-tool-patch--read-file path)
+            '((:old-lines ("<p>one</p>") :new-lines ("<p>three</p>") :selected t
+               :diff-lines ("-<p>one</p>" "+<p>three</p>")))
+            path)))
+      (kill-buffer data)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-patch--selected-file-data
   (:doc "Builds a selected-only Update file block") ,test (test)

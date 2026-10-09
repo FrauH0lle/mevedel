@@ -364,6 +364,7 @@ publication."
                :agent-turn-capacity 3
                :plan-metadata nil
                :goal nil
+               :attached-artifacts nil
                :messages nil)))
     (let ((overrides plist))
       (while plist

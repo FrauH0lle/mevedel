@@ -700,12 +700,12 @@ Each response is capped at 50,000 output bytes and repeated requests from one
 guest are throttled. View-only guests can use the link.
 Nested open and closed choices survive record updates, reconnect snapshots
 and agent transcript refreshes; the composer draft stays untouched. Direct
-ApplyPatch calls keep session artifact cards and diff presentation.
+ApplyPatch calls keep artifact cards and diff presentation.
 
 ## Artifact viewing
 
-[Session artifacts](view.md#session-artifacts) are files authored through the
-normal patch workflow.
+Artifacts are files in the [workspace artifact store](view.md#artifact-store),
+authored through the normal patch workflow.
 
 In a room, the projection turns each selected applied artifact destination
 into a card carrying name and size -- never the bytes, and never the host-side
@@ -728,7 +728,7 @@ records already published to that guest, never by a guest-supplied path. Agent
 artifact ids are namespaced before publication because canonical ids are only
 transcript-local. The request id must be a nonnegative JavaScript-safe integer
 before projection or file I/O starts, the resolved path is re-verified inside
-the artifacts directory before a byte is read, files over 16 MiB are refused, and repeat fetches from a guest within one
+the artifact store before a byte is read, files over 16 MiB are refused, and repeat fetches from a guest within one
 second are dropped. The host answers targeted
 `artifact` frames with base64 chunks under the wire bound. The viewer
 renders HTML in an `<iframe sandbox="allow-scripts">` (never
@@ -752,15 +752,16 @@ synchronously from the click -- the bytes are already in hand, so no
 popup blocker races the transfer -- whose only content is the same
 sandboxed frame. Guests author artifacts through the model: they ask,
 the model writes, everyone gets the card. There is no guest upload
-path into the artifacts folder -- guests add files to the
+path into the artifact store -- guests add files to the
 [project](#project-files) instead -- and the relay is untouched:
 artifact frames are sealed like every other frame.
 
 Full and owner links can **Delete** an open artifact after confirming. The
 host resolves the file from its own published record of the card, never from
-the request, deletes it with its artifact comments through the same path as
-the Emacs cockpit, and the card then reads as deleted on the host. Files
-below `artifacts/shared-editing/` are items, deleted from Shared work.
+the request, deletes the whole artifact (its id directory, with versions) and
+the room session's comments on it through the same path as the Emacs cockpit,
+and the card then reads as deleted on the host. Every live room of the
+workspace is re-published.
 
 ### Artifact comments
 

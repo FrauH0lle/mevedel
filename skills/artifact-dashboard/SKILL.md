@@ -36,7 +36,7 @@ default arrangement, not a fixed structure.
 4. Self-check before writing the file: no `SLOT` markers left, no placeholder
    or invented values, and every custom color routed through a token declared
    in every scope (light, both dark blocks, print) so it survives both themes.
-5. Write the file into the session artifacts directory with ApplyPatch, per the
+5. Write the file into the project artifact store with ApplyPatch, per the
    artifact rules above.
 
 **Creation only.** When updating an existing dashboard, work with its current

@@ -141,6 +141,22 @@
                          (user-error nil))))
     (mevedel-cockpit-context-data-buffer context)))
 
+(defun mevedel-cockpit-workspace-context (workspace &optional origin-buffer)
+  "Return a cockpit context for WORKSPACE alone, without a session.
+ORIGIN-BUFFER is where quitting returns.  Only surfaces that do not
+require a session accept it."
+  (list :workspace workspace :origin-buffer origin-buffer))
+
+(defun mevedel-cockpit--live-context-p (context)
+  "Return non-nil when CONTEXT's owners are live.
+A session context needs its view and data buffers; a workspace context
+from `mevedel-cockpit-workspace-context' owns nothing that can die."
+  (and context
+       (if (plist-member context :data-buffer)
+           (and (mevedel-cockpit-context-view-buffer context)
+                (mevedel-cockpit-context-data-buffer context))
+         (plist-get context :workspace))))
+
 (defun mevedel-cockpit-require-owner (&optional label context)
   "Signal a user error unless the current cockpit has live owners.
 LABEL is a user-facing surface label used in the error message.
@@ -148,9 +164,7 @@ CONTEXT defaults to `mevedel-cockpit-current-context'."
   (let ((context (condition-case nil
                      (or context (mevedel-cockpit-current-context))
                    (user-error nil))))
-    (unless (and context
-                 (mevedel-cockpit-context-view-buffer context)
-                 (mevedel-cockpit-context-data-buffer context))
+    (unless (mevedel-cockpit--live-context-p context)
       (user-error "No live mevedel session for this %s"
                   (or label "cockpit surface"))))
   t)
@@ -168,8 +182,7 @@ CONTEXT defaults to `mevedel-cockpit-current-context'."
   "Return CONTEXT when it has live view and data buffers.
 LABEL is used in the owner error."
   (let ((context (or context (mevedel-cockpit-current-context))))
-    (unless (and (mevedel-cockpit-context-view-buffer context)
-                 (mevedel-cockpit-context-data-buffer context))
+    (unless (mevedel-cockpit--live-context-p context)
       (user-error "No live mevedel session for this %s"
                   (or label "cockpit surface")))
     context))
@@ -476,19 +489,24 @@ a help label are still valid bindings, but are omitted from generated help."
   "Kill the current cockpit and return to the main session cockpit.
 LABEL is a user-facing surface label used in the dead-owner error."
   (interactive)
-  (let ((buffer (current-buffer))
-        (return-buffer (mevedel-cockpit--return-buffer)))
+  (let* ((buffer (current-buffer))
+         (session-p (plist-member mevedel-cockpit--context :data-buffer))
+         (return-buffer (mevedel-cockpit--return-buffer)))
     (when return-buffer
       (when-let* ((window (display-buffer return-buffer)))
         (select-window window)))
     (when (buffer-live-p buffer)
       (kill-buffer buffer))
-    (unless return-buffer
+    (cond
+     ;; A workspace context has no session cockpit to return to.
+     ((not session-p))
+     ((not return-buffer)
       (user-error "No live mevedel session for this %s"
                   (or label "cockpit surface")))
-    (with-current-buffer return-buffer
-      (require 'mevedel-menu)
-      (mevedel-menu))))
+     (t
+      (with-current-buffer return-buffer
+        (require 'mevedel-menu)
+        (mevedel-menu))))))
 
 (defun mevedel-cockpit-surface-quit ()
   "Quit the current cockpit surface."
@@ -510,8 +528,10 @@ LABEL is a user-facing surface label used in the dead-owner error."
   (when-let* ((existing (get-buffer (plist-get surface :buffer-name)))
               (previous (buffer-local-value 'mevedel-cockpit--context
                                             existing))
-              ((not (eq (mevedel-cockpit-context-session previous)
-                        (mevedel-cockpit-context-session context)))))
+              ((not (and (eq (mevedel-cockpit-context-session previous)
+                             (mevedel-cockpit-context-session context))
+                         (eq (mevedel-cockpit-context-workspace previous)
+                             (mevedel-cockpit-context-workspace context))))))
     (kill-buffer existing))
   (let ((buffer (get-buffer-create (plist-get surface :buffer-name))))
     (with-current-buffer buffer
