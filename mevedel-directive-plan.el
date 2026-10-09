@@ -438,7 +438,7 @@ CALLBACK runs after implementation settles."
     (condition-case err
         (let ((fsm
                (mevedel--process-directive
-                directive (alist-get 'discuss mevedel-action-preset-alist)
+                directive (alist-get 'implement mevedel-action-preset-alist)
                 (lambda (content)
                   (setq implementation-prompt (funcall prompt-fn content))
                   (mevedel-directive-plan-put
@@ -488,7 +488,7 @@ CALLBACK runs after implementation settles."
     (overlay-put directive 'mevedel-directive-action 'plan)
     (prog1
         (mevedel--process-directive
-         directive (alist-get 'discuss mevedel-action-preset-alist)
+         directive (alist-get 'implement mevedel-action-preset-alist)
          (lambda (_content)
            (mevedel-directive-plan--planning-prompt
             (plist-get plan :implementation-prompt)

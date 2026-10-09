@@ -473,9 +473,10 @@ request-only application is dynamically scoped for variables. Its agent roster
 and tool catalog are read by tool calls after dispatch, so they last until the
 request ends, when teardown reinstalls the session preset's. Directive dispatch
 applies the default chat preset only to a session without one. The built-ins are
-`mevedel-discuss` and `mevedel-implement`. Request changes
-and Retry use ordinary implementation authority and focused prompt context,
-not another preset. Presets can also merge named model tiers and workload maps.
+`mevedel-discuss`, used by directive Discuss, and `mevedel-implement`.
+Directive planning also uses `mevedel-implement`, bounded by its request's
+Plan read-only stamp. Request changes and Retry use ordinary implementation
+authority and focused prompt context, not another preset. Presets can also merge named model tiers and workload maps.
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.

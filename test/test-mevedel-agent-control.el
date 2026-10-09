@@ -1233,6 +1233,52 @@
     (should (equal "/root" (plist-get steered :sender)))
     (should (equal "Steer safely." (plist-get steered :payload))))
 
+  :doc "a Plan read-only caller steers only Plan read-only turns"
+  (let* ((session (mevedel-agent-control-test--session))
+         (plain (mevedel-agent-record--create
+                 :path "/root/plain" :activity 'running
+                 :invocation (mevedel-agent-invocation--create)))
+         (planning (mevedel-agent-record--create
+                    :path "/root/planning" :activity 'running
+                    :invocation (mevedel-agent-invocation--create
+                                 :plan-read-only t)))
+         (starting (mevedel-agent-record--create
+                    :path "/root/starting" :activity 'starting))
+         (mevedel--current-request
+          (mevedel-request--create :plan-read-only t)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/plain" plain)
+                (cons "/root/planning" planning)
+                (cons "/root/starting" starting)))
+    (should-error
+     (mevedel-agent-control-followup session "plain" "Edit the parser.")
+     :type 'user-error)
+    (should-error
+     (mevedel-agent-control-followup session "starting" "Edit the parser.")
+     :type 'user-error)
+    (should-not (mevedel-agent-record-mailbox plain))
+    (should (eq planning
+                (mevedel-agent-control-followup
+                 session "planning" "Also inspect the tests.")))
+    (should (= 1 (length (mevedel-agent-record-mailbox planning))))
+    ;; The same steering is ordinary outside Plan.
+    (setq mevedel--current-request (mevedel-request--create))
+    (should (eq plain
+                (mevedel-agent-control-followup
+                 session "plain" "Edit the parser."))))
+
+  :doc "a sticky Plan session refuses to steer an unstamped running turn"
+  (let* ((session (mevedel-agent-control-test--session))
+         (plain (mevedel-agent-record--create
+                 :path "/root/plain" :activity 'running
+                 :invocation (mevedel-agent-invocation--create))))
+    (setf (mevedel-session-plan-mode session) t
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/plain" plain)))
+    (should-error
+     (mevedel-agent-control-followup session "plain" "Edit the parser.")
+     :type 'user-error))
+
   :doc "failed retained dispatch preserves the prior settled result"
   (let* ((session (mevedel-agent-control-test--session))
          (buffer (generate-new-buffer " *agent-control-failed-followup*"))
@@ -2120,6 +2166,42 @@
     (should (= 1 (length
                   (mevedel-agent-control--mailbox
                    session "/root/running")))))
+
+  :doc "a Plan read-only caller messages only /root or Plan read-only turns"
+  (let* ((session (mevedel-agent-control-test--session))
+         (idle (mevedel-agent-record--create
+                :id "idle-id" :path "/root/idle" :activity 'idle))
+         (plain (mevedel-agent-record--create
+                 :id "plain-id" :path "/root/plain" :activity 'running
+                 :invocation (mevedel-agent-invocation--create)))
+         (planning (mevedel-agent-record--create
+                    :id "planning-id" :path "/root/planning"
+                    :activity 'running
+                    :invocation (mevedel-agent-invocation--create
+                                 :plan-read-only t)))
+         (sender (mevedel-agent-record--create
+                  :id "sender-id" :path "/root/sender" :activity 'running))
+         (mevedel--agent-invocation
+          (mevedel-agent-invocation--create
+           :agent-id "sender-id" :path "/root/sender"
+           :parent-session session :plan-read-only t)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/idle" idle)
+                (cons "/root/plain" plain)
+                (cons "/root/planning" planning)
+                (cons "/root/sender" sender)))
+    (dolist (target '("/root/idle" "/root/plain"))
+      (should-error
+       (mevedel-agent-control-send-message session target "Edit it.")
+       :type 'user-error)
+      (should-not (mevedel-agent-control--mailbox session target)))
+    (should (equal "/root/planning"
+                   (mevedel-agent-control-send-message
+                    session "/root/planning" "Check the tests too.")))
+    (should (equal "/root"
+                   (mevedel-agent-control-send-message
+                    session "/root" "Found the entry point.")))
+    (should (= 1 (length (mevedel-agent-control--mailbox session "/root")))))
 
   :doc "accepts tree-wide peer paths and rejects empty or unknown targets"
   (let* ((session (mevedel-agent-control-test--session))

@@ -19,14 +19,12 @@
 (require 'mevedel-tool-registry)
 
 ;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-parent-session
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-plan-directive-p "mevedel-agents"
                   (&optional session request))
-(declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
-(defvar mevedel--agent-invocation)
+(declare-function mevedel-plan-read-only-p "mevedel-agents"
+                  (&optional session))
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-data-buffer
@@ -77,8 +75,6 @@
                   (path access grants &optional recursive))
 
 ;; `mevedel-plan-mode'
-(declare-function mevedel-plan-mode-active-p
-                  "mevedel-plan-mode" (&optional session))
 (declare-function mevedel-plan-mode-exit
                   "mevedel-plan-mode" (&optional session))
 
@@ -381,18 +377,6 @@ happen for a non-read-only tool."
     (list :normalized-context
           (plist-put (copy-sequence context) :content content))))
 
-(defun mevedel-permission--plan-mode-p (&optional session)
-  "Return non-nil when the owning session is planning read-only work."
-  (let ((owner
-         (or session
-             (and (boundp 'mevedel--session) mevedel--session)
-             (and mevedel--agent-invocation
-                  (mevedel-agent-invocation-parent-session
-                   mevedel--agent-invocation)))))
-    (or (mevedel-plan-read-only-request-p)
-        (and (fboundp 'mevedel-plan-mode-active-p)
-             (mevedel-plan-mode-active-p owner)))))
-
 (cl-defun mevedel-permission--preflight
     (tool-name &key tool-struct path pattern domain name content request
                invocation-rules request-rules session-rules persistent-rules
@@ -461,7 +445,7 @@ session-owned work descendants; workspace-owned shared files are excluded."
              (deny-bucket
               (mevedel-permission--decision
                'deny 'deny-rule :bucket deny-bucket))
-             ((and (mevedel-permission--plan-mode-p session)
+             ((and (mevedel-plan-read-only-p session)
                    (or (and (equal tool-name "ApplyPatch")
                             (or (not patch-session-only-p)
                                 (mevedel-plan-directive-p

@@ -38,7 +38,9 @@ Single decision function `mevedel-check-permission`. Decision chain:
 3. Workflow restrictions: standalone/sticky Plan denies native edit tools and
    Eval, except ApplyPatch whose every operand is a session-owned `work://`
    descendant. Directive Planning denies all native edits and Eval. These
-   restrictions apply regardless of allow rules or permission mode.
+   restrictions apply regardless of allow rules or permission mode. An agent
+   turn started under Plan keeps them for its lifetime through its Plan
+   read-only stamp.
 4. Full Access bypasses ordinary asks, resource defaults and review; explicit
    tool denials still apply. Otherwise the tool's own `check-permission` slot
    decides command authority
@@ -952,6 +954,11 @@ confinement policy. Any
 "allow-session" / "deny-session" outcome accepted inside the sub-agent's
 prompt is written via `setf` on the same struct -- so the new rule
 applies immediately to the root and to every other live sub-agent.
+Plan restrictions are the exception to live sharing. An agent turn started
+under Plan carries an immutable Plan read-only stamp, so leaving Plan or
+accepting a proposal does not widen a turn that is already running. See
+[Plan mode](plan-mode.md#tool-boundary).
+
 An agent's tool list limits which operations it can request. A read-only
 agent can still need a permission prompt for a protected or outside-root
 resource; read-only capability does not confer unrestricted read authority.

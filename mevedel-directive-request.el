@@ -914,8 +914,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
             (setq cleanup-request-context-set-p t)
 	    (setq mevedel--current-directive-uuid
 		  (overlay-get directive 'mevedel-uuid)
-                  mevedel--directive-read-only-request-p
-                  (or discussion-p planning-p))
+                  mevedel--directive-read-only-request-p discussion-p)
             (mevedel-session-artifacts-ensure-files mevedel--session chat-buffer)
             (when (mevedel-engine-external-p
                    (or (plist-get model-policy :backend) gptel-backend))

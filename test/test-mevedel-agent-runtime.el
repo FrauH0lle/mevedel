@@ -438,6 +438,44 @@
       (kill-buffer agent-buffer)
       (kill-buffer parent)))
 
+  :doc "stamps a turn started under sticky Plan read-only for its lifetime"
+  (dolist (plan-mode '(t nil))
+    (let* ((parent (generate-new-buffer " *agent-runtime-parent*"))
+           (agent-buffer (generate-new-buffer " *agent-runtime-retained*"))
+           (session (mevedel-session--create :name "main" :plan-mode plan-mode))
+           (configuration
+            (mevedel-agent-runtime-test--configuration
+             (mevedel-agent-runtime-test--agent))))
+      (unwind-protect
+          (with-current-buffer parent
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request (mevedel-request--create))
+            (cl-letf (((symbol-function 'mevedel-agent-conversation-save)
+                       (lambda (&rest _) t))
+                      ((symbol-function 'mevedel-agent-exec-run)
+                       (lambda (_callback _role _description invocation _buffer)
+                         (setf (mevedel-agent-invocation-runtime-fsm invocation)
+                               'continued-fsm)
+                         'continued-fsm)))
+              (let ((invocation
+                     (mevedel-agent-runtime-dispatch
+                      nil "Continue" "Inspect the parser."
+                      :path "/root/explore"
+                      :frozen-configuration configuration
+                      :retained-id "explorer--test"
+                      :retained-buffer agent-buffer
+                      :retained-transcript "agents/explorer.chat.org")))
+                (should (eq plan-mode
+                            (mevedel-agent-invocation-plan-read-only
+                             invocation)))
+                ;; Leaving Plan does not widen the running turn.
+                (setf (mevedel-session-plan-mode session) nil)
+                (with-current-buffer agent-buffer
+                  (should (eq plan-mode
+                              (and (mevedel-plan-read-only-p) t)))))))
+        (kill-buffer agent-buffer)
+        (kill-buffer parent))))
+
   :doc "copies forked context into the turn text only for an external engine"
   (let* ((gptel--known-backends nil)
          (claude (mevedel-claude-code-register))

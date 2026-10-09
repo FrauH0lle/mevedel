@@ -1028,6 +1028,57 @@
                        (kill-buffer captured-chat))
                      (delete-directory tmpdir t)))
 
+                 :doc "applies read-only directive rules to discussion, not planning"
+                 (dolist (case '((discuss . t) (plan . nil)))
+                   (let* ((tmpdir (file-name-as-directory
+                                   (make-temp-file "mevedel-directive-capability-" t)))
+                          (file (file-name-concat tmpdir "sample.txt"))
+                          (buf (find-file-noselect file))
+                          captured-chat
+                          (captured-flag 'unset))
+                     (unwind-protect
+                         (with-current-buffer buf
+                           (insert "source\n")
+                           (write-region (point-min) (point-max) file nil 'silent)
+                           (set-buffer-modified-p nil)
+                           (let ((directive
+                                  (mevedel--create-directive-in
+                                   buf (point-min) (1- (point-max)) nil
+                                   "Change it")))
+                             (overlay-put directive 'mevedel-directive-action
+                                          (car case))
+                             (cl-letf (((symbol-function 'save-some-buffers)
+                                        (lambda (&rest _) nil))
+                                       ((symbol-function 'display-buffer)
+                                        (lambda (&rest _) nil))
+                                       ((symbol-function 'gptel--apply-preset)
+                                        (lambda (&rest _) nil))
+                                       ((symbol-function 'mevedel-view-rerender)
+                                        #'ignore)
+                                       ((symbol-function 'gptel-request)
+                                        (lambda (_prompt &rest args)
+                                          (setq captured-chat
+                                                (plist-get args :buffer)
+                                                captured-flag
+                                                (buffer-local-value
+                                                 'mevedel--directive-read-only-request-p
+                                                 captured-chat))
+                                          (error "Stop after dispatch"))))
+                               (should-error
+                                (mevedel--process-directive
+                                 directive '(:system "test") #'identity nil))
+                               (should (eq (cdr case) captured-flag)))))
+                       (when (buffer-live-p buf)
+                         (kill-buffer buf))
+                       (when (buffer-live-p captured-chat)
+                         (let ((view-buf
+                                (buffer-local-value 'mevedel--view-buffer
+                                                    captured-chat)))
+                           (when (buffer-live-p view-buf)
+                             (kill-buffer view-buf)))
+                         (kill-buffer captured-chat))
+                       (delete-directory tmpdir t))))
+
                  :doc "preserves prior state and an unrelated active request on pre-reservation errors"
                  (let* ((workspace
                          (mevedel-workspace--create
