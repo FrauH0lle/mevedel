@@ -188,7 +188,9 @@ Each value contains the raw parent, agent, tool, and variable settings.")
   "Non-nil while a preset is applied for one dynamic request only.")
 
 (defvar-local mevedel--directive-read-only-request-p nil
-  "Non-nil while the current directive turn has read-only capability.")
+  "Non-nil while the current turn is a read-only directive discussion.
+Directive planning is bounded by its request's Plan read-only stamp instead,
+which lets it delegate to agents that inherit that stamp.")
 
 (defconst mevedel-preset--structural-keys
   '(:description :parents :pre :post :backend :model :system :tools :agents

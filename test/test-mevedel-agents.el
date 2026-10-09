@@ -60,6 +60,47 @@
         (request (mevedel-request--create :plan-read-only t)))
     (should-not (mevedel-plan-directive-p session request))))
 
+(mevedel-deftest mevedel-plan-read-only-p ()
+  ,test
+  (test)
+  :doc "uses an explicit root session"
+  (let ((session (mevedel-session--create :name "main" :plan-mode t)))
+    (should (mevedel-plan-read-only-p session)))
+
+  :doc "keeps a directive planning request read-only after its phase advances"
+  (let ((session (mevedel-session--create :name "main"))
+        (mevedel--current-request
+         (mevedel-request--create :plan-read-only t)))
+    (should (mevedel-plan-read-only-p session))
+    (setf (mevedel-session-directive-planning session)
+          '(:directive-id "d1" :phase implementation))
+    (should (mevedel-plan-read-only-p session)))
+
+  :doc "uses a retained agent's parent session"
+  (let ((session (mevedel-session--create :name "main" :plan-mode t)))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create
+                   :parent-session session))
+      (should (mevedel-plan-read-only-p))))
+
+  :doc "uses immutable Plan authority on a retained agent"
+  (let ((session (mevedel-session--create :name "main")))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create
+                   :parent-session session :plan-read-only t))
+      (should (mevedel-plan-read-only-p))))
+
+  :doc "is nil without a stamp or a sticky Plan session"
+  (let ((session (mevedel-session--create :name "main"))
+        (mevedel--current-request (mevedel-request--create)))
+    (should-not (mevedel-plan-read-only-p session))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create :parent-session session))
+      (should-not (mevedel-plan-read-only-p)))))
+
 (mevedel-deftest mevedel-agent-invocation-require-path
   ()
   ,test

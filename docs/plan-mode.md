@@ -130,9 +130,32 @@ arbitrary Emacs Lisp cannot be classified reliably as read-only, including in
 a child process. Resource-address completion remains side-effect free. See
 [`address-to-resource.md`](address-to-resource.md#execution-target-and-plan-mode).
 
-Directive Plan before implementation has a separate, stricter boundary: its
-planning requests remain read-only and do not expose or allow `ApplyPatch`,
-including session-only proposals, or `Eval`.
+Plan can delegate. `Agent` and the other agent tools stay available, so the
+planner can run independent investigations in parallel or ask an agent to
+critique a draft plan passed in its message. The Plan reminder says so; when
+to delegate is the model's call. Each agent turn started under Plan carries an
+immutable Plan read-only stamp. Its requests, nested agents and forked skills
+keep Plan's tool and Bash limits until that turn ends, even after the proposal
+is accepted or the user leaves Plan. A `/review` or `/verify` started during
+Plan is bound the same way. A later follow-up from an ordinary turn starts an
+ordinary turn. Skill preparation keeps the caller's stamp too, so a skill's
+`!` commands follow Plan's Bash classification.
+
+A Plan caller cannot steer an agent turn that runs outside Plan limits.
+FollowupAgent on a running agent and SendMessage are accepted only when the
+target's current turn is itself Plan read-only; SendMessage to `/root` is also
+accepted. Otherwise the call fails and suggests FollowupAgent once the agent
+is idle, which starts a Plan read-only turn. While sticky Plan is active this
+also refuses agents started before Plan was entered. Interrupting, listing and
+waiting are unaffected. Mail and results remain advisory text: a recipient
+that reads them later acts under its own authority at that time.
+
+Directive Plan before implementation runs on the implementation preset's tool
+surface, bounded by the same Plan stamp, so it can delegate and use read-only
+Bash. Its boundary is stricter in one respect: its planning requests do not
+expose or allow `ApplyPatch`, including session-only proposals. `Eval` is
+unavailable as in every Plan request. Directive Discuss is unchanged; it keeps
+its own read-only capability ceiling, which denies delegation.
 
 ## Proposal interaction
 

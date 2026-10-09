@@ -53,11 +53,14 @@
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(declare-function mevedel-plan-read-only-p "mevedel-agents"
+                  (&optional session))
 (autoload 'mevedel-agent--create "mevedel-agents")
 (autoload 'mevedel-agent-get "mevedel-agents")
 (autoload 'mevedel-agent-invocation-hook-rules "mevedel-agents")
 (autoload 'mevedel-agent-invocation-skill-permission-rules "mevedel-agents")
 (autoload 'mevedel-agent-name "mevedel-agents")
+(autoload 'mevedel-plan-read-only-p "mevedel-agents")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string
@@ -755,6 +758,9 @@ The returned function restores the previous request and calls CALLBACK with
 its outcome exactly once."
   (let ((origin-buffer (current-buffer))
         (origin (mevedel-current-origin))
+        ;; Preparation runs `!' commands through the tool pipeline; it must
+        ;; keep the caller's Plan limits after the invocation is unbound.
+        (plan-read-only (mevedel-plan-read-only-p session))
         (previous-request (and (boundp 'mevedel--current-request)
                                mevedel--current-request))
         (invocation-local-p
@@ -768,7 +774,8 @@ its outcome exactly once."
                  :origin origin
                  :file-snapshots (make-hash-table :test #'equal)
                  :skill-permission-rules rules
-                 :hook-rules hooks))
+                 :hook-rules hooks
+                 :plan-read-only (and plan-read-only t)))
     (setq-local mevedel--agent-invocation nil)
     (lambda (outcome)
       (unless settled

@@ -14,6 +14,16 @@ tools and Eval are unavailable, and Bash is limited to recognized read-only
 commands. Directive planning also withholds ApplyPatch. These workflow limits
 cannot be widened by ordinary allow rules; they are not an OS sandbox.
 
+Planning may delegate to agents. The boundary for delegated work is an
+immutable per-turn Plan read-only stamp, not the session's current phase:
+every agent turn started under Plan, in sticky Plan or directive planning,
+keeps Plan limits until it ends, and skill preparation inherits the caller's
+stamp. A Plan caller cannot steer an agent turn that lacks the stamp.
+Directive planning uses the implementation preset's tools under that stamp,
+so both kinds of planning share one tool surface apart from ApplyPatch.
+Directive Discuss keeps its separate read-only ceiling
+([ADR 0090](0090-enforce-discussion-as-a-read-only-capability.md)).
+
 Completed proposals accept an opening tag glued to preceding prose and indented
 delimiters. The opening tag still ends its line, and the closing tag occupies
 its own line. Parsing and view hiding share those rules. Automatic continuation
@@ -39,6 +49,13 @@ allows either to be used independently. The cost is an explicit accepted-plan
 handoff. Session-only working files let a planner prepare its artifacts without
 granting implementation authority over the workspace.
 
+Delegation lets a planner gather evidence in parallel and obtain an independent
+critique before proposing. Because the stamp belongs to the turn, a planning
+agent's authority cannot grow when the root workflow moves on; the cost is
+that a planning agent must be followed up from an ordinary turn before it can
+implement. Mail and results that reach an agent after Plan ends remain advisory
+text acted on under that agent's own authority.
+
 ## Decision history
 
 The September 2026 preset configuration used Astra for planning and Sol for
@@ -57,6 +74,16 @@ ADR 0067 replaced that embedded planning lifecycle with independent Plan mode;
 ordinary idle continuation. The two-revision limit and plan guardian are no
 longer Goal behavior. The recorded reason was responsibility separation and a
 smaller lifecycle, rather than a measured failure of the revision limit.
+
+Until 2026-10-09, only directive planning stamped delegated work; sticky Plan
+children were bound by the live session flag, and directive planning ran on
+the Discuss preset with delegation and Bash denied. Two gaps moved the
+decision. A sticky-Plan child still running when its proposal was accepted
+regained its role's edit tools, because the session flag cleared on
+acceptance. Directive planning had no Bash, although the Plan tool boundary
+documented read-only Bash for it, and could not delegate. Stamping every
+planning turn, guarding steering, and running directive planning on the
+implementation preset under the stamp replaced that split.
 
 The earlier ADR 0067 description also allowed Eval under ordinary permissions
 and withheld all file edits. Current Plan filtering instead excludes Eval and

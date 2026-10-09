@@ -68,6 +68,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-plan-read-only
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
@@ -77,6 +79,8 @@
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
+(declare-function mevedel-plan-read-only-p "mevedel-agents"
+                  (&optional session))
 (autoload 'copy-mevedel-agent "mevedel-agents")
 (autoload 'mevedel-agent-configuration-p "mevedel-agents")
 (autoload 'mevedel-agent-hook-rules "mevedel-agents")
@@ -85,11 +89,13 @@
 (autoload 'mevedel-agent-invocation-frozen-configuration "mevedel-agents")
 (autoload 'mevedel-agent-invocation-parent-session "mevedel-agents")
 (autoload 'mevedel-agent-invocation-path "mevedel-agents")
+(autoload 'mevedel-agent-invocation-plan-read-only "mevedel-agents")
 (autoload 'mevedel-agent-invocation-terminal-reason "mevedel-agents")
 (autoload 'mevedel-agent-invocation-transcript-relative-path "mevedel-agents")
 (autoload 'mevedel-agent-invocation-transcript-status "mevedel-agents")
 (autoload 'mevedel-agent-name "mevedel-agents")
 (autoload 'mevedel-agent-resolve-role "mevedel-agents")
+(autoload 'mevedel-plan-read-only-p "mevedel-agents")
 (autoload 'mevedel-agents-specs "mevedel-agents")
 
 ;; `mevedel-compact-evidence'
@@ -234,6 +240,23 @@
   "Return non-nil when RECORD owns one active-turn slot."
   (mevedel-agent-control-active-activity-p
    (mevedel-agent-record-activity record)))
+
+(defun mevedel-agent-control--assert-plan-steering (session path record tool)
+  "Signal unless the caller may steer PATH's RECORD in SESSION with TOOL.
+A caller under Plan read-only authority may address /root or a turn that
+is itself Plan read-only.  Mail for any other agent would act under that
+agent's own authority, now or in its next turn."
+  (when (and (mevedel-plan-read-only-p session)
+             (not (equal path "/root"))
+             (not (and (mevedel-agent-control--active-p record)
+                       (when-let* ((invocation
+                                    (mevedel-agent-record-invocation record)))
+                         (mevedel-agent-invocation-plan-read-only
+                          invocation)))))
+    (user-error
+     "%s cannot steer %s from Plan: its turn is not bound by Plan limits.  \
+Use FollowupAgent when it is idle to start a read-only turn"
+     tool path)))
 
 (defun mevedel-agent-control-settled-result (record)
   "Return RECORD's settled result plist when it is idle, or nil.
@@ -610,6 +633,10 @@ Return the resolved recipient path.  Sending never activates a turn."
   (let* ((sender (mevedel-agent-control-current-path session))
          (recipient
           (mevedel-agent-control-resolve-path session sender target)))
+    (mevedel-agent-control--assert-plan-steering
+     session recipient
+     (cdr (assoc recipient (mevedel-session-agent-registry session)))
+     "SendMessage")
     (mevedel-agent-control--enqueue
      session recipient
      (list :type 'MAIL
@@ -1092,15 +1119,18 @@ Return rollback and post-commit delivery closures for INVOCATION."
     (let ((record (cdr (assoc path
                               (mevedel-session-agent-registry session)))))
       (if (mevedel-agent-control--active-p record)
-          (mevedel-agent-control--enqueue
-           session path
-           (list :type 'MAIL
-                 :sender caller-path
-                 :recipient path
-                 :payload message
-                 :timestamp (current-time))
-           'steering)
-        (when (>= (mevedel-agent-control--active-count session)
+          (progn
+            (mevedel-agent-control--assert-plan-steering
+             session path record "FollowupAgent")
+            (mevedel-agent-control--enqueue
+             session path
+             (list :type 'MAIL
+                   :sender caller-path
+                   :recipient path
+                   :payload message
+                   :timestamp (current-time))
+             'steering))
+        (when (>=(mevedel-agent-control--active-count session)
                   (mevedel-session-agent-turn-capacity session))
           (user-error "Agent tree is at its active-turn capacity"))
         (let ((previous-result (mevedel-agent-record-settled-result record))

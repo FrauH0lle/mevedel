@@ -45,6 +45,11 @@
 (autoload 'mevedel-hooks-annotate-rules-source "mevedel-hooks")
 (autoload 'mevedel-hooks-normalize-rules "mevedel-hooks")
 
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode-active-p "mevedel-plan-mode"
+                  (&optional session))
+(autoload 'mevedel-plan-mode-active-p "mevedel-plan-mode")
+
 ;; `mevedel-presets'
 (declare-function mevedel-preset--resolved-metadata
                   "mevedel-presets" (name))
@@ -373,9 +378,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   (transcript-status nil :type (or null symbol))
   (sidecar-dirty nil :type boolean)
   ;; Rules accumulate across nested skills (additive); model/effort are
-  ;; last-writer-wins. Forks are seeded from
-  ;; parent's currently active rules + the fork skill's own rules at spawn time;
-  ;; later additions on either side do not propagate.
+  ;; last-writer-wins.  A fork starts with only the fork skill's own rules;
+  ;; the parent's request rules never propagate to a child.
   (skill-permission-rules nil :type list)
   frozen-configuration
   ;; Skill-scoped selector, stored as (:tier TIER) or (:backend BACKEND :model
@@ -431,6 +435,19 @@ and render-data markers are runtime-only caches for cheap live updates."
       (and mevedel--agent-invocation
            (mevedel-agent-invocation-plan-read-only
             mevedel--agent-invocation))))
+
+(defun mevedel-plan-read-only-p (&optional session)
+  "Return non-nil when the ambient caller works under Plan read-only authority.
+That is either the immutable request or invocation stamp, or the live sticky
+Plan flag of SESSION.  SESSION defaults to the current buffer's session, else
+the ambient agent invocation's root session."
+  (or (mevedel-plan-read-only-request-p)
+      (mevedel-plan-mode-active-p
+       (or session
+           (and (boundp 'mevedel--session) mevedel--session)
+           (and mevedel--agent-invocation
+                (mevedel-agent-invocation-parent-session
+                 mevedel--agent-invocation))))))
 
 (defun mevedel-plan-directive-p (&optional session request)
   "Return non-nil when Plan authority belongs to directive planning."

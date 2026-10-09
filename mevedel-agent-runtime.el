@@ -833,7 +833,7 @@ plist carrying either `:turn' and `:start-hook-audits' or `:error'."
           (mevedel-agent-invocation-parent-turn invocation)
           (and session (mevedel-current-turn session))
           (mevedel-agent-invocation-plan-read-only invocation)
-          (mevedel-plan-read-only-request-p))
+          (mevedel-plan-read-only-p session))
     (when skill-permission-rules
       (setf (mevedel-agent-invocation-skill-permission-rules invocation)
             skill-permission-rules))
@@ -997,7 +997,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
           (mevedel-agent-invocation-goal-owner invocation)
           (mevedel-goal-accounting-owner parent-buffer)
           (mevedel-agent-invocation-plan-read-only invocation)
-          (mevedel-plan-read-only-request-p)
+          (mevedel-plan-read-only-p session)
           (mevedel-agent-invocation-parent-tool-use-id invocation)
           parent-tool-use-id
           (mevedel-agent-invocation-sandbox-summary-cell invocation)

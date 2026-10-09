@@ -556,13 +556,22 @@ It rejects any ordinary, shared, memory, or bare endpoint before local
 materialization, including mixed local/ordinary and ordinary-only calls, while
 other edit tools and `Eval` remain unavailable.
 
-Directive planning additionally stamps immutable read-only authority on the
-root request and copies it into every delegated invocation and nested request.
-Those agents retain Plan tool and Bash restrictions after the root workflow
-advances to approval or implementation; mutable session phase is not an
-authority boundary. Unlike standalone/sticky Plan mode, directive Planning
-remains strictly read-only: its requests and retained agents cannot use
-`ApplyPatch`, including session-only proposals, or `Eval`.
+Every agent turn started under Plan carries immutable Plan read-only
+authority: directive planning stamps its root request, and a spawn or
+follow-up made while sticky Plan is active stamps the new invocation. The
+stamp is copied into every nested invocation and request, including forked
+skills and their preparation. Those turns keep Plan tool and Bash restrictions
+after the root workflow advances to approval or implementation, or the user
+leaves Plan; mutable session phase is not an authority boundary. Unlike
+standalone/sticky Plan mode, directive Planning denies `ApplyPatch`, including
+session-only proposals, to its requests and retained agents. `Eval` is
+unavailable in both.
+
+A caller with Plan authority cannot direct a turn that lacks it.
+FollowupAgent on an active agent and SendMessage require the target's current
+turn to be Plan read-only; SendMessage to `/root` is always accepted.
+FollowupAgent on an idle agent starts a stamped turn. See
+[Plan mode](plan-mode.md#tool-boundary).
 
 Delegated invocation/request rules may narrow authority and may allow ordinary
 known-safe commands, but they cannot authorize dangerous or complex Bash, live

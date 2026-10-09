@@ -1144,7 +1144,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                        (mevedel-tool-fs--register)
                        (mevedel-tool-patch-register)
                        (mevedel-tool-exec--register)
-                       (mevedel-tool-goal--register))
+                       (mevedel-tool-goal--register)
+                       (mevedel-tool-ui--register))
    :after-each (mevedel-tool-clear-registry))
   ,test
   (test)
@@ -1298,7 +1299,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          (tools (mapcar (lambda (name)
                           (mevedel-tool-gptel-tool
                            (mevedel-tool-get name "mevedel")))
-                        '("Read" "ApplyPatch" "Eval"))))
+                        '("Read" "ApplyPatch" "Eval" "Bash" "Agent"))))
     (unwind-protect
         (progn
           (with-current-buffer buf
@@ -1307,7 +1308,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                          :plan-read-only t :directive-uuid "d1")))
           (plist-put (gptel-fsm-info fsm) :tools tools)
           (mevedel-tools--handle-plan-tool-filter fsm)
-          (should (equal '("Read")
+          ;; Directive planning keeps read-only Bash and delegation.
+          (should (equal '("Read" "Bash" "Agent")
                          (mapcar #'gptel-tool-name
                                  (plist-get (gptel-fsm-info fsm) :tools))))
           (with-current-buffer buf
@@ -1315,7 +1317,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (mevedel-request--create :plan-read-only nil)))
           (plist-put (gptel-fsm-info fsm) :tools tools)
           (mevedel-tools--handle-plan-tool-filter fsm)
-          (should (equal '("Read" "ApplyPatch" "Eval")
+          (should (equal '("Read" "ApplyPatch" "Eval" "Bash" "Agent")
                          (mapcar #'gptel-tool-name
                                  (plist-get (gptel-fsm-info fsm) :tools)))))
       (kill-buffer buf))))

@@ -24,6 +24,8 @@
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-plan-read-only-p "mevedel-agents"
+                  (&optional session))
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-bash-analysis'
@@ -69,10 +71,6 @@
 (declare-function mevedel-permission-rules-resource-granted-p
                   "mevedel-permission-rules"
                   (path access grants &optional recursive))
-
-;; `mevedel-permissions'
-(declare-function mevedel-permission--plan-mode-p
-                  "mevedel-permissions" (&optional session))
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-mode-effective
@@ -783,7 +781,7 @@ authorize dangerous or complex syntax."
         (cl-return-from mevedel-bash-policy-check-permission
           (decide 'deny 'rule)))
 
-      (when (and (mevedel-permission--plan-mode-p
+      (when (and (mevedel-plan-read-only-p
                   (plist-get permission-context :session))
                  (not (eq class 'read-only)))
         (cl-return-from mevedel-bash-policy-check-permission

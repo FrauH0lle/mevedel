@@ -392,7 +392,35 @@ allowed-tools:
         (funcall settle 'first)
         (should (eq previous mevedel--current-request))
         (funcall settle 'second)
-        (should (equal '(first) outcomes))))))
+        (should (equal '(first) outcomes)))))
+
+  :doc "keeps the caller's Plan read-only authority for preparation commands"
+  (let ((session (mevedel-skills-test--make-session)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create
+                   :path "/root/explore" :parent-session session
+                   :plan-read-only t))
+      (let ((settle (mevedel-skills--preparation-settler
+                     session nil nil #'ignore)))
+        (should-not mevedel--agent-invocation)
+        (should (mevedel-request-plan-read-only mevedel--current-request))
+        (should (mevedel-plan-read-only-p session))
+        (funcall settle 'done)
+        (should (mevedel-agent-invocation-plan-read-only
+                 mevedel--agent-invocation))))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setf (mevedel-session-plan-mode session) t)
+      (mevedel-skills--preparation-settler session nil nil #'ignore)
+      (should (mevedel-request-plan-read-only mevedel--current-request)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setf (mevedel-session-plan-mode session) nil)
+      (mevedel-skills--preparation-settler session nil nil #'ignore)
+      (should-not (mevedel-request-plan-read-only
+                   mevedel--current-request)))))
 
 (mevedel-deftest mevedel-skills--preparation-success-outcome ()
   ,test

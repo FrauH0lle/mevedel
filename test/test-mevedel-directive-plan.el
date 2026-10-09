@@ -473,7 +473,7 @@
 
 (mevedel-deftest mevedel-directive-plan-start
   (:vars ((mevedel-action-preset-alist
-           '((discuss . (:system "plan"))
+           '((discuss . (:system "discuss"))
              (implement . (:system "implement"))))))
   ,test
   (test)
@@ -537,7 +537,9 @@
                                "## Assumptions\n- None.\n"
                                "</proposed_plan>"))
                              (fsm (gptel-make-fsm)))
-                        (should (equal '(:system "plan") preset))
+                        ;; Planning uses the implementation tools; its
+                        ;; request's Plan stamp bounds them.
+                        (should (equal '(:system "implement") preset))
                         (should (string-search "Source context" planning-prompt))
                         (setf (mevedel-directive-planning record)
                               (append

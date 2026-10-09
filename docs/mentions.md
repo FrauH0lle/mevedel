@@ -49,9 +49,9 @@ across sessions. These remain tool targets; `@file` and `@mcp` attach,
 user `$skill` invokes or attaches, authored `!$skill` requires instruction
 context, and `@agent` delegates. Standalone/sticky Plan mode permits
 session-only `ApplyPatch` there, while an ordinary, shared, memory, or bare endpoint is
-denied before the namespace can be materialized. Directive Planning has a
-separate strictly read-only boundary and does not allow `ApplyPatch`, including
-session-only proposals, or `Eval`.
+denied before the namespace can be materialized. Directive Planning does not
+allow `ApplyPatch` there, including session-only proposals; `Eval` is
+unavailable in both.
 
 `mevedel-mention-bindings.el` owns the shared atomic binding lifecycle for
 skills, direct references, files, and MCP resources. Kind-specific discovery,
