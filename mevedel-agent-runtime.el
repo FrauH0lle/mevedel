@@ -529,7 +529,7 @@
                session (concat "agent:" (mevedel-agent-invocation-agent-id invocation))
                (mevedel-recovery-category (and (stringp detail) detail))
                (format "Agent %s failed; inspect its transcript before continuing"
-                       (mevedel-agent-invocation-agent-id invocation)) nil)))
+                       (mevedel-agent-invocation-require-path invocation)) nil)))
           (let ((mevedel-agent-runtime--defer-terminal-publication-p
                  terminal-publication-p))
             (mevedel-agent-runtime--finalize invocation status))
@@ -982,6 +982,12 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
          (invocation (mevedel-agent-invocation-create agent))
          (parent-buffer (current-buffer))
          (session (and (boundp 'mevedel--session) mevedel--session))
+         (previous-issue
+          (and session retained-p
+               (cl-find (concat "agent:" agent-id)
+                        (mevedel-session-recovery-issues session)
+                        :key (lambda (issue) (plist-get issue :id))
+                        :test #'equal)))
          publication-ready)
     (unless (mevedel-session-p session)
       (error "Agent requires an active mevedel session"))
@@ -1095,6 +1101,24 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                   (mevedel-view-agent-live-transcript-start invocation))
                 (setq published-p t
                       publication-ready t)
+                ;; Equal failure notices are deduplicated.  A synchronous
+                ;; terminal error can therefore retain the old issue object
+                ;; while its callback waits for publication; do not clear it.
+                (let ((pending (mevedel-agent-invocation-runtime-pending-response
+                                invocation)))
+                  (when (and previous-issue
+                             (not (plist-get previous-issue :blocking))
+                             (memq previous-issue
+                                   (mevedel-session-recovery-issues session))
+                             (not (memq
+                                   (mevedel-agent-invocation-transcript-status invocation)
+                                   '(error aborted)))
+                             (not (and (listp pending)
+                                       (memq (plist-get (plist-get pending :event)
+                                                        :mevedel-agent-terminal-status)
+                                             '(error aborted)))))
+                    (mevedel-recovery-clear session (plist-get previous-issue :id))
+                    (mevedel-recovery-save session)))
                 (when (fboundp 'mevedel-telemetry-record)
                   (mevedel-telemetry-record
                    session 'agent-request-sent

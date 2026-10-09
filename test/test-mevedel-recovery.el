@@ -29,6 +29,53 @@
     (should (equal '("preset") (mapcar (lambda (issue) (plist-get issue :id))
                                        (mevedel-session-recovery-issues session))))))
 
+(mevedel-deftest mevedel-recovery-dismiss ()
+  ,test
+  (test)
+  :doc "dismissal removes only the notice and schedules a save"
+  (let* ((issue '(:id "agent:a" :message "Failed" :blocking nil))
+         (blocker '(:id "authentication" :message "Sign in" :blocking t))
+         (session (mevedel-session--create :authority-mode 'pid-lock
+                   :recovery-issues (list issue blocker)))
+         saved)
+    (cl-letf (((symbol-function 'mevedel-recovery-save)
+               (lambda (session) (setq saved session))))
+      (should (mevedel-recovery-dismiss session issue))
+      (should (eq session saved))
+      (should (equal (list blocker) (mevedel-session-recovery-issues session)))
+      (should-not (mevedel-recovery-dismiss session issue))))
+
+  :doc "blockers cannot be dismissed"
+  (let* ((issue '(:id "authentication" :message "Sign in" :blocking t))
+         (session (mevedel-session--create :recovery-issues (list issue))))
+    (should-not (mevedel-recovery-dismiss session issue))
+    (should (eq issue (mevedel-recovery-blocker session))))
+
+  :doc "a stale action cannot remove a replacement with the same id"
+  (let* ((old (list :id "agent:a" :message "Failed" :blocking nil))
+         (new (copy-sequence old))
+         (session (mevedel-session--create :recovery-issues (list new))))
+    (should-not (mevedel-recovery-dismiss session old))
+    (should (eq new (car (mevedel-session-recovery-issues session)))))
+
+  :doc "a replacement during authority admission is not dismissed"
+  (let* ((issue (list :id "agent:a" :message "Failed" :blocking nil))
+         (session (mevedel-session--create :recovery-issues (list issue))))
+    (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-new-mutation-authority)
+               (lambda (session)
+                 (mevedel-recovery-report session "agent:a" 'request "Failed again" nil))))
+      (should-not (mevedel-recovery-dismiss session issue))
+      (should (equal "Failed again"
+                     (plist-get (car (mevedel-session-recovery-issues session)) :message)))))
+
+  :doc "quiescing sessions reject dismissal without changing the notice"
+  (let* ((issue '(:id "agent:a" :message "Failed" :blocking nil))
+         (session (mevedel-session--create
+                   :recovery-issues (list issue)
+                   :control-transfer '(:state quiescing))))
+    (should-error (mevedel-recovery-dismiss session issue) :type 'user-error)
+    (should (eq issue (car (mevedel-session-recovery-issues session))))))
+
 (mevedel-deftest mevedel-recovery-category ()
   (progn
     (should (eq 'model (mevedel-recovery-category "Unavailable" "model_not_found")))

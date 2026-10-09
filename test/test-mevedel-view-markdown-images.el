@@ -12,6 +12,28 @@
 (require 'mevedel-view)
 (require 'mevedel-view-markdown)
 
+(mevedel-deftest mevedel-view--put-image-display ()
+  ,test
+  (test)
+  :doc "default previews use half the previous 600-pixel width"
+  (let ((file (make-temp-file "mevedel-image-preview-" nil ".png"))
+        (mevedel-view-inline-image-max-width
+         (eval (car (get 'mevedel-view-inline-image-max-width 'standard-value)) t)))
+    (unwind-protect
+        (with-temp-buffer
+          (insert file)
+          (cl-letf (((symbol-function 'display-images-p)
+                     (lambda (&optional _display) t))
+                    ((symbol-function 'create-image)
+                     (lambda (path &rest args)
+                       (list 'image :file path
+                             :max-width (plist-get args :max-width)))))
+            (mevedel-view--put-image-display (point-min) (point-max) file)
+            (let ((spec (cdr (get-text-property (point-min) 'display))))
+              (should (equal file (plist-get spec :file)))
+              (should (eql 300 (plist-get spec :max-width))))))
+      (delete-file file))))
+
 (mevedel-deftest mevedel-view--image-sizing ()
   ,test
   (test)

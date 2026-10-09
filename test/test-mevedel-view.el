@@ -41,6 +41,47 @@
 ;;
 ;;; Activation
 
+(mevedel-deftest mevedel-view--status-recovery-body ()
+  ,test
+  (test)
+  :doc "blocking notices do not offer dismissal"
+  (should (equal "Sign in"
+                 (mevedel-view--status-recovery-body
+                  (mevedel-session--create)
+                  '(:message "Sign in" :blocking t))))
+
+  :doc "dismissal through the rendered control preserves the draft and agent result"
+  (mevedel-view-test--with-buffers
+    (let* ((record (mevedel-agent-record--create
+                    :path "/root/explore" :settled-outcome 'errored
+                    :settled-result "Provider failed"))
+           (session (mevedel-session--create
+                     :name "main" :root-buffer data-buf
+                     :authority-mode 'pid-lock
+                     :agent-registry (list (cons "/root/explore" record)))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (point-max))
+        (insert "> first line\nsecond line")
+        (backward-char 4)
+        (let ((offset (- (point) (mevedel-view--input-start))))
+          (mevedel-recovery-report session "agent:a" 'request "Agent failed" nil)
+          (should (= offset (- (point) (mevedel-view--input-start))))
+          (should (equal "> first line\nsecond line" (mevedel-view--input-text))))
+        (goto-char (point-min))
+        (search-forward "[Dismiss]")
+        (backward-char 2)
+        (should (get-text-property (point) 'read-only))
+        (should (button-at (point)))
+        (call-interactively (key-binding (kbd "RET")))
+        (should-not (mevedel-session-recovery-issues session))
+        (should-not (string-search "Agent failed" (buffer-string)))
+        (should (equal "> first line\nsecond line" (mevedel-view--input-text))))
+      (should (eq 'errored (mevedel-agent-record-settled-outcome record)))
+      (should (equal "Provider failed" (mevedel-agent-record-settled-result record))))))
+
 (mevedel-deftest mevedel-view-activate-at-point
   (:doc "mouse activation reads properties from the clicked window")
   (let ((target (generate-new-buffer " *test-click-target*"))

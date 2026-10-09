@@ -22,6 +22,7 @@
 
 ;;; Code:
 
+(require 'button)
 (require 'cl-lib)
 (require 'mevedel-execution)
 (require 'mevedel-theme-faces)
@@ -99,6 +100,10 @@
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
+
+;; `mevedel-recovery'
+(declare-function mevedel-recovery-dismiss "mevedel-recovery" (session issue))
+(autoload 'mevedel-recovery-dismiss "mevedel-recovery")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts--segment-tail-prompt-count
@@ -301,7 +306,7 @@
 ;;
 ;;; Customization
 
-(defcustom mevedel-view-inline-image-max-width 600
+(defcustom mevedel-view-inline-image-max-width 300
   "Maximum width for inline images rendered in the view.
 A positive integer is a fixed pixel width.  A float in (0, 1] sizes
 each image to that fraction of the displaying window's pixel width
@@ -1791,13 +1796,32 @@ the editable composer signal instead of settling queued interactions."
           :task-active-p task-active-p
           :task-body task-body)))
 
+(defun mevedel-view--status-recovery-body (session issue)
+  "Return ISSUE's notice text and a dismissal control for SESSION.
+Blocking issues have no dismissal control.  The action captures this exact
+issue, so a stale control cannot dismiss a later failure with the same id."
+  (concat
+   (plist-get issue :message)
+   (unless (plist-get issue :blocking)
+     (concat
+      "  "
+      (make-text-button
+       "[Dismiss]" nil
+       'follow-link t
+       'help-echo "Dismiss this notice; the failure remains in the transcript"
+       'action (lambda (_button) (mevedel-recovery-dismiss session issue)))))))
+
 (defun mevedel-view--status-fragments (model)
   "Return status fragments for MODEL."
   (let (fragments)
     (when-let* ((session (plist-get model :session))
                 (issues (mevedel-session-recovery-issues session)))
       (push (list :namespace 'status :id 'recovery :priority 120
-                  :body (mapconcat (lambda (issue) (plist-get issue :message)) issues "\n"))
+                  :body (mapconcat
+                         (lambda (issue)
+                           (mevedel-view--status-recovery-body session issue))
+                         issues "\n")
+                  :keymap (mevedel-view--display-fragment-keymap))
             fragments))
     (when-let* ((body (plist-get model :task-body)))
       (let ((fragment (list :namespace 'status

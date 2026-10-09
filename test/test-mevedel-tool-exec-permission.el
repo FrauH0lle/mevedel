@@ -1749,6 +1749,33 @@ full escalation prompts without a directly authored qualified rule"
     (should (eq 'require-escalated
                 (plist-get entry :sandbox-permissions)))
     (should (eq 'allow outcome)))
+  :doc "SSH host retry approval: allow-once does not authorize a later invocation"
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "ssh-host-retry"
+                   :sandbox-mode 'required))
+         (mevedel--session session)
+         (mevedel-permission-mode 'edits)
+         (mevedel-permission-rules nil)
+         (args '(:command "ssh -G localhost"
+                         :sandbox_permissions "require_escalated"
+                         :justification "Confirmed system SSH owner UID mapping failure"))
+         entries outcomes)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (push entry entries)
+                 (funcall (plist-get entry :callback)
+                          (if (= (length entries) 1) 'allow-once 'deny-once)))))
+      (dotimes (_ 2)
+        (mevedel-tool-exec-permission-check-bash-async
+         nil args (lambda (result) (push result outcomes)))))
+    (should (equal '(deny allow) outcomes))
+    (should (= 2 (length entries)))
+    (dolist (entry entries)
+      (should (eq 'sandbox (plist-get entry :kind)))
+      (should (eq 'require-escalated (plist-get entry :sandbox-permissions)))
+      (should (equal "ssh -G localhost" (plist-get entry :detail))))
+    (should-not (mevedel-session-permission-rules session))
+    (should-not (mevedel-session-resource-grants session)))
   :doc "sandbox off:
 full escalation adds no boundary prompt but ordinary command authority remains"
   (let* ((session (mevedel-session--create

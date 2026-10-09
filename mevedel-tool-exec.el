@@ -269,6 +269,25 @@ operation rather than a successful or semantic non-error result."
             "Confinement is required but unavailable. Only a new invocation "
             "with `require_escalated` and a justification can request direct "
             "execution."))
+          ((and failed-p (eq (plist-get facts :sandbox) 'bubblewrap)
+                (string-match-p
+                 (concat "^Bad owner or permissions on /etc/ssh/ssh_config"
+                         "\\(?:\\.d/[^\r\n]+\\)?\r?$")
+                 (or text "")))
+           (concat
+            "OpenSSH rejected system SSH configuration ownership. "
+            "Bubblewrap's user namespace can map host root-owned files to "
+            "the overflow UID (often 65534); read access does not make that "
+            "owner acceptable to OpenSSH. This diagnostic alone does not "
+            "prove a namespace cause: compare ownership and a non-connecting "
+            "`ssh -G` check on the host. Network or exact-path grants do not "
+            "change UID mapping. If confirmed and the operation is still "
+            "needed, submit a new Bash invocation with `require_escalated` "
+            "and a justification, requesting invocation-only approval to run "
+            "on the execution target outside confinement. Command approval "
+            "still applies; no retry is automatic. Keep SSH ownership and "
+            "configuration checks intact; do not bypass configuration or "
+            "change its permissions to work around the namespace."))
           ((and failed-p (eq (plist-get facts :sandbox) 'bubblewrap))
            mevedel-tool-exec--sandbox-recovery-guidance))))
        "\n\n")))))
