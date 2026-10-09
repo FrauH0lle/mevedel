@@ -202,6 +202,12 @@ flowchart TD
 The transcript supplies history; session state and interaction descriptors
 supply the surrounding controls. Each redraw preserves the user-owned composer.
 
+Informational recovery notices offer a **Dismiss** control. It removes only
+that notice, not the failure's retained agent result or transcript. Blocking
+issues have no dismissal control. A successful retained-agent retry clears
+that agent's previous notice; refused retries and other agents' notices remain.
+These changes preserve an active composer draft, including multiline input.
+
 Full rerenders parse the data buffer through
 `mevedel-transcript-segments`, after skipping gptel-org leading
 metadata and any leading compaction summary. `mevedel-view.el` owns the
@@ -1451,7 +1457,7 @@ Markdown rendering adds small view-only affordances:
   writes or the mutable fixed-path cache, while PID-lock sessions read their
   authoritative fixed logical file.
   `mevedel-view-inline-image-max-width` takes a fixed pixel width
-  (default 600) or a float in (0, 1] meaning a fraction of the
+  (default 300) or a float in (0, 1] meaning a fraction of the
   displaying window's pixel width; ratio-sized images retain their path,
   ratio, and measured width and are re-scaled by the realignment job below;
 - canonical pipe tables (two or more consecutive `|...|` rows outside

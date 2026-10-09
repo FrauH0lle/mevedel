@@ -57,6 +57,30 @@ execution under its configured best-effort preference. Full Access already
 authorizes unrestricted execution without a separate escalation request. Direct
 results disclose that boundary; it does not expand the user's task scope.
 
+### System SSH configuration ownership failures
+
+A failed confined command reporting `Bad owner or permissions on
+/etc/ssh/ssh_config` or an included file under `/etc/ssh/ssh_config.d/` receives
+a targeted explanation. Bubblewrap uses a user namespace: host root-owned files
+can appear owned by the overflow UID (often 65534), which OpenSSH rejects even
+though the files are readable. A read-only bind of `/` preserves access, not the
+host UID mapping. Additional network or exact-path grants cannot fix that mapping.
+
+The diagnostic is a clue, not proof: compare the configuration's owner on the
+host and inside confinement, and use `ssh -G HOST` to check configuration without
+connecting or pushing. A genuine host-side ownership problem still needs its own
+diagnosis. Do not disable SSH ownership checks, bypass configuration with `ssh -F`,
+or change file permissions as a namespace workaround.
+
+For a confirmed namespace failure, if the operation is still authorized and
+needed, submit a **new** Bash call with `sandbox_permissions="require_escalated"`
+and a justification describing the ownership mismatch. Request invocation-only
+approval through the existing permission card. That approved call runs directly
+on the execution target, with ordinary SSH configuration and ownership checks;
+command approval still applies. No automatic retry, saved SSH-specific authority,
+or change to the sandbox's UID mapping is introduced. Inspect any prior effects
+before repeating an operation.
+
 ## Yielding, polling, and input
 
 Bash waits for `yield_time_ms`, then returns an `execution_id` if still running.

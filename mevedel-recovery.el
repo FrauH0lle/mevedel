@@ -11,8 +11,9 @@
 ;; A blocking issue refuses root requests.  Only owners that also re-check and
 ;; clear their issue report one: provider readiness ("authentication"), preset
 ;; restore ("preset") and saved-model restore ("model").  Every other issue is
-;; informational and lasts until the next root request starts, which is the
-;; user's retry.
+;; informational and lasts until dismissed or the next root request starts,
+;; which is the user's retry.  Retrying a retained agent also clears that
+;; agent's previous notice once dispatch succeeds.
 
 ;;; Code:
 
@@ -27,7 +28,9 @@
 (declare-function mevedel-collaboration-recovery-refresh "mevedel-collaboration-recovery" (buffer))
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority "mevedel-session-artifacts" (session))
 (declare-function mevedel-session-artifacts-save-agent-registry "mevedel-session-artifacts" (session buffer))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save-agent-registry "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
@@ -84,6 +87,22 @@ MESSAGE contains no credentials.  Return non-nil when the issues changed."
   (apply #'mevedel-recovery-clear session
          (cl-loop for row in (mevedel-session-recovery-issues session)
                   unless (plist-get row :blocking) collect (plist-get row :id))))
+
+(defun mevedel-recovery-dismiss (session issue)
+  "Dismiss the exact informational ISSUE in SESSION and save the change.
+Never dismiss a blocker or a replacement issue with the same id.  Return
+non-nil when the notice was removed; retained results and transcripts stay
+unchanged.  Session mutation authority is checked at activation time."
+  (when (and (memq issue (mevedel-session-recovery-issues session))
+             (not (plist-get issue :blocking)))
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
+    ;; Admission may consult a remote target.  Revalidate the exact notice
+    ;; after it returns rather than clear a replacement by id.
+    (when (and (memq issue (mevedel-session-recovery-issues session))
+               (not (plist-get issue :blocking))
+               (mevedel-recovery-clear session (plist-get issue :id)))
+      (mevedel-recovery-save session)
+      t)))
 
 (defun mevedel-recovery-blocker (session)
   "Return SESSION's first execution-blocking issue, or nil."

@@ -941,6 +941,35 @@
      "ok" '(:sandbox-facts
             (:sandbox bubblewrap :filesystem workspace-write :network isolated)))
     "ok\n\n[sandbox: bubblewrap; filesystem: workspace-write; network: isolated]"))
+  :doc "system SSH ownership failure: explains namespace mapping and an approved fresh retry"
+  (dolist (path '("/etc/ssh/ssh_config"
+                  "/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf"))
+    (let* ((output (format "Bad owner or permissions on %s\n" path))
+           (text (mevedel-tool-exec--sandbox-disclosure
+                  output '(:sandbox-facts (:sandbox bubblewrap)) nil t)))
+      (should (string-prefix-p output text))
+      (should (string-search "overflow UID (often 65534)" text))
+      (should (string-search "does not prove a namespace cause" text))
+      (should (string-search "`ssh -G`" text))
+      (should (string-search "grants do not change UID mapping" text))
+      (should (string-search "`require_escalated`" text))
+      (should (string-search "invocation-only approval" text))
+      (should (string-search "no retry is automatic" text))
+      (should (string-search "Keep SSH ownership" text))
+      (should-not (string-search mevedel-tool-exec--sandbox-recovery-guidance text))))
+  :doc "system SSH ownership hint: stays scoped to a failed confined system-config diagnostic"
+  (dolist (case '(("Bad owner or permissions on /home/user/.ssh/config\n" bubblewrap t nil)
+                  ("Bad owner or permissions on /etc/ssh/ssh_config-other\n" bubblewrap t nil)
+                  ("quoted: Bad owner or permissions on /etc/ssh/ssh_config\n" bubblewrap t nil)
+                  ("Permission denied (publickey).\n" bubblewrap t nil)
+                  ("Bad owner or permissions on /etc/ssh/ssh_config\n" escalated t nil)
+                  ("Bad owner or permissions on /etc/ssh/ssh_config\n" bubblewrap nil nil)
+                  ("Bad owner or permissions on /etc/ssh/ssh_config\n" bubblewrap t t)))
+    (pcase-let ((`(,output ,sandbox ,failed ,suppressed) case))
+      (let ((text (mevedel-tool-exec--sandbox-disclosure
+                   output `(:sandbox-facts (:sandbox ,sandbox)) suppressed failed)))
+        (should (string-prefix-p output text))
+        (should-not (string-search "overflow UID" text)))))
   :doc "authority preparation refusal:
 invalid grants retain the specific reason and do not prescribe full escalation"
   (let ((text

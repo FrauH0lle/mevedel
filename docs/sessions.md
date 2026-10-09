@@ -1409,7 +1409,12 @@ them as blocking: Codex login, a missing preset (cleared by applying any
 preset) and a saved model with no available fallback (cleared by selecting a
 model). Blocking issues refuse root requests. Provider failures, failed agents,
 naming, effort and fallback notices are informational; the next root request
-clears them, because that request is the retry. Only a structured
+clears them, because that request is the retry. Informational notices also have
+a **Dismiss** control in the local view, and successful retained-agent dispatch
+clears only that agent's previous notice. Dismissal checks current session
+mutation authority and uses the coalesced sidecar save; it does not erase the
+retained terminal result or transcript. Blocking issues cannot be dismissed.
+Only a structured
 model-not-found signal (provider code or HTTP 404) moves a session to
 `mevedel-model-fallback-provider` or the host default, with a visible notice.
 

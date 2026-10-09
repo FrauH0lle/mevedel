@@ -221,6 +221,53 @@
         (mevedel-agent-runtime-test--agent)
         "Explore" "Inspect files" :path "/root/explore"))))
 
+  :doc "a synchronous same-message retry failure retains its newly reported notice"
+  (let* ((parent (generate-new-buffer " *agent-retry-parent*"))
+         (child (generate-new-buffer " *agent-retry-child*"))
+         (session (mevedel-session--create :name "main" :authority-mode 'pid-lock))
+         (agent (mevedel-agent-runtime-test--agent))
+         (configuration (mevedel-agent-runtime-test--configuration agent))
+         retry)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (mevedel-recovery-report
+           session "agent:explorer--test" 'request
+           "Agent /root/explore failed; inspect its transcript before continuing" nil)
+          (cl-letf (((symbol-function 'mevedel-agent-conversation-save)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'mevedel-agent-runtime--finalize)
+                     (lambda (invocation status)
+                       (setf (mevedel-agent-invocation-transcript-status invocation)
+                             status)))
+                    ((symbol-function 'run-at-time)
+                     (lambda (_seconds _repeat callback &rest _args)
+                       (setq retry callback)))
+                    ((symbol-function 'mevedel-agent-exec-run)
+                     (lambda (callback role description invocation _buffer)
+                       (funcall
+                        (mevedel-agent-exec--make-callback
+                         callback role description nil (list nil))
+                        nil (list :error "Provider failed"
+                                  :mevedel-agent-invocation invocation))
+                       'provider-fsm)))
+            (let ((invocation
+                   (mevedel-agent-runtime-dispatch
+                    nil "Retry" "Continue"
+                    :path "/root/explore" :frozen-configuration configuration
+                    :retained-id "explorer--test" :retained-buffer child
+                    :retained-transcript "agents/explorer.chat.org")))
+              (should retry)
+              (should (eq 'error (mevedel-agent-invocation-transcript-status invocation)))
+              (should (= 1 (length (mevedel-session-recovery-issues session))))
+              ;; The callback retries after publication; it must not lose the
+              ;; notice while that delivery is pending or after settlement.
+              (funcall retry)
+              (should (mevedel-agent-invocation-runtime-settled-p invocation))
+              (should (= 1 (length (mevedel-session-recovery-issues session)))))))
+      (kill-buffer child)
+      (kill-buffer parent)))
+
   :doc "starts one fresh asynchronous turn and settles its callback once"
   (let* ((parent (generate-new-buffer " *agent-runtime-parent*"))
          (agent-buffer (generate-new-buffer " *agent-runtime-child*"))
@@ -610,6 +657,8 @@
     (unwind-protect
         (with-current-buffer parent
           (setq-local mevedel--session session)
+          (mevedel-recovery-report session "agent:explorer--test" 'request "Old failure" nil)
+          (mevedel-recovery-report session "agent:other" 'request "Other failure" nil)
           (let ((mevedel-user-prompt-submit-functions
                  (list
                   (lambda (_event)
@@ -622,6 +671,7 @@
             (cl-letf
                 (((symbol-function 'mevedel-agent-conversation-save)
                   (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-recovery-save) #'ignore)
                  ((symbol-function 'mevedel-agent-exec-run)
                   (lambda (_callback _role _description invocation buffer)
                     (with-current-buffer buffer
@@ -638,6 +688,7 @@
                 :retained-buffer agent-buffer
                 :retained-transcript "agents/explorer.chat.org"
                 :on-hook-context (lambda (entries) (setq pending entries))))
+              (should (= 2 (length (mevedel-session-recovery-issues session))))
               (with-current-buffer agent-buffer
                 (should-not (string-match-p "Blocked task" (buffer-string))))
               (should pending)
@@ -650,6 +701,9 @@
                :retained-transcript "agents/explorer.chat.org"
                :pending-hook-context pending
                :on-hook-context (lambda (entries) (setq pending entries)))
+              (should (equal '("agent:other")
+                             (mapcar (lambda (issue) (plist-get issue :id))
+                                     (mevedel-session-recovery-issues session))))
               (should-not pending)
               (should (string-match-p "Rewritten accepted task"
                                       provider-prompt))

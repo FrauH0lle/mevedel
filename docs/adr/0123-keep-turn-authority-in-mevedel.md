@@ -120,7 +120,9 @@ without changing permission or sandbox authority.
 Only owners that re-check an issue report it as blocking: Codex login, preset
 restore and saved-model restore, each clearing only its own issue. Request,
 agent and other failures are informational and cleared by the next root
-request, which is the user's retry; retained agents never touch root recovery.
+request, which is the user's retry. Informational notices can also be dismissed
+explicitly, without erasing results or transcripts. A successful retained-agent
+retry clears only its own previous notice; other root recovery remains untouched.
 Authentication recovery uses asynchronous Codex refresh/device login and the
 Claude CLI's subscription login/status interfaces. Credentials remain local;
 owner peers receive ephemeral URL/code challenges. Unsent input survives a clean
@@ -173,6 +175,12 @@ Receipt establishes SDK acceptance, not model understanding or retention
 through later compaction.
 
 ## Decision history
+
+- **Notice lifetime:** waiting for the next root request left a child failure
+  banner visible throughout a long-running turn, even after work continued.
+  Informational notices now allow explicit dismissal and clear the child's
+  old notice after its retry dispatch succeeds. Blocking issues remain owned
+  by their recovery checks, and failure evidence remains in retained results.
 
 - **Steering:** busy Claude input first became queued follow-ups, because the
   native loop offered no same-turn user input mevedel could observe. The
