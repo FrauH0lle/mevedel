@@ -76,6 +76,52 @@
         (should (equal '(".gitignore" "src/main.py")
                        (mevedel-collaboration-files--listing root)))))))
 
+(defun mevedel-collaboration-files-test--git-init (dir)
+  "Make DIR a Git repository."
+  (make-directory dir t)
+  (let ((default-directory dir))
+    (should (zerop (call-process "git" nil nil nil "init" "--quiet")))))
+
+(mevedel-deftest mevedel-collaboration-files--nested-repositories
+  (:doc "lists untracked nested Git repositories by their own rules")
+  (mevedel-collaboration-files-test--with-root root
+    (mevedel-collaboration-files-test--git-init root)
+    (mevedel-collaboration-files-test--write root ".gitignore" "ignored/\n")
+    (mevedel-collaboration-files-test--write root "top.txt")
+    (mevedel-collaboration-files-test--write root "plain/b.txt")
+    ;; A reference clone, with its own ignores, workspace state and a
+    ;; clone nested in it in turn.
+    (mevedel-collaboration-files-test--git-init
+     (file-name-concat root "refs/app"))
+    (mevedel-collaboration-files-test--write root "refs/app/.gitignore"
+                                             "*.log\n")
+    (mevedel-collaboration-files-test--write root "refs/app/src/main.py")
+    (mevedel-collaboration-files-test--write root "refs/app/debug.log")
+    (mevedel-collaboration-files-test--write root "refs/app/.mevedel/lobby")
+    (mevedel-collaboration-files-test--git-init
+     (file-name-concat root "refs/app/vendor/lib"))
+    (mevedel-collaboration-files-test--write root "refs/app/vendor/lib/x.el")
+    ;; A clone the project ignores stays hidden.
+    (mevedel-collaboration-files-test--git-init
+     (file-name-concat root "ignored/repo"))
+    (mevedel-collaboration-files-test--write root "ignored/repo/secret.txt")
+    (should (equal '(".gitignore" "plain/b.txt" "refs/app/.gitignore"
+                     "refs/app/src/main.py" "refs/app/vendor/lib/x.el"
+                     "top.txt")
+                   (mevedel-collaboration-files--listing root)))
+    ;; Without untracked material, the clones are left out like any.
+    (let ((default-directory root))
+      (should (zerop (call-process "git" nil nil nil "add" ".gitignore"
+                                   "top.txt"))))
+    (let ((project-vc-include-untracked nil))
+      (should (equal '(".gitignore" "top.txt")
+                     (mevedel-collaboration-files--listing root))))
+    ;; The listing is what lets a guest name the clone's files.
+    (should (equal (file-name-concat root "refs/app/src/main.py")
+                   (mevedel-collaboration-files--file
+                    root (mevedel-collaboration-files--listing root)
+                    "refs/app/src/main.py")))))
+
 (mevedel-deftest mevedel-collaboration-files--folder-p
   (:doc "accepts the root and folders that hold listed files only")
   (let ((listing '("a/b/c.txt" "ab.txt")))

@@ -17,7 +17,9 @@ Uploads land in any listed folder of the project, not in a confined drop
 folder such as `work://shared/`. An upload creates a new file and never
 replaces one. Removal moves a file to the trash. The project's own listing,
 minus `.mevedel/`, is the only authority for which paths a browser may name;
-the browser never supplies a path the listing does not show.
+the browser never supplies a path the listing does not show. In a Git
+project that listing includes each untracked, unignored Git repository
+cloned inside it, by that repository's own listing.
 
 ## Rationale
 
@@ -34,6 +36,13 @@ person already chose, and it fails exactly when no session is running. The
 direct path keeps the model's mutation tracking intact for model edits; it
 adds a second, narrow writer whose every change a human made explicitly.
 
+Nested clones were added when a project that existed to share two cloned
+reference repositories showed none of their files. Git reports an untracked
+nested repository as one directory entry and `project-files` drops it, while
+the model's search tools read those files; the browser then hid exactly the
+material the sessions were reading. Asking each clone for its own listing
+keeps that clone's ignore rules, and a clone the project ignores stays hidden.
+
 ## Consequences
 
 A full lobby link, which ADR 0114 already makes a long-lived bearer, now also
@@ -41,7 +50,8 @@ carries write access to the project tree. Anyone it is handed on to can add
 files and remove them without a permission prompt. The bounds are: no
 overwrite, no folder removal, no hidden or ignored paths, no `.mevedel/`
 state, at most 16 MiB per upload, and removal to the trash, which keeps the
-bytes. A file with unsaved changes in Emacs cannot be removed. Rotating the
+bytes. The same bounds cover files inside nested clones; a clone the host
+mounts read-only refuses the change itself. A file with unsaved changes in Emacs cannot be removed. Rotating the
 lobby credentials revokes the access.
 
 A model that read a file before a browser removed or added one sees the

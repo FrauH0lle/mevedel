@@ -9,7 +9,8 @@
 ;;
 ;; The project's own file listing is the authority: `project-files', which
 ;; follows the VC ignore rules in a repository and the transient project's
-;; ignores elsewhere, minus the workspace state under `.mevedel/'.  A guest
+;; ignores elsewhere, plus the same listing of each Git repository cloned
+;; untracked inside it, minus the workspace state under `.mevedel/'.  A guest
 ;; path or folder is accepted only when that listing shows it, then
 ;; re-verified beneath the root before any I/O, so an ignored, private or
 ;; symlinked file is neither readable nor writable from a browser.  An
@@ -62,7 +63,8 @@
 
 (defun mevedel-collaboration-files--listing (root)
   "Return the project files under ROOT as sorted names relative to ROOT.
-The workspace state under `.mevedel/' is never listed."
+A Git repository nested untracked in ROOT contributes its own listing.
+The workspace state under `.mevedel/' is never listed, at any depth."
   (let* ((root (file-name-as-directory (expand-file-name root)))
          (default-directory root)
          ;; The VC backend, not whatever the user registered: a cached
@@ -71,13 +73,38 @@ The workspace state under `.mevedel/' is never listed."
                         (project-current nil root))
                       (cons 'transient root)))
          (project-files-relative-names nil))
-    (sort (cl-loop for file in (project-files project (list root))
-                   for name = (file-relative-name file root)
-                   unless (or (string-prefix-p "../" name)
-                              (string-match-p
-                               "\\`\\.mevedel\\(?:/\\|\\'\\)" name))
-                   collect name)
+    (sort (nconc
+           (cl-loop for file in (project-files project (list root))
+                    for name = (file-relative-name file root)
+                    unless (or (string-prefix-p "../" name)
+                               (string-match-p
+                                "\\`\\.mevedel\\(?:/\\|\\'\\)" name))
+                    collect name)
+           (cl-loop for nested in (mevedel-collaboration-files--nested-repositories
+                                   project root)
+                    nconc (mapcar (lambda (name) (concat nested name))
+                                  (mevedel-collaboration-files--listing
+                                   (file-name-concat root nested)))))
           #'string-lessp)))
+
+(defun mevedel-collaboration-files--nested-repositories (project root)
+  "Return the Git repositories nested untracked in PROJECT under ROOT.
+Names are relative to ROOT and end in a slash.  Git reports such a
+repository, a clone kept inside the project, as one directory entry,
+which `project-files' drops; the model's search still reads its files.
+One the project ignores stays out, and untracked material at all only
+when `project-vc-include-untracked' allows it."
+  (when (and (eq (car-safe project) 'vc)
+             project-vc-include-untracked
+             (eq (ignore-errors (vc-responsible-backend root)) 'Git))
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory root))
+      (when (zerop (process-file "git" nil t nil "ls-files" "-z" "--others"
+                                 "--exclude-standard"))
+        (cl-loop for name in (split-string (buffer-string) "\0" t)
+                 when (and (directory-name-p name)
+                           (file-exists-p (file-name-concat name ".git")))
+                 collect name)))))
 
 (defun mevedel-collaboration-files--folder-p (listing dir)
   "Return non-nil when DIR is the root \"\" or a folder holding LISTING files."
