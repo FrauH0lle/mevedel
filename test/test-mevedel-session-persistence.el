@@ -4120,6 +4120,17 @@
   (should (null (mevedel-session-persistence-parse-iso-time nil))))
 
 
+(mevedel-deftest mevedel-session-persistence-without-dedicated ()
+  ,test
+  (test)
+  :doc "drops artifact conversations from a listing by session directory"
+  (cl-letf (((symbol-function 'mevedel-artifact-store-dedicated-ids)
+             (lambda (_workspace) '("b"))))
+    (should (equal '((:save-path "/s/a/") (:save-path "/s/c"))
+                   (mevedel-session-persistence-without-dedicated
+                    'workspace '((:save-path "/s/a/") (:save-path "/s/b/")
+                                 (:save-path "/s/c")))))))
+
 (mevedel-deftest mevedel-session-persistence-cleanup-expired (:quiet t)
   ,test
   (test)
@@ -4150,6 +4161,33 @@
               (mevedel-journal-pins-release directory capture)
               (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t)))
               (should-not (file-directory-p directory))))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer))
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
+
+  :doc "keeps an artifact's dedicated session while the artifact exists"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let ((buffer (generate-new-buffer " *dedicated-cleanup*"))
+          (session (mevedel-session-create "Artifact flow" workspace))
+          (mevedel-session-max-age-days 7)
+          (mevedel-session-keep-recent-count nil)
+          (mevedel-session-persistence--cleanup-throttle (make-hash-table :test #'equal)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer (org-mode) (insert "Saved source\n"))
+            (mevedel-session-artifacts-save session buffer)
+            (test-mevedel-session-persistence--expire-session session)
+            (mevedel-session-persistence-lock-release
+             (mevedel-session-save-path session) session)
+            (cl-letf (((symbol-function 'mevedel-artifact-store-dedicated-ids)
+                       (lambda (_workspace)
+                         (list (mevedel-session-session-id session)))))
+              (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t))))
+            (should (file-directory-p (mevedel-session-save-path session)))
+            (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t))))
         (when (buffer-live-p buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer))

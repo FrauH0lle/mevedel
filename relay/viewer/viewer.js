@@ -163,8 +163,11 @@
 
   const artifacts = window.mevedelArtifactView.create({
     send, el, flash: flashNotice, summarize: summarizeSession,
-    canComment: () => state.connected && !state.readOnly,
-    canDelete: () => state.connected && !state.readOnly,
+    // A lobby has no welcome; its link tier decides instead.
+    canComment: () => (state.connected && !state.readOnly)
+      || (lobby.active() && state.writable),
+    canDelete: () => (state.connected && !state.readOnly)
+      || (lobby.active() && state.writable),
     busy: () => state.connected && state.busy === true,
     // A project file opened from the lobby can seed a new session; only an
     // owner link may create one there.
@@ -208,8 +211,21 @@
   const uploads = window.mevedelFilesView.uploader({send});
   const files = window.mevedelFilesView.create(
     {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile});
+  // The workspace artifact store: the room's Project artifacts section
+  // and the lobby's Artifacts tab; one is active at a time.
+  const roomStore = window.mevedelStoreView.create({
+    send, el, state, room: true, open: artifacts.open, notice: flashNotice,
+    list: document.getElementById('store-list'),
+    empty: document.getElementById('store-empty'),
+  });
+  const lobbyStore = window.mevedelStoreView.create({
+    send, el, state, open: artifacts.open, notice: flashNotice,
+    list: document.getElementById('lobby-store-list'),
+    empty: document.getElementById('lobby-store-empty'),
+  });
   const lobby = window.mevedelLobbyView.create(
-    {state, send, el, notice: flashNotice, sessions, files});
+    {state, send, el, notice: flashNotice, sessions, files, store: lobbyStore});
+  const activeStore = () => (lobby.active() ? lobbyStore : roomStore);
 
   let executionResultSequence = 0;
   let pendingExecutionResult = null;
@@ -650,7 +666,7 @@
 
   // Whether SCOPE's discussion still has its item: false once the host has
   // deleted it, null while the host has not yet listed its shared items.
-  // CARDS returns the latest artifact card per name.
+  // CARDS returns the latest artifact card per store artifact.
   function scopePresent(scope, cards) {
     if (!itemScope(scope)) return true;
     const id = scope.slice('item:'.length);
@@ -711,7 +727,7 @@
         if (!cards) {
           cards = new Map();
           for (const record of [...history.artifacts(), ...state.records.values()]) {
-            if (record.artifact) cards.set(record.artifact, record);
+            if (record.artifact) cards.set(record.store || record.artifact, record);
           }
         }
         return cards;
@@ -1302,6 +1318,11 @@
       artifacts.handleDelete(frame);
     } else if (frame.t === 'artifact-comments') {
       artifacts.storedComments(frame);
+    } else if (frame.t === 'store-artifacts') {
+      activeStore().show(frame);
+      if (!lobby.active()) artifacts.attachedRows(frame.artifacts);
+    } else if (frame.t === 'store-action') {
+      activeStore().handle(frame);
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
       // The host re-sends the same request id on every head redraw and

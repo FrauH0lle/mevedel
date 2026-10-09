@@ -217,6 +217,22 @@
           (should (equal (list data "ab12") opened)))
       (kill-buffer data))))
 
+(mevedel-deftest mevedel-artifacts-list-conversation ()
+  ,test
+  (test)
+  :doc "displays the selected artifact's dedicated session"
+  (mevedel-artifacts-list-test--with-store
+    (mevedel-artifacts-list-test--artifact session store "a" "x.md" "1")
+    (let (shown)
+      (with-current-buffer (mevedel-artifacts-list-open
+                            (mevedel-artifacts-list-test--context session view data))
+        (cl-letf (((symbol-function 'mevedel-artifact-store-conversation)
+                   (lambda (seen id) (should (eq seen workspace)) (concat "buffer-" id)))
+                  ((symbol-function 'mevedel--display-chat-buffer)
+                   (lambda (buffer) (setq shown buffer))))
+          (mevedel-artifacts-list-conversation)))
+      (should (equal "buffer-a" shown)))))
+
 (mevedel-deftest mevedel-artifacts-list-delete (:quiet t)
   ,test
   (test)

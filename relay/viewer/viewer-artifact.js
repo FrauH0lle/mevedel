@@ -1,4 +1,4 @@
-/* viewer-artifact.js -- session artifact panel and transfer */
+/* viewer-artifact.js -- artifact panel and transfer */
 'use strict';
 
 (() => {
@@ -48,10 +48,11 @@
     const body = document.getElementById('artifact-body');
     const commentToggle = document.getElementById('artifact-comment');
     const askButton = document.getElementById('artifact-ask');
-    // KIND is 'artifact' for a session card or 'file' for a project file,
+    // KIND is 'artifact' for an artifact card or 'file' for a project file,
     // which has no comments and is removed from the file tree instead.
-    const view = {id: null, name: null, kind: 'artifact', reqId: 0, staging: null,
-                  meta: null, bytes: null, urls: [], frames: []};
+    // STORE is the artifact store id comments belong to, if any.
+    const view = {id: null, name: null, store: null, kind: 'artifact', reqId: 0,
+                  staging: null, meta: null, bytes: null, urls: [], frames: []};
     let requestSequence = 0;
     let theme = null;
     const commentKit = window.mevedelArtifactComments;
@@ -104,6 +105,7 @@
     function close() {
       view.id = null;
       view.name = null;
+      view.store = null;
       view.staging = null;
       view.meta = null;
       view.bytes = null;
@@ -118,13 +120,14 @@
       if (askButton) askButton.hidden = true;
     }
 
-    // Deleting removes the file for everyone; the host resolves it from its
-    // own record of the card, and the card then reads as deleted.
+    // Deleting removes the artifact for everyone, with its versions and
+    // comments; the host resolves it from its own record of the card or
+    // from its store id, and the card then reads as deleted.
     const deletions = new Map();
     let deleteSequence = 0;
     if (remove) {
       remove.addEventListener('click', async () => {
-        if (!view.id || !window.confirm(`Delete ${view.name} for everyone in this room? This cannot be undone.`)) return;
+        if (!view.id || !window.confirm(`Delete ${view.name} for everyone, with its versions and comments? This cannot be undone.`)) return;
         const reqId = ++deleteSequence;
         deletions.set(reqId, view.name);
         if (!await send({t: 'artifact-delete', reqId, id: view.id})) {
@@ -168,6 +171,7 @@
       if (!panel || !record || typeof record.id !== 'string') return;
       fetch('artifact', record.id, record.artifact || 'artifact',
             {t: 'artifact-get', id: record.id});
+      view.store = typeof record.store === 'string' ? record.store : null;
     }
 
     // A project file, named by its path in the project.
@@ -186,11 +190,14 @@
       if (download) download.hidden = false;
       if (remove) remove.hidden = !(artifact && typeof canDelete === 'function' && canDelete());
       if (askButton) askButton.hidden = artifact || !ask || !ask.available();
+      // Comments belong to a store artifact; the host keeps them on its
+      // main file.
+      const commentable = artifact && view.store !== null;
       if (mime === 'text/html') {
         if (tab) tab.hidden = false;
-        const frame = sandboxedFrame(document, text(), artifact);
+        const frame = sandboxedFrame(document, text(), commentable);
         body.append(frame);
-        if (comments && artifact) comments.attach(frame, view.id, view.name);
+        if (comments && commentable) comments.attach(frame, view.id, view.store);
       } else if (mime === 'text/markdown') {
         const prose = renderMarkdown(text());
         prose.className = 'prose artifact-prose';
@@ -280,13 +287,29 @@
       if (typeof link.click === 'function') link.click();
     }
 
+    // The room's cards, and the store artifacts attached to its session:
+    // both list in the sidebar, once per artifact file.
     let published = [];
+    let attached = [];
     function render(records) {
       published = records;
       if (comments) comments.records(records);
+      paint();
+    }
+
+    function attachedRows(rows) {
+      attached = Array.isArray(rows) ? rows.filter(row => row && row.attached === true) : [];
+      paint();
+    }
+
+    function paint() {
       if (!nav) return;
       const byName = new Map();
-      records.forEach(record => {
+      attached.forEach(row => byName.set(row.artifact, {
+        id: `artifact:${row.id}`, artifact: row.artifact, store: row.id,
+        size: row.size, missing: row.missing === true,
+      }));
+      published.forEach(record => {
         if (record.artifact) byName.set(record.artifact, record);
       });
       nav.replaceChildren();
@@ -342,20 +365,15 @@
       if (comments) comments.activity();
     }
 
-    // A room message about artifact NAME as a whole, with attachment
-    // IMAGES, sent into the artifact's own conversation through its latest
-    // published record.
-    function discuss(name, text, images = []) {
-      const record = published.filter(item => item && item.artifact === name && !item.missing)
-        .at(-1);
-      if (!comments || !record) {
-        return Promise.reject(new Error(`${name} is not published in this room.`));
-      }
-      return comments.discuss(record.id, text, images);
+    // A room message about store artifact STORE as a whole, with attachment
+    // IMAGES, sent into the artifact's conversation.
+    function discuss(store, text, images = []) {
+      if (!comments) return Promise.reject(new Error('Artifact messages are unavailable.'));
+      return comments.discuss(`artifact:${store}`, text, images);
     }
 
-    return Object.freeze({open, openFile, render, handle, handleDelete, close, setTheme, queue, handleComment,
-                          storedComments, discuss, activity});
+    return Object.freeze({open, openFile, render, attachedRows, handle, handleDelete, close,
+                          setTheme, queue, handleComment, storedComments, discuss, activity});
   }
 
   window.mevedelArtifactView = Object.freeze({create});

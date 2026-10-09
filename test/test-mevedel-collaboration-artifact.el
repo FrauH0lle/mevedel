@@ -215,6 +215,144 @@
       (kill-buffer data-buffer))))
 
 
+(defmacro mevedel-collaboration-artifact-test--with-store (&rest body)
+  "Run BODY with WORKSPACE, its STORE, a SESSION, a ROOM and a LOBBY.
+Artifact page is attached to SESSION, draft is not; SENT collects frames
+as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
+  (declare (indent 0) (debug t))
+  `(let* ((root (file-name-as-directory (make-temp-file "mevedel-store-room-" t)))
+          (workspace (mevedel-workspace--create :type 'file :id "w" :root root :name "w"))
+          (store (mevedel-artifact-store-directory workspace))
+          (data-buffer (generate-new-buffer " *store-room-data*"))
+          (session (mevedel-session--create :name "s" :session-id "s1"
+                                            :workspace workspace
+                                            :authority-mode 'pid-lock))
+          (room (list :session session :data-buffer data-buffer :transport 'room
+                      :guests (make-hash-table :test #'eql)))
+          (lobby (list :workspace workspace :transport 'lobby
+                       :guests (make-hash-table :test #'eql)))
+          (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+          sent)
+     (dolist (owner (list room lobby))
+       (puthash 1 (list :name "viewer" :writable nil :ready t) (plist-get owner :guests))
+       (puthash 2 (list :name "writer" :writable t :ready t) (plist-get owner :guests)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                    (lambda (transport peer frame)
+                      (push (list transport peer frame) sent) t))
+                   ((symbol-function 'mevedel-collaboration--publish) #'ignore)
+                   ((symbol-function 'mevedel-collaboration-lobby--find)
+                    (lambda (seen) (and (eq seen workspace) lobby)))
+                   ((symbol-function 'mevedel-session-persistence-write-sidecar-now)
+                    #'ignore))
+           (dolist (entry '(("page" "index.html" "<p>page</p>") ("draft" "notes.md" "n")))
+             (let ((path (file-name-concat store (car entry) (cadr entry))))
+               (make-directory (file-name-directory path) t)
+               (write-region (nth 2 entry) nil path nil 'silent)
+               (mevedel-artifact-store-note-writes
+                (if (equal (car entry) "page") session
+                  (mevedel-session--create :workspace workspace))
+                (list (list :action 'write :path path)))))
+           ,@body)
+       (kill-buffer data-buffer)
+       (mevedel-collaboration--artifact-stat-invalidate)
+       (delete-directory root t))))
+
+(defun mevedel-collaboration-artifact-test--reply (sent transport)
+  "Return the newest frame in SENT that went through TRANSPORT."
+  (nth 2 (cl-find transport sent :key #'car)))
+
+(mevedel-deftest mevedel-collaboration--artifact-target ()
+  ,test
+  (test)
+  :doc "resolves store ids anywhere and cards by record, carrying their artifact"
+  (mevedel-collaboration-artifact-test--with-store
+    (let ((page (mevedel-collaboration--artifact-target lobby nil "artifact:page")))
+      (should (equal "page" (plist-get page :store)))
+      (should (equal "page/index.html" (plist-get page :artifact)))
+      (should (equal (file-name-concat store "page" "index.html")
+                     (plist-get page :artifact-path)))
+      (should-not (plist-get page :missing)))
+    (should-not (mevedel-collaboration--artifact-target lobby nil "artifact:nope"))
+    (should-not (mevedel-collaboration--artifact-target lobby nil "artifact:../page"))
+    (should-not (mevedel-collaboration--artifact-target lobby nil "tool-1"))
+    (plist-put room :records (list (list :id "tool-1" :artifact "page/asset.html"
+                                         :artifact-path "/x")))
+    (should (equal "page" (plist-get (mevedel-collaboration--artifact-target
+                                      room nil "tool-1")
+                                     :store)))
+    (delete-file (file-name-concat store "page" "index.html"))
+    (should (plist-get (mevedel-collaboration--artifact-target room nil "artifact:page")
+                       :missing))))
+
+(mevedel-deftest mevedel-collaboration--store-rows ()
+  ,test
+  (test)
+  :doc "lists the workspace store with attachment relative to the room"
+  (mevedel-collaboration-artifact-test--with-store
+    (let ((rows (mevedel-collaboration--store-rows room)))
+      (should (equal '("draft" "page") (sort (mapcar (lambda (row) (plist-get row :id)) rows)
+                                             #'string<)))
+      (let ((page (cl-find "page" rows :key (lambda (row) (plist-get row :id)) :test #'equal)))
+        (should (eq t (plist-get page :attached)))
+        (should (equal "html" (plist-get page :kind)))
+        (should (equal "page/index.html" (plist-get page :artifact)))
+        (should (= 1 (plist-get page :versions)))
+        (should (integerp (plist-get page :modified)))))
+    (should (cl-every (lambda (row) (eq :json-false (plist-get row :attached)))
+                      (mevedel-collaboration--store-rows lobby)))))
+
+(mevedel-deftest mevedel-collaboration--handle-store-action ()
+  ,test
+  (test)
+  :doc "lists versions for any link and changes the store for writable links"
+  (mevedel-collaboration-artifact-test--with-store
+    (cl-labels ((act (owner peer &rest frame)
+                  (setq sent nil)
+                  (mevedel-collaboration--handle-store-action
+                   owner peer (append (list :reqId 5) frame))
+                  (mevedel-collaboration-artifact-test--reply
+                   sent (plist-get owner :transport))))
+      (let ((versions (act lobby 1 :action "versions" :id "page")))
+        (should (eq t (plist-get versions :ok)))
+        (should (= 1 (plist-get (aref (plist-get versions :versions) 0) :n))))
+      (should (string-match-p "not change" (plist-get (act lobby 1 :action "restore"
+                                                           :id "page" :n 1)
+                                                      :error)))
+      (should (plist-get (act lobby 2 :action "versions" :id "../page") :error))
+      ;; Restoring records a new version and tells every room.
+      (should (= 2 (plist-get (act room 2 :action "restore" :id "page" :n 1) :n)))
+      (should (cl-find-if (lambda (entry)
+                            (equal "store-artifacts" (plist-get (nth 2 entry) :t)))
+                          sent))
+      ;; Attaching needs a session; the lobby has none.
+      (should (string-match-p "Open a session"
+                              (plist-get (act lobby 2 :action "attach" :id "draft") :error)))
+      (should (eq t (plist-get (act room 2 :action "attach" :id "draft") :ok)))
+      (should (member "draft" (mevedel-session-attached-artifacts session)))
+      ;; A duplicate is attached to the room's session.
+      (should (equal "page-2" (plist-get (act room 2 :action "duplicate" :id "page"
+                                              :newId "page-2")
+                                         :id)))
+      (should (member "page-2" (mevedel-session-attached-artifacts session)))
+      (should (plist-get (act room 2 :action "duplicate" :id "page" :newId "../x") :error))
+      ;; The conversation link comes from the dedicated session's own room.
+      (cl-letf (((symbol-function 'mevedel-collaboration--store-conversation-link)
+                 (lambda (_guest _workspace id) (concat "link-" id))))
+        (should (equal "link-page"
+                       (plist-get (act lobby 2 :action "conversation" :id "page") :link))))
+      (should (plist-get (act lobby 2 :action "evil" :id "page") :error)))))
+
+(mevedel-deftest mevedel-collaboration--handle-store-list ()
+  ,test
+  (test)
+  :doc "answers the sender with the store listing"
+  (mevedel-collaboration-artifact-test--with-store
+    (mevedel-collaboration--handle-store-list lobby 1 '(:t "store-list"))
+    (let ((frame (mevedel-collaboration-artifact-test--reply sent 'lobby)))
+      (should (equal "store-artifacts" (plist-get frame :t)))
+      (should (= 2 (length (plist-get frame :artifacts)))))))
+
 (mevedel-deftest mevedel-collaboration--artifact-mime
   (:doc "maps artifact extensions case-insensitively and defaults to octet-stream")
   (progn
@@ -230,19 +368,16 @@
                    (mevedel-collaboration--artifact-mime "noext")))))
 
 (mevedel-deftest mevedel-collaboration--handle-artifact-delete
-  (:doc "deletes a published artifact and its comments for writable links only")
+  (:doc "deletes a whole store artifact by card or store id for writable links only")
   (let* ((root (make-temp-file "mevedel-guest-artifact-delete-" t))
-         (save-path (file-name-concat root "session"))
          ;; A file workspace, so the pid-lock session matches its authority.
          (workspace (mevedel-workspace--create :type 'file :id "w"
                                                :root root :name "w"))
          (dir (expand-file-name (mevedel-artifact-store-directory workspace)))
          (path (file-name-concat dir "mockup" "index.html"))
-         (comments (file-name-concat
-                    save-path (mevedel-collaboration--artifact-comment-logical
-                               "mockup/index.html")))
-         (session (mevedel-session--create :name "s" :save-path save-path
-                                           :workspace workspace
+         (comments (file-name-concat dir "mockup" "comments.json"))
+         (other (file-name-concat dir "other" "page.html"))
+         (session (mevedel-session--create :name "s" :workspace workspace
                                            :authority-mode 'pid-lock))
          (guests (make-hash-table :test #'eql))
          (room (list :session session :guests guests :transport 'transport
@@ -254,9 +389,10 @@
     (puthash 2 (list :name "writer" :writable t :ready t) guests)
     (unwind-protect
         (progn
-          (dolist (file (list path comments))
+          (dolist (file (list path comments other))
             (make-directory (file-name-directory file) t)
             (with-temp-file file (insert "x")))
+          (mevedel-artifact-store--create-meta workspace "other" "page.html")
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport peer frame) (push (cons peer frame) sent) t))
                     ((symbol-function 'mevedel-collaboration--publish) #'ignore))
@@ -272,7 +408,11 @@
               (should-not (file-exists-p (file-name-concat dir "mockup")))
               (should-not (file-exists-p comments))
               (should (equal "artifact-delete" (plist-get (reply 2 "nope") :t)))
-              (should (plist-get (reply 2 "nope") :error)))))
+              (should (plist-get (reply 2 "nope") :error))
+              ;; Any link may reach a store artifact by its id.
+              (should (eq t (plist-get (reply 2 "artifact:other") :ok)))
+              (should-not (file-exists-p (file-name-concat dir "other")))
+              (should (plist-get (reply 2 "artifact:../x") :error)))))
       (mevedel-collaboration--artifact-stat-invalidate)
       (delete-directory root t))))
 

@@ -48,6 +48,7 @@
         <h2 id="lobby-title">Sessions</h2>
         <div id="lobby-tabs" class="lobby-tabs" role="tablist" aria-label="Project" hidden>
           <button id="lobby-tab-sessions" class="lobby-tab" type="button" role="tab" aria-selected="true" aria-controls="lobby-sessions">Sessions</button>
+          <button id="lobby-tab-artifacts" class="lobby-tab" type="button" role="tab" aria-selected="false" aria-controls="lobby-artifacts">Artifacts</button>
           <button id="lobby-tab-files" class="lobby-tab" type="button" role="tab" aria-selected="false" aria-controls="lobby-files">Files</button>
         </div>
         <div class="lobby-actions">
@@ -60,6 +61,10 @@
         <p id="lobby-empty" class="lobby-empty" hidden>No sessions in this project yet.</p>
         <ul id="lobby-list" class="lobby-list"></ul>
         <p id="lobby-omitted" class="lobby-empty" hidden></p>
+      </div>
+      <div id="lobby-artifacts" role="tabpanel" aria-labelledby="lobby-tab-artifacts" hidden>
+        <p id="lobby-store-empty" class="lobby-empty" hidden>No artifacts in this project yet.</p>
+        <ul id="lobby-store-list" class="lobby-list"></ul>
       </div>
       <div id="lobby-files" class="lobby-files" role="tabpanel" aria-labelledby="lobby-tab-files" hidden>
         <nav id="files-path" class="files-path" aria-label="Folder" hidden></nav>
@@ -144,6 +149,11 @@
           <details id="artifacts-box" class="dock-submenu" hidden open>
             <summary id="artifacts-summary">Artifacts</summary>
             <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
+          </details>
+          <details id="store-box" class="dock-submenu">
+            <summary>Project artifacts</summary>
+            <p id="store-empty" class="lobby-empty" hidden>No artifacts in this project yet.</p>
+            <ul id="store-list" class="lobby-list store-list"></ul>
           </details>
           <section id="activity" class="activity" aria-label="Progress"><h2>Progress</h2>
           <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
@@ -343,6 +353,7 @@
     <script src="/viewer-task.js" defer></script>
     <script src="/viewer-session.js" defer></script>
     <script src="/viewer-files.js" defer></script>
+    <script src="/viewer-store.js" defer></script>
     <script src="/viewer-lobby.js" defer></script>
     <script src="/viewer-editing.js" defer></script>
     <script src="/viewer.js" defer></script>

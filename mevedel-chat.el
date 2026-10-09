@@ -77,6 +77,11 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
 		  "mevedel-agents" (cl-x) t)
 
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-dedicated-ids
+                  "mevedel-artifact-store" (workspace))
+(autoload 'mevedel-artifact-store-dedicated-ids "mevedel-artifact-store")
+
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
@@ -948,8 +953,15 @@ if none found."
      mevedel--data-buffer)
     ((bound-and-true-p mevedel--session) (current-buffer)))
    (when-let* ((workspace (or workspace (mevedel-workspace))))
-     ;; The workspace scan already preserves most-recent buffer order.
-     (cdar (mevedel--workspace-sessions workspace)))))
+     ;; The workspace scan already preserves most-recent buffer order.  An
+     ;; artifact's conversation is never a default target.
+     (let ((dedicated (mevedel-artifact-store-dedicated-ids workspace)))
+       (cdr (cl-find-if-not
+             (lambda (entry)
+               (member (mevedel-session-session-id
+                        (buffer-local-value 'mevedel--session (cdr entry)))
+                       dedicated))
+             (mevedel--workspace-sessions workspace)))))))
 
 (defun mevedel--generate-final-patch (workspace request callback)
   "Generate final diffs for all tracked files in REQUEST, then call CALLBACK.

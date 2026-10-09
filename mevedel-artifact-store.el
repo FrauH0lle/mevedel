@@ -5,8 +5,12 @@
 ;; The workspace artifact store at `<workspace>/.mevedel/artifacts/'.  Each
 ;; artifact is one directory, its name the stable id.  The directory holds the
 ;; artifact file the model writes with ApplyPatch, plus host bookkeeping:
-;; `meta.el' (kind, title, primary file) and `versions/' (numbered copies and
-;; `index.el').  Sessions do not own artifacts; they attach to them by id.
+;; `meta.el' (kind, title, primary file, dedicated session), `versions/'
+;; (numbered copies and `index.el') and `comments.json'.  Sessions do not own
+;; artifacts; they attach to them by id.  An artifact may have one dedicated
+;; session, created on demand for conversations started outside any chat; it
+;; is hidden from session lists, kept from expiry, and deleted with the
+;; artifact.
 ;;
 ;; A settled ApplyPatch reports its writes here.  A write into a new id
 ;; directory creates the artifact; every write of its primary file records a
@@ -20,9 +24,37 @@
 (require 'mevedel-utilities)
 (require 'mevedel-workspace)
 
+;; `mevedel-chat'
+(declare-function mevedel--chat-buffer "mevedel-chat"
+                  (session-name &optional create workspace working-directory))
+(declare-function mevedel--ensure-chat-preset "mevedel-chat" (chat-buffer))
+(declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
+(autoload 'mevedel--chat-buffer "mevedel-chat")
+(autoload 'mevedel--ensure-chat-preset "mevedel-chat")
+(autoload 'mevedel--workspace-sessions "mevedel-chat")
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-save "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
+(declare-function mevedel-session-artifacts-sessions-dir
+                  "mevedel-session-artifacts" (workspace))
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts")
+
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-rename "mevedel-session-naming"
+                  (session buffer name &optional current-p))
+(autoload 'mevedel-session-naming-rename "mevedel-session-naming")
+
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-delete
+                  "mevedel-session-persistence" (workspace save-path))
+(declare-function mevedel-session-persistence-resume-id
+                  "mevedel-session-persistence" (workspace session-id))
 (declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
+(autoload 'mevedel-session-persistence-delete "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-resume-id "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-write-sidecar-now
   "mevedel-session-persistence")
 
@@ -38,7 +70,7 @@ even when it alone exceeds this size."
   :type 'natnum
   :group 'mevedel)
 
-(defconst mevedel-artifact-store--bookkeeping '("meta.el" "versions")
+(defconst mevedel-artifact-store--bookkeeping '("meta.el" "versions" "comments.json")
   "Top-level names in an artifact directory that belong to the host.")
 
 (defun mevedel-artifact-store-directory (workspace)
@@ -46,16 +78,16 @@ even when it alone exceeds this size."
   (file-name-as-directory
    (file-name-concat (mevedel-workspace-state-dir workspace) "artifacts")))
 
-(defun mevedel-artifact-store--id-p (id)
+(defun mevedel-artifact-store-id-p (id)
   "Return non-nil when ID names one visible store directory."
   (and (stringp id)
        (not (string-empty-p id))
        (not (string-prefix-p "." id))
        (not (string-match-p "/" id))))
 
-(defun mevedel-artifact-store--dir (workspace id)
+(defun mevedel-artifact-store-artifact-directory (workspace id)
   "Return the directory of artifact ID in WORKSPACE's store."
-  (unless (mevedel-artifact-store--id-p id)
+  (unless (mevedel-artifact-store-id-p id)
     (error "Invalid artifact id: %S" id))
   (file-name-concat (mevedel-artifact-store-directory workspace) id))
 
@@ -86,7 +118,7 @@ Reads directory names only, so it stays cheap enough for a menu redraw."
 (defun mevedel-artifact-store-meta (workspace id)
   "Return the metadata plist of artifact ID, or nil."
   (mevedel-artifact-store--read
-   (file-name-concat (mevedel-artifact-store--dir workspace id) "meta.el")))
+   (file-name-concat (mevedel-artifact-store-artifact-directory workspace id) "meta.el")))
 
 (defun mevedel-artifact-store--kind (file)
   "Return the artifact kind for FILE's extension."
@@ -103,18 +135,18 @@ Reads directory names only, so it stays cheap enough for a menu redraw."
                     :file file
                     :created (format-time-string "%FT%T%z"))))
     (mevedel-artifact-store--write
-     (file-name-concat (mevedel-artifact-store--dir workspace id) "meta.el")
+     (file-name-concat (mevedel-artifact-store-artifact-directory workspace id) "meta.el")
      meta)
     meta))
 
 (defun mevedel-artifact-store--versions-dir (workspace id)
   "Return the versions directory of artifact ID."
-  (file-name-concat (mevedel-artifact-store--dir workspace id) "versions"))
+  (file-name-concat (mevedel-artifact-store-artifact-directory workspace id) "versions"))
 
 (defun mevedel-artifact-store-versions (workspace id)
   "Return artifact ID's version plists, oldest first.
-Each has :n, :file (relative to the versions directory), :time, :session
-and :bytes."
+Each has :n, :file (relative to the versions directory), :time (seconds
+since the epoch), :session and :bytes."
   (mevedel-artifact-store--read
    (file-name-concat (mevedel-artifact-store--versions-dir workspace id)
                      "index.el")))
@@ -143,7 +175,7 @@ SESSION-ID names the session whose write this is.  Return the version
 number."
   (let* ((meta (or (mevedel-artifact-store-meta workspace id)
                    (error "Artifact %s has no metadata" id)))
-         (source (file-name-concat (mevedel-artifact-store--dir workspace id)
+         (source (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
                                    (plist-get meta :file)))
          (directory (mevedel-artifact-store--versions-dir workspace id))
          (versions (mevedel-artifact-store-versions workspace id))
@@ -155,7 +187,7 @@ number."
     (setq versions
           (append versions
                   (list (list :n n :file name
-                              :time (format-time-string "%FT%T%z")
+                              :time (truncate (float-time))
                               :session session-id
                               :bytes (file-attribute-size
                                       (file-attributes source))))))
@@ -174,7 +206,7 @@ SESSION-ID is recorded as the restoring session.  Return the new version
 number."
   (let ((meta (mevedel-artifact-store-meta workspace id)))
     (copy-file (mevedel-artifact-store-version-path workspace id n)
-               (file-name-concat (mevedel-artifact-store--dir workspace id)
+               (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
                                  (plist-get meta :file))
                t)
     (mevedel-artifact-store-record-version workspace id session-id)))
@@ -182,8 +214,8 @@ number."
 (defun mevedel-artifact-store-duplicate (workspace id new-id)
   "Copy artifact ID to the new, independent artifact NEW-ID.
 The copy starts with one version and its own metadata."
-  (let ((source (mevedel-artifact-store--dir workspace id))
-        (target (mevedel-artifact-store--dir workspace new-id))
+  (let ((source (mevedel-artifact-store-artifact-directory workspace id))
+        (target (mevedel-artifact-store-artifact-directory workspace new-id))
         (meta (or (mevedel-artifact-store-meta workspace id)
                   (error "Artifact %s has no metadata" id))))
     (when (file-exists-p target)
@@ -195,8 +227,19 @@ The copy starts with one version and its own metadata."
     new-id))
 
 (defun mevedel-artifact-store-delete (workspace id)
-  "Delete artifact ID with its metadata and versions."
-  (delete-directory (mevedel-artifact-store--dir workspace id) t))
+  "Delete artifact ID with its metadata, versions and dedicated session.
+Refuse while the dedicated session is open in Emacs, whose buffer would
+save it straight back, or held by another client."
+  (when-let* ((session-id (plist-get (mevedel-artifact-store-meta workspace id)
+                                     :dedicated-session)))
+    (when (mevedel-artifact-store--live-buffer workspace session-id)
+      (error "Close the conversation of %s in Emacs first" id))
+    (let ((save-path (file-name-concat
+                      (mevedel-session-artifacts-sessions-dir workspace) session-id)))
+      (when (and (file-directory-p save-path)
+                 (not (mevedel-session-persistence-delete workspace save-path)))
+        (error "The conversation of %s is still in use elsewhere" id))))
+  (delete-directory (mevedel-artifact-store-artifact-directory workspace id) t))
 
 (defun mevedel-artifact-store-list (workspace)
   "Return WORKSPACE's artifacts as plists, newest modification first.
@@ -205,7 +248,7 @@ missing primary file has :missing t."
   (let (rows)
     (dolist (id (mevedel-artifact-store-ids workspace))
       (when-let* ((meta (mevedel-artifact-store-meta workspace id)))
-        (let* ((path (file-name-concat (mevedel-artifact-store--dir workspace id)
+        (let* ((path (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
                                        (plist-get meta :file)))
                (attributes (file-attributes path)))
           (push (append
@@ -233,6 +276,58 @@ otherwise the next session save carries the attachment."
     (when buffer
       (mevedel-session-persistence-write-sidecar-now session buffer))))
 
+(defun mevedel-artifact-store--update-meta (workspace id &rest properties)
+  "Set PROPERTIES in the metadata of artifact ID and return it."
+  (let ((meta (copy-sequence (or (mevedel-artifact-store-meta workspace id)
+                                 (error "Artifact %s has no metadata" id)))))
+    (while properties
+      (setq meta (plist-put meta (pop properties) (pop properties))))
+    (mevedel-artifact-store--write
+     (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
+                       "meta.el")
+     meta)
+    meta))
+
+(defun mevedel-artifact-store-dedicated-ids (workspace)
+  "Return the session ids dedicated to WORKSPACE's artifacts."
+  (delq nil (mapcar (lambda (id)
+                      (plist-get (mevedel-artifact-store-meta workspace id)
+                                 :dedicated-session))
+                    (mevedel-artifact-store-ids workspace))))
+
+(defun mevedel-artifact-store--live-buffer (workspace session-id)
+  "Return the live root data buffer of WORKSPACE's SESSION-ID, or nil."
+  (cdr (cl-find-if (lambda (entry)
+                     (equal session-id
+                            (mevedel-session-session-id
+                             (buffer-local-value 'mevedel--session (cdr entry)))))
+                   (mevedel--workspace-sessions workspace))))
+
+(defun mevedel-artifact-store-session-buffer (workspace session-id)
+  "Return the data buffer of WORKSPACE's SESSION-ID, resuming it when saved.
+Return nil when the session no longer exists."
+  (or (mevedel-artifact-store--live-buffer workspace session-id)
+      (mevedel-session-persistence-resume-id workspace session-id)))
+
+(defun mevedel-artifact-store-conversation (workspace id)
+  "Return the data buffer of artifact ID's dedicated session.
+The session is created, attached and saved on first use, so it survives
+before anyone has written in it."
+  (let ((session-id (plist-get (or (mevedel-artifact-store-meta workspace id)
+                                   (error "No artifact %s" id))
+                               :dedicated-session)))
+    (or (and session-id
+             (mevedel-artifact-store-session-buffer workspace session-id))
+        (let* ((buffer (mevedel--chat-buffer nil t workspace))
+               (session (buffer-local-value 'mevedel--session buffer)))
+          (mevedel--ensure-chat-preset buffer)
+          (mevedel-artifact-store-attach session id)
+          (mevedel-session-artifacts-save session buffer nil t)
+          (mevedel-session-naming-rename session buffer (format "Artifact %s" id))
+          (mevedel-artifact-store--update-meta
+           workspace id :dedicated-session (mevedel-session-session-id session))
+          buffer))))
+
 (defun mevedel-artifact-store-note-writes (session changes)
   "Record settled ApplyPatch CHANGES of SESSION that land in the store.
 A write into a new id directory creates the artifact; a write of an
@@ -251,7 +346,7 @@ artifact's primary file records a version.  Either attaches SESSION."
                (file (and slash (substring relative (1+ slash)))))
           ;; ponytail: only the primary file is versioned; secondary files
           ;; (assets) change without versions.
-          (when (and (mevedel-artifact-store--id-p id)
+          (when (and (mevedel-artifact-store-id-p id)
                      (not (member (car (split-string file "/"))
                                   mevedel-artifact-store--bookkeeping)))
             (let ((meta (or (mevedel-artifact-store-meta workspace id)

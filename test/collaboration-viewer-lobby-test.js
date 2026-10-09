@@ -11,10 +11,10 @@ const plain = value => JSON.parse(JSON.stringify(value));
 
 const ids = ['lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
              'lobby-title', 'lobby-new', 'lobby-refresh', 'lobby-tabs',
-             'lobby-tab-sessions', 'lobby-tab-files', 'lobby-sessions',
-             'lobby-files', 'files-upload'];
+             'lobby-tab-sessions', 'lobby-tab-artifacts', 'lobby-tab-files',
+             'lobby-sessions', 'lobby-artifacts', 'lobby-files', 'files-upload'];
 
-function build({writable = true, owner = false, withFiles = false} = {}) {
+function build({writable = true, owner = false, withFiles = false, withStore = false} = {}) {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.lobby.hidden = true;
   const body = new Element('body');
@@ -44,8 +44,11 @@ function build({writable = true, owner = false, withFiles = false} = {}) {
     show: () => filesCalls.push(['show']),
     refresh: () => filesCalls.push(['refresh']),
   } : null;
+  const storeCalls = [];
+  const store = withStore ? {refresh: () => storeCalls.push('refresh')} : null;
   const lobby = window.mevedelLobbyView.create({
     files,
+    store,
     state: {writable, owner},
     send: frame => sent.push(frame),
     el: (tag, className, text) => element(document, tag, className, text),
@@ -58,7 +61,7 @@ function build({writable = true, owner = false, withFiles = false} = {}) {
     confirm: text => { confirms.push(text); return confirmAnswer.value; },
   });
   return {lobby, nodes, body, document, sent, notices, followed, confirms,
-          confirmAnswer, remembered, newSession, filesCalls,
+          confirmAnswer, remembered, newSession, filesCalls, storeCalls,
           age: window.mevedelLobbyView.age};
 }
 
@@ -269,6 +272,28 @@ function openButton(nodes, index) {
   assert.equal(nodes['files-upload'].hidden, true);
   nodes['lobby-refresh'].dispatch('click');
   assert.deepEqual(plain(sent), [{t: 'lobby-refresh'}]);
+}
+
+// The artifact store is a tab for every link, a view link included.
+{
+  const {lobby, nodes, storeCalls, sent} = build({writable: false, withFiles: true,
+                                                   withStore: true});
+  lobby.show(listing);
+  assert.equal(nodes['lobby-tabs'].hidden, false);
+  assert.equal(nodes['lobby-tab-artifacts'].hidden, false);
+  assert.equal(nodes['lobby-tab-files'].hidden, true);
+  nodes['lobby-tab-artifacts'].dispatch('click');
+  assert.deepEqual(storeCalls, ['refresh']);
+  assert.equal(nodes['lobby-artifacts'].hidden, false);
+  assert.equal(nodes['lobby-sessions'].hidden, true);
+  assert.equal(textOf(nodes['lobby-title']), 'Artifacts');
+  nodes['lobby-refresh'].dispatch('click');
+  assert.deepEqual(storeCalls, ['refresh', 'refresh']);
+  assert.deepEqual(sent, []);
+  // Files stay a full-link tab.
+  nodes['lobby-tab-files'].dispatch('click');
+  assert.equal(nodes['lobby-files'].hidden, true);
+  assert.equal(textOf(nodes['lobby-title']), 'Sessions');
 }
 
 console.log('viewer lobby controller passed');

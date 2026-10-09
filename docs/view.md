@@ -1146,21 +1146,33 @@ Artifacts live in the workspace artifact store,
 `<workspace>/.mevedel/artifacts/`, owned by `mevedel-artifact-store.el`.
 Each artifact is one directory whose name is its stable id. It holds the
 artifact file (an HTML mockup, a Markdown document, or an image the user is
-meant to open) plus host bookkeeping: `meta.el` (kind, title, primary file)
-and `versions/` (numbered copies and `index.el`).
+meant to open) plus host bookkeeping: `meta.el` (kind, title, primary file,
+dedicated session), `versions/` (numbered copies and `index.el`) and
+`comments.json` (the comment threads on an HTML artifact).
 
 ```
 .mevedel/artifacts/
   ID/
-    meta.el          ; kind, title, primary file, created
+    meta.el          ; kind, title, primary file, created, dedicated session
     <name>           ; the artifact file the model writes
     versions/        ; NNNNNN.<ext> copies plus index.el
+    comments.json    ; comment threads, each naming its answering session
 ```
 
 Sessions do not own artifacts; they attach to them. A session persists only
 the list of attached ids (`:attached-artifacts` in its sidecar), and Fork and
 Save As carry that list, so a fork points at the same artifacts. Deleting a
 session leaves its artifacts in place.
+
+An artifact may have one dedicated session, its own conversation for work
+started outside any chat: a comment or question from the lobby, the cockpit's
+`c`, or **Conversation** in the browser. It is an ordinary session, created on
+first use, attached to the artifact and saved at once, and named "Artifact
+ID"; `meta.el` records its id. It is hidden from the session chooser and the
+lobby listing, is never the default chat buffer for directives, and is kept
+from expiry while the artifact exists. Deleting the artifact deletes its
+dedicated session, which is refused while that session is open in Emacs or
+held by another client.
 
 The model writes artifacts with ordinary ApplyPatch; there is no artifact
 tool. After a settled ApplyPatch, `mevedel-tool-patch-apply` reports its
@@ -1193,8 +1205,8 @@ any project buffer) lists the store with each artifact's kind, attachment to
 the current session, version count, modification time and size; `t` toggles
 between all and attached artifacts. It opens an artifact locally (`o`, `e`),
 attaches it to the current session (`a`), views or restores a version (`v`),
-duplicates it into an independent artifact (`D`), and deletes it with its
-versions (`d`). In a session it also lists the session's whiteboards and
+duplicates it into an independent artifact (`D`), opens its dedicated session
+(`c`), and deletes it with its versions, comments and dedicated session (`d`). In a session it also lists the session's whiteboards and
 documents, opens one in the session's room (see
 [shared editing](shared-editing.md)), and deletes it as a shared item (see
 [deleting](shared-editing.md#deleting)); their state below

@@ -171,7 +171,8 @@ running lobby touches no real state."
 (mevedel-deftest mevedel-collaboration-lobby--rows
   (:doc "lists unsaved live sessions first and marks open saved ones")
   (let ((live-buffer (generate-new-buffer " *lobby-live*"))
-        (shared-buffer (generate-new-buffer " *lobby-shared*")))
+        (shared-buffer (generate-new-buffer " *lobby-shared*"))
+        (dedicated nil))
     (unwind-protect
         (let ((mevedel-collaboration--rooms
                (mevedel-test-room-registry
@@ -185,6 +186,8 @@ running lobby touches no real state."
           (cl-letf (((symbol-function 'mevedel--workspace-sessions)
                      (lambda (_workspace)
                        `(("new" . ,live-buffer) ("renamed" . ,shared-buffer))))
+                    ((symbol-function 'mevedel-artifact-store-dedicated-ids)
+                     (lambda (_workspace) dedicated))
                     ((symbol-function
                       'mevedel-session-persistence-list-sessions)
                      (lambda (_workspace &optional _cached)
@@ -209,7 +212,12 @@ running lobby touches no real state."
               (should (equal '(:id "s3" :name "Untitled" :updated nil
                                :preview nil :live :json-false
                                :shared :json-false)
-                             (nth 2 rows))))))
+                             (nth 2 rows))))
+            ;; An artifact's conversation is reached from its artifact.
+            (setq dedicated '("fresh" "s3"))
+            (should (equal '("s2")
+                           (mapcar (lambda (row) (plist-get row :id))
+                                   (mevedel-collaboration-lobby--rows 'workspace))))))
       (kill-buffer live-buffer)
       (kill-buffer shared-buffer))))
 
@@ -420,7 +428,17 @@ running lobby touches no real state."
                  (push (list 'file-upload peer root) routed)))
               ((symbol-function 'mevedel-collaboration-files-handle-remove)
                (lambda (_lobby peer _frame root)
-                 (push (list 'file-remove peer root) routed))))
+                 (push (list 'file-remove peer root) routed)))
+              ((symbol-function 'mevedel-collaboration--handle-artifact-get)
+               (lambda (_lobby peer _frame) (push (list 'artifact-get peer) routed)))
+              ((symbol-function 'mevedel-collaboration--handle-artifact-delete)
+               (lambda (_lobby peer _frame) (push (list 'artifact-delete peer) routed)))
+              ((symbol-function 'mevedel-collaboration--handle-artifact-comment)
+               (lambda (_lobby peer _frame) (push (list 'artifact-comment peer) routed)))
+              ((symbol-function 'mevedel-collaboration--handle-store-list)
+               (lambda (_lobby peer _frame) (push (list 'store-list peer) routed)))
+              ((symbol-function 'mevedel-collaboration--handle-store-action)
+               (lambda (_lobby peer _frame) (push (list 'store-action peer) routed))))
       ;; A refresh from a peer that never said hello gets nothing.
       (mevedel-collaboration-lobby--on-frame "/root/" 1 '(:t "lobby-refresh"))
       (should-not sent)
@@ -457,6 +475,14 @@ running lobby touches no real state."
         (mevedel-collaboration-lobby--on-frame "/root/" 1 (list :t type)))
       (should (equal '((file-remove 1 "/root/") (file-upload 1 "/root/")
                        (file-get 1 "/root/") (files 1 "/root/"))
+                     routed))
+      ;; The workspace's artifacts are reached by store identity.
+      (setq routed nil)
+      (dolist (type '("artifact-get" "artifact-delete" "artifact-comment"
+                      "store-list" "store-action"))
+        (mevedel-collaboration-lobby--on-frame "/root/" 1 (list :t type)))
+      (should (equal '((store-action 1) (store-list 1) (artifact-comment 1)
+                       (artifact-delete 1) (artifact-get 1))
                      routed))
       (setq routed '((new . 1) (open . 1)))
       ;; Another workspace's frames never reach this lobby.

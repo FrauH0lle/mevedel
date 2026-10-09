@@ -372,9 +372,11 @@ every earlier lobby link stops working. The rooms a lobby hands out are
 ordinary rooms with the ordinary share lifetime
 ([ADR 0114](adr/0114-tie-collaboration-room-lifetime-to-host-share.md)).
 
-Link tiers keep their meaning. A view link lists sessions; a full link can
-also open them and use the [project files](#project-files); an owner link can
-also create and delete sessions. Opening a session resumes
+Link tiers keep their meaning. A view link lists sessions and the
+workspace's [artifacts](#artifact-viewing), and opens artifacts; a full link
+can also open sessions, change artifacts, and use the
+[project files](#project-files); an owner link can also create and delete
+sessions. Opening a session resumes
 it when it is not live, shares it when it is not already shared, and returns
 its room's link at the requester's own tier, so the lobby never grants more
 than the link that reached it. The session id in an open request only selects
@@ -392,7 +394,8 @@ are pending. After a deletion every lobby guest receives a fresh listing.
 
 Each row carries the session id, display name, last save time, a prompt
 preview of at most 160 characters, and whether the session is live in Emacs
-and shared. Live sessions that were never saved come first, then saved ones,
+and shared. An artifact's dedicated session is not listed; it is reached from
+its artifact. Live sessions that were never saved come first, then saved ones,
 newest first; a listing holds at most 200 rows and reports how many it left
 out. The listing is sent on join and on request; the browser asks again on
 Refresh and whenever the lobby tab returns to the foreground.
@@ -408,9 +411,11 @@ In the browser, a lobby link renders the session list in place of the
 conversation and composer. Open replaces the page with the session's room;
 an owner's rows also carry Delete, which asks for confirmation first.
 The lobby stores itself in the browser's room list, so every room it opens
-lists it under Rooms as the way back. A full or owner link adds a **Files**
-tab beside **Sessions**: the [project files](#project-files). Refresh and a
-return to the foreground reload whichever tab is shown.
+lists it under Rooms as the way back. An **Artifacts** tab beside
+**Sessions** lists the [artifact store](#the-artifact-store-in-the-browser)
+for every link; a full or owner link adds a **Files** tab: the
+[project files](#project-files). Refresh and a return to the foreground reload
+whichever tab is shown.
 
 ## Project files
 
@@ -708,23 +713,28 @@ Artifacts are files in the [workspace artifact store](view.md#artifact-store),
 authored through the normal patch workflow.
 
 In a room, the projection turns each selected applied artifact destination
-into a card carrying name and size -- never the bytes, and never the host-side
-path, which stays in the unserialized `:artifact-path` field. A multi-file
+into a card carrying name, size and the id of the store artifact it belongs
+to -- never the bytes, and never the host-side path, which stays in the
+unserialized `:artifact-path` field. A multi-file
 patch produces one card per artifact destination; rejected changes produce
 none, and a mixed code/artifact patch retains its ordinary tool row.
 File stats are memoized against per-publish-tick target round trips and
 invalidated when ApplyPatch settles. A deleted artifact still
 projects, marked missing, so it reads as deleted rather than as a gap
-in the log. The sidebar combines live and archived artifact records (last
-record per name wins), so compaction does not remove access to published work.
+in the log. The sidebar combines live and archived artifact records with
+the store artifacts attached to the room's session (last record per name
+wins), so compaction does not remove access to published work.
 Archived transcripts are read once per segment to reconstruct artifact metadata;
-their full browser projection is sent only when that segment is expanded. The published
-record remains the authority: unrelated files in the artifact directory are
-not exposed by this index.
+their full browser projection is sent only when that segment is expanded.
 
 Bytes travel only on demand: opening a card sends `artifact-get` with
-the record id -- resolution is by identity against live or archived root records or agent
-records already published to that guest, never by a guest-supplied path. Agent
+the record id, and opening a store artifact sends it with
+`artifact:ID` -- resolution is by identity against live or archived root
+records, agent records already published to that guest, or the store's own
+artifact ids, never by a guest-supplied path. Any link to the workspace may
+reach any store artifact this way, which deliberately widens the room's
+published records as the only authority (see
+[ADR 0124](adr/0124-keep-artifacts-in-a-workspace-store.md)). Agent
 artifact ids are namespaced before publication because canonical ids are only
 transcript-local. The request id must be a nonnegative JavaScript-safe integer
 before projection or file I/O starts, the resolved path is re-verified inside
@@ -756,12 +766,36 @@ path into the artifact store -- guests add files to the
 [project](#project-files) instead -- and the relay is untouched:
 artifact frames are sealed like every other frame.
 
-Full and owner links can **Delete** an open artifact after confirming. The
-host resolves the file from its own published record of the card, never from
-the request, deletes the whole artifact (its id directory, with versions) and
-the room session's comments on it through the same path as the Emacs cockpit,
-and the card then reads as deleted on the host. Every live room of the
-workspace is re-published.
+Full and owner links can **Delete** an open artifact after confirming, in a
+room or the lobby. The host resolves it from its own record of the card or
+from the store id, never from a guest path, and deletes the whole artifact --
+its id directory with versions and comments, and its dedicated session --
+through the same path as the Emacs cockpit. A dedicated session open in Emacs,
+or held by another client, refuses the deletion. The card then reads as
+deleted. Every live room of the workspace is re-published, and every room and
+the lobby receive the store's new listing.
+
+### The artifact store in the browser
+
+A room's dock has a **Project artifacts** section and the lobby an
+**Artifacts** tab, both listing the workspace's
+[artifact store](view.md#artifact-store) newest first: name, id, kind, size,
+version count, and in a room whether the artifact is attached to the room's
+session. The host sends the listing when a guest joins a room or asks for it
+(`store-list`), and to every room and lobby of the workspace after each store
+change (`store-artifacts`). Any link can **Open** an artifact in the panel and
+list its **Versions**. Full and owner links also act through `store-action`
+frames:
+
+- **Restore** makes an older version the newest;
+- **Attach**, in a room, attaches the artifact to the room's session;
+- **Duplicate** copies it into a new, independent artifact under a name the
+  guest gives, attached to the room's session;
+- **Conversation** opens the artifact's dedicated session in a room of its
+  own, created on first use.
+
+Actions that would need a decision in Emacs, such as resuming a dedicated
+session another client holds, are refused with the usual notice.
 
 ### Artifact comments
 
@@ -788,25 +822,40 @@ frame and only while comment mode is on, and bounds every field. An artifact
 can still misreport where it was clicked; the composer shows the label and
 quote it will send.
 
-**Post** stores the comment for everyone in the room. **Send to assistant**,
+**Post** stores the comment for everyone. **Send to assistant**,
 checked by default, also sends it to the artifact's conversation; unchecked,
 the comment stays a note between people. Replies work the same way. Each
 action is an `artifact-comment` frame with an `action` of `post`, `reply`,
-`resolve`, `ask` or `list`, carrying the record id and client-generated
-identities so a retry neither stores nor queues twice. The host refuses writes
-from view links, unknown or deleted records and non-HTML artifacts, rebuilds
-the anchor from its known bounded fields, and answers every refusal to the
-sender with an error.
+`resolve`, `ask` or `list`, carrying the card's record id or `artifact:ID`,
+and client-generated identities so a retry neither stores nor queues twice.
+Comments belong to the store artifact and are kept on its main file. The host
+refuses writes from view links, unknown or deleted artifacts, other files of
+an artifact and non-HTML artifacts, rebuilds the anchor from its known bounded
+fields, and answers every refusal to the sender with an error.
 
-Comments live in a per-artifact store beside the shared items, under
-`artifacts/shared-editing/artifact-comments/`, so Resume, Save As and Fork
-carry them. An artifact takes at most 200 comments of 200 replies each, with
+Comments live in the artifact's `comments.json` in the store, so every room
+and the lobby see the same threads, and deleting the artifact deletes them. An
+artifact takes at most 200 comments of 200 replies each, with
 10,000 characters per message, and its comment list as guests receive it stays
-under 512 KiB. Every change is broadcast to the room as an `artifact-comments`
-frame; the stored excerpts stay on the host.
+under 512 KiB. Every change is broadcast to every room and the lobby of the
+workspace as an `artifact-comments` frame; the stored excerpts stay on the
+host. Concurrent comment writes from two Emacs instances are not serialized;
+the later write wins.
 
-Each artifact has its own conversation, like a whiteboard or document: messages
-sent to the assistant are item questions whose item is `artifact:NAME`. The
+A message to the assistant goes to the session that owns its thread:
+
+- written in a chat's room, to that chat, which becomes attached to the
+  artifact;
+- written from the lobby, to the artifact's dedicated session, created on
+  first use;
+- a reply goes to the session that answered the thread, even from another
+  room, or to the dedicated session when that session is gone.
+
+The thread records its answering session, and the viewer shows it as
+*answered in NAME*. A message about the whole artifact follows the same rule
+without a thread. Each artifact has its own conversation in that session, like
+a whiteboard or document: messages sent to the assistant are item questions
+whose item is `artifact:ID`. The
 request carries the artifact's name and file path, the target, the excerpts,
 and the comment thread behind the shared-context heading, and frames the file
 as the current state and as untrusted content whose instructions are data. The
@@ -815,7 +864,8 @@ same artifact are included, other room work is not, and `history://root`
 reaches the conversation that produced it. The room lists the artifact as a
 discussion; with it selected, a room message is an `ask` about the whole
 artifact. The room and Emacs view fold the context under **Artifact comment ·
-NAME · LABEL**, or **Artifact · NAME · Whole artifact**.
+NAME · LABEL**, or **Artifact · NAME · Whole artifact**, where NAME is the
+artifact's file in the store.
 
 The frame places each open comment's marker by its selector when the element
 still carries the same text fingerprint, and otherwise searches for the element

@@ -79,10 +79,13 @@ for the deleted path will re-project as missing."
                             (file-name-as-directory "..") relative))
                       ;; Host bookkeeping is not an artifact.
                       (not (string-match-p
-                            "\\`[^/]+/\\(?:meta\\.el\\'\\|versions/\\)"
+                            "\\`[^/]+/\\(?:meta\\.el\\'\\|comments\\.json\\'\\|versions/\\)"
                             relative)))))
-      (let ((stat (mevedel-collaboration--artifact-stat full)))
+      (let ((stat (mevedel-collaboration--artifact-stat full))
+            (slash (string-search "/" relative)))
         (append (list :artifact relative :artifact-path full)
+                ;; The store artifact the card belongs to.
+                (when slash (list :store (substring relative 0 slash)))
                 (if (cdr stat)
                     (list :missing t)
                   (list :size (car stat))))))))

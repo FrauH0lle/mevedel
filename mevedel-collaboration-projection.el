@@ -220,7 +220,7 @@ an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :item :detail :diff
-                       :artifact :size :missing :presentation :shared
+                       :artifact :store :size :missing :presentation :shared
                        :execution))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)

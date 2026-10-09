@@ -1321,7 +1321,7 @@ nothing to restore."
   (mevedel-menu-open 'executions))
 
 (defun mevedel-menu--open-artifacts ()
-  "Open the session artifacts cockpit surface."
+  "Open the artifacts cockpit surface."
   (interactive)
   (mevedel-menu-open 'artifacts))
 
@@ -1382,7 +1382,7 @@ nothing to restore."
         :sections (list (list :id 'help-0 :title "Session cockpit"
 			      :body (string-join (list "The transient menu is the live key reference for session commands.") "\n"))
 			(list :id 'help-1 :title "Slash commands that open UI"
-			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Session artifacts" "Cockpit i                   Session info panel" "/usage, Cockpit U           Subscription usage" "/tools, /tools list         Tools" "/ps                         Live executions" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
+			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Artifacts" "Cockpit i                   Session info panel" "/usage, Cockpit U           Subscription usage" "/tools, /tools list         Tools" "/ps                         Live executions" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
 			(list :id 'help-2 :title "Direct slash commands"
 			      :body (string-join (list "/plugin enable NAME, disable NAME, reload, update NAME" "/plugin install TARGET, remove NAME, uninstall NAME, hooks ..." "/skills enable NAME, disable NAME, help NAME" "/mode MODE, /model MODEL" "/worktree create [NAME] [--for \"purpose\"] [--clean]" "/goal OBJECTIVE, /goal budget N|none, /goal edit|pause|resume|clear" "/compact, /remember [focus], /review, /verify, /edits, /clear, /init ..., /tokens") "\n"))
 			(list :id 'help-3 :title "Modes"
