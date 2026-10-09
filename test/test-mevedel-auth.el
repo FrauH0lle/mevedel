@@ -95,6 +95,22 @@
 				      (await (lambda () (equal "ready" (plist-get (mevedel-auth-state backend) :status))))
 				      (should-not (plist-get (mevedel-auth-state backend) :url)))))
 
+(mevedel-deftest mevedel-auth--claude-login-url-regexp
+  (:doc "finds the authorization URL in each form the Claude CLI prints")
+  (cl-flet ((url (output)
+              (and (string-match mevedel-auth--claude-login-url-regexp output)
+                   (match-string 0 output))))
+    (should (equal "https://claude.com/cai/oauth/authorize?code=true&state=s"
+                   (url (concat "If the browser didn't open, visit: "
+                                "https://claude.com/cai/oauth/authorize"
+                                "?code=true&state=s\nPaste code here > "))))
+    (should (equal "https://claude.ai/oauth/authorize?state=s"
+                   (url "https://claude.ai/oauth/authorize?state=s")))
+    (should (equal "https://platform.claude.com/oauth/authorize?state=s"
+                   (url "\"https://platform.claude.com/oauth/authorize?state=s\"")))
+    (should-not (url "https://claude.com/oauth/authorize?state=s"))
+    (should-not (url "https://example.com/oauth/authorize?state=s"))))
+
 (mevedel-deftest mevedel-auth-cancel (:quiet t)
   (mevedel-auth-test--with-provider 200
 				    (mevedel-auth-start backend)

@@ -291,6 +291,12 @@ Begin asynchronous renewal; callers retain their ordinary failure lifecycle."
                                           (plist-get payload :user_code))
                    (poll (plist-get payload :device_auth_id) (plist-get payload :user_code))))))))))
 
+(defconst mevedel-auth--claude-login-url-regexp
+  (concat "https://\\(?:claude\\.ai\\|platform\\.claude\\.com\\|claude\\.com/cai\\)"
+          "/oauth/authorize[^[:space:]\"\033]*")
+  "The authorization URL `claude auth login' prints, in its known forms.
+Claude Code 2.1.295 prints it under `claude.com/cai'.")
+
 (defun mevedel-auth--claude-login (backend)
   "Run Claude's supported login subprocess for BACKEND, keeping credentials local."
   (require 'mevedel-claude-code)
@@ -323,7 +329,7 @@ Begin asynchronous renewal; callers retain their ordinary failure lifecycle."
                              (unless stopped
                                (setq output (concat output text))
                                (if (> (length output) 32768) (fail)
-                                 (when (string-match "https://\\(?:claude\\.ai\\|platform\\.claude\\.com\\)/oauth/authorize[^[:space:]\"\033]*" output)
+                                 (when (string-match mevedel-auth--claude-login-url-regexp output)
                                    (mevedel-auth--publish backend "login" "Sign in to Claude, then paste the full returned code"
                                                           (match-string 0 output))))))
                    :sentinel (lambda (child _event)

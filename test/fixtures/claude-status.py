@@ -54,7 +54,11 @@ elif sys.argv[1:2] == ["install"]:
             stream.write(sys.argv[2])
     sys.exit(1 if os.getenv("MEVEDEL_TEST_INSTALL_FAIL") else 0)
 elif sys.argv[1:] == ["auth", "login", "--claudeai"]:
-    print("https://claude.ai/oauth/authorize?state=fixture-state", flush=True)
+    # The current CLI's output; the prompt line has no newline.
+    print("Opening browser to sign in...")
+    print("If the browser didn't open, visit: https://claude.com/cai/oauth/"
+          "authorize?code=true&response_type=code&state=fixture-state")
+    print("Paste code here if prompted > ", end="", flush=True)
     code = sys.stdin.readline().strip()
     sys.exit(0 if code == "fixture-code#fixture-state" else 1)
 elif not sys.argv[1:]:

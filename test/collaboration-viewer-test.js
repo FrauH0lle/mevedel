@@ -1763,6 +1763,22 @@ async function main() {
   await deliver({t: 'recovery', models: [], presets: [], providers: ['Claude Code'], provider: 'Claude Code',
                  auth: claudeLogin, runtime: {status: 'ready'}});
   assert.equal(hasButton('Check updates'), true);
+  // The provider's own login hosts get a link, in every form the CLI
+  // prints; any other address does not.
+  const loginLink = () => nodes['recovery-auth'].children.find(node => node.tagName === 'a');
+  for (const url of ['https://claude.ai/oauth/authorize',
+                     'https://claude.com/cai/oauth/authorize?state=s',
+                     'https://platform.claude.com/oauth/authorize']) {
+    await deliver({t: 'recovery', models: [], presets: [], providers: ['Claude Code'], provider: 'Claude Code',
+                   auth: {...claudeLogin, url}, runtime: {status: 'ready'}});
+    assert.equal(loginLink()?.href, url);
+  }
+  await deliver({t: 'recovery', models: [], presets: [], providers: ['Claude Code'], provider: 'Claude Code',
+                 auth: {...claudeLogin, url: 'https://claude.com.example/oauth/authorize'},
+                 runtime: {status: 'ready'}});
+  assert.equal(loginLink(), undefined);
+  await deliver({t: 'recovery', models: [], presets: [], providers: ['Claude Code'], provider: 'Claude Code',
+                 auth: claudeLogin, runtime: {status: 'ready'}});
   const codeInput = nodes['recovery-auth'].children.find(node => node.type === 'password');
   codeInput.value = 'partial-code';
   await deliver({t: 'recovery', models: [], presets: [], providers: ['Claude Code'], provider: 'Claude Code',
