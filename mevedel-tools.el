@@ -71,6 +71,8 @@
                   "mevedel-mentions" (session expansion))
 (declare-function mevedel-mentions-expand-user-input
                   "mevedel-mentions" (text session &optional fresh-p))
+(declare-function mevedel-mentions-wrap-prompt-media
+                  "mevedel-mentions" (prompt contexts backend model request))
 (autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
 (autoload 'mevedel-mentions-commit-expansion "mevedel-mentions")
 
@@ -574,15 +576,13 @@ data BUFFER's view postpones it."
   "Expand steering ENTRY for SESSION from the current request buffer.
 Expansion reads a dropped file through a real Read check, so ENTRY's grants
 are activated first; the caller restores them when delivery fails.  FRESH
-excludes historical mention deduplication.  Media cannot steer."
+excludes historical mention deduplication.  The caller delivers the
+expansion's `:media-contexts' with the prompt text."
   (mevedel-session-activate-dropped-file-grants
    session (plist-get entry :dropped-file-grants))
-  (let ((expansion (mevedel-mentions-expand-user-input
-                    (or (plist-get entry :model-input) (plist-get entry :input))
-                    session fresh)))
-    (when (plist-get expansion :media-contexts)
-      (error "Media steering cannot be delivered"))
-    expansion))
+  (mevedel-mentions-expand-user-input
+   (or (plist-get entry :model-input) (plist-get entry :input))
+   session fresh))
 
 (defun mevedel-tools-steering-commit (session entry expansion &optional fresh)
   "Consume delivered steering ENTRY and commit its EXPANSION for SESSION.
@@ -657,7 +657,14 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                        (prompt
                         (car (gptel--parse-list
                               backend
-                              (list (cons 'prompt (plist-get expansion :text)))))))
+                              (list (cons 'prompt (plist-get expansion :text))))))
+                       (media (plist-get expansion :media-contexts)))
+                  (when media
+                    (setq prompt
+                          (mevedel-mentions-wrap-prompt-media
+                           prompt media backend (plist-get info :model)
+                           (buffer-local-value
+                            'mevedel--current-request buffer))))
                   (gptel--inject-prompt backend data prompt)
                   ;; Mention reminders ride the reminder injector,
                   ;; which runs later in this same WAIT.

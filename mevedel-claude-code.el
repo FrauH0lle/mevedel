@@ -427,7 +427,15 @@ BOUNDARY returns reminder text, or nil, after each completed tool batch."
                                        for pending = (plist-get (mevedel-engine-info request) key)
                                        when (eq 'continuation (plist-get pending :route))
                                        return (plist-get pending :body))))))
-                    (if (not (mevedel-claude-code-context-hook-fits-p context))
+                    (if (or (not (mevedel-claude-code-context-hook-fits-p context))
+                            ;; Only an undelivered continuation reaches here.
+                            (equal "PreToolUse" name)
+                            ;; Steering images cannot ride hook text.
+                            (and (equal "PostToolBatch" name)
+                                 (eq 'continuation
+                                     (plist-get (plist-get (mevedel-engine-info request)
+                                                           :mevedel-claude-context-pending)
+                                                :route))))
                         (progn
                           (when (and (mevedel-agent-invocation-p request)
                                      (member name

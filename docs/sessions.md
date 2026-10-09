@@ -570,11 +570,14 @@ its mention, skill and prompt-submission effects, and records its transcript
 text and hook audits as user input; the header stays on the wire. Steering left
 when a native prompt ends successfully, with no continuation pending, is sent as
 a further prompt in the same turn and received by its exact echo, so the turn
-settles once. Media cannot steer, as on HTTP.
+settles once. Steering that carries images cannot ride hook text: it takes the
+continuation prompt below at its tool batch, with the images after the body
+text. Receipt then also requires those images, in order, with their complete
+bytes and MIME types; the echo of the text alone delivers nothing.
 
 Claude's inline hook output limit is 10,000 UTF-16 code units. A hook update
-beyond it, including a single mail message, stops the native prompt at that
-boundary. The same admitted turn then sends a continuation prompt containing the
+beyond it, including a single mail message, or one carrying steering images,
+stops the native prompt at that boundary. The same admitted turn then sends a continuation prompt containing the
 complete captured body and requires its exact echo before more tools. Native
 compaction's `SessionStart` hook cannot stop the prompt, so while a continuation
 is pending a `PreToolUse` hook denies any attempted call and stops the prompt; a

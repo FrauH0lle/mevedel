@@ -2577,6 +2577,80 @@ injector would once the payload exists."
 (provide 'test-mevedel-mentions)
 ;;; test-mevedel-mentions.el ends here
 
+;; Steering wraps one injected message, never the chat buffer's context.
+(mevedel-deftest mevedel-mentions-wrap-prompt-media
+  (:vars ((gptel--known-backends (copy-tree gptel--known-backends)))
+   :vars* ((png (make-temp-file "mevedel-steer-media-" nil ".png" "fake media\n"))
+           (encoded (base64-encode-string "fake media\n" t))
+           (model (let ((model (make-symbol "mevedel-steer-model")))
+                    (put model :capabilities '(media))
+                    (put model :mime-types '("image/png"))
+                    model)))
+   :after-each (delete-file png))
+  ,test
+  (test)
+  :doc "every backend shape gains the image in its own user-message format"
+  (pcase-dolist (`(,backend ,check)
+                 `((,(gptel-make-openai "Wrap openai" :key "unused" :models '(m)
+                                        :host "example.test")
+                    ,(lambda (prompt)
+                       (let ((content (plist-get prompt :content)))
+                         (should (equal "image_url" (plist-get (aref content 0) :type)))
+                         (should (string-suffix-p
+                                  encoded (plist-get (plist-get (aref content 0) :image_url) :url)))
+                         (should (equal "look" (plist-get (aref content 1) :text))))))
+                   (,(gptel-make-openai "Wrap responses" :key "unused" :models '(m))
+                    ,(lambda (prompt)
+                       (let ((content (plist-get prompt :content)))
+                         (should (equal "input_image" (plist-get (aref content 0) :type)))
+                         (should (string-suffix-p encoded (plist-get (aref content 0) :image_url)))
+                         (should (equal "look" (plist-get (aref content 1) :text))))))
+                   (,(gptel-make-anthropic "Wrap anthropic" :key "unused" :models '(m))
+                    ,(lambda (prompt)
+                       (let ((content (plist-get prompt :content)))
+                         (should (equal "image" (plist-get (aref content 0) :type)))
+                         (should (equal encoded (plist-get (plist-get (aref content 0) :source) :data)))
+                         (should (equal "look" (plist-get (aref content 1) :text))))))
+                   (,(gptel-make-gemini "Wrap gemini" :key "unused" :models '(m))
+                    ,(lambda (prompt)
+                       (let ((parts (plist-get prompt :parts)))
+                         (should (equal encoded (plist-get (plist-get (aref parts 0) :inline_data) :data)))
+                         (should (equal "look" (plist-get (aref parts 1) :text))))))
+                   ;; Ollama's `:images' setter replaces the message cell.
+                   (,(gptel-make-ollama "Wrap ollama" :models '(m))
+                    ,(lambda (prompt)
+                       (should (equal (vector encoded) (plist-get prompt :images)))
+                       (should (equal "look" (plist-get prompt :content)))))))
+    (ert-info ((gptel-backend-name backend))
+      (with-temp-buffer
+        (setq-local gptel-context '(("/chat/context.png" :mime "image/png")))
+        (funcall check
+                 (mevedel-mentions-wrap-prompt-media
+                  (car (gptel--parse-list backend (list (cons 'prompt "look"))))
+                  (list (list png "image/png")) backend model nil))
+        (should (equal '(("/chat/context.png" :mime "image/png")) gptel-context)))))
+
+  :doc "verified bytes are encoded from a staged file that expires with the request"
+  (let* ((backend (gptel-make-anthropic "Wrap bytes" :key "unused" :models '(m)))
+         (request (mevedel-request--create :id "wrap-bytes"))
+         (staged nil))
+    (unwind-protect
+        (cl-letf* ((original (symbol-function 'gptel--base64-encode))
+                   ((symbol-function 'gptel--base64-encode)
+                    (lambda (path) (push path staged) (funcall original path))))
+          (let ((prompt (mevedel-mentions-wrap-prompt-media
+                         (car (gptel--parse-list backend (list (cons 'prompt "look"))))
+                         (list (list "artifact://board.png" "image/png" "artifact bytes"))
+                         backend model request)))
+            (should (equal (base64-encode-string "artifact bytes" t)
+                           (plist-get (plist-get (aref (plist-get prompt :content) 0) :source)
+                                      :data)))
+            (should (= 1 (length staged)))
+            (should (file-exists-p (car staged)))
+            (mevedel-request-drain-cancellers request)
+            (should-not (file-exists-p (car staged)))))
+      (mevedel-request-drain-cancellers request))))
+
 (mevedel-deftest mevedel-mentions--add-media-context ()
   ,test
   (test)

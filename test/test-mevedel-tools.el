@@ -407,7 +407,50 @@
                   (mevedel-session-active-dropped-file-grants session))))
       (kill-buffer buf)))
 
-  :doc "a rejected media entry leaves no active file grant behind"
+  :doc "media steering reaches the model as one user message with its image"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering media test" :stream nil :key "unused"
+                   :host "example.test"
+                   :models '(steering-media-test)))
+         (buf (generate-new-buffer " *mt-steering-media*"))
+         (data (list :messages []))
+         (dropped (make-temp-file "mt-steering-media-" nil ".png" "pixels"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf :backend backend :data data
+                           :model 'steering-media-test
+                           :history '(TRET)
+                           :mevedel-request-id "request-media"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           (list :input "look" :request-id "request-media"
+                 :dropped-file-grants (list dropped)))
+          (cl-letf
+              (((symbol-function 'mevedel-mentions-expand-user-input)
+                (lambda (input _session &optional _fresh)
+                  (list :text input
+                        :media-contexts (list (list dropped "image/png"))))))
+            (mevedel-tools--handle-steering-inject fsm))
+          (let ((content (plist-get (aref (plist-get data :messages) 0) :content)))
+            (should (equal "image_url" (plist-get (aref content 0) :type)))
+            (should (string-suffix-p
+                     (base64-encode-string "pixels" t)
+                     (plist-get (plist-get (aref content 0) :image_url) :url)))
+            (should (equal "look" (plist-get (aref content 1) :text))))
+          (should-not (mevedel-session-pending-steering session))
+          (should (equal (list dropped)
+                         (mevedel-session-active-dropped-file-grants session)))
+          ;; Later turns must not inherit the steering image as chat context.
+          (with-current-buffer buf
+            (should-not (local-variable-p 'gptel-context))))
+      (kill-buffer buf)
+      (delete-file dropped)))
+
+  :doc "media that cannot be staged leaves the entry and no file grant behind"
   (let* ((session (mevedel-tools-test--make-session))
          (backend (gptel-make-openai
                    "Steering media grant test" :stream nil :key "unused"
@@ -428,13 +471,18 @@
            session 'steering
            (list :input "look" :request-id "request-media"
                  :dropped-file-grants (list dropped)))
+          ;; Verified bytes are staged per request; without one they fail.
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
                 (lambda (input _session &optional _fresh)
-                  (list :text input :media-contexts (list :image dropped)))))
+                  (list :text input
+                        :media-contexts
+                        (list (list dropped "image/png" "bytes"))))))
             (should-error
              (mevedel-tools--handle-steering-inject fsm)
              :type 'error))
+          (should (equal [] (plist-get data :messages)))
+          (should (= 1 (length (mevedel-session-pending-steering session))))
           (should-not (mevedel-session-active-dropped-file-grants session)))
       (kill-buffer buf)))
 

@@ -93,13 +93,7 @@
 (autoload 'mevedel-mention-bindings-copy-text "mevedel-mention-bindings")
 
 ;; `mevedel-mentions'
-(declare-function mevedel-mentions-expand-user-input
-                  "mevedel-mentions" (text session &optional fresh-p))
-(declare-function mevedel-mentions-file-paths-in-text
-                  "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
-(autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
-(autoload 'mevedel-mentions-file-paths-in-text "mevedel-mentions")
 (autoload 'mevedel-mentions-file-token "mevedel-mentions")
 
 ;; `mevedel-prompt-submission'
@@ -534,20 +528,6 @@ explicitly selected skills applied together, with the same admission recheck."
       (mevedel-view--schedule-late-follow-up-drain)
       entry)))
 
-(defun mevedel-view--steering-validation-expansion (text session)
-  "Expand TEXT for steering validation without committing its effects."
-  (let* ((paths (mevedel-mentions-file-paths-in-text text))
-         (pending (mevedel-session-dropped-file-grants session))
-         (temporary-grants (cl-intersection paths pending :test #'equal))
-         (active (mevedel-session-active-dropped-file-grants session)))
-    (unwind-protect
-        (progn
-          (mevedel-session--set-active-dropped-file-grants
-           session (append temporary-grants active))
-          (with-current-buffer mevedel--data-buffer
-            (mevedel-mentions-expand-user-input text session)))
-      (mevedel-session--set-active-dropped-file-grants session active))))
-
 (defun mevedel-view--steering-request-context-supported-p (context)
   "Return non-nil when prepared skill CONTEXT can steer an active request."
   (cl-loop for (key value) on context by #'cddr
@@ -588,34 +568,26 @@ longer accepts the prepared input."
       (message "mevedel: request can no longer be steered; use C-c TAB")
       nil)
      (t
-      (let ((expansion
-             (mevedel-view--steering-validation-expansion
-              model-input session)))
-        (if (plist-get expansion :media-contexts)
-            (progn
-              (message
-               "mevedel: media cannot steer an active request; use C-c TAB")
-              nil)
-          (let* ((input
-                  (mevedel-prompt-submission-display-text submission))
-                 (dropped-file-grants
-                  (mevedel-view--pop-dropped-file-grants-for-input
-                   input session)))
-            (mevedel-prompt-submission-reserve submission)
-            (list
-             :input input
-             :model-input model-input
-             :transcript-payload
-             (concat (plist-get outcome :transcript-input)
-                     (or (plist-get outcome :render-data) ""))
-             :hook-audits (plist-get outcome :hook-audits)
-             :request-context request-context
-             :submission submission
-             :dropped-file-grants dropped-file-grants
-             :request-id (mevedel-request-id request)
-             :queued-at-time (float-time)
-             :queued-at-turn
-             (or (mevedel-session-turn-count session) 0)))))))))
+      (let* ((input
+              (mevedel-prompt-submission-display-text submission))
+             (dropped-file-grants
+              (mevedel-view--pop-dropped-file-grants-for-input
+               input session)))
+        (mevedel-prompt-submission-reserve submission)
+        (list
+         :input input
+         :model-input model-input
+         :transcript-payload
+         (concat (plist-get outcome :transcript-input)
+                 (or (plist-get outcome :render-data) ""))
+         :hook-audits (plist-get outcome :hook-audits)
+         :request-context request-context
+         :submission submission
+         :dropped-file-grants dropped-file-grants
+         :request-id (mevedel-request-id request)
+         :queued-at-time (float-time)
+         :queued-at-turn
+         (or (mevedel-session-turn-count session) 0)))))))
 
 (defun mevedel-view--queue-prepared-steering
     (submission request &optional preserve-draft)

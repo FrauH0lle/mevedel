@@ -89,6 +89,14 @@ Tool-result messages cannot acknowledge submitted input."
          (sequencep parts) (not (stringp parts))
          parts)))
 
+(defun mevedel-claude-code-context--image-echo-p (expected actual)
+  "Return non-nil when echoed image part ACTUAL carries submitted EXPECTED."
+  (let ((source (alist-get 'source actual)))
+    (and (equal "image" (alist-get 'type actual))
+         (equal "base64" (alist-get 'type source))
+         (equal (alist-get 'data expected) (alist-get 'data source))
+         (equal (alist-get 'mimeType expected) (alist-get 'media_type source)))))
+
 (defun mevedel-claude-code-context--input-received-p (content message)
   "Return non-nil when native user MESSAGE echoes all required CONTENT.
 Image order, MIME types and complete base64 bytes must match the submitted
@@ -98,12 +106,7 @@ images; tool-result messages cannot acknowledge a submitted user attachment."
          (received (seq-filter (lambda (part) (equal "image" (alist-get 'type part))) parts)))
     (and parts
          (= (length images) (length received))
-         (cl-every (lambda (expected actual)
-                     (let ((source (alist-get 'source actual)))
-                       (and (equal "base64" (alist-get 'type source))
-                            (equal (alist-get 'data expected) (alist-get 'data source))
-                            (equal (alist-get 'mimeType expected) (alist-get 'media_type source)))))
-                   images received)
+         (cl-every #'mevedel-claude-code-context--image-echo-p images received)
          (seq-every-p
           (lambda (part)
             (or (equal "image" (alist-get 'type part))
@@ -112,6 +115,25 @@ images; tool-result messages cannot acknowledge a submitted user attachment."
                                  (equal (alist-get 'text part) (alist-get 'text actual))))
                           parts)))
           content))))
+
+(defun mevedel-claude-code-context--prompt-received-p (pending message)
+  "Return non-nil when native user MESSAGE echoes PENDING prompt delivery.
+Its body is one exact text block.  Its images appear in order with complete
+bytes and MIME types; the prompt may carry other parts around them."
+  (let* ((parts (mevedel-claude-code-context--user-parts message))
+         (received (seq-filter (lambda (part) (equal "image" (alist-get 'type part))) parts)))
+    (and (seq-some (lambda (block)
+                     (and (equal "text" (alist-get 'type block))
+                          (equal (plist-get pending :body) (alist-get 'text block))))
+                   parts)
+         (cl-every (lambda (expected)
+                     (setq received
+                           (seq-drop-while
+                            (lambda (actual)
+                              (not (mevedel-claude-code-context--image-echo-p expected actual)))
+                            received))
+                     (when received (pop received) t))
+                   (plist-get pending :images)))))
 
 (defun mevedel-claude-code-context--observations (owner)
   "Render OWNER's currently selected observations through their shared owner."
@@ -264,19 +286,23 @@ A turn ending at a boundary takes none, and held delivery waits."
 
 (defun mevedel-claude-code-context--steering (owner)
   "Prepare OWNER's deliverable steering, or nil.
-Return a plist of the model-visible :body, the user-role :transcript, mention
-reminder :entries and the receipt :commits that consume each entry."
+Return a plist of the model-visible :body, its ACP :images, the user-role
+:transcript, mention reminder :entries and the receipt :commits that consume
+each entry."
   (when-let* ((entries (mevedel-claude-code-context--steering-entries owner)))
     (let* ((info (mevedel-engine-info owner))
            (session (mevedel-request-session owner))
            (fresh (or (mevedel-request-directive-uuid owner)
                       (plist-get info :mevedel-native-isolated)))
-           body transcript reminders commits)
+           body images transcript reminders commits)
       (dolist (entry entries)
         (let ((expansion (with-current-buffer (plist-get info :buffer)
                            (mevedel-tools-steering-expand session entry fresh))))
           (setq body (concat body mevedel-claude-code-context--steering-header "\n\n"
                              (plist-get expansion :text) "\n")
+                images (append images
+                               (mevedel-claude-code-context--images
+                                (plist-get expansion :media-contexts)))
                 transcript (concat transcript
                                    (or (plist-get entry :transcript-payload) (plist-get entry :input))
                                    "\n"
@@ -286,7 +312,7 @@ reminder :entries and the receipt :commits that consume each entry."
             (push (list :type (cons 'mention (plist-get item :key)) :body (plist-get item :body))
                   reminders))
           (push (lambda () (mevedel-tools-steering-commit session entry expansion fresh)) commits)))
-      (list :body body :transcript transcript
+      (list :body body :images images :transcript transcript
             :entries (nreverse reminders) :commits (nreverse commits)))))
 
 (defun mevedel-claude-code-context-check (owner)
@@ -337,7 +363,10 @@ plist of further typed `:entries' and their `:commits'."
           (let* ((batch (mevedel-claude-code-context--batch entries (if prompt-p 'turn-start 'mid-turn)))
                  (body (concat (car batch) (plist-get steering :body)))
                  (transcript (concat (cdr batch) (plist-get steering :transcript)))
-                 (overflow (and (not prompt-p) (not (mevedel-claude-code-context-hook-fits-p body))))
+                 ;; Hook context is text only; steering images need a prompt.
+                 (overflow (and (not prompt-p)
+                                (or (plist-get steering :images)
+                                    (not (mevedel-claude-code-context-hook-fits-p body)))))
                  (messages (and context (mevedel-agent-control-context-mailbox context)))
                  selected)
             (while (and messages
@@ -355,6 +384,7 @@ plist of further typed `:entries' and their `:commits'."
               (setf (mevedel-engine-info owner)
                     (plist-put info :mevedel-claude-context-pending
                                (list :context context :messages (nreverse selected) :body body
+                                     :images (plist-get steering :images)
                                      :transcript transcript
                                      :observations (and changed observations)
                                      :commits (append (and entries (plist-get events :commits))
@@ -365,6 +395,11 @@ plist of further typed `:entries' and their `:commits'."
                                      :route (cond (prompt-p 'prompt) (overflow 'continuation) (t 'hook))
                                      :event "PostToolBatch")))
               body)))))))
+
+(defun mevedel-claude-code-context--pending-images (owner)
+  "Return the ACP images of OWNER's pending context delivery."
+  (plist-get (plist-get (mevedel-engine-info owner) :mevedel-claude-context-pending)
+             :images))
 
 (defun mevedel-claude-code-context-next-prompt (owner)
   "Return OWNER's next native prompt content within the same turn, or nil.
@@ -379,18 +414,23 @@ underlying events remain queued."
         (if (plist-get info :mevedel-end-turn)
             (setq info (plist-put info key nil))
           (plist-put pending :route 'prompt)
-          (push `((type . "text") (text . ,(plist-get pending :body))) content))))
+          (push `((type . "text") (text . ,(plist-get pending :body))) content)
+          (dolist (image (plist-get pending :images))
+            (push image content)))))
     (setf (mevedel-engine-info owner) info)
     (if (not content)
         (when-let* (((not (plist-get info :mevedel-claude-context-pending)))
                     ((mevedel-claude-code-context--steering-entries owner))
                     (body (mevedel-claude-code-context-prepare owner t)))
-          (vector `((type . "text") (text . ,body))))
+          (vconcat (list `((type . "text") (text . ,body)))
+                   (mevedel-claude-code-context--pending-images owner)))
       ;; Restoration occupies its own receipt slot.  Capture prompt reminders
       ;; too, including a child's newly reserved final-sample warning.
       (unless (plist-get info :mevedel-claude-context-pending)
         (when-let* ((body (mevedel-claude-code-context-prepare owner t)))
-          (push `((type . "text") (text . ,body)) content)))
+          (push `((type . "text") (text . ,body)) content)
+          (dolist (image (mevedel-claude-code-context--pending-images owner))
+            (push image content))))
       (vconcat [((type . "text")
                  (text . "Continue the current task after applying the complete context updates below. The prior native prompt stopped only to deliver this context in full. Earlier tool effects remain applied; do not replay them."))]
                (nreverse content)))))
@@ -466,10 +506,7 @@ tool notifications, malformed output and duplicate receipts cannot consume mail.
                    (equal "_claude/sdkMessage" (alist-get 'method notification))
                    (pcase (plist-get pending :route)
                      ('prompt
-                      (seq-some (lambda (block)
-                                  (and (equal "text" (alist-get 'type block))
-                                       (equal (plist-get pending :body) (alist-get 'text block))))
-                                (mevedel-claude-code-context--user-parts message)))
+                      (mevedel-claude-code-context--prompt-received-p pending message))
                      ('hook
                       (and (equal "system" (alist-get 'type message))
                            (equal "hook_response" (alist-get 'subtype message))
