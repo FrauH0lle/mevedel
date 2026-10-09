@@ -4342,6 +4342,65 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                        (buffer-string))))))
       (delete-directory root t)))
 
+  :doc "ordinary steering delivers an image mention inside the same turn"
+  (let* ((root (make-temp-file "mevedel-steering-image-" t))
+         (file (file-name-concat root "board.png"))
+         (model (make-symbol "steering-image-test"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'file :id root :root root :name "steering-image"
+           :file-cache
+           (mevedel-file-cache--create
+            :table (make-hash-table :test #'equal)
+            :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" workspace))
+         (backend
+          (gptel-make-openai
+           "Steering image" :stream nil :key "unused"
+           :host "example.test" :models (list model)))
+         (data (list :messages []))
+         fsm request)
+    (put model :capabilities '(media))
+    (put model :mime-types '("image/png"))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "PIXELS"))
+          (mevedel-view-test--with-buffers
+            (setq fsm
+                  (gptel-make-fsm
+                   :state 'TOOL
+                   :info (list :buffer data-buf :backend backend :data data
+                               :model model
+                               :position (with-current-buffer data-buf (point-marker))
+                               :history '(TRET)
+                               :mevedel-request-id "request-image")))
+            (setq request
+                  (mevedel-request--create
+                   :id "request-image" :session session :fsm fsm))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace workspace
+                          mevedel--current-request request
+                          gptel-model model))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "Compare @file:board.png")
+              (mevedel-view-send)
+              (should (equal "" (mevedel-view--input-text))))
+            (should (= 1 (length (mevedel-session-pending-steering session))))
+            (mevedel-tools--handle-steering-inject fsm)
+            (mevedel-reminders--handle-inject fsm)
+            (should-not (mevedel-session-pending-steering session))
+            (let ((content (plist-get (aref (plist-get data :messages) 0) :content)))
+              (should (equal "image_url" (plist-get (aref content 0) :type)))
+              (should (string-suffix-p
+                       (base64-encode-string "PIXELS" t)
+                       (plist-get (plist-get (aref content 0) :image_url) :url))))
+            (with-current-buffer data-buf
+              (should (string-match-p (regexp-quote "@file:board.png") (buffer-string)))
+              (should-not (local-variable-p 'gptel-context)))))
+      (delete-directory root t)))
+
   :doc "ordinary steering accepts an inline skill and prompt hook context"
   (mevedel-view-test--with-source-skills
       '(("alpha" "inline" "ALPHA ORDINARY STEERING"))

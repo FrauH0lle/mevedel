@@ -20,8 +20,9 @@ the same fsm and delivered by the reminder injector later in that WAIT. The
 original bound text remains in the composer, history, or pending-steering
 entry; only the model-ready copy contains placeholders. Expansion returns
 media contexts and deduplication updates explicitly: ordinary request
-transforms apply both, while WaitAgent steering rejects new media and commits
-deduplication only when the text-only steering entry is accepted.
+transforms apply both, while steering attaches the media to its own injected
+user message with `mevedel-mentions-wrap-prompt-media` and commits
+deduplication only when the steering entry is delivered.
 
 Inline `$skill` attachment scanning lives next to this transform and reuses
 the same placeholder plus staged-reminder output path, but keeps a

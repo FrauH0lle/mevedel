@@ -352,6 +352,16 @@
    (list :input text :model-input text :transcript-payload text
          :request-id (if (stringp request) request (mevedel-request-id request)))))
 
+(defun mevedel-claude-code-context-test--echo (content)
+  "Return the SDK user-message echo of submitted ACP CONTENT."
+  (mapcar (lambda (part)
+            (if (equal "image" (alist-get 'type part))
+                `((type . "image")
+                  (source (type . "base64") (data . ,(alist-get 'data part))
+                          (media_type . ,(alist-get 'mimeType part))))
+              part))
+          content))
+
 (defun mevedel-claude-code-context-test--prompt-text (owner history)
   "Return the text OWNER's prompt with native HISTORY submits."
   (mapconcat (lambda (part) (or (alist-get 'text part) ""))
@@ -436,6 +446,52 @@
     (should (= 1 (how-many "STEER-7731" (point-min) (point-max))))
     (should-not (string-search mevedel-claude-code-context--steering-header (buffer-string))))
 
+  :doc "steering images stop at the batch and continue the turn as a prompt"
+  (mevedel-engine-test--with-session
+    (let ((image '((type . "image") (mimeType . "image/png") (data . "UElYRUxT"))))
+      (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+      (mevedel-claude-code-context-system request "sys")
+      (mevedel-claude-code-context-test--steer session request "IMAGE-STEER-3108")
+      (cl-letf (((symbol-function 'mevedel-claude-code-context--images)
+                 (lambda (contexts) (and contexts (list image))))
+                ((symbol-function 'mevedel-mentions-expand-user-input)
+                 (lambda (text &rest _)
+                   (list :text text :media-contexts '(("board.png" "image/png"))))))
+        (let* ((decision (mevedel-claude-code--control
+                          request '(:hook_event_name "PostToolBatch")))
+               (pending (plist-get (mevedel-engine-info request)
+                                   :mevedel-claude-context-pending)))
+          ;; The text alone would fit the hook; the image cannot ride it.
+          (should (eq :json-false (plist-get decision :continue)))
+          (should (mevedel-claude-code-context-hook-fits-p (plist-get pending :body)))
+          (should (eq 'continuation (plist-get pending :route)))
+          (should (equal (list image) (plist-get pending :images)))
+          ;; A call attempted before the continuation is denied, not fed hook text.
+          (should (equal "deny"
+                         (plist-get (plist-get (mevedel-claude-code--control
+                                                request '(:hook_event_name "PreToolUse"))
+                                               :hookSpecificOutput)
+                                    :permissionDecision)))
+          (let ((content (mevedel-claude-code-context-next-prompt request)))
+            (should (equal image (aref content (1- (length content)))))
+            ;; Text alone does not deliver the image.
+            (mevedel-claude-code-context-observe
+             request `((method . "_claude/sdkMessage")
+                       (params (message (type . "user")
+                                        (message (role . "user")
+                                                 (content . ,(seq-remove
+                                                              (lambda (part) (alist-get 'mimeType part))
+                                                              content)))))))
+            (should (= 1 (length (mevedel-session-pending-steering session))))
+            (mevedel-claude-code-context-observe
+             request `((method . "_claude/sdkMessage")
+                       (params (message (type . "user")
+                                        (message (role . "user")
+                                                 (content . ,(mevedel-claude-code-context-test--echo
+                                                              content))))))))
+          (should-not (mevedel-session-pending-steering session))
+          (should (= 1 (how-many "IMAGE-STEER-3108" (point-min) (point-max))))))))
+
   :doc "held steering stays queued at the tool boundary"
   (mevedel-engine-test--with-session
     (setf (mevedel-engine-info request) (list :buffer buffer))
@@ -475,6 +531,51 @@
           (plist-put (mevedel-engine-info request) :mevedel-end-turn 'user))
     (should-not (mevedel-claude-code-context-next-prompt request))
     (should (= 1 (length (mevedel-session-pending-steering session))))))
+
+(mevedel-deftest mevedel-claude-code-context--pending-images ()
+  ,test
+  (test)
+  :doc "reads the images of the pending context delivery only"
+  (let ((owner (mevedel-request--create :id "images")))
+    (setf (mevedel-engine-info owner)
+          (list :mevedel-claude-context-pending '(:body "b" :images (image))
+                :mevedel-claude-restoration-pending '(:body "r" :images (other))))
+    (should (equal '(image) (mevedel-claude-code-context--pending-images owner)))
+    (setf (mevedel-engine-info owner) nil)
+    (should-not (mevedel-claude-code-context--pending-images owner))))
+
+(mevedel-deftest mevedel-claude-code-context--image-echo-p ()
+  ,test
+  (test)
+  :doc "requires the echoed image's exact bytes and MIME type"
+  (let ((sent '((type . "image") (mimeType . "image/png") (data . "QUJD"))))
+    (should (mevedel-claude-code-context--image-echo-p
+             sent (car (mevedel-claude-code-context-test--echo (list sent)))))
+    (dolist (field '((data . "QUI=") (mimeType . "image/jpeg")))
+      (should-not (mevedel-claude-code-context--image-echo-p
+                   sent (car (mevedel-claude-code-context-test--echo
+                              (list (cons field sent)))))))))
+
+(mevedel-deftest mevedel-claude-code-context--prompt-received-p ()
+  ,test
+  (test)
+  :doc "matches the exact body and the pending images in order among other parts"
+  (let* ((one '((type . "image") (mimeType . "image/png") (data . "T05F")))
+         (two '((type . "image") (mimeType . "image/png") (data . "VFdP")))
+         (user '((type . "image") (mimeType . "image/png") (data . "VVNFUg==")))
+         (text '((type . "text") (text . "BODY")))
+         (pending (list :body "BODY" :images (list one two))))
+    (cl-flet ((received (parts &optional (pending pending))
+                (mevedel-claude-code-context--prompt-received-p
+                 pending `((type . "user") (message (role . "user")
+                                                    (content . ,(mevedel-claude-code-context-test--echo
+                                                                 parts)))))))
+      (should (received (list text user one two)))
+      (should-not (received (list text two one)))
+      (should-not (received (list text one)))
+      (should-not (received (list '((type . "text") (text . "BOD")) one two)))
+      ;; A text-only delivery may share its prompt with user images.
+      (should (received (list text user) '(:body "BODY"))))))
 
 (mevedel-deftest mevedel-claude-code-context-prompt (:quiet t)
   ,test

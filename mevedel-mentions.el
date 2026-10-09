@@ -17,9 +17,11 @@
 (require 'mevedel-overlays)
 
 ;; `gptel'
+(declare-function gptel--inject-media "ext:gptel-request" (backend prompts))
 (declare-function gptel--model-capable-p "ext:gptel-request" (cap &optional model))
 (declare-function gptel--model-mime-capable-p "ext:gptel-request" (mime &optional model))
 (declare-function gptel-fsm-info "gptel" (fsm))
+(defvar gptel-backend)
 (defvar gptel-context)
 (defvar gptel-model)
 (defvar gptel-use-context)
@@ -667,6 +669,25 @@ teardown instead of letting gptel read PATH."
               (delete-file temporary)))))))
   (unless gptel-use-context
     (setq-local gptel-use-context 'system)))
+
+(defun mevedel-mentions-wrap-prompt-media
+    (prompt contexts backend model request)
+  "Return provider PROMPT with media CONTEXTS prepended for BACKEND.
+PROMPT is one user message parsed by `gptel--parse-list'.  CONTEXTS are
+expansion media entries (PATH MIME [BYTES]); MODEL selects the backend's
+media encoding.  Staged bytes expire with REQUEST.  No chat buffer's
+`gptel-context' changes."
+  (with-temp-buffer
+    (let ((mevedel--current-request request)
+          (gptel-backend backend)
+          (gptel-model model)
+          (prompts (list prompt)))
+      ;; Context insertion prepends; retain mention and PDF page order.
+      (dolist (context (reverse contexts))
+        (apply #'mevedel-mentions--add-media-context context))
+      (gptel--inject-media backend prompts)
+      ;; Ollama's `:images' setter replaces the list cell, not PROMPT.
+      (car prompts))))
 
 (defun mevedel-mentions--allowed-roots (info)
   "Return allowed roots for INFO."

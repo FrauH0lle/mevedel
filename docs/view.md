@@ -1903,12 +1903,16 @@ preparation and `UserPromptSubmit` run immediately, then all steering already
 present at the next model interaction boundary is inserted as durable user
 transcript messages without creating extra turns. Steering submitted during
 that injection waits for the following boundary. It never aborts the request.
-Root `WaitAgent` uses the same steering path and wakes the wait at the next
-possible boundary rather than creating a mailbox message.
+Media mentions, such as a dropped or pasted image, steer too: the injected user
+message carries the images in the provider's own format, from a temporary
+context that never becomes the chat buffer's `gptel-context`. Root `WaitAgent`
+uses the same steering path and wakes the wait at the next possible boundary
+rather than creating a mailbox message.
 
 A Claude Code turn takes steering the same way. It arrives with the next native
 tool batch, or as a further prompt of the same turn when the native prompt ends
-first. A native turn cannot wait at a held boundary, so steering still held by
+first. Steering with images stops the native prompt at its tool batch and
+continues the turn with a prompt carrying them. A native turn cannot wait at a held boundary, so steering still held by
 the cockpit or an unresolved interaction when it succeeds becomes the first
 follow-ups ([Sessions](sessions.md#native-context-delivery)).
 
