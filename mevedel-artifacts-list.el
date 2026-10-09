@@ -20,6 +20,8 @@
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-attach
                   "mevedel-artifact-store" (session id &optional buffer))
+(declare-function mevedel-artifact-store-conversation
+                  "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-directory
                   "mevedel-artifact-store" (workspace))
 (declare-function mevedel-artifact-store-duplicate
@@ -35,6 +37,7 @@
 (declare-function mevedel-artifact-store-versions
                   "mevedel-artifact-store" (workspace id))
 (autoload 'mevedel-artifact-store-attach "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-conversation "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-duplicate "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-ids "mevedel-artifact-store")
@@ -42,6 +45,10 @@
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-version-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
+
+;; `mevedel-chat'
+(declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
+(autoload 'mevedel--display-chat-buffer "mevedel-chat")
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer "mevedel-cockpit" (&optional context))
@@ -79,7 +86,7 @@
 
 ;; `mevedel-collaboration-artifact'
 (declare-function mevedel-collaboration-delete-artifact
-                  "mevedel-collaboration-artifact" (workspace name &optional session))
+                  "mevedel-collaboration-artifact" (workspace name))
 (declare-function mevedel-collaboration-notify-artifacts-changed
                   "mevedel-collaboration-artifact" (workspace))
 (autoload 'mevedel-collaboration-delete-artifact "mevedel-collaboration-artifact")
@@ -306,7 +313,8 @@ Restoring copies the version over the artifact as a new version."
          (choices
           (mapcar (lambda (row)
                     (cons (format "%d  %s  %s" (plist-get row :n)
-                                  (plist-get row :time)
+                                  (format-time-string "%Y-%m-%d %H:%M"
+                                                      (plist-get row :time))
                                   (file-size-human-readable (plist-get row :bytes)))
                           (plist-get row :n)))
                   (reverse (mevedel-artifact-store-versions workspace id))))
@@ -341,6 +349,14 @@ Restoring copies the version over the artifact as a new version."
     (mevedel-artifacts-list--changed workspace new-id)
     (message "mevedel: %s duplicated as %s" id new-id)))
 
+(defun mevedel-artifacts-list-conversation ()
+  "Open the selected artifact's own conversation, creating it on first use."
+  (interactive)
+  (let ((workspace (mevedel-artifacts-list--workspace))
+        (id (plist-get (mevedel-artifacts-list--selected-artifact) :id)))
+    (mevedel--display-chat-buffer
+     (mevedel-artifact-store-conversation workspace id))))
+
 (defun mevedel-artifacts-list-delete ()
   "Delete the selected artifact with its versions, which also unpublishes it.
 A whiteboard or document is deleted as a shared item, after any save in
@@ -368,8 +384,7 @@ progress, together with its comments and history."
           (mevedel-collaboration-delete-artifact
            workspace
            (file-relative-name (plist-get item :path)
-                               (mevedel-artifact-store-directory workspace))
-           session)
+                               (mevedel-artifact-store-directory workspace)))
           (mevedel-cockpit-surface-refresh)
           (message "mevedel: artifact %s deleted" (plist-get item :id)))))))
 
@@ -407,6 +422,8 @@ progress, together with its comments and history."
             mevedel-artifacts-list-versions)
            ("D" "Duplicate the selected artifact"
             mevedel-artifacts-list-duplicate)
+           ("c" "Open the selected artifact's own conversation"
+            mevedel-artifacts-list-conversation)
            ("d" "Delete (and unpublish) the selected artifact"
             mevedel-artifacts-list-delete)))
   "Cockpit surface spec for the artifact store.")

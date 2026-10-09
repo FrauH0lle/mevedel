@@ -1,4 +1,4 @@
-/* viewer-lobby.js -- a workspace's session list, opened from its lobby link */
+/* viewer-lobby.js -- a workspace's sessions, artifacts and files, from its lobby link */
 'use strict';
 
 (() => {
@@ -22,13 +22,15 @@
     window.location.replace(link);
   }
 
-  function create({state, send, el, notice, sessions, files = null, navigate = follow,
-                   confirm = text => window.confirm(text)}) {
+  function create({state, send, el, notice, sessions, files = null, store = null,
+                   navigate = follow, confirm = text => window.confirm(text)}) {
     const section = document.getElementById('lobby');
     const tabs = document.getElementById('lobby-tabs');
     const sessionsTab = document.getElementById('lobby-tab-sessions');
+    const artifactsTab = document.getElementById('lobby-tab-artifacts');
     const filesTab = document.getElementById('lobby-tab-files');
     const sessionsPane = document.getElementById('lobby-sessions');
+    const artifactsPane = document.getElementById('lobby-artifacts');
     const filesPane = document.getElementById('lobby-files');
     const list = document.getElementById('lobby-list');
     const empty = document.getElementById('lobby-empty');
@@ -48,25 +50,35 @@
     // stand in for this heading on screen; it labels the section for
     // assistive technology and heads a view link's tab-less list.
     function retitle() {
-      title.textContent = tab === 'files' ? 'Files' : 'Sessions';
+      title.textContent = {files: 'Files', artifacts: 'Artifacts'}[tab] || 'Sessions';
       newButton.hidden = !state.owner || tab !== 'sessions';
       uploadButton.hidden = tab !== 'files';
     }
 
-    // Project files are a full-link feature: a view link lists sessions
-    // and nothing else, so it gets no tabs at all.
+    // Project files are a full-link feature; a view link sees sessions and
+    // artifacts only.
+    function filesAllowed() {
+      return Boolean(files && state.writable);
+    }
+
     function select(next) {
-      tab = next === 'files' && files && state.writable ? 'files' : 'sessions';
+      if (next === 'files' && filesAllowed()) tab = 'files';
+      else if (next === 'artifacts' && store) tab = 'artifacts';
+      else tab = 'sessions';
       sessionsTab.setAttribute('aria-selected', String(tab === 'sessions'));
+      artifactsTab.setAttribute('aria-selected', String(tab === 'artifacts'));
       filesTab.setAttribute('aria-selected', String(tab === 'files'));
       sessionsPane.hidden = tab !== 'sessions';
+      artifactsPane.hidden = tab !== 'artifacts';
       filesPane.hidden = tab !== 'files';
       retitle();
       if (tab === 'files') files.show();
+      if (tab === 'artifacts') store.refresh();
     }
 
     function reload() {
       if (tab === 'files') files.refresh();
+      else if (tab === 'artifacts') store.refresh();
       else send({t: 'lobby-refresh'});
     }
 
@@ -125,7 +137,9 @@
       }
       const project = typeof frame.project === 'string' && frame.project ? frame.project : null;
       document.title = project ? `${project} · mevedel` : 'mevedel';
-      tabs.hidden = !(files && state.writable);
+      tabs.hidden = !(store || filesAllowed());
+      artifactsTab.hidden = !store;
+      filesTab.hidden = !filesAllowed();
       retitle();
       const rows = Array.isArray(frame.sessions) ? frame.sessions : [];
       list.replaceChildren(...rows.map(renderRow));
@@ -173,6 +187,7 @@
     });
     refresh.addEventListener('click', reload);
     sessionsTab.addEventListener('click', () => select('sessions'));
+    artifactsTab.addEventListener('click', () => select('artifacts'));
     filesTab.addEventListener('click', () => select('files'));
     // A phone tab returning to the foreground is the moment the list may
     // be stale: sessions were opened or created while it slept.

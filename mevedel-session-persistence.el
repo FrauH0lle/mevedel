@@ -42,6 +42,11 @@
 (declare-function mevedel-agent-persistence-restore-tree "mevedel-agent-persistence" (session root-buffer readonly-p))
 (autoload 'mevedel-agent-persistence-restore-tree "mevedel-agent-persistence")
 
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-dedicated-ids
+                  "mevedel-artifact-store" (workspace))
+(autoload 'mevedel-artifact-store-dedicated-ids "mevedel-artifact-store")
+
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer-disable-org-element-cache "mevedel-chat" nil)
 (declare-function mevedel--chat-buffer-init-common "mevedel-chat" (buf workspace source &optional inspection-p))
@@ -2384,6 +2389,18 @@ at `size unavailable' rather than hiding the chooser."
           (mevedel-session-persistence--incompatible-reason entry)
           (plist-get entry :save-path)))
 
+(defun mevedel-session-persistence-without-dedicated (workspace entries)
+  "Return listing ENTRIES of WORKSPACE without artifact conversations.
+An artifact's dedicated session is reached from its artifact, not listed
+among the user's chats."
+  (if-let* ((dedicated (mevedel-artifact-store-dedicated-ids workspace)))
+      (cl-remove-if (lambda (entry)
+                      (member (file-name-nondirectory
+                               (directory-file-name (plist-get entry :save-path)))
+                              dedicated))
+                    entries)
+    entries))
+
 (defun mevedel-session-persistence-choose-entry (workspace)
   "Choose a persisted WORKSPACE session or return `new'.
 
@@ -2401,7 +2418,8 @@ expired lease is taken over."
   (mevedel-session-persistence--sweep-stale-locks workspace)
   (let* ((enumeration
           (mevedel-session-persistence--enumerate-sessions workspace))
-         (sessions (plist-get enumeration :sessions))
+         (sessions (mevedel-session-persistence-without-dedicated
+                    workspace (plist-get enumeration :sessions)))
          (incompatible
           (mevedel-session-persistence--size-incompatible
            (plist-get enumeration :incompatible))))
@@ -2833,11 +2851,14 @@ workspace was swept too recently."
         (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
               (now            (float-time))
               (deleted        0)
-              (candidates     nil))
+              (candidates     nil)
+              ;; An artifact's conversation lives as long as the artifact.
+              (dedicated      (mevedel-artifact-store-dedicated-ids workspace)))
           (dolist (save-path
                    (and (file-directory-p sessions-dir)
                         (directory-files sessions-dir t "\\`[^.]")))
-            (when (file-directory-p save-path)
+            (when (and (file-directory-p save-path)
+                       (not (member (file-name-nondirectory save-path) dedicated)))
               (let* ((sidecar-path
                       (mevedel-session-artifacts-sidecar-path save-path))
                      (sidecar

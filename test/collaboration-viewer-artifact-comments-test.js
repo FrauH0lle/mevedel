@@ -56,7 +56,7 @@ const controller = window.mevedelArtifactView.create({
   busy: () => busy,
 });
 
-controller.open({id: 'tool-1', artifact: 'page.html'});
+controller.open({id: 'tool-1', artifact: 'page/page.html', store: 'page'});
 const html = '<p id="lead">Hello</p>';
 controller.handle({reqId: 1, mime: 'text/html', size: html.length,
                    data: Buffer.from(html).toString('base64'), final: true});
@@ -71,10 +71,10 @@ frame.contentWindow = {postMessage: data => posted.push(data)};
 // and the transcript's reply become one answered marker.
 assert.deepEqual({...sentFrames.at(-1)}, {t: 'artifact-comment', reqId: 1, action: 'list', id: 'tool-1'});
 const anchor = {kind: 'word', selector: '#lead', label: 'word "Hello"', quote: 'Hello', start: 0};
-controller.storedComments({artifact: 'page.html', comments: [
+controller.storedComments({artifact: 'page', comments: [
   {id: 'c1', actor: 'Alice', text: 'Wave', anchor, resolved: false, replies: []},
   {id: 'c2', actor: 'Bob', text: 'Done', anchor, resolved: true, replies: []}]});
-controller.storedComments({artifact: 'other.html', comments: []});
+controller.storedComments({artifact: 'other', comments: []});
 controller.render([
   {id: 'tool-1', kind: 'tool', artifact: 'page.html'},
   {id: 'u1', kind: 'user', guest: 'Alice',
@@ -128,20 +128,32 @@ const card = nodes['artifact-body'].children.find(child => child.className === '
 assert.match(textOf(card), /Alice · Answered/);
 assert.match(textOf(card), /Waved\./);
 
+// A thread answered in another session says where.
+controller.storedComments({artifact: 'page', comments: [
+  {id: 'c1', actor: 'Alice', text: 'Wave', anchor, resolved: false, replies: []},
+  {id: 'c9', actor: 'Bob', text: 'Elsewhere', anchor: {kind: 'word', selector: '#lead',
+                                                     label: 'Lead', quote: 'Hello', start: 0},
+   resolved: false, replies: [], session: 's2', sessionName: 'Design chat'}]});
+message({source: frame.contentWindow,
+         data: {mevedelComment: 'open', id: 'c9', rect: {left: 1, top: 1, width: 1, height: 1}}});
+const answeredCard = nodes['artifact-body'].children.find(
+  child => child.className === 'artifact-comment-card');
+assert.match(textOf(answeredCard), /answered in Design chat/);
+
 const find = (node, text) => node.textContent === text ? node
   : node.children.map(child => typeof child === 'string' ? null : find(child, text)).find(Boolean);
 find(card, 'Show in chat').dispatch('click');
 assert.deepEqual(revealed, [{id: 'u1', panelHidden: true}],
                  'the panel closes before the turn is revealed');
 
-// A room message about the whole artifact goes through its latest record.
-controller.discuss('page.html', 'Tighten the intro');
+// A room message about the whole artifact names it by its store id; the
+// host decides whether the artifact still takes messages.
+controller.discuss('page', 'Tighten the intro');
 assert.deepEqual(JSON.parse(JSON.stringify(sentFrames.at(-1))),
                  {t: 'artifact-comment', reqId: sentFrames.at(-1).reqId, action: 'ask',
-                  id: 'tool-1', questionId: sentFrames.at(-1).questionId,
+                  id: 'artifact:page', questionId: sentFrames.at(-1).questionId,
                   text: 'Tighten the intro'});
-controller.discuss('missing.html', 'Hello').then(
-  () => assert.fail('an unpublished artifact takes no messages'),
-  error => assert.match(error.message, /not published/));
+
+
 
 console.log('viewer artifact comments passed');

@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Anchors, the per-artifact comment store, guest actions and assistant
-;; requests for comments on session artifacts.
+;; Anchors, the per-artifact comment store, guest actions and the routing
+;; of assistant requests for comments on store artifacts.
 
 ;;; Code:
 
@@ -14,6 +14,7 @@
           "helpers"))
 (require 'cl-lib)
 (require 'gptel)
+(require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-artifact)
@@ -91,7 +92,7 @@
                               :quote "share" :region (:x0 0 :y0 0 :x1 0.5 :y1 1) :count 2)
                      :context (:text "Two cards" :html "<div>Two cards</div>")
                      :replies [(:id "r" :actor "Bob" :text "Of four")]))))
-    (should (string-match-p "^Session artifact schema.html$" snapshot))
+    (should (string-match-p "^Artifact schema.html$" snapshot))
     (should (string-match-p "^File: /tmp/a/schema.html$" snapshot))
     (should (string-match-p "^Target: Schema › area · 2 elements$" snapshot))
     (should (string-match-p "^Selected text: \"share\"$" snapshot))
@@ -101,40 +102,54 @@
   :doc "describes a message about the whole artifact by file and scope only"
   (let ((snapshot (mevedel-collaboration--artifact-comment-snapshot
                    '(:artifact "a.html" :artifact-path "/tmp/a.html") nil)))
-    (should (equal snapshot "Session artifact a.html\nFile: /tmp/a.html\nScope: the whole artifact"))))
+    (should (equal snapshot "Artifact a.html\nFile: /tmp/a.html\nScope: the whole artifact"))))
 
-(mevedel-deftest mevedel-collaboration--artifact-comment-logical
-  (:doc "stores each artifact's comments in its own file beside the shared items")
-  (let ((one (mevedel-collaboration--artifact-comment-logical "a.html"))
-        (two (mevedel-collaboration--artifact-comment-logical "b.html")))
-    (should (string-match-p
-             "\\`artifacts/shared-editing/artifact-comments/[0-9a-f]\\{32\\}\\.json\\'" one))
-    (should-not (equal one two))
-    (should (equal one (mevedel-collaboration--artifact-comment-logical "a.html")))))
+(defun mevedel-test--artifact-comment-store (workspace id file &optional content)
+  "Create WORKSPACE's store artifact ID whose FILE holds CONTENT.
+Without CONTENT the artifact's file is missing.  Return the file's path."
+  (let ((path (file-name-concat (mevedel-artifact-store-directory workspace) id file)))
+    (make-directory (file-name-directory path) t)
+    (mevedel-artifact-store--create-meta workspace id file)
+    (when content (write-region content nil path nil 'silent))
+    path))
 
 (defmacro mevedel-test--with-artifact-comment-room (&rest body)
   "Run BODY with ROOM: a live PID-lock session, a writable guest and artifacts.
-DIRECTORY is the session's save path and SENT collects outgoing frames."
+DIRECTORY is the workspace root, WORKSPACE its file workspace with store
+artifacts schema, notes and gone, and SENT collects outgoing frames."
   (declare (indent 0))
   `(mevedel-view-test--with-buffers
-     (let* ((directory (make-temp-file "mevedel-artifact-comments-" t))
+     (let* ((directory (file-name-as-directory
+                        (make-temp-file "mevedel-artifact-comments-" t)))
             (workspace (mevedel-workspace--create :type 'file :id "artifact-comments"
-                                                  :root temporary-file-directory))
+                                                  :root directory))
             (session (mevedel-session-create "main" workspace))
+            (schema (mevedel-test--artifact-comment-store
+                     workspace "schema" "schema.html" "<p>schema</p>"))
             (room (list :session session :data-buffer data-buf :transport 'transport
                         :guests (make-hash-table :test #'eql)
                         :records (list (list :id "tool-1" :kind "tool" :name "ApplyPatch"
-                                             :artifact "schema.html"
-                                             :artifact-path "/tmp/schema.html")
+                                             :artifact "schema/schema.html"
+                                             :artifact-path schema)
                                        (list :id "tool-2" :kind "tool" :name "ApplyPatch"
-                                             :artifact "notes.md" :artifact-path "/tmp/notes.md")
+                                             :artifact "notes/notes.md"
+                                             :artifact-path (mevedel-test--artifact-comment-store
+                                                             workspace "notes" "notes.md" "n"))
                                        (list :id "tool-3" :kind "tool" :name "ApplyPatch"
-                                             :artifact "gone.html"
-                                             :artifact-path "/tmp/gone.html" :missing t))))
+                                             :artifact "gone/gone.html"
+                                             :artifact-path (mevedel-test--artifact-comment-store
+                                                             workspace "gone" "gone.html")
+                                             :missing t)
+                                       (list :id "tool-4" :kind "tool" :name "ApplyPatch"
+                                             :artifact "schema/extra.html"
+                                             :artifact-path (file-name-concat
+                                                             (file-name-directory schema)
+                                                             "extra.html")))))
+            (mevedel-collaboration--rooms (mevedel-test-room-registry room))
             (guest (list :name "Alice" :guest-id "alice" :writable t :role "full"))
             sent)
        (puthash 1 guest (plist-get room :guests))
-       (setf (mevedel-session-save-path session) directory
+       (setf (mevedel-session-save-path session) (file-name-concat directory "session")
              (mevedel-session-authority-mode session) 'pid-lock)
        (with-current-buffer data-buf
          (setq-local mevedel--session session mevedel--workspace workspace))
@@ -169,25 +184,21 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
   (test)
   :doc "round-trips the store and treats a missing one as no comments"
   (mevedel-test--with-artifact-comment-room
-    (should-not (mevedel-collaboration--artifact-comments-read session "schema.html"))
+    (should-not (mevedel-collaboration--artifact-comments-read workspace "schema"))
     (mevedel-collaboration--artifact-comments-write
-     room "schema.html" (list '(:id "c" :actor "Alice" :text "Hi" :resolved :json-false
+     workspace "schema" (list '(:id "c" :actor "Alice" :text "Hi" :resolved :json-false
                                 :replies [])))
-    (should (file-exists-p (file-name-concat directory
-                                             (mevedel-collaboration--artifact-comment-logical
-                                              "schema.html"))))
-    (let ((comment (car (mevedel-collaboration--artifact-comments-read session "schema.html"))))
+    (should (file-exists-p (file-name-concat directory ".mevedel/artifacts/schema/comments.json")))
+    (let ((comment (car (mevedel-collaboration--artifact-comments-read workspace "schema"))))
       (should (equal (plist-get comment :text) "Hi"))
       (should (eq (plist-get comment :resolved) :json-false)))
     ;; Items are the shared-item folder's direct entries only.
     (should-not (mevedel-shared-editing-list session)))
   :doc "refuses a store that belongs to another artifact"
   (mevedel-test--with-artifact-comment-room
-    (let ((path (file-name-concat directory (mevedel-collaboration--artifact-comment-logical
-                                             "schema.html"))))
-      (make-directory (file-name-directory path) t)
-      (write-region "{\"artifact\":\"other.html\",\"comments\":[]}" nil path nil 'silent)
-      (should-error (mevedel-collaboration--artifact-comments-read session "schema.html")))))
+    (let ((path (file-name-concat directory ".mevedel/artifacts/schema/comments.json")))
+      (write-region "{\"artifact\":\"other\",\"comments\":[]}" nil path nil 'silent)
+      (should-error (mevedel-collaboration--artifact-comments-read workspace "schema")))))
 
 (mevedel-deftest mevedel-collaboration--artifact-comment-action ()
   ,test
@@ -198,7 +209,7 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
                    room guest (mevedel-test--artifact-comment-post)))
            (entry (car (mevedel-session-pending-follow-ups session)))
            (shared (plist-get entry :shared-question))
-           (stored (car (mevedel-collaboration--artifact-comments-read session "schema.html")))
+           (stored (car (mevedel-collaboration--artifact-comments-read workspace "schema")))
            (broadcast (cdr (cl-find 0 sent :key #'car))))
       (should (equal (plist-get reply :commentId) "0123456789abcdef0123"))
       (should (plist-get reply :queued))
@@ -208,25 +219,29 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
       (should (equal (plist-get stored :context) '(:text "countries share the same tables")))
       ;; Guests receive the list without the stored excerpts.
       (should (equal (plist-get broadcast :t) "artifact-comments"))
-      (should (equal (plist-get broadcast :artifact) "schema.html"))
+      (should (equal (plist-get broadcast :artifact) "schema"))
       (should-not (plist-member (aref (plist-get broadcast :comments) 0) :context))
       ;; The request is an item conversation about the artifact.
-      (should (equal (plist-get shared :itemId) "artifact:schema.html"))
+      (should (equal (plist-get shared :itemId) "artifact:schema"))
+      ;; The room's session answers the thread and is attached.
+      (should (equal (plist-get reply :session) (mevedel-session-session-id session)))
+      (should (equal (plist-get stored :session) (mevedel-session-session-id session)))
+      (should (equal '("schema") (mevedel-session-attached-artifacts session)))
       (should (equal (plist-get shared :commentId) "0123456789abcdef0123"))
       (should (equal (plist-get shared :questionId) "0123456789abcdef0123"))
       (should (equal (plist-get shared :scope) "selection"))
       (should (string-prefix-p
                (concat "Make this bigger\n\nShared content snapshot (user-provided data):\n"
-                       "Session artifact schema.html\nFile: /tmp/schema.html")
+                       "Artifact schema/schema.html\nFile: " schema)
                (plist-get entry :input)))
       (should (equal (plist-get (mevedel-transcript-audit-shared-context
                                  (plist-get entry :input) shared)
                                 :label)
-                     "Artifact comment · schema.html · SNT Schema v2 › word \"share\""))
+                     "Artifact comment · schema/schema.html · SNT Schema v2 › word \"share\""))
       ;; A retried post neither stores nor queues it twice.
       (mevedel-collaboration--artifact-comment-action
        room guest (mevedel-test--artifact-comment-post))
-      (should (= 1 (length (mevedel-collaboration--artifact-comments-read session "schema.html"))))
+      (should (= 1 (length (mevedel-collaboration--artifact-comments-read workspace "schema"))))
       (should (= 1 (length (mevedel-session-pending-follow-ups session))))))
   :doc "keeps people-only comments and replies out of the model, and threads replies"
   (mevedel-test--with-artifact-comment-room
@@ -246,7 +261,7 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
         (should (string-match-p "- Alice: Make this bigger\n- Alice: And bolder"
                                 (plist-get entry :input)))))
     (should (= 1 (length (plist-get (car (mevedel-collaboration--artifact-comments-read
-                                          session "schema.html"))
+                                          workspace "schema"))
                                     :replies)))))
   :doc "resolves and reopens, and refuses replies to a resolved comment"
   (mevedel-test--with-artifact-comment-room
@@ -257,7 +272,7 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
                                                :commentId "0123456789abcdef0123" :resolved t))
                              :resolved)))
     (should (eq t (plist-get (car (mevedel-collaboration--artifact-comments-read
-                                   session "schema.html"))
+                                   workspace "schema"))
                              :resolved)))
     (should-error (mevedel-collaboration--artifact-comment-action
                    room guest (list :action "reply" :id "tool-1"
@@ -267,7 +282,7 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
      room guest (list :action "resolve" :id "tool-1" :commentId "0123456789abcdef0123"
                       :resolved :json-false))
     (should (eq :json-false (plist-get (car (mevedel-collaboration--artifact-comments-read
-                                             session "schema.html"))
+                                             workspace "schema"))
                                        :resolved))))
   :doc "asks about the whole artifact without storing a comment"
   (mevedel-test--with-artifact-comment-room
@@ -282,8 +297,8 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
       (should (equal (plist-get (mevedel-transcript-audit-shared-context
                                  (plist-get entry :input) shared)
                                 :label)
-                     "Artifact · schema.html · Whole artifact")))
-    (should-not (mevedel-collaboration--artifact-comments-read session "schema.html")))
+                     "Artifact · schema/schema.html · Whole artifact")))
+    (should-not (mevedel-collaboration--artifact-comments-read workspace "schema")))
   :doc "carries the sender's files with a message about the whole artifact"
   (mevedel-test--with-artifact-comment-room
     (let ((media (file-name-as-directory (make-temp-file "mevedel-artifact-files-" t))))
@@ -314,6 +329,8 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
                                 "not published")
                           (list guest (mevedel-test--artifact-comment-post :id "nope")
                                 "not published")
+                          (list guest (mevedel-test--artifact-comment-post :id "tool-4")
+                                "main file")
                           (list guest (mevedel-test--artifact-comment-post :text "   ")
                                 "message is required")
                           (list guest (mevedel-test--artifact-comment-post :anchor '(:label "x"))
@@ -323,23 +340,54 @@ DIRECTORY is the session's save path and SENT collects outgoing frames."
         (let ((err (should-error (mevedel-collaboration--artifact-comment-action
                                   room (car case) (nth 1 case)))))
           (should (string-match-p (nth 2 case) (error-message-string err)))))
-      (should-not (mevedel-collaboration--artifact-comments-read session "schema.html"))
+      (should-not (mevedel-collaboration--artifact-comments-read workspace "schema"))
       (should-not (mevedel-session-pending-follow-ups session)))))
+
+(mevedel-deftest mevedel-collaboration--artifact-answering-buffer ()
+  ,test
+  (test)
+  :doc "keeps a thread with its session, else the room's, else the dedicated one"
+  (mevedel-test--with-artifact-comment-room
+    (let ((other (generate-new-buffer " *other-session*"))
+          (dedicated (generate-new-buffer " *dedicated-session*"))
+          (lobby (list :workspace workspace :transport 'transport
+                       :guests (make-hash-table :test #'eql))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-artifact-store-session-buffer)
+                     (lambda (_workspace id) (and (equal id "other") other)))
+                    ((symbol-function 'mevedel-artifact-store-conversation)
+                     (lambda (_workspace _id) dedicated)))
+            (should (eq data-buf (mevedel-collaboration--artifact-answering-buffer
+                                  room "schema" nil)))
+            (should (eq data-buf (mevedel-collaboration--artifact-answering-buffer
+                                  room "schema" (mevedel-session-session-id session))))
+            (should (eq other (mevedel-collaboration--artifact-answering-buffer
+                               room "schema" "other")))
+            ;; A thread whose session is gone falls back to the dedicated one.
+            (should (eq dedicated (mevedel-collaboration--artifact-answering-buffer
+                                   room "schema" "gone")))
+            ;; The lobby has no session of its own.
+            (should (eq dedicated (mevedel-collaboration--artifact-answering-buffer
+                                   lobby "schema" nil)))
+            (should (eq other (mevedel-collaboration--artifact-answering-buffer
+                               lobby "schema" "other"))))
+        (kill-buffer other)
+        (kill-buffer dedicated)))))
 
 (mevedel-deftest mevedel-collaboration--artifact-question-known-p
   (:doc "finds queued and delivered artifact requests by identity")
   (mevedel-test--with-artifact-comment-room
     (should-not (mevedel-collaboration--artifact-question-known-p
-                 room "0123456789abcdef0123"))
+                 data-buf "0123456789abcdef0123"))
     (mevedel-collaboration--artifact-comment-action
      room guest (mevedel-test--artifact-comment-post))
-    (should (mevedel-collaboration--artifact-question-known-p room "0123456789abcdef0123"))
+    (should (mevedel-collaboration--artifact-question-known-p data-buf "0123456789abcdef0123"))
     (mevedel-session-set-pending-input-paused session nil)
     (cl-letf (((symbol-function 'gptel-send) #'ignore))
       (mevedel-view--drain-follow-up data-buf))
     (should-not (mevedel-session-pending-follow-ups session))
-    (should (mevedel-collaboration--artifact-question-known-p room "0123456789abcdef0123"))
-    (should-not (mevedel-collaboration--artifact-question-known-p room "other"))))
+    (should (mevedel-collaboration--artifact-question-known-p data-buf "0123456789abcdef0123"))
+    (should-not (mevedel-collaboration--artifact-question-known-p data-buf "other"))))
 
 (mevedel-deftest mevedel-collaboration--handle-artifact-comment
   (:doc "answers the sender with a receipt or a refusal and never signals")

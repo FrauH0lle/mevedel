@@ -76,9 +76,11 @@ Cache immutable segment metadata, never a second transcript store."
 (defun mevedel-collaboration--history-catalog-records (records)
   "Extract only published artifact identities and paths from RECORDS."
   (cl-loop for record in records when (plist-get record :artifact)
-           collect (list :id (plist-get record :id)
-                         :artifact (plist-get record :artifact)
-                         :artifact-path (plist-get record :artifact-path))))
+           collect (append (list :id (plist-get record :id)
+                                 :artifact (plist-get record :artifact)
+                                 :artifact-path (plist-get record :artifact-path))
+                           (when (plist-member record :store)
+                             (list :store (plist-get record :store))))))
 
 (defun mevedel-collaboration--publish-history (room &optional peer)
   "Publish ROOM's history index when changed, or directly to joining PEER."

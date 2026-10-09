@@ -32,9 +32,34 @@
 (require 'mevedel-collaboration)
 (require 'mevedel-workspace)
 
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-dedicated-ids
+                  "mevedel-artifact-store" (workspace))
+(autoload 'mevedel-artifact-store-dedicated-ids "mevedel-artifact-store")
+
 ;; `mevedel-chat'
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
+
+;; `mevedel-collaboration-artifact'
+(declare-function mevedel-collaboration--handle-artifact-delete
+                  "mevedel-collaboration-artifact" (room peer frame))
+(declare-function mevedel-collaboration--handle-artifact-get
+                  "mevedel-collaboration-artifact" (room peer frame))
+(declare-function mevedel-collaboration--handle-store-action
+                  "mevedel-collaboration-artifact" (room peer frame))
+(declare-function mevedel-collaboration--handle-store-list
+                  "mevedel-collaboration-artifact" (room peer frame))
+(autoload 'mevedel-collaboration--handle-artifact-delete "mevedel-collaboration-artifact")
+(autoload 'mevedel-collaboration--handle-artifact-get "mevedel-collaboration-artifact")
+(autoload 'mevedel-collaboration--handle-store-action "mevedel-collaboration-artifact")
+(autoload 'mevedel-collaboration--handle-store-list "mevedel-collaboration-artifact")
+
+;; `mevedel-collaboration-artifact-comments'
+(declare-function mevedel-collaboration--handle-artifact-comment
+                  "mevedel-collaboration-artifact-comments" (room peer frame))
+(autoload 'mevedel-collaboration--handle-artifact-comment
+  "mevedel-collaboration-artifact-comments")
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--admit-hello
@@ -88,7 +113,11 @@
                   "mevedel-session-persistence"
                   (session-dir &optional lifecycle-source session-override
                                workspace))
+(declare-function mevedel-session-persistence-without-dedicated
+                  "mevedel-session-persistence" (workspace entries))
 (autoload 'mevedel-session-persistence-delete "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-without-dedicated
+  "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-list-sessions
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-restore "mevedel-session-persistence")
@@ -277,8 +306,11 @@ gone, in which case it is forgotten."
 Live sessions that were never saved lead; saved ones follow in their
 own order, marked live or shared when they are open here.  A row's
 `:updated' is in seconds since the epoch."
-  (let* ((live (mevedel-collaboration-lobby--live-sessions workspace))
-         (saved (mevedel-session-persistence-list-sessions workspace))
+  (let* ((dedicated (mevedel-artifact-store-dedicated-ids workspace))
+         (live (cl-remove-if (lambda (entry) (member (car entry) dedicated))
+                             (mevedel-collaboration-lobby--live-sessions workspace)))
+         (saved (mevedel-session-persistence-without-dedicated
+                 workspace (mevedel-session-persistence-list-sessions workspace)))
          (saved-ids (mapcar (lambda (entry)
                               (plist-get (plist-get entry :summary)
                                          :session-id))
@@ -470,7 +502,18 @@ whose link is meant to keep working."
               lobby peer frame root))
             ("file-remove"
              (mevedel-collaboration-files-handle-remove
-              lobby peer frame root))))
+              lobby peer frame root))
+            ;; The workspace's artifacts, reached by store identity.
+            ("artifact-get"
+             (mevedel-collaboration--handle-artifact-get lobby peer frame))
+            ("artifact-delete"
+             (mevedel-collaboration--handle-artifact-delete lobby peer frame))
+            ("artifact-comment"
+             (mevedel-collaboration--handle-artifact-comment lobby peer frame))
+            ("store-list"
+             (mevedel-collaboration--handle-store-list lobby peer frame))
+            ("store-action"
+             (mevedel-collaboration--handle-store-action lobby peer frame))))
       (error
        (message "mevedel: lobby frame failed: %s"
                 (error-message-string err))))))

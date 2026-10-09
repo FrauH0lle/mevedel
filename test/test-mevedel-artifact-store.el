@@ -8,6 +8,12 @@
 ;;; Code:
 
 (require 'mevedel-artifact-store)
+(require 'mevedel-chat)
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-session-test-support"))
 (require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
@@ -212,6 +218,49 @@
       (mevedel-artifact-store-attach session "a" 'buffer))
     (should (equal '("a" "b") (mevedel-session-attached-artifacts session)))
     (should (equal (list (list session 'buffer)) written))))
+
+;; ponytail: one real lifecycle case; the chat setup is too slow for several.
+(mevedel-deftest mevedel-artifact-store-conversation (:quiet t)
+  ,test
+  (test)
+  :doc "creates a saved, attached, hidden session once, resumes it, and deletes it"
+  (pcase-let* ((`(,workspace . ,root)
+                (test-mevedel-session-persistence--make-tempdir-workspace))
+               (store (mevedel-artifact-store-directory workspace))
+               (buffer nil))
+    (unwind-protect
+        (progn
+          (mevedel-artifact-store-test--write store "flow/index.html" "x")
+          (mevedel-artifact-store--create-meta workspace "flow" "index.html")
+          ;; Presets are defined by the package setup the test omits.
+          (cl-letf (((symbol-function 'mevedel--ensure-chat-preset) #'ignore))
+            (setq buffer (mevedel-artifact-store-conversation workspace "flow")))
+          (let* ((session (buffer-local-value 'mevedel--session buffer))
+                 (id (mevedel-session-session-id session)))
+            (should (equal "Artifact flow" (mevedel-session-name session)))
+            (should (equal '("flow") (mevedel-session-attached-artifacts session)))
+            (should (equal (list id) (mevedel-artifact-store-dedicated-ids workspace)))
+            (should (file-exists-p (mevedel-session-artifacts-sidecar-path
+                                    (mevedel-session-save-path session))))
+            (should (eq buffer (mevedel-artifact-store-conversation workspace "flow")))
+            ;; An open conversation keeps its artifact.
+            (should-error (mevedel-artifact-store-delete workspace "flow"))
+            (test-mevedel-session-persistence--release-and-kill buffer session)
+            (setq buffer (mevedel-artifact-store-conversation workspace "flow"))
+            (should (equal id (mevedel-session-session-id
+                               (buffer-local-value 'mevedel--session buffer))))
+            (test-mevedel-session-persistence--release-and-kill
+             buffer (buffer-local-value 'mevedel--session buffer))
+            (mevedel-artifact-store-delete workspace "flow")
+            (should-not (file-exists-p (file-name-concat store "flow")))
+            (should-not (file-exists-p (file-name-concat
+                                        (mevedel-session-artifacts-sessions-dir workspace)
+                                        id)))))
+      (when (buffer-live-p buffer)
+        (test-mevedel-session-persistence--release-and-kill
+         buffer (buffer-local-value 'mevedel--session buffer)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (provide 'test-mevedel-artifact-store)
 ;;; test-mevedel-artifact-store.el ends here

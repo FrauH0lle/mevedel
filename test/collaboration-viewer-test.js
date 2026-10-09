@@ -639,8 +639,10 @@ async function main() {
                'invites', 'invite-button', 'invite', 'invite-tiers',
                'lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
                'lobby-title', 'lobby-new', 'lobby-refresh',
-               'lobby-tabs', 'lobby-tab-sessions', 'lobby-tab-files',
-               'lobby-sessions', 'lobby-files', 'files-path', 'files-list',
+               'lobby-tabs', 'lobby-tab-sessions', 'lobby-tab-artifacts', 'lobby-tab-files',
+               'lobby-sessions', 'lobby-artifacts', 'lobby-store-list', 'lobby-store-empty',
+               'store-box', 'store-list', 'store-empty',
+               'lobby-files', 'files-path', 'files-list',
                'files-status', 'files-upload', 'files-input', 'artifact-ask',
                'editing-status', 'editing-recheck', 'editing-box', 'editing-items', 'editing-panel', 'editing-body',
                'editing-title', 'editing-file', 'editing-import', 'editing-close'];
@@ -834,6 +836,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-files.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-store.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-lobby.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);

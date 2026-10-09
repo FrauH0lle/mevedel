@@ -184,3 +184,7 @@
   font-size: .76rem;
   cursor: pointer;
 }
+
+/* The session answering a thread, which may be another chat than this
+   room's. */
+.artifact-comment-session { color: var(--muted); font-size: .8rem; }

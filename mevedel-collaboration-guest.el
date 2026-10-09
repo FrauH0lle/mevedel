@@ -80,6 +80,12 @@
                   "mevedel-collaboration-artifact" (room peer frame))
 (declare-function mevedel-collaboration--handle-artifact-delete
                   "mevedel-collaboration-artifact" (room peer frame))
+(declare-function mevedel-collaboration--handle-store-action
+                  "mevedel-collaboration-artifact" (room peer frame))
+(declare-function mevedel-collaboration--handle-store-list
+                  "mevedel-collaboration-artifact" (room peer frame))
+(declare-function mevedel-collaboration--store-frame
+                  "mevedel-collaboration-artifact" (room))
 
 ;; `mevedel-collaboration-files'
 (declare-function mevedel-collaboration-files-handle-upload
@@ -708,6 +714,14 @@ Authority comes only from the tokens FRAME proves it holds."
     (mevedel-collaboration--transport-send
      (plist-get room :transport) peer
      (mevedel-collaboration--tasks-frame room))
+    ;; The store's artifacts attached to the session join the sidebar.  A
+    ;; store fault costs the guest only this listing.
+    (condition-case err
+        (mevedel-collaboration--transport-send
+         (plist-get room :transport) peer
+         (mevedel-collaboration--store-frame room))
+      (error (message "mevedel: artifact listing failed: %s"
+                      (error-message-string err))))
     (when (and (plist-get guest :writable)
                mevedel-collaboration-remote-interactions)
       (mevedel-collaboration--send-ui-requests room peer))
@@ -1146,6 +1160,10 @@ sending guest instead of waiting for an answer."
      (mevedel-collaboration--handle-artifact-delete room peer frame))
     ("artifact-comment"
      (mevedel-collaboration--handle-artifact-comment room peer frame))
+    ("store-list"
+     (mevedel-collaboration--handle-store-list room peer frame))
+    ("store-action"
+     (mevedel-collaboration--handle-store-action room peer frame))
     ("file-upload"
      (mevedel-collaboration-files-handle-upload
       room peer frame

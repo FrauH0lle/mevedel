@@ -1024,6 +1024,8 @@ function createArtifactCommentController(options) {
       if (!anchor || comment.resolved === true) continue;
       list.push(Object.assign({id: comment.id, anchor, text: String(comment.text || ''),
                                actor: String(comment.actor || ''),
+                               sessionName: typeof comment.sessionName === 'string'
+                                 ? comment.sessionName : '',
                                replies: Array.isArray(comment.replies) ? comment.replies : []},
                               assistantState(comment.id)));
     }
@@ -1245,6 +1247,10 @@ function createArtifactCommentController(options) {
          answered: 'Answered'}[comment.state] || 'Posted';
     const head = el('div', 'artifact-comment-head');
     head.append(el('span', '', [comment.actor || 'Guest', status].join(' · ')));
+    // The session that answers this thread, wherever it was written.
+    if (comment.sessionName) {
+      head.append(el('span', 'artifact-comment-session', `answered in ${comment.sessionName}`));
+    }
     const close = el('button', 'artifact-comment-close', '×');
     close.type = 'button';
     close.title = 'Close';
@@ -1425,15 +1431,15 @@ function createArtifactCommentController(options) {
     activity() {
       publishMarkers();
     },
-    // The host store changed for artifact NAME.
+    // The host store changed for the artifact the frame names.
     stored(frame) {
       if (frame && frame.artifact === view.name && Array.isArray(frame.comments)) {
         stored = frame.comments;
         publishMarkers();
       }
     },
-    // A room message about the whole artifact record ID, with attachment
-    // IMAGES, into its conversation.
+    // A message about the whole artifact ID (a card or artifact:STORE),
+    // with attachment IMAGES, into its conversation.
     discuss(id, text, images = []) {
       return request({action: 'ask', id, questionId: newId(), text,
                       ...(images.length ? {images} : {})});
