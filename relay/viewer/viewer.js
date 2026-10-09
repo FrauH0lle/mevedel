@@ -474,7 +474,7 @@
     auth.replaceChildren();
     if (frame.auth) {
       auth.append(el('p', '', frame.auth.message || ''));
-      if (frame.auth.url && /^https:\/\/(auth\.openai\.com|claude\.ai|platform\.claude\.com)\//.test(frame.auth.url)) {
+      if (frame.auth.url && /^https:\/\/(auth\.openai\.com|claude\.ai|claude\.com|platform\.claude\.com)\//.test(frame.auth.url)) {
         const link = el('a', '', 'Open provider login');
         link.href = frame.auth.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; auth.append(link);
       }
