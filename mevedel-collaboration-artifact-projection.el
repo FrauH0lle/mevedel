@@ -2,7 +2,8 @@
 
 ;;; Commentary:
 
-;; Maps settled ApplyPatch render data onto session artifact cards.  This is
+;; Maps settled ApplyPatch render data onto artifact cards for writes into
+;; the workspace artifact store.  This is
 ;; the path-domain and file-stat leaf used by collaboration projection; file
 ;; bytes remain host-only until an authenticated guest requests a published
 ;; record id.
@@ -17,22 +18,21 @@
 (autoload 'mevedel-execution-target-create "mevedel-execution-target")
 (autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
 
-;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-artifacts-dir
-                  "mevedel-session-artifacts" (save-path))
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-directory
+                  "mevedel-artifact-store" (workspace))
+(autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
 (defun mevedel-collaboration--artifacts-dir (session)
-  "Return SESSION's expanded artifacts directory with trailing slash, or nil."
-  (when-let* ((save-path (and session (mevedel-session-save-path session))))
-    (file-name-as-directory
-     (expand-file-name
-      (mevedel-session-artifacts-artifacts-dir save-path)))))
+  "Return SESSION's expanded artifact store directory, or nil."
+  (when-let* ((workspace (and session (mevedel-session-workspace session))))
+    (expand-file-name (mevedel-artifact-store-directory workspace))))
 
 (defvar mevedel-collaboration--artifact-stats (make-hash-table :test #'equal)
   "Cached (SIZE . MISSING-P) per published artifact's qualified path.
@@ -76,7 +76,11 @@ for the deleted path will re-project as missing."
                       (not (equal relative "."))
                       (not (equal relative ".."))
                       (not (string-prefix-p
-                            (file-name-as-directory "..") relative)))))
+                            (file-name-as-directory "..") relative))
+                      ;; Host bookkeeping is not an artifact.
+                      (not (string-match-p
+                            "\\`[^/]+/\\(?:meta\\.el\\'\\|versions/\\)"
+                            relative)))))
       (let ((stat (mevedel-collaboration--artifact-stat full)))
         (append (list :artifact relative :artifact-path full)
                 (if (cdr stat)

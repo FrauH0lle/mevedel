@@ -50,8 +50,8 @@ captured bodies, not current file reads. Each browser owns nested disclosures.
 Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
 with scripts permitted but no same-origin authority and a restrictive CSP.
-Artifacts use existing portable session publication, not relay file storage or
-a separate retention system. See [Session artifacts](../view.md#session-artifacts).
+Artifacts live in the workspace artifact store, not in relay file storage. See
+[Artifact store](../view.md#artifact-store).
 
 Compaction reduces model context without withdrawing browser history. Earlier
 segments load as read-only disclosures through the existing session reader.

@@ -24,6 +24,7 @@
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-artifact-store)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
@@ -411,13 +412,15 @@
                                   record))))))
     ;; Settled selected ApplyPatch render data is the artifact authority.
     (let* ((save-path (make-temp-file "mevedel-collab-tool-artifact-" t))
-           (dir (mevedel-session-artifacts-artifacts-dir save-path))
+           (workspace (mevedel-workspace--create :type 'project :id "w"
+                                                 :root save-path :name "w"))
+           (dir (mevedel-artifact-store-directory workspace))
            (path (file-name-concat dir "mockup.html")))
       (unwind-protect
           (progn
             (setq-local mevedel--session
                         (mevedel-session--create :name "s"
-                                                 :save-path save-path))
+                                                 :workspace workspace))
             (make-directory dir t)
             (write-region "<h1>hi</h1>" nil path nil 'silent)
             (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)

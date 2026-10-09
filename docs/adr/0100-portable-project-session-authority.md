@@ -48,7 +48,7 @@ claim from another client therefore always wins.
 A missing or contradictory authority profile is an error. The session codec
 accepts one current format without automatic migration or a dual reader. The
 explicit [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-session-v0.5.6.el), which
-converts v0.5.6 and v0.5.9 sidecars to v0.5.10 and validates their Goals,
+converts v0.5.6, v0.5.9 and v0.5.10 sidecars to v0.5.11 and validates their Goals,
 operates on a separate closed-session copy;
 it does not change the runtime authority or codec contract. See
 [Sessions](../sessions.md) for the current storage contract.

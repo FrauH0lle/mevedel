@@ -302,7 +302,27 @@
             (kill-buffer data-buffer)
             (should-error (mevedel-cockpit-require-owner "test cockpit")
                           :type 'user-error)))
-      (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
+
+  :doc "accepts a workspace context, which has no owners that can die"
+  (let ((workspace (mevedel-workspace--create :type 'project :id "w")))
+    (should (mevedel-cockpit-require-owner
+             "test cockpit" (mevedel-cockpit-workspace-context workspace)))
+    (should-error (mevedel-cockpit-require-owner
+                   "test cockpit" (mevedel-cockpit-workspace-context nil))
+                  :type 'user-error)))
+
+(mevedel-deftest mevedel-cockpit-workspace-context ()
+  ,test
+  (test)
+
+  :doc "carries the workspace and origin but no session"
+  (let* ((workspace (mevedel-workspace--create :type 'project :id "w"))
+         (context (mevedel-cockpit-workspace-context workspace 'origin)))
+    (should (eq workspace (mevedel-cockpit-context-workspace context)))
+    (should (eq 'origin (plist-get context :origin-buffer)))
+    (should-not (mevedel-cockpit-context-session context))
+    (should (mevedel-cockpit--live-context-p context))))
 
 (mevedel-deftest mevedel-cockpit-data-buffer ()
   ,test

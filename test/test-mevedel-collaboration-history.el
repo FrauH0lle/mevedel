@@ -23,8 +23,10 @@
 (mevedel-deftest mevedel-collaboration-archived-artifacts
   (:doc "publishes and serves archived artifacts after compaction and a cold room start")
   (let* ((directory (make-temp-file "mevedel-history-" t))
-         (artifact (file-name-concat directory "artifacts" "design.html"))
+         (artifact (file-name-concat directory ".mevedel" "artifacts" "design.html"))
          (session (mevedel-session--create :name "history" :save-path directory
+                                         :workspace (mevedel-workspace--create
+                                                     :type 'file :id "w" :root directory)
                                          :authority-mode 'pid-lock :current-segment 2))
          (data (generate-new-buffer " *history live*"))
          (guests (make-hash-table :test #'eql))
@@ -40,7 +42,7 @@
                     "#+begin_tool (ApplyPatch :patch \"patch\")\n"
                     "(:name \"ApplyPatch\" :args (:patch \"patch\"))\n\nApplied patch\n"
                     (mevedel-tool-render-data-format
-                     ;; Model-authored relative paths resolve against the artifacts root.
+                     ;; Model-authored relative paths resolve against the artifact store.
                      '(:kind patch :files ((:kind add :path "design.html" :added 1 :deleted 0 :diff "")))
                      "old-patch")
                     "#+end_tool\n")

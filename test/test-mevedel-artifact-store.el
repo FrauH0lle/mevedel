@@ -1,0 +1,217 @@
+;;; test-mevedel-artifact-store.el --- Workspace artifact store tests -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Tests the store layout, metadata, versions with their caps, duplicate,
+;; delete, attachment, and the bookkeeping of settled ApplyPatch writes.
+
+;;; Code:
+
+(require 'mevedel-artifact-store)
+(require 'mevedel-structs)
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "helpers"))
+
+(defmacro mevedel-artifact-store-test--with-workspace (&rest body)
+  "Run BODY with `workspace' rooted in a fresh temp directory and `store'."
+  (declare (indent 0) (debug t))
+  `(let* ((root (file-name-as-directory
+                 (make-temp-file "mevedel-artifact-store-" t)))
+          (workspace (mevedel-workspace--create :type 'project :id "w"
+                                                :root root :name "w"))
+          (store (mevedel-artifact-store-directory workspace)))
+     (ignore store)
+     (unwind-protect (progn ,@body)
+       (delete-directory root t))))
+
+(defun mevedel-artifact-store-test--write (store relative content)
+  "Write CONTENT to RELATIVE below STORE and return the absolute path."
+  (let ((path (file-name-concat store relative)))
+    (make-directory (file-name-directory path) t)
+    (write-region content nil path nil 'silent)
+    path))
+
+(defun mevedel-artifact-store-test--note (session path)
+  "Report a settled ApplyPatch write of PATH for SESSION."
+  (mevedel-artifact-store-note-writes
+   session (list (list :action 'write :path path))))
+
+(mevedel-deftest mevedel-artifact-store-directory ()
+  ,test
+  (test)
+  :doc "lives in the workspace's .mevedel directory"
+  (mevedel-artifact-store-test--with-workspace
+    (should (equal (file-name-concat root ".mevedel/artifacts/") store))))
+
+(mevedel-deftest mevedel-artifact-store-ids ()
+  ,test
+  (test)
+  :doc "lists visible directories only, sorted, and nil without a store"
+  (mevedel-artifact-store-test--with-workspace
+    (should-not (mevedel-artifact-store-ids workspace))
+    (mevedel-artifact-store-test--write store "b/index.html" "b")
+    (mevedel-artifact-store-test--write store "a/index.html" "a")
+    (mevedel-artifact-store-test--write store "loose.html" "x")
+    (make-directory (file-name-concat store ".hidden") t)
+    (should (equal '("a" "b") (mevedel-artifact-store-ids workspace)))))
+
+(mevedel-deftest mevedel-artifact-store-note-writes ()
+  ,test
+  (test)
+  :doc "a first write creates the metadata, a version, and attaches the session"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((session (mevedel-session--create :workspace workspace :session-id "s1")))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "flow/index.html" "<p>1</p>"))
+      (should (equal '(:kind html :title "index.html" :file "index.html")
+                     (cl-subseq (mevedel-artifact-store-meta workspace "flow") 0 6)))
+      (should (equal '("flow") (mevedel-session-attached-artifacts session)))
+      (let ((versions (mevedel-artifact-store-versions workspace "flow")))
+        (should (= 1 (length versions)))
+        (should (equal "s1" (plist-get (car versions) :session)))
+        (should (equal "<p>1</p>"
+                       (with-temp-buffer
+                         (insert-file-contents
+                          (mevedel-artifact-store-version-path workspace "flow" 1))
+                         (buffer-string)))))))
+
+  :doc "later writes add versions; secondary, bookkeeping, and loose files do not"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((session (mevedel-session--create :workspace workspace)))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "flow/index.html" "1"))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "flow/index.html" "2"))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "flow/logo.png" "png"))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "flow/meta.el" "()"))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "loose.html" "x"))
+      (mevedel-artifact-store-note-writes
+       session (list (list :action 'delete
+                           :path (file-name-concat store "flow/index.html"))))
+      (should (= 2 (length (mevedel-artifact-store-versions workspace "flow"))))
+      (should (equal '("flow") (mevedel-session-attached-artifacts session)))))
+
+  :doc "writes outside the store are ignored"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((session (mevedel-session--create :workspace workspace))
+          (path (file-name-concat root "src/app.html")))
+      (make-directory (file-name-directory path) t)
+      (write-region "x" nil path nil 'silent)
+      (mevedel-artifact-store-test--note session path)
+      (should-not (mevedel-session-attached-artifacts session))
+      (should-not (file-exists-p store)))))
+
+(mevedel-deftest mevedel-artifact-store-record-version ()
+  ,test
+  (test)
+  :doc "drops the oldest beyond the count cap, with their files"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((mevedel-artifact-store-max-versions 2)
+          (session (mevedel-session--create :workspace workspace)))
+      (dolist (content '("1" "2" "3"))
+        (mevedel-artifact-store-test--note
+         session (mevedel-artifact-store-test--write store "a/x.md" content)))
+      (should (equal '(2 3) (mapcar (lambda (row) (plist-get row :n))
+                                    (mevedel-artifact-store-versions workspace "a"))))
+      (should-not (file-exists-p (file-name-concat store "a/versions/000001.md")))))
+
+  :doc "drops the oldest beyond the byte cap but always keeps the latest"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((mevedel-artifact-store-max-version-bytes 5)
+          (session (mevedel-session--create :workspace workspace)))
+      (dolist (content '("abc" "def" "too large"))
+        (mevedel-artifact-store-test--note
+         session (mevedel-artifact-store-test--write store "a/x.md" content)))
+      (should (equal '(3) (mapcar (lambda (row) (plist-get row :n))
+                                  (mevedel-artifact-store-versions workspace "a")))))))
+
+(mevedel-deftest mevedel-artifact-store-restore-version ()
+  ,test
+  (test)
+  :doc "copies the old version back as a new version"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((session (mevedel-session--create :workspace workspace))
+           (path (mevedel-artifact-store-test--write store "a/x.md" "old")))
+      (mevedel-artifact-store-test--note session path)
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "a/x.md" "new"))
+      (should (= 3 (mevedel-artifact-store-restore-version workspace "a" 1 "s2")))
+      (should (equal "old" (with-temp-buffer (insert-file-contents path)
+                                             (buffer-string))))
+      (should (equal "s2" (plist-get (car (last (mevedel-artifact-store-versions
+                                                  workspace "a")))
+                                     :session)))
+      (should-error (mevedel-artifact-store-restore-version workspace "a" 9)))))
+
+(mevedel-deftest mevedel-artifact-store-duplicate ()
+  ,test
+  (test)
+  :doc "copies the artifact with fresh metadata and a single version"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((session (mevedel-session--create :workspace workspace)))
+      (dolist (content '("1" "2"))
+        (mevedel-artifact-store-test--note
+         session (mevedel-artifact-store-test--write store "a/x.md" content)))
+      (mevedel-artifact-store-test--write store "a/img.png" "png")
+      (should (equal "b" (mevedel-artifact-store-duplicate workspace "a" "b")))
+      (should (file-exists-p (file-name-concat store "b/img.png")))
+      (should (equal "x.md" (plist-get (mevedel-artifact-store-meta workspace "b") :file)))
+      (should (= 1 (length (mevedel-artifact-store-versions workspace "b"))))
+      (should (= 2 (length (mevedel-artifact-store-versions workspace "a"))))
+      (should-error (mevedel-artifact-store-duplicate workspace "a" "b"))
+      (should-error (mevedel-artifact-store-duplicate workspace "a" "../c")))))
+
+(mevedel-deftest mevedel-artifact-store-delete ()
+  ,test
+  (test)
+  :doc "removes the artifact directory and refuses ids that escape the store"
+  (mevedel-artifact-store-test--with-workspace
+    (mevedel-artifact-store-test--write store "a/x.md" "1")
+    (mevedel-artifact-store-delete workspace "a")
+    (should-not (file-exists-p (file-name-concat store "a")))
+    (should-error (mevedel-artifact-store-delete workspace ".."))
+    (should-error (mevedel-artifact-store-delete workspace "a/b"))
+    (should (file-directory-p root))))
+
+(mevedel-deftest mevedel-artifact-store-list ()
+  ,test
+  (test)
+  :doc "lists artifacts with metadata, stats, and missing files"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((session (mevedel-session--create :workspace workspace)))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "a/x.md" "123"))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "b/y.png" "1"))
+      (delete-file (file-name-concat store "b/y.png"))
+      ;; A directory without metadata is not an artifact yet.
+      (mevedel-artifact-store-test--write store "c/z.md" "1")
+      (let ((rows (mevedel-artifact-store-list workspace)))
+        (should (equal '("a" "b") (mapcar (lambda (row) (plist-get row :id)) rows)))
+        (should (= 3 (plist-get (car rows) :size)))
+        (should (eq 'markdown (plist-get (car rows) :kind)))
+        (should (= 1 (plist-get (car rows) :versions)))
+        (should (plist-get (cadr rows) :missing))))))
+
+(mevedel-deftest mevedel-artifact-store-attach ()
+  ,test
+  (test)
+  :doc "attaches once, keeps order, and writes the sidecar only with a buffer"
+  (let ((session (mevedel-session--create))
+        written)
+    (cl-letf (((symbol-function 'mevedel-session-persistence-write-sidecar-now)
+               (lambda (&rest args) (push args written))))
+      (mevedel-artifact-store-attach session "a")
+      (mevedel-artifact-store-attach session "b" 'buffer)
+      (mevedel-artifact-store-attach session "a" 'buffer))
+    (should (equal '("a" "b") (mevedel-session-attached-artifacts session)))
+    (should (equal (list (list session 'buffer)) written))))
+
+(provide 'test-mevedel-artifact-store)
+;;; test-mevedel-artifact-store.el ends here

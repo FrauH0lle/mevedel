@@ -1,6 +1,6 @@
 ---
 name: artifact-design
-description: Design fundamentals for session artifacts - palette, typography, layout, both themes, and how to avoid templated AI-looking pages. Attached automatically by the artifact skills; read it before writing any artifact HTML rather than invoking it on its own.
+description: Design fundamentals for project artifacts - palette, typography, layout, both themes, and how to avoid templated AI-looking pages. Attached automatically by the artifact skills; read it before writing any artifact HTML rather than invoking it on its own.
 user-invocable: false
 ---
 

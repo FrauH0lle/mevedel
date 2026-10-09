@@ -1,6 +1,6 @@
 ---
 name: artifact
-description: Build a self-contained HTML mockup, prototype, or document as a session artifact that others can open; whiteboards and co-edited documents are shared items
+description: Build a self-contained HTML mockup, prototype, or document as a project artifact that others can open; whiteboards and co-edited documents are shared items
 argument-hint: "[what to build]"
 context: inline
 user-invocable: true
@@ -10,32 +10,40 @@ allowed-tools:
 
 $ARGUMENTS
 
-# Session artifacts
+# Project artifacts
 
 An artifact is a file the user can open and look at: an HTML mockup, an
-interactive prototype, a Markdown document, a diagram image. The artifacts
-cockpit lists files in the session's artifacts directory. A settled ApplyPatch
-that creates or updates one of those files also publishes its openable card to
-a live collaboration room.
+interactive prototype, a Markdown document, a diagram image. Artifacts live
+in the project's artifact store, one directory per artifact; the directory
+name is the artifact's id. Any session of the project can open and edit
+them, and every settled write of the artifact file records a version.
 
-This session's artifacts directory:
+This project's artifact store:
 
 ```!el
 (if-let* ((session (or (bound-and-true-p mevedel--session)
                        (and (bound-and-true-p mevedel--data-buffer)
                             (buffer-live-p mevedel--data-buffer)
                             (buffer-local-value 'mevedel--session
-                                                mevedel--data-buffer))))
-          (save-path (mevedel-session-save-path session)))
-    (mevedel-session-artifacts-artifacts-dir save-path)
+                                                mevedel--data-buffer)))))
+    (mevedel-artifact-store-directory (mevedel-session-workspace session))
   "unavailable: no live session; tell the user instead of guessing a path")
 ```
 
 ## Rules
 
-- Create or update one artifact file with ApplyPatch, using an absolute path
-  inside the directory above. A successful reviewed patch is the publication
-  event; overwriting the same artifact replaces its card.
+- Start a new artifact with ApplyPatch: Add File at
+  `<store>/<id>/<name>`, where `<id>` is a new directory named for what the
+  artifact shows (`checkout-flow/`, not `test/`) and `<name>` its file
+  (`index.html`, `notes.md`). If the Add fails because the file exists, the
+  id is taken: pick another id, or read and update that artifact if it is
+  the one you meant.
+- Update an existing artifact with ApplyPatch on its file. Another session
+  may have changed it since you read it; a failed hunk means reread and
+  patch again. Writing an artifact attaches it to this session, and a
+  successful write also publishes its card to a live collaboration room.
+- The first file written into an id directory is the artifact; only it is
+  versioned. Never write `meta.el` or `versions/`: the host keeps them.
 - **Self-contained, always.** No CDN scripts or stylesheets, no external
   fonts, no runtime `fetch`, no remote images. In the browser the
   artifact renders inside a sandbox whose Content-Security-Policy blocks
@@ -60,9 +68,5 @@ This session's artifacts directory:
   action or be visibly identified as part of a static prototype. Do not imply
   saving, filtering, approval, or host integration that is not implemented.
   Explain unavailable behavior in visible text, not only in a tooltip.
-- Name the file for what it shows (`checkout-flow-mockup.html`, not
-  `test.html`); the name is the label on every card and cockpit row.
-  Subdirectories are allowed but rarely worth it.
-- Scratch files, test pages, and intermediate output belong elsewhere. Files
-  in this directory appear in the host cockpit; a successful ApplyPatch is
-  what additionally publishes a collaboration card.
+- Scratch files, test pages, and intermediate output belong elsewhere.
+  Everything in the store is listed for the whole project.

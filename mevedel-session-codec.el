@@ -88,6 +88,7 @@
 (declare-function mevedel-goal-updated-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-agent-turn-capacity "mevedel-structs" (cl-x))
+(declare-function mevedel-session-attached-artifacts "mevedel-structs" (cl-x))
 (declare-function mevedel-session-authority-mode-for-session "mevedel-structs" (session))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
@@ -148,7 +149,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.10"
+(defconst mevedel-session-codec-format-version "v0.5.11"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -177,7 +178,7 @@ add more, and we don't want to act on actions we don't understand).")
     :agent-types-snapshot :workspace-instruction-hashes
     :additional-roots :tasks
     :prompt-index :file-snapshots :ptc-checkpoints :agent-transcripts :agent-registry
-    :agent-turn-capacity :plan-metadata :goal :messages)
+    :agent-turn-capacity :plan-metadata :goal :attached-artifacts :messages)
   "Keys required in every current-version session sidecar.")
 
 (defun mevedel-session-codec-portable-authority-p (session)
@@ -619,6 +620,7 @@ The resulting plist is round-trippable via
    :plan-metadata          (mevedel-session-plan-metadata session)
    :goal                   (when-let* ((goal (mevedel-session-goal session)))
                              (mevedel-session-codec--goal-to-plist goal))
+   :attached-artifacts     (mevedel-session-attached-artifacts session)
    ;; Root's reverse-order unread queue.  Child queues live on their explicit
    ;; registry records and all queues become FIFO only at delivery time.
    :messages
@@ -780,6 +782,9 @@ session's sidecar, rewritten by every save."
                    (cl-every (lambda (key) (plist-member prompt key))
                              '(:turn :file-turn :cum-turn)))
         (error "Invalid session prompt entry: %S" prompt))))
+  (let ((ids (plist-get plist :attached-artifacts)))
+    (unless (and (proper-list-p ids) (cl-every #'stringp ids))
+      (error "Invalid attached artifacts: %S" ids)))
   plist)
 
 (defun mevedel-session-codec-deserialize (plist workspace)
@@ -949,6 +954,7 @@ their hygiene filters."
                          (mevedel-session-codec--goal-from-plist
                           (plist-get plist :goal))
                        (error nil))
+                     :attached-artifacts (plist-get plist :attached-artifacts)
                      :agent-transcripts
                      (mevedel-session-codec-sanitize-agent-transcripts
                       (plist-get plist :agent-transcripts))

@@ -24,6 +24,11 @@
 (declare-function diff-no-select "diff"
                   (old new &optional switches no-async buf))
 
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-note-writes
+                  "mevedel-artifact-store" (session changes))
+(autoload 'mevedel-artifact-store-note-writes "mevedel-artifact-store")
+
 ;; `mevedel-directive'
 (declare-function mevedel-directive-set-anchor
                   "mevedel-directive" (directive anchor))
@@ -1268,7 +1273,12 @@ Refresh file tracking immediately and diagnostics before continuation."
       (unless (plist-get change :resource-p)
         (ignore-errors
           (mevedel-session-record-file-access
-           session (plist-get change :path) 'modify)))))
+           session (plist-get change :path) 'modify))))
+    ;; The write is committed; bookkeeping failure must not fail the tool.
+    (condition-case err
+        (mevedel-artifact-store-note-writes session changes)
+      (error (message "mevedel: artifact store bookkeeping failed: %s"
+                      (error-message-string err)))))
   (cl-labels
       ((finish (remaining)
          (let ((remaining

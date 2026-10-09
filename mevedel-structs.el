@@ -315,7 +315,9 @@ workspace."
   ;; Plan artifact metadata.  Goal plan paths are recorded here.
   plan-metadata
   ;; The session-owned current `mevedel-goal', or nil.
-  goal)
+  goal
+  ;; Ids of the workspace store artifacts this session is attached to.
+  attached-artifacts)
 
 (defun mevedel-session-authority-mode-for-workspace (workspace)
   "Return the durable authority mode required by WORKSPACE.

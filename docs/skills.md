@@ -164,8 +164,9 @@ Bundled skills currently include:
   evidence; the skill retains attribution, verifies cheap claims, and acknowledges
   relevant missing captures without treating repeated summaries as independent
   evidence.
-- `artifact` — user-invocable base skill for session artifacts. Owns the
-  artifacts directory lookup and the self-contained/size rules every artifact
+- `artifact` — user-invocable base skill for project artifacts. Owns the
+  artifact store lookup, the new-artifact convention (one id directory per
+  artifact), and the self-contained/size rules every artifact
   must obey; the other artifact skills attach it rather than restating them.
 - `artifact-design` — design fundamentals for artifact HTML: palette,
   typography from system stacks, both themes, layout, and copy. Attached by the

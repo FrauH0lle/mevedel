@@ -159,7 +159,7 @@ Chat / view
   mevedel-menu.el             session cockpit transient and model selection
   mevedel-gptel-bridge.el     view-launched gptel menu, restoration, and steering routing
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
-  mevedel-artifacts-list.el   session artifacts cockpit: list, open, delete-as-unpublish
+  mevedel-artifacts-list.el   artifacts cockpit: list, open, attach, versions, duplicate, delete
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke
   mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing
   mevedel-instruction-registry.el workspace instruction buckets, IDs, links
@@ -171,6 +171,7 @@ Chat / view
   mevedel-persistence.el      save/load instructions
   mevedel-session-codec.el    closed session sidecar codec and validation
   mevedel-session-artifacts.el  paths, artifacts, snapshots, and segment writes
+  mevedel-artifact-store.el   workspace artifact store: metadata, versions, attachment
   mevedel-session-durability.el lease and storage primitives
   mevedel-session-recovery.el  specialized recovery protocol and markers
   mevedel-session-transfer.el  durable cooperative control transfer protocol

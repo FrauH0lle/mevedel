@@ -35,7 +35,7 @@ be mistaken for the whole dataset.
    rows, and both JSON blocks parse and satisfy the data rules below. Check
    keyboard sorting, both sort directions, filtering, empty/no-match states,
    narrow-screen overflow, both color schemes, and print preview.
-4. Write the file into the session artifacts directory with ApplyPatch, per the
+4. Write the file into the project artifact store with ApplyPatch, per the
    artifact rules above.
 
 **Creation only.** When updating an existing table, work with its current HTML

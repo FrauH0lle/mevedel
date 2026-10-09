@@ -20,6 +20,7 @@
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-pending-inputs)
+(require 'mevedel-artifact-store)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
@@ -268,8 +269,9 @@
 (mevedel-deftest mevedel-collaboration--handle-fetch-agent
   (:doc "answers chunked projected records with an unchanged latch and a throttle")
   (let* ((save-path (make-temp-file "mevedel-agent-artifact-" t))
-         (artifact-dir
-          (mevedel-session-artifacts-artifacts-dir save-path))
+         (workspace (mevedel-workspace--create :type 'project :id "w"
+                                               :root save-path :name "w"))
+         (artifact-dir (mevedel-artifact-store-directory workspace))
          (artifact-path (file-name-concat artifact-dir "agent.html"))
          (root-artifact-path (file-name-concat artifact-dir "root.html"))
          (buffer (generate-new-buffer " *agent-fetch*"))
@@ -278,6 +280,7 @@
          (session (mevedel-session--create
                    :name "s"
                    :save-path save-path
+                   :workspace workspace
                    :agent-registry (list (cons "/root/worker-1" record))))
          (guests (make-hash-table :test #'eql))
          (room (list :session session :guests guests :transport 'transport

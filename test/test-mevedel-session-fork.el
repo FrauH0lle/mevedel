@@ -17,7 +17,7 @@
 (mevedel-deftest mevedel-session-fork-clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-		   (should (= 88
+		   (should (= 89
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -103,7 +103,8 @@
            :invoked-skills (list invoked)
            :pending-plan-approval '(:proposal pending)
            :plan-metadata '(:status accepted :nested source)
-           :goal goal))
+           :goal goal
+           :attached-artifacts (list "board")))
          (fork
           (mevedel-session-fork-clone-session
            source 'fork
@@ -214,6 +215,11 @@
     (should-not (eq (mevedel-session-reminders source)
                     (mevedel-session-reminders fork)))
     (should-not (mevedel-session-goal fork))
+    ;; Fork and Save As carry artifact references, each in its own list.
+    (dolist (child (list fork save-as))
+      (should (equal '("board") (mevedel-session-attached-artifacts child)))
+      (should-not (eq (mevedel-session-attached-artifacts source)
+                      (mevedel-session-attached-artifacts child))))
     (should (eq 'portable (mevedel-session-authority-mode fork)))
     (should (equal "source"
                    (mevedel-session-forked-from-session-id fork)))

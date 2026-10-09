@@ -46,7 +46,7 @@ such controls would promise persistence this document does not provide.
    Keep text contrast accessible in both.
 4. Self-check before writing the file: no `SLOT` markers left, no placeholder
    text left, no color declared only inside the dark or print block.
-5. Write the file into the session artifacts directory with ApplyPatch, per the
+5. Write the file into the project artifact store with ApplyPatch, per the
    artifact rules above.
 
 **Creation only.** When updating an existing document artifact, work with its

@@ -482,7 +482,7 @@ paths:
       (should (mevedel-skill-model-invocable-p artifact))
       (should (equal '("Eval") (mevedel-skill-allowed-tools artifact)))
       (should (string-match-p "Self-contained, always" artifact-body))
-      (should (string-match-p "mevedel-session-artifacts-artifacts-dir"
+      (should (string-match-p "mevedel-artifact-store-directory"
                               artifact-body)))
     ;; The artifact family inherits through required attachments: each leaf
     ;; declares its bases, and every descendant stays model-invocable so a

@@ -34,7 +34,7 @@ prose, so an explainer that is mostly text is underusing it.
    no placeholder text, and no hardcoded color anywhere in an SVG. Check labels
    at a narrow displayed width, not just their authored SVG size, and check
    print output. Retune palette tokens in the light, both dark, and print scopes.
-5. Write the file into the session artifacts directory with ApplyPatch, per the
+5. Write the file into the project artifact store with ApplyPatch, per the
    artifact rules above.
 
 **Creation only.** When updating an existing explainer, work with its current

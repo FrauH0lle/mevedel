@@ -28,24 +28,27 @@
 (require 'mevedel-view-render)
 (require 'mevedel-workspace)
 
+(require 'mevedel-artifact-store)
 (require 'mevedel-collaboration-artifact-projection)
 (require 'mevedel-collaboration-artifact)
 
 (mevedel-deftest mevedel-collaboration--artifact-fields
-  (:doc "projects selected ApplyPatch render data inside the artifacts directory")
+  (:doc "projects selected ApplyPatch render data inside the artifact store")
   (let* ((save-path (make-temp-file "mevedel-collab-artifacts-" t))
-         (dir (mevedel-session-artifacts-artifacts-dir save-path))
-         (session (mevedel-session--create :name "s" :save-path save-path))
-         (path (file-name-concat dir "mockup.html")))
+         (workspace (mevedel-workspace--create :type 'project :id "w"
+                                               :root save-path :name "w"))
+         (dir (mevedel-artifact-store-directory workspace))
+         (session (mevedel-session--create :name "s" :workspace workspace))
+         (path (file-name-concat dir "mockup/index.html")))
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
-          (make-directory dir t)
+          (make-directory (file-name-directory path) t)
           (write-region "<h1>hi</h1>" nil path nil 'silent)
           (let ((fields (car (mevedel-collaboration--artifact-fields
                               `(:kind patch
                                 :files ((:kind add :path ,path)))))))
-            (should (equal "mockup.html" (plist-get fields :artifact)))
+            (should (equal "mockup/index.html" (plist-get fields :artifact)))
             (should (= 11 (plist-get fields :size)))
             (should (equal (expand-file-name path)
                            (plist-get fields :artifact-path)))
@@ -54,6 +57,8 @@
            (mevedel-collaboration--artifact-fields
             `(:kind patch :files
               ((:kind add :path ,(file-name-concat save-path "notes.html"))
+               (:kind add :path ,(file-name-concat dir "mockup/meta.el"))
+               (:kind add :path ,(file-name-concat dir "mockup/versions/000001.html"))
                (:kind delete :path ,path)))))
           (should-not (mevedel-collaboration--artifact-fields
                        `(:kind media :files ((:kind add :path ,path)))))
@@ -80,7 +85,7 @@
                                 :files ((:kind update :path ,path)))))))
             (should (eq t (plist-get fields :missing)))
             (should-not (plist-member fields :size)))
-          ;; Without a session there is no artifacts directory at all.
+          ;; Without a session there is no artifact store at all.
           (with-temp-buffer
             (should-not (mevedel-collaboration--artifact-fields
                          `(:kind patch
@@ -90,20 +95,23 @@
           (with-temp-buffer
             (setq-local mevedel--session
                         (mevedel-session--create
-                         :name "r" :save-path "/ssh:example:/base"))
+                         :name "r"
+                         :workspace (mevedel-workspace--create
+                                     :type 'project :id "r"
+                                     :root "/ssh:example:/base/" :name "r")))
             (cl-letf (((symbol-function
                         'mevedel-collaboration--artifact-stat)
                        (lambda (seen)
-                         (should (equal "/ssh:example:/base/artifacts/m.html"
+                         (should (equal "/ssh:example:/base/.mevedel/artifacts/m/m.html"
                                         seen))
                          (cons 5 nil))))
               (let ((fields (car (mevedel-collaboration--artifact-fields
                                   '(:kind patch
                                     :files
                                     ((:kind add
-                                      :path "/base/artifacts/m.html")))))))
-                (should (equal "m.html" (plist-get fields :artifact)))
-                (should (equal "/ssh:example:/base/artifacts/m.html"
+                                      :path "/base/.mevedel/artifacts/m/m.html")))))))
+                (should (equal "m/m.html" (plist-get fields :artifact)))
+                (should (equal "/ssh:example:/base/.mevedel/artifacts/m/m.html"
                                (plist-get fields :artifact-path)))))))
       (mevedel-collaboration--artifact-stat-invalidate)
       (delete-directory save-path t))))
@@ -112,17 +120,19 @@
 (mevedel-deftest mevedel-collaboration--tool-segment-records
   (:doc "expands selected ApplyPatch files into stable artifact cards")
   (let* ((save-path (make-temp-file "mevedel-collab-patch-artifacts-" t))
-         (dir (mevedel-session-artifacts-artifacts-dir save-path))
-         (one (file-name-concat dir "one.html"))
-         (two (file-name-concat dir "two.md"))
+         (workspace (mevedel-workspace--create :type 'project :id "w"
+                                               :root save-path :name "w"))
+         (dir (mevedel-artifact-store-directory workspace))
+         (one (file-name-concat dir "a/one.html"))
+         (two (file-name-concat dir "a/two.md"))
          (code (file-name-concat save-path "code.el"))
          parsed)
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session
-                      (mevedel-session--create :name "s" :save-path save-path))
+                      (mevedel-session--create :name "s" :workspace workspace))
           (insert "tool")
-          (make-directory dir t)
+          (make-directory (file-name-concat dir "a") t)
           (write-region "one" nil one nil 'silent)
           (write-region "two" nil two nil 'silent)
           (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
@@ -136,7 +146,7 @@
                       (:kind add :added 1 :deleted 0 :diff "" :path ,two)))))
             (let ((records (mevedel-collaboration--tool-segment-records
                             (current-buffer) '(tool 1 5))))
-              (should (equal '("one.html" "two.md")
+              (should (equal '("a/one.html" "a/two.md")
                              (mapcar (lambda (record)
                                        (plist-get record :artifact))
                                      records)))
@@ -157,7 +167,7 @@
                             (current-buffer) '(tool 1 5))))
               (should (= 2 (length records)))
               (should-not (plist-get (car records) :artifact))
-              (should (equal "one.html"
+              (should (equal "a/one.html"
                              (plist-get (cadr records) :artifact))))
             (setq parsed
                   `(:name "ApplyPatch" :args (:patch "patch")
@@ -173,9 +183,10 @@
 
 
 (mevedel-deftest mevedel-collaboration-notify-artifacts-changed
-  (:doc "drops cached artifact stats and re-publishes the shared room")
+  (:doc "drops cached artifact stats and re-publishes the workspace's rooms")
   (let* ((data-buffer (generate-new-buffer " *collab-artifacts-data*"))
-         (session (mevedel-session--create :name "artifacts"))
+         (workspace (mevedel-workspace--create :type 'project :id "w"))
+         (session (mevedel-session--create :name "artifacts" :workspace workspace))
          (room (list :session session :data-buffer data-buffer
                      :guests (make-hash-table :test #'eql)
                      :transport 'transport))
@@ -190,14 +201,14 @@
           (should (= 0 (car (mevedel-collaboration--artifact-stat
                              (expand-file-name path)))))
           (delete-file path)
-          (mevedel-collaboration-notify-artifacts-changed session)
+          (mevedel-collaboration-notify-artifacts-changed workspace)
           (should (equal (list room) published))
           (should (cdr (mevedel-collaboration--artifact-stat
                         (expand-file-name path))))
-          ;; An unshared session still drops the cache, publishes nothing,
-          ;; and does not error.
+          ;; A workspace without rooms still drops the cache, publishes
+          ;; nothing, and does not error.
           (mevedel-collaboration-notify-artifacts-changed
-           (mevedel-session--create :name "other"))
+           (mevedel-workspace--create :type 'project :id "other"))
           (should (= 1 (length published))))
       (mevedel-collaboration--artifact-stat-invalidate)
       (when (file-exists-p path) (delete-file path))
@@ -220,32 +231,35 @@
 
 (mevedel-deftest mevedel-collaboration--handle-artifact-delete
   (:doc "deletes a published artifact and its comments for writable links only")
-  (let* ((save-path (make-temp-file "mevedel-guest-artifact-delete-" t))
-         (dir (file-name-as-directory
-               (expand-file-name (mevedel-session-artifacts-artifacts-dir save-path))))
-         (path (file-name-concat dir "mockup.html"))
-         (board (file-name-concat dir "shared-editing" "board.json"))
+  (let* ((root (make-temp-file "mevedel-guest-artifact-delete-" t))
+         (save-path (file-name-concat root "session"))
+         ;; A file workspace, so the pid-lock session matches its authority.
+         (workspace (mevedel-workspace--create :type 'file :id "w"
+                                               :root root :name "w"))
+         (dir (expand-file-name (mevedel-artifact-store-directory workspace)))
+         (path (file-name-concat dir "mockup" "index.html"))
          (comments (file-name-concat
-                    save-path (mevedel-collaboration--artifact-comment-logical "mockup.html")))
+                    save-path (mevedel-collaboration--artifact-comment-logical
+                               "mockup/index.html")))
          (session (mevedel-session--create :name "s" :save-path save-path
+                                           :workspace workspace
                                            :authority-mode 'pid-lock))
          (guests (make-hash-table :test #'eql))
          (room (list :session session :guests guests :transport 'transport
                      :records
                      (list (list :id "tool-1" :kind "tool" :name "ApplyPatch"
-                                 :artifact "mockup.html" :artifact-path path)
-                           (list :id "tool-2" :kind "tool" :name "ApplyPatch"
-                                 :artifact "shared-editing/board.json" :artifact-path board))))
+                                 :artifact "mockup/index.html" :artifact-path path))))
          sent)
     (puthash 1 (list :name "viewer" :writable nil :ready t) guests)
     (puthash 2 (list :name "writer" :writable t :ready t) guests)
     (unwind-protect
         (progn
-          (dolist (file (list path board comments))
+          (dolist (file (list path comments))
             (make-directory (file-name-directory file) t)
             (with-temp-file file (insert "x")))
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-                     (lambda (_transport peer frame) (push (cons peer frame) sent) t)))
+                     (lambda (_transport peer frame) (push (cons peer frame) sent) t))
+                    ((symbol-function 'mevedel-collaboration--publish) #'ignore))
             (cl-labels ((reply (peer id)
                           (setq sent nil)
                           (mevedel-collaboration--handle-artifact-delete
@@ -254,25 +268,24 @@
               (should (string-match-p "not delete" (plist-get (reply 1 "tool-1") :error)))
               (should (file-exists-p path))
               (should (eq t (plist-get (reply 2 "tool-1") :ok)))
-              (should-not (file-exists-p path))
+              ;; The whole artifact goes, not only the carded file.
+              (should-not (file-exists-p (file-name-concat dir "mockup")))
               (should-not (file-exists-p comments))
               (should (equal "artifact-delete" (plist-get (reply 2 "nope") :t)))
-              (should (plist-get (reply 2 "nope") :error))
-              ;; Items are deleted as items, never as a model-written file.
-              (should (string-match-p "Shared work" (plist-get (reply 2 "tool-2") :error)))
-              (should (file-exists-p board)))))
-      (delete-directory save-path t))))
+              (should (plist-get (reply 2 "nope") :error)))))
+      (mevedel-collaboration--artifact-stat-invalidate)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-collaboration--handle-artifact-get
   (:doc "answers published artifacts in bounded chunks and refuses everything else")
   (let* ((save-path (make-temp-file "mevedel-guest-artifact-" t))
-         (dir (file-name-as-directory
-               (expand-file-name
-                (mevedel-session-artifacts-artifacts-dir save-path))))
+         (workspace (mevedel-workspace--create :type 'project :id "w"
+                                               :root save-path :name "w"))
+         (dir (expand-file-name (mevedel-artifact-store-directory workspace)))
          (path (file-name-concat dir "mockup.html"))
          (outside (file-name-concat save-path "outside.txt"))
          (escape (file-name-concat dir "escape.txt"))
-         (session (mevedel-session--create :name "s" :save-path save-path))
+         (session (mevedel-session--create :name "s" :workspace workspace))
          (guests (make-hash-table :test #'eql))
          (content (make-string 1000 ?x))
          (room (list :session session :guests guests :transport 'transport
