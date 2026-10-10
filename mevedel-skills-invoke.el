@@ -104,7 +104,7 @@
 ;; `mevedel-skills-preparation'
 (declare-function mevedel-skills-preparation-expand-body
                   "mevedel-skills-preparation"
-                  (text callback &optional skill session))
+                  (text callback &optional skill session live-p))
 (declare-function mevedel-skills-preparation-substitute
                   "mevedel-skills-preparation"
                   (text arguments session skill))
@@ -893,6 +893,12 @@ sanitized `UserPromptExpansion' hook decision."
                 :model (plist-get policy :model)
                 :effort (plist-get policy :effort)
                 :ignored-policy-fields (plist-get policy :ignored-fields)))
+         ;; A turn's preparation runs only while that turn does.
+         (turn (and (boundp 'mevedel--current-request) mevedel--current-request))
+         (live-p (and turn
+                      (lambda ()
+                        (and (eq turn mevedel--current-request)
+                             (not (mevedel-request-cancelled-p turn))))))
          (finish (mevedel-skills--preparation-settler
                   session rules hooks callback)))
     (cl-labels
@@ -928,7 +934,7 @@ sanitized `UserPromptExpansion' hook decision."
                           expanded decision)))
            (fail (plist-get injection-outcome :reason)
                  (plist-get injection-outcome :message))))
-       skill session))))
+       skill session live-p))))
 
 (defun mevedel-skills--node-reachable-p (candidate root)
   "Return non-nil when CANDIDATE is ROOT or one of its dependencies."

@@ -311,6 +311,20 @@ Return the outcome plist produced by the async helper."
       (should (eq 'ok (plist-get outcome :status)))
       (should (equal "value=hello" (plist-get outcome :body)))))
 
+  :doc "stops before a command once its turn has ended"
+  (mevedel-skills-test--with-bash-allowed
+    (let ((mevedel--session (mevedel-skills-test--make-session "injection"))
+          (checks 0)
+          outcome)
+      (mevedel-skills-preparation-expand-body
+       "a=!`echo 1` b=!`echo 2`" (lambda (o) (setq outcome o)) nil nil
+       ;; The turn ends while the first command runs.
+       (lambda () (= 1 (cl-incf checks))))
+      (while (null outcome)
+        (accept-process-output nil 0.01))
+      (should (= 2 checks))
+      (should (eq 'aborted (plist-get outcome :reason)))))
+
   :doc "multiple inline injections in the same line"
   (mevedel-skills-test--with-bash-allowed
     (let ((outcome (mevedel-skills-test--shell-injections-sync

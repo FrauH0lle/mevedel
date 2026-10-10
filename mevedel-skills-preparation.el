@@ -619,7 +619,7 @@ The return value is a plist with :start, :end, :command, and
                       (plist-get b :start))))))))
 
 (defun mevedel-skills-preparation-expand-body
-    (text callback &optional skill session)
+    (text callback &optional skill session live-p)
   "Replace skill body injection markers in TEXT, then call CALLBACK.
 
 CALLBACK receives either \\=(:status ok :body STRING) or
@@ -634,7 +634,9 @@ Supported markers:
 Each command/expression goes through its normal tool pipeline with
 `:trust-literal-p t', so permission checking, execution, and
 oversized-result persistence stay aligned with normal tool
-execution.  SKILL and SESSION identify the invoking skill and target."
+execution.  SKILL and SESSION identify the invoking skill and target.
+LIVE-P, when non-nil, must still return non-nil before each command
+starts; preparation lent to a turn stops once that turn has ended."
   (if-let* ((match (mevedel-skills-preparation--injection-match text)))
       (let ((start (plist-get match :start))
             (end (plist-get match :end))
@@ -643,12 +645,16 @@ execution.  SKILL and SESSION identify the invoking skill and target."
             (prefix (or (plist-get match :prefix) ""))
             (suffix (or (plist-get match :suffix) ""))
             (origin-buffer (current-buffer)))
-        (if-let* ((message (and (eq kind 'shell)
-                                (mevedel-skills-preparation--shell-resource-error
-                                 skill session))))
-            (funcall callback
-                     `(:status error :reason resource-target
-                               :message ,message))
+        (if-let* ((failure
+                   (cond
+                    ((and live-p (not (funcall live-p)))
+                     '(:status error :reason aborted
+                               :message "The turn ended during skill preparation."))
+                    ((eq kind 'shell)
+                     (when-let* ((message (mevedel-skills-preparation--shell-resource-error
+                                           skill session)))
+                       `(:status error :reason resource-target :message ,message))))))
+            (funcall callback failure)
           (funcall
            (pcase kind
              ('shell #'mevedel-skills-preparation--run-shell-command-async)
@@ -671,7 +677,7 @@ execution.  SKILL and SESSION identify the invoking skill and target."
                               (plist-get outcome :output))
                              suffix
                              (substring text end))
-                     callback skill session))
+                     callback skill session live-p))
                    (_
                     (funcall callback outcome)))))))))
     (funcall callback `(:status ok :body ,(substring-no-properties text)))))
