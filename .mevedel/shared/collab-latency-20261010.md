@@ -167,15 +167,33 @@ Host stages per edit: `--commit` 51 ms (one lease-fenced program),
 `editing--changed` 2.3 ms. Perceived edit latency for two people is now
 about 75 ms plus rendering; the browser no longer waits up to 300 ms.
 
+### Second round (deployed `1e74c3d`)
+
+- **Joins:** websocket.el masked and assembled every outgoing frame through
+  a list of all payload bytes (~450 ms per 400 KB snapshot chunk on .43),
+  and each record was JSON-encoded twice per joining guest. Frames are now
+  masked in place, records encoded once and spliced into chunk frames, and
+  guests joining unchanged records share that encoding.
+- **Writers:** consecutive queued edits of one item commit together (up to
+  16), acknowledged and announced in order after that commit.
+
+| Measurement (p50) | After round 1 | After round 2 |
+|---|---|---|
+| Join, 1,011 records, 1 guest | ~1.3 s | **0.39 s** |
+| Join, 2 / 4 / 8 guests at once | 1.7 / 4.6 s / — | **0.68 / 1.09 / 2.2 s** |
+| Edit seen, 2 guests | 73 ms | 70 ms |
+| Edit seen, 10 guests, 3 writers | 74 ms | 80 ms (p95 160–180) |
+| Edit seen, 20 guests, 5 writers | 259 ms | **103–109 ms** (p95 ~220) |
+| Edit seen, 20 guests, 10 writers every 100 ms | — | 201 ms |
+
+Every edit reached every guest in every run. A join now spends ~200 ms
+encoding the snapshot once and ~40 ms per 400 KB chunk per guest
+(masking, sealing, TLS write). Every commit republishes the workspace's
+open rooms; a long session open in the same project adds its publish
+(~18 ms at 1,011 records) to each commit.
+
 Still open:
 
-- **Writers share one queue.** At 20 guests / 5 writers each edit every
-  300 ms, saves arrive at ~17/s against a 51 ms commit: the workspace
-  queue runs ~90 % busy and edits wait 260 ms. Next: a cheaper commit
-  (the fenced program itself, ~50 ms in the container) or per-item queues.
-- **Joining a long session** still takes 1.7 s (2 guests) to 4.6 s
-  (4 joining at once) at 1,011 records: each welcome builds and sends the
-  whole snapshot.
 - **Prompt admission** keeps its cross-Emacs session-transfer checks
   (several control programs) before the prompt is inserted.
 - The segment scan in `mevedel-transcript-segments` is now ~70 % of a
