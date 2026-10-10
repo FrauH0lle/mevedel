@@ -119,8 +119,10 @@
                             (list :workspace (funcall make "/home/u/other/")))))
     (should-not (mevedel-collaboration--workspace-key nil))))
 
-(mevedel-deftest mevedel-collaboration--send-snapshot--shared
-  (:doc "guests joining unchanged records share one encoding; a publish renews it")
+(mevedel-deftest mevedel-collaboration--send-snapshot--shared ()
+  ,test
+  (test)
+  :doc "guests joining unchanged records share one encoding; a publish renews it"
   (let* ((guests (make-hash-table :test #'eql))
          (records (list (list :id "u" :kind "user" :revision 0 :text "hi")))
          (room (list :transport 'transport :guests guests :records records))
@@ -141,7 +143,20 @@
       (mevedel-collaboration--send-snapshot room 7)
       (should (= 2 encodings))
       (should (equal "ho" (plist-get (aref (plist-get (mevedel-test--frame (car sent)) :records) 0)
-                                     :text))))))
+                                     :text)))))
+  :doc "an empty room sends a final chunk on its first and subsequent joins"
+  (let* ((room (list :transport 'transport :guests (make-hash-table :test #'eql)))
+         sent)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport _peer frame) (push (mevedel-test--frame frame) sent) t)))
+      (dotimes (_ 2)
+        (setq sent nil)
+        (mevedel-collaboration--send-snapshot room 7)
+        (should (= 2 (length sent)))
+        (should (= 0 (plist-get (cadr sent) :recordCount)))
+        (should (equal "snapshot-chunk" (plist-get (car sent) :t)))
+        (should (eq t (plist-get (car sent) :final)))
+        (should (equal [] (plist-get (car sent) :records)))))))
 
 (mevedel-deftest mevedel-collaboration--send-snapshot
   (:doc "sends a targeted welcome then final-flagged snapshot chunks")

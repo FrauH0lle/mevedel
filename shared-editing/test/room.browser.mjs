@@ -832,7 +832,14 @@ test(
       await imageWriter.mouse.down();
       const previewAt=performance.now();
       await imageWriter.mouse.move(handle.x+handle.width/2+70,handle.y+handle.height/2+30);
-      await until(async()=>await watching.getAttribute('data-live-preview')==='true',1500);
+      // Presence is lossy under host backpressure; exercise a continuing drag,
+      // not guaranteed delivery of one instantaneous pointer sample.
+      let previewSamples=0;
+      await until(async()=>{
+        if (await watching.getAttribute('data-live-preview')==='true') return true;
+        await imageWriter.mouse.move(handle.x+handle.width/2+70+(++previewSamples%2),handle.y+handle.height/2+30);
+        return false;
+      },1500);
       assert.ok(Math.abs((await watching.boundingBox()).x-original.x)>30,'other participant sees movement before release');
       console.log(`Remote drag preview arrived in ${Math.round(performance.now()-previewAt)} ms before release`);
       const whileDragging=JSON.parse((await agent('ReadShared',{id:imageBoard.id})).result);
@@ -845,7 +852,11 @@ test(
       await imageWriter.mouse.move(handle.x+handle.width/2,handle.y+handle.height/2);
       await imageWriter.mouse.down();
       await imageWriter.mouse.move(handle.x+handle.width/2+70,handle.y+handle.height/2+30);
-      await until(async()=>await watching.getAttribute('data-live-preview')==='true');
+      await until(async()=>{
+        if (await watching.getAttribute('data-live-preview')==='true') return true;
+        await imageWriter.mouse.move(handle.x+handle.width/2+70+(++previewSamples%2),handle.y+handle.height/2+30);
+        return false;
+      },1500);
       const previewBox=await watching.boundingBox();
       await imageWriter.mouse.up();
       await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
@@ -1089,6 +1100,8 @@ test(
         return info.queue.length === 2 ? info : null;
       });
       assert.deepEqual(asked.attachments, [0, 2]);
+      // Queue insertion precedes the editor's acknowledgement on slow hosts.
+      await frame(ownerPage).locator('#question-attachments .attachment').waitFor({state:'hidden'});
       assert.equal(await frame(ownerPage).locator('#question-attachments .attachment').count(), 0);
       assert.match(asked.queue[1], /"type":"freedraw"/);
       assert.doesNotMatch(asked.queue[1], /"type":"diamond"/);

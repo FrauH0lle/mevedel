@@ -617,7 +617,8 @@ Record the publish's cost on ROOM to pace later coalesced publishes."
                               (mevedel-collaboration--record-without-revision
                                record)))
             (setq revision (1+ revision))
-            (push (setq record (plist-put record :revision revision)) changed))
+            (push record changed))
+          (setq record (plist-put record :revision revision))
           (puthash id record new-by-id)))
       (dolist (record old)
         (unless (gethash (plist-get record :id) new-by-id)

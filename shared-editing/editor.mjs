@@ -201,7 +201,7 @@ function flush() {
   clearTimeout(saveTimer);
   saveTimer = null;
   const wait = lastSave + SAVE_FLOOR - performance.now();
-  if (wait > 0) {
+  if (wait > 0 && (updates.length || pending.length)) {
     saveTimer = setTimeout(flush, wait);
     saved();
     return;

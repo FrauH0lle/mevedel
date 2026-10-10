@@ -401,8 +401,9 @@ its own workspace's rooms; the key reveals no path."
          (records (plist-get room :records))
          ;; Guests joining while the records are unchanged share their
          ;; encoding: each publish stores a new list.
-         (chunks (if (eq records (car (plist-get room :snapshot-chunks)))
-                     (cdr (plist-get room :snapshot-chunks))
+         (cached (plist-get room :snapshot-chunks))
+         (chunks (if (and cached (eq records (car cached)))
+                     (cdr cached)
                    (let ((chunks (or (mevedel-collaboration--snapshot-chunks records)
                                      (list nil))))
                      (plist-put room :snapshot-chunks (cons records chunks))
