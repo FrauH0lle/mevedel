@@ -420,7 +420,44 @@ allowed-tools:
       (setf (mevedel-session-plan-mode session) nil)
       (mevedel-skills--preparation-settler session nil nil #'ignore)
       (should-not (mevedel-request-plan-read-only
-                   mevedel--current-request)))))
+                   mevedel--current-request))))
+
+  :doc "a turn finishing during preparation ends its request once restored"
+  ;; Regression: the turn used to read the preparation request as a newer
+  ;; one, settle nothing, and get restored into the slot after it finished:
+  ;; a session that reported a running turn forever.
+  (let ((session (mevedel-skills-test--make-session))
+        (turn (mevedel-request--create :id "turn"))
+        ended-with)
+    (with-temp-buffer
+      (setq-local mevedel--current-request turn)
+      (let ((fsm (gptel-make-fsm
+                  :info (list :buffer (current-buffer) :mevedel-request-id "turn")))
+            (settle (mevedel-skills--preparation-settler
+                     session nil nil #'ignore)))
+        (cl-letf (((symbol-function 'mevedel--turn-commit) #'ignore)
+                  ((symbol-function 'mevedel--defer-turn-steps)
+                   (lambda (machine &rest _)
+                     (setq ended-with mevedel--current-request)
+                     (mevedel--turn-end-request machine))))
+          (mevedel--complete-turn fsm)
+          (should-not ended-with)
+          (funcall settle 'done)
+          (should (eq turn ended-with))
+          (should-not mevedel--current-request)
+          (should (mevedel-request-cancelled-p turn))))))
+
+  :doc "a request admitted after preparation teardown keeps the slot"
+  (let ((session (mevedel-skills-test--make-session))
+        (previous (mevedel-request--create :id "previous"))
+        (admitted (mevedel-request--create :id "admitted")))
+    (with-temp-buffer
+      (setq-local mevedel--current-request previous)
+      (let ((settle (mevedel-skills--preparation-settler
+                     session nil nil #'ignore)))
+        (setq-local mevedel--current-request admitted)
+        (funcall settle 'done)
+        (should (eq admitted mevedel--current-request))))))
 
 (mevedel-deftest mevedel-skills--preparation-success-outcome ()
   ,test

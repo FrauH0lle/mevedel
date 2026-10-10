@@ -182,6 +182,7 @@
 (autoload 'mevedel-artifact-store-save-version "mevedel-artifact-store")
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-displaced "mevedel-structs" (cl-x))
 (declare-function mevedel-request-edited-artifacts "mevedel-structs" (cl-x))
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-request-origin "mevedel-structs" (cl-x))
@@ -241,6 +242,10 @@
 
 (defvar-local mevedel--turn-settlements-pending nil
   "FSMs whose terminal settlement is waiting for transport or its next step.")
+
+(defvar-local mevedel--turn-displaced-settlements nil
+  "Settlement continuations waiting for their request to return to the slot.
+See `mevedel--turn-displaced-p'.")
 
 (defun mevedel-request-active-p (&optional buffer)
   "Return non-nil when BUFFER has an active request."
@@ -500,39 +505,45 @@ is returned here."
   (mevedel-reminders-restore-reserved-context (current-buffer))
   (when mevedel--current-request
     (let ((request mevedel--current-request))
-      (when (fboundp 'mevedel-telemetry-record)
-        (mevedel-telemetry-record
-         (mevedel-request-session request) 'request-teardown
-         :request-id (mevedel-request-id request)
-         :origin (mevedel-request-origin request)
-         :abort-plan-approval (and abort-plan-approval t)))
-      (mevedel-request-cancel request abort-plan-approval)
-      ;; Cancelling interactions invokes callbacks; do not erase a request
-      ;; installed by one of them while the old teardown was on the stack.
-      (when (eq request mevedel--current-request)
-        ;; A turn that edited store artifacts leaves one version of each.
-        (pcase-dolist (`(,workspace . ,id) (mevedel-request-edited-artifacts request))
-          (condition-case err
-              (mevedel-artifact-store-save-version
-               workspace id (mevedel-session-session-id
-                             (mevedel-request-session request)))
-            (error (message "mevedel: no version of %s was saved: %s"
-                            id (error-message-string err)))))
-        (when (equal (mevedel-request-origin request) "/root")
-          (setf (mevedel-session-agent-root-activity
-                 (mevedel-request-session request))
-                'idle)
-          ;; A long-running Emacs must keep expiring old sessions.
-          (mevedel-session-persistence-schedule-cleanup
-           (mevedel-session-workspace (mevedel-request-session request))))
-        (setq mevedel--current-request nil)
-        ;; Settlement leaves journal publication and collection behind it,
-        ;; which allocate as much as the turn did; keep the threshold a
-        ;; little longer rather than collecting repeatedly through them.
-        (let ((until (+ (float-time) mevedel--gc-settlement-grace)))
-          (mevedel--gc-hold request (lambda () (< (float-time) until))))
-        (when (fboundp 'mevedel-collaboration-notify-request-changed)
-          (mevedel-collaboration-notify-request-changed (current-buffer)))))))
+      ;; The slot is what every caller reads as "a turn is running"; a
+      ;; teardown step that signals must not leave it set.
+      (unwind-protect
+          (progn
+            (when (fboundp 'mevedel-telemetry-record)
+              (mevedel-telemetry-record
+               (mevedel-request-session request) 'request-teardown
+               :request-id (mevedel-request-id request)
+               :origin (mevedel-request-origin request)
+               :abort-plan-approval (and abort-plan-approval t)))
+            (mevedel-request-cancel request abort-plan-approval))
+        ;; Cancelling interactions invokes callbacks; do not erase a request
+        ;; installed by one of them while the old teardown was on the stack.
+        (when (eq request mevedel--current-request)
+          (setq mevedel--current-request nil)
+          (unwind-protect
+              (progn
+                ;; A turn that edited store artifacts leaves one version of each.
+                (pcase-dolist (`(,workspace . ,id) (mevedel-request-edited-artifacts request))
+                  (condition-case err
+                      (mevedel-artifact-store-save-version
+                       workspace id (mevedel-session-session-id
+                                     (mevedel-request-session request)))
+                    (error (message "mevedel: no version of %s was saved: %s"
+                                    id (error-message-string err)))))
+                (when (equal (mevedel-request-origin request) "/root")
+                  (setf (mevedel-session-agent-root-activity
+                         (mevedel-request-session request))
+                        'idle)
+                  ;; A long-running Emacs must keep expiring old sessions.
+                  (mevedel-session-persistence-schedule-cleanup
+                   (mevedel-session-workspace (mevedel-request-session request)))))
+            ;; Settlement leaves journal publication and collection behind it,
+            ;; which allocate as much as the turn did; keep the threshold a
+            ;; little longer rather than collecting repeatedly through them.
+            (let ((until (+ (float-time) mevedel--gc-settlement-grace)))
+              (mevedel--gc-hold request (lambda () (< (float-time) until))))
+            (when (fboundp 'mevedel-collaboration-notify-request-changed)
+              (mevedel-collaboration-notify-request-changed (current-buffer)))))))))
 
 
 ;;
@@ -870,6 +881,48 @@ Sessionless machines have no buffer ownership to check."
                         (equal (plist-get info :mevedel-request-id)
                                (mevedel-request-id mevedel--current-request)))))))))
 
+(defun mevedel--turn-displaced-p (fsm)
+  "Return non-nil while a skill preparation holds FSM's request slot.
+Preparation installs its own request for its commands and puts the one it
+displaced back when it settles.  Settlement cannot run meanwhile: its steps
+act on the slot, and a turn treated as replaced would never end its request,
+which preparation then restores into a finished turn."
+  (when-let* ((info (condition-case nil (mevedel-engine-info fsm) (error nil)))
+              (id (plist-get info :mevedel-request-id))
+              (buffer (plist-get info :buffer))
+              ((buffer-live-p buffer)))
+    (let ((holder (buffer-local-value 'mevedel--current-request buffer))
+          found)
+      ;; Preparations nest: each displaces the one before it.
+      (while (and (not found) (mevedel-request-p holder)
+                  (setq holder (mevedel-request-displaced holder)))
+        (setq found (and (mevedel-request-p holder)
+                         (equal id (mevedel-request-id holder)))))
+      found)))
+
+(defun mevedel--turn-park (fsm thunk)
+  "Run THUNK once FSM's request returns to its slot.
+See `mevedel--turn-displaced-p'."
+  (with-current-buffer (plist-get (mevedel-engine-info fsm) :buffer)
+    (setq mevedel--turn-displaced-settlements
+          (append mevedel--turn-displaced-settlements (list thunk)))))
+
+(defun mevedel-turn-resume-displaced (buffer)
+  "Resume BUFFER's settlement parked while a preparation held its slot.
+Call after restoring the displaced request.  A continuation whose request
+is still displaced parks again."
+  (when (buffer-live-p buffer)
+    (let ((thunks (buffer-local-value 'mevedel--turn-displaced-settlements buffer)))
+      (with-current-buffer buffer
+        (setq mevedel--turn-displaced-settlements nil))
+      (dolist (thunk thunks)
+        (condition-case err
+            (funcall thunk)
+          (error
+           (mevedel--warn-once 'turn-displaced-settlement
+                               "Displaced turn settlement failed: %s"
+                               (error-message-string err))))))))
+
 (defun mevedel--turn-hold (fsm)
   "Fence admission while FSM owns a terminal continuation.
 Holds nest across final-patch generation and deferred durable settlement."
@@ -927,7 +980,10 @@ A step returning `mevedel-turn-pending' stays at the front and calls
         (mevedel-transport-cancel-pending (list 'turn-settlement request-id))
         (cancel))
       (cancel ()
-        (unless finished
+        (cond
+         (finished)
+         ((mevedel--turn-displaced-p fsm) (mevedel--turn-park fsm #'cancel))
+         (t
           (setq finished t)
           (cancel-checkpoint)
           (unwind-protect
@@ -937,7 +993,7 @@ A step returning `mevedel-turn-pending' stays at the front and calls
                                                  mevedel--turn-end-request))))
             (setf (mevedel-engine-info fsm)
                   (plist-put (mevedel-engine-info fsm) :mevedel-turn-settled nil))
-            (release))))
+            (release)))))
       (advance ()
         (unless finished
           (condition-case err
@@ -950,6 +1006,8 @@ A step returning `mevedel-turn-pending' stays at the front and calls
                     (pop steps)))
                 (unless finished
                   (cond
+                   ((and steps (mevedel--turn-displaced-p fsm))
+                    (mevedel--turn-park fsm (lambda () (unless finished (enqueue .001)))))
                    ((not (and steps (mevedel--turn-current-p fsm)))
                     (setq finished t)
                     (release))
@@ -1103,6 +1161,8 @@ The chain retains one admission hold across event-loop breaks because its order
 is load-bearing: `mevedel--turn-end-request\=' follows the autosave, and
 inverting them drops the turn's file-history checkpoints."
   (cond
+   ((mevedel--turn-displaced-p fsm)
+    (mevedel--turn-park fsm (lambda () (mevedel--complete-turn fsm))))
    ((mevedel--turn-settled-p fsm)
     (mevedel--turn-stamp-settled fsm))
    ((mevedel--turn-lost-p fsm)
@@ -1138,6 +1198,8 @@ inverting them drops the turn's file-history checkpoints."
 Deferred for the same reason as `mevedel--complete-turn\=': the failure chain
 also autosaves, and it reaches here from the same process sentinel."
   (cond
+   ((mevedel--turn-displaced-p fsm)
+    (mevedel--turn-park fsm (lambda () (mevedel--fail-turn fsm status))))
    ((mevedel--turn-settled-p fsm)
     (mevedel--turn-stamp-settled fsm))
    ((mevedel--turn-lost-p fsm)

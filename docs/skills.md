@@ -723,6 +723,13 @@ ApplyPatch to explicit session-owned `work://` descendants has a bounded write
 exception, and directive planning has no patch exception. Goal execution uses
 ordinary request permissions. See [Plan mode](plan-mode.md).
 
+The preparation request holds the buffer's request slot while preparation
+runs, and puts back the request it took the slot from when it settles, unless
+a request admitted meanwhile now owns the slot. A turn that ends while a
+preparation for its steering or `Skill` call holds the slot cannot settle
+against a slot it does not own: its settlement waits and resumes once its
+request is back, and only then ends that request.
+
 ## ToolCall Primitives
 
 `ptc-primitives` narrows the nested tools visible to ToolCall for a command
