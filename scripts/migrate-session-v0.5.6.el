@@ -63,6 +63,9 @@
     (insert-file-contents-literally file)
     (secure-hash 'sha256 (current-buffer))))
 
+(define-error 'mevedel-migrate-session-unconvertible
+  "Session has nothing this converter reads")
+
 (defun mevedel-migrate-session--sidecar (data &optional attached)
   "Return DATA converted to v0.5.11, preserving existing durable fields.
 ATTACHED lists the store artifact ids a legacy session starts attached to."
@@ -75,7 +78,8 @@ ATTACHED lists the store artifact ids a legacy session starts attached to."
        (error "Unexpected external histories in a v0.5.6 sidecar"))
      (setq data (plist-put data :external-conversations nil)))
     ((or "v0.5.9" "v0.5.10" "v0.5.11") nil)
-    (_ (error "Unsupported migration source version: %s" (plist-get data :version))))
+    (_ (signal 'mevedel-migrate-session-unconvertible
+               (list (format "version %s" (plist-get data :version))))))
   ;; v0.5.6 and early v0.5.9 Goals predate incomplete-usage tracking.  The
   ;; loader drops an invalid Goal silently, so validate it here instead.
   (when-let* ((goal (plist-get data :goal)))
@@ -212,7 +216,8 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
                   (when manifest (push (cons path manifest) manifests))))))
           (let ((sidecar (file-name-concat destination "session.meta.el")))
             (when (file-regular-p sidecar) (puthash sidecar 'fixed sidecars)))
-          (when (zerop (hash-table-count sidecars)) (error "No session metadata found"))
+          (when (zerop (hash-table-count sidecars))
+            (signal 'mevedel-migrate-session-unconvertible (list "no session metadata")))
           (let ((head (when-let* ((relative (mevedel-migrate-session--head lease source)))
                         (file-name-concat destination relative)))
                 dropped)

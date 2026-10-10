@@ -6,10 +6,12 @@
 ;; the workspace it copies the session's artifact files, whiteboards,
 ;; documents and artifact comments into `.mevedel/artifacts/', then converts
 ;; the session into DESTINATION with `scripts/migrate-session-v0.5.6.el',
-;; attached to the artifacts it held.  Comment threads keep answering in
-;; the session that discussed them.  The original sessions are never
-;; changed: check DESTINATION, then replace the sessions directory with it.
-;; A rerun reuses artifacts an earlier run already moved.
+;; attached to the artifacts it held and without its old `artifacts/'
+;; entries.  Comment threads keep answering in the session that discussed
+;; them.  The original sessions are never changed: check DESTINATION, then
+;; replace the sessions directory with it.  A rerun reuses artifacts an
+;; earlier run already moved, and a fork's identical copy of a file reuses
+;; its parent's.
 ;; Run from the repository root, with every session of the workspace closed:
 ;; npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-artifacts-to-store.el \
 ;;   -f mevedel-migrate-artifacts-main -- WORKSPACE-ROOT DESTINATION
@@ -38,7 +40,8 @@
   "Return closed session DIRECTORY's legacy artifact entries.
 Each is (LOGICAL . BYTES) for a logical path below `artifacts/'.  A
 portable session is read from its verified publication, never its fixed
-cache; a PID-lock session from its folder."
+cache; a PID-lock session from its folder, without links, hidden files and
+backups, which would carry other bytes into the store."
   (if (file-directory-p (file-name-concat directory ".lease"))
       (let ((publication (mevedel-session-publication-read directory)))
         (cl-loop for (logical . _) in (plist-get publication :artifacts)
@@ -49,6 +52,11 @@ cache; a PID-lock session from its folder."
     (let ((folder (file-name-concat directory "artifacts")))
       (when (file-directory-p folder)
         (cl-loop for file in (directory-files-recursively folder "." nil)
+                 for name = (file-name-nondirectory file)
+                 unless (or (file-symlink-p file)
+                            (string-prefix-p "." name)
+                            (string-suffix-p "~" name)
+                            (string-prefix-p "#" name))
                  collect (cons (concat "artifacts/" (file-relative-name file folder))
                                (with-temp-buffer
                                  (set-buffer-multibyte nil)
@@ -70,7 +78,9 @@ cache; a PID-lock session from its folder."
   "Return an unused store id derived from file NAME."
   (let* ((base (let ((stem (replace-regexp-in-string
                             "[^A-Za-z0-9_-]+" "-" (file-name-sans-extension name))))
-                 (if (string-match-p "\\`[A-Za-z0-9]" stem) stem (concat "artifact" stem))))
+                 (truncate-string-to-width
+                  (if (string-match-p "\\`[A-Za-z0-9]" stem) stem (concat "artifact" stem))
+                  72)))
          (id base)
          (n 1))
     (while (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
@@ -87,10 +97,25 @@ cache; a PID-lock session from its folder."
   "Move legacy artifact file LOGICAL with BYTES into WORKSPACE's store.
 COMMENTS are its legacy comment threads, which keep answering in session
 SESSION-ID called NAME.  Return the store id."
-  (let ((origin (cons session-id logical)))
+  (let ((origin (cons session-id logical))
+        (file (file-name-nondirectory logical)))
     (or (mevedel-migrate-artifacts--existing workspace origin)
-        (let* ((file (file-name-nondirectory logical))
-               (id (mevedel-migrate-artifacts--fresh-id workspace file)))
+        ;; A fork copied its parent's files: the same bytes are the same
+        ;; artifact, as for whiteboards and documents.
+        (cl-find-if (lambda (id)
+                      (let ((meta (mevedel-artifact-store-meta workspace id)))
+                        (and (plist-get meta :migrated-from)
+                             (equal file (plist-get meta :file))
+                             (equal bytes
+                                    (with-temp-buffer
+                                      (set-buffer-multibyte nil)
+                                      (insert-file-contents-literally
+                                       (file-name-concat
+                                        (mevedel-artifact-store-artifact-directory workspace id)
+                                        file))
+                                      (buffer-string))))))
+                    (mevedel-artifact-store-ids workspace))
+        (let ((id (mevedel-migrate-artifacts--fresh-id workspace file)))
           (mevedel-migrate-artifacts--write
            (file-name-concat (mevedel-artifact-store-artifact-directory workspace id) file)
            bytes)
@@ -170,11 +195,28 @@ Return the store ids the session holds."
                 ids)))))
     (nreverse ids)))
 
+(defun mevedel-migrate-artifacts--drop-legacy (target)
+  "Drop converted session TARGET's `artifacts/' folder and manifest entries.
+The store now holds their content, and nothing reads them."
+  (let ((folder (file-name-concat target "artifacts")))
+    (when (file-directory-p folder) (delete-directory folder t)))
+  (let ((publications (file-name-concat target ".publications")))
+    (when (file-directory-p publications)
+      (dolist (manifest (directory-files-recursively publications "\\`manifest\\.el\\'"))
+        (let* ((data (mevedel-migrate-session--read manifest))
+               (kept (cl-remove-if (lambda (entry) (string-prefix-p "artifacts/" (car entry)))
+                                   (plist-get data :artifacts))))
+          (unless (equal kept (plist-get data :artifacts))
+            (mevedel-migrate-session--write manifest (plist-put data :artifacts kept))))))))
+
 (defun mevedel-migrate-artifacts (root destination)
   "Move the artifacts of workspace ROOT's sessions into its store.
 Each session is converted into new DESTINATION, attached to its moved
-artifacts; one the converter refuses is copied there unchanged.  Return a
-list of (SESSION-ID . IDS), IDS being (:unconverted REASON) for those."
+artifacts; one the converter has nothing to read in -- older than it
+reads, or never saved -- is copied there unchanged.
+Any other failure stops the run, naming its session; a rerun into a new
+DESTINATION reuses what was already moved.  Return a list of (SESSION-ID
+. IDS), IDS being (:unconverted REASON) for unconverted sessions."
   (setq root (file-name-as-directory (expand-file-name root))
         destination (directory-file-name (expand-file-name destination)))
   (when (file-remote-p root) (error "Migration requires a local workspace"))
@@ -196,15 +238,19 @@ list of (SESSION-ID . IDS), IDS being (:unconverted REASON) for those."
     (set-file-modes destination #o700)
     (dolist (directory directories)
       (let* ((session-id (file-name-nondirectory directory))
-             (ids (mevedel-migrate-artifacts-session workspace directory))
-             (target (file-name-concat destination session-id)))
+             (target (file-name-concat destination session-id))
+             ids)
         (condition-case err
-            (mevedel-migrate-session-copy directory target ids)
+            (progn
+              (setq ids (mevedel-migrate-artifacts-session workspace directory))
+              (mevedel-migrate-session-copy directory target ids)
+              (mevedel-migrate-artifacts--drop-legacy target))
           ;; A session no current reader can open stays as it was, so
           ;; replacing the sessions directory loses nothing.
-          (error
+          (mevedel-migrate-session-unconvertible
            (copy-directory directory target t t t)
-           (setq ids (list :unconverted (error-message-string err)))))
+           (setq ids (list :unconverted (error-message-string err))))
+          (error (error "%s: %s" session-id (error-message-string err))))
         (push (cons session-id ids) report)))
     (nreverse report)))
 

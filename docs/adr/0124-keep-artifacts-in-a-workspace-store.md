@@ -126,8 +126,8 @@ push out every earlier version, including the state before the turn.
 ## Consequences
 
 - Session persistence carries no artifact bytes: the `artifacts/` subtree left
-  portable publications, Fork staging, Resume and Save As. A session published
-  before keeps its old `artifacts/...` manifest entries as unused bytes.
+  portable publications, Fork staging, Resume and Save As. The migration drops
+  a converted session's old `artifacts/...` entries.
 - A room exposes artifacts by store identity, not only through its own
   transcript records: any link to the workspace can open any artifact. This
   deliberately widens ADR 0099's "published record is the authority".
