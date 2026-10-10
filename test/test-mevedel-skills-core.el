@@ -2530,7 +2530,9 @@ paths:
         (progn
           (make-directory state)
           (with-current-buffer buf
-            (setq-local mevedel--session session))
+            (setq-local mevedel--session session)
+            (setq-local mevedel-skills--watch-roots
+                        (mevedel-skills--resolved-roots root)))
           (setq dirs (mevedel-skills--collect-roots root nil ws))
           (should (member state dirs))
           (should (member root dirs))
