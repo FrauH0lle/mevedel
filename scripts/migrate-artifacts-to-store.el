@@ -22,6 +22,7 @@
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-publication)
 (require 'mevedel-shared-editing)
+(require 'mevedel-collaboration-artifact-comments)
 (load (expand-file-name "migrate-session-v0.5.6.el"
                         (file-name-directory (or load-file-name buffer-file-name)))
       nil t)
@@ -96,17 +97,12 @@ SESSION-ID called NAME.  Return the store id."
           (mevedel-artifact-store-create-meta workspace id file)
           (mevedel-artifact-store-update-meta workspace id :migrated-from origin)
           (when comments
-            (mevedel--write-file-atomically
-             (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
-                               "comments.json")
-             (mevedel-shared-editing--json
-              (list :artifact id
-                    :comments (vconcat
-                               (mapcar (lambda (comment)
-                                         (plist-put (plist-put (copy-sequence comment)
-                                                               :session session-id)
-                                                    :session-name name))
-                                       comments))))))
+            (mevedel-collaboration--artifact-comments-write
+             workspace id
+             (mapcar (lambda (comment)
+                       (plist-put (plist-put (copy-sequence comment) :session session-id)
+                                  :session-name name))
+                     comments)))
           (mevedel-artifact-store-record-version workspace id session-id)
           id))))
 

@@ -259,15 +259,13 @@ A missing file is an artifact nobody has commented on yet."
                     (with-temp-buffer
                       (insert-file-contents file)
                       (buffer-string)))))
-        (unless (equal (plist-get state :artifact) id)
-          (error "Artifact comment store does not match %s" id))
         (append (plist-get state :comments) nil)))))
 
 (defun mevedel-collaboration--artifact-comments-write (workspace id comments)
   "Durably store COMMENTS for WORKSPACE's artifact ID."
   (mevedel--write-file-atomically
    (mevedel-collaboration--artifact-comments-file workspace id)
-   (mevedel-shared-editing--json (list :artifact id :comments (vconcat comments)))))
+   (mevedel-shared-editing--json (list :comments (vconcat comments)))))
 
 (defun mevedel-collaboration--artifact-comments-public (comments)
   "Return COMMENTS as guests receive them, without stored excerpts."
