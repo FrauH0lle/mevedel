@@ -185,10 +185,13 @@
       (mevedel-artifact-lease-write workspace "board" path "one")
       (should (equal "one" (with-temp-buffer (insert-file-contents path) (buffer-string))))
       ;; Another client takes over behind this one's back.
-      (cl-letf (((symbol-function 'mevedel-artifact-lease--now)
-                 (lambda (_directory) 1e12)))
-        (mevedel-artifact-lease-test--as-other
-          (mevedel-artifact-lease-acquire workspace "board")))
+      (let (messages)
+        (mevedel-test--with-captured-messages messages
+          (cl-letf (((symbol-function 'mevedel-artifact-lease--now)
+                     (lambda (_directory) 1e12)))
+            (mevedel-artifact-lease-test--as-other
+              (mevedel-artifact-lease-acquire workspace "board"))))
+        (should (string-match-p "took over editing board" messages)))
       (should-error (mevedel-artifact-lease-write workspace "board" path "two"))
       (should (equal "one" (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
 
