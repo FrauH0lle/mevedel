@@ -584,6 +584,25 @@ allowed-tools:
       (should (eq 'user
                   (mevedel-skill-invocation-record-origin record)))))
 
+  :doc "a turn's preparation runs commands only while that turn does"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "alpha" :body "body"))
+         (turn (mevedel-request--create :session session))
+         live-p)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--current-request turn)
+      (cl-letf (((symbol-function 'mevedel-skills-preparation-expand-body)
+                 (lambda (_body _callback _skill _session live)
+                   (setq live-p live))))
+        (mevedel-skills-prepare skill "" #'ignore :role 'instruction :origin 'user))
+      (should (funcall live-p))
+      (setf (mevedel-request-cancelled-p turn) t)
+      (should-not (funcall live-p))
+      (setf (mevedel-request-cancelled-p turn) nil)
+      (setq-local mevedel--current-request (mevedel-request--create :session session))
+      (should-not (funcall live-p))))
+
   :doc "command preparation returns policy context without committing it"
   (let* ((session (mevedel-skills-test--make-session))
          (rules '(("Read" :action allow)))
