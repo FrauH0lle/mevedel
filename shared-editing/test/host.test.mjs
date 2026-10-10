@@ -445,3 +445,29 @@ test('restoring a document version keeps comments on unchanged blocks', async ()
   assert.equal(restored.result.comments[0].anchorStatus, 'current', 'the unchanged block keeps its anchor');
   assert.deepEqual(restored.state.transactions[0].changes.map((c) => c.id).sort(), ['b', 'c']);
 });
+
+test('restoring a document keeps blocks that moved around a moved block', async () => {
+  const para = (id, text) => ({ type: 'paragraph', attrs: { id }, content: [{ type: 'text', text }] });
+  const blocks = (ids) => ({ type: 'doc', content: ids.map((id) => para(id, `Block ${id}.`)) });
+  let { state } = await handle({ action: 'create', id: 'doc4', kind: 'document', title: 'Moves',
+    actor: 'Alice', opId: 'create1', content: blocks(['a', 'b', 'c', 'd']) });
+  const version = state.crdt;
+  const doc = restore(Buffer.from(state.crdt, 'base64'));
+  const before = doc.getXmlFragment('document').toArray();
+  // Move a to the end.
+  doc.transact(() => {
+    const a = doc.getXmlFragment('document').get(0).clone();
+    doc.getXmlFragment('document').delete(0, 1);
+    doc.getXmlFragment('document').insert(3, [a]);
+  });
+  ({ state } = await handle({ action: 'update', state, actor: 'Bob', opId: 'move',
+    update: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64') }));
+  doc.destroy();
+  const restored = await handle({ action: 'restore', state, actor: 'Alice', opId: 'restore1', target: version });
+  assert.deepEqual(restored.result.content.content.map((n) => n.attrs.id), ['a', 'b', 'c', 'd']);
+  const after = restore(Buffer.from(restored.state.crdt, 'base64'));
+  const ids = (items) => items.map((item) => `${item._item.id.client}:${item._item.id.clock}`);
+  // b, c and d keep their items; only a is copied back.
+  assert.deepEqual(ids(after.getXmlFragment('document').toArray().slice(1)), ids(before.slice(1)));
+  after.destroy();
+});
