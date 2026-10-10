@@ -120,7 +120,7 @@ the one already moved.  Return the store id."
     (or (mevedel-migrate-artifacts--existing workspace origin)
         ;; A fork copied its parent's items under the same id: the same
         ;; state is the same item, a diverged one becomes its own.
-        (and (mevedel-shared-editing--present-p workspace id)
+        (and (mevedel-shared-editing-present-p workspace id)
              (equal (mevedel-shared-editing--json state)
                     (mevedel-shared-editing--json
                      (mevedel-shared-editing--read workspace id)))

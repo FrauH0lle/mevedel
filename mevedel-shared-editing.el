@@ -75,14 +75,14 @@ RESULT.  Observers cannot change whether the preceding commit succeeded.")
      (json-parse-string text :object-type 'plist :array-type 'array
                         :null-object :null :false-object :json-false))))
 
-(defun mevedel-shared-editing--present-p (workspace id)
+(defun mevedel-shared-editing-present-p (workspace id)
   "Return non-nil when WORKSPACE's store holds shared item ID."
   (and (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
        (file-exists-p (mevedel-shared-editing--state-path workspace id))))
 
 (defun mevedel-shared-editing--read (workspace id)
   "Read committed shared item ID of WORKSPACE."
-  (unless (mevedel-shared-editing--present-p workspace id)
+  (unless (mevedel-shared-editing-present-p workspace id)
     (error "This item no longer exists"))
   (mevedel-shared-editing--parse
    (with-temp-buffer
@@ -102,7 +102,7 @@ The item's whole artifact goes with it: content, images, comments,
 history, versions and its dedicated session.  Observers learn of it as a
 state with `:deleted' and the deleting `:actor'."
   (let ((id (plist-get args :id)))
-    (unless (mevedel-shared-editing--present-p workspace id)
+    (unless (mevedel-shared-editing-present-p workspace id)
       (error "This item no longer exists"))
     (mevedel-artifact-store--delete workspace id)
     (mevedel-artifact-lease-forget-item workspace id)
@@ -110,24 +110,20 @@ state with `:deleted' and the deleting `:actor'."
      workspace (list :id id :deleted t :actor (plist-get args :actor)) nil)
     (list :result (list :id id :deleted t))))
 
+(defun mevedel-shared-editing-list (workspace)
+  "Return WORKSPACE's shared items as plists of `:id', `:kind' and `:title'.
+Only their metadata is read: an item's state can run to megabytes, and
+the prompt's resource roster lists items on every request."
+  (cl-loop for id in (mevedel-artifact-store-ids workspace)
+           for meta = (mevedel-artifact-store-meta workspace id)
+           when (mevedel-artifact-store-item-p meta)
+           collect (list :id id :kind (symbol-name (plist-get meta :kind))
+                         :title (plist-get meta :title))))
+
 (defun mevedel-shared-editing-ids (workspace)
   "Return the ids of WORKSPACE's shared items, reading only their metadata."
-  (cl-remove-if-not
-   (lambda (id)
-     (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id)))
-   (mevedel-artifact-store-ids workspace)))
-
-(defun mevedel-shared-editing-list (workspace)
-  "Return WORKSPACE's shared item catalog."
-  (delq nil
-        (mapcar (lambda (id)
-                  (condition-case nil
-                      (let ((state (mevedel-shared-editing--read workspace id)))
-                        (list :id id :kind (plist-get state :kind)
-                              :title (plist-get state :title)
-                              :revision (plist-get state :revision)))
-                    (error nil)))
-                (mevedel-shared-editing-ids workspace))))
+  (mapcar (lambda (item) (plist-get item :id))
+          (mevedel-shared-editing-list workspace)))
 
 (defun mevedel-shared-editing--commit (workspace state)
   "Durably commit candidate STATE of WORKSPACE under this Emacs's item lease.
@@ -425,7 +421,7 @@ characters so UTF-8 encoding never splits a character between writes."
                 (when (and mutation (not (member action '("create" "import")))
                            (not (mevedel-artifact-lease-held-p
                                  workspace (mevedel-shared-editing--valid-id id)))
-                           (not (mevedel-shared-editing--present-p workspace id)))
+                           (not (mevedel-shared-editing-present-p workspace id)))
                   (error "This item no longer exists"))
                 ;; Another Emacs editing the item leaves it read-only here.  A
                 ;; takeover never asks from the queue: a question would block
@@ -453,7 +449,7 @@ characters so UTF-8 encoding never splits a character between writes."
                                (not (mevedel-artifact-store-item-p
                                      (mevedel-artifact-store-meta workspace id))))
                       (error "Artifact %s already exists" id))
-                    (when (mevedel-shared-editing--present-p workspace id)
+                    (when (mevedel-shared-editing-present-p workspace id)
                       (let ((existing (mevedel-shared-editing--read workspace id)))
                         (unless (and (stringp (plist-get args :opId))
                                      (plist-member (plist-get existing :receipts)
