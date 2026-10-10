@@ -784,8 +784,9 @@ the lobby an **Artifacts** tab, both listing the workspace's
 kind, size, version count, age of the last change, and in a room whether the
 artifact is attached to the room's session; the id shows on hovering the name.
 The host sends the listing when a guest joins a room or asks for it
-(`store-list`), and to every room and lobby of the workspace after each store
-change (`store-artifacts`). Each row shows **Open**, which any link can use to
+(`store-list`), and to every room and lobby of the workspace after a store
+change (`store-artifacts`): once per change however many steps it took, built
+once for all of them, and only where a guest is connected. Each row shows **Open**, which any link can use to
 open the artifact in the panel, and keeps its other actions in a `⋯` menu. Any
 link can list an artifact's **Versions** there. Full and owner links also act
 through `store-action` frames:

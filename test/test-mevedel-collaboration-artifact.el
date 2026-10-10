@@ -183,7 +183,7 @@
 
 
 (mevedel-deftest mevedel-collaboration-notify-artifacts-changed
-  (:doc "drops cached artifact stats and re-publishes the workspace's rooms")
+  (:doc "drops cached artifact stats at once and tells the workspace's rooms once")
   (let* ((data-buffer (generate-new-buffer " *collab-artifacts-data*"))
          (workspace (mevedel-workspace--create :type 'project :id "w"))
          (session (mevedel-session--create :name "artifacts" :workspace workspace))
@@ -192,9 +192,10 @@
                      :transport 'transport))
          (mevedel-collaboration--rooms (mevedel-test-room-registry room))
          (path (make-temp-file "mevedel-collab-stat-"))
+         (mevedel-collaboration--store-notifications nil)
          published)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-collaboration--publish)
+        (cl-letf (((symbol-function 'mevedel-collaboration--schedule-publish)
                    (lambda (target) (push target published))))
           ;; Prime the memo, then delete behind it: the stale size
           ;; survives until this seam drops the cache.
@@ -202,13 +203,19 @@
                              (expand-file-name path)))))
           (delete-file path)
           (mevedel-collaboration-notify-artifacts-changed workspace)
+          (mevedel-collaboration-notify-artifacts-changed workspace)
+          (should-not published)
+          (should (= 1 (length mevedel-collaboration--store-notifications)))
+          (mevedel-collaboration--notify-store workspace)
           (should (equal (list room) published))
+          (should-not mevedel-collaboration--store-notifications)
           (should (cdr (mevedel-collaboration--artifact-stat
                         (expand-file-name path))))
           ;; A workspace without rooms still drops the cache, publishes
           ;; nothing, and does not error.
-          (mevedel-collaboration-notify-artifacts-changed
-           (mevedel-workspace--create :type 'project :id "other"))
+          (let ((other (mevedel-workspace--create :type 'project :id "other")))
+            (mevedel-collaboration-notify-artifacts-changed other)
+            (mevedel-collaboration--notify-store other))
           (should (= 1 (length published))))
       (mevedel-collaboration--artifact-stat-invalidate)
       (when (file-exists-p path) (delete-file path))
@@ -232,6 +239,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
           (lobby (list :workspace workspace :transport 'lobby
                        :guests (make-hash-table :test #'eql)))
           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+          (mevedel-collaboration--store-notifications nil)
           sent)
      (dolist (owner (list room lobby))
        (puthash 1 (list :name "viewer" :writable nil :ready t) (plist-get owner :guests))
@@ -241,6 +249,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                     (lambda (transport peer frame)
                       (push (list transport peer frame) sent) t))
                    ((symbol-function 'mevedel-collaboration--publish) #'ignore)
+                   ((symbol-function 'mevedel-collaboration--schedule-publish) #'ignore)
                    ((symbol-function 'mevedel-collaboration-lobby--find)
                     (lambda (seen) (and (eq seen workspace) lobby)))
                    ((symbol-function 'mevedel-session-persistence-write-sidecar-now)
@@ -254,6 +263,8 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                   (mevedel-session--create :workspace workspace))
                 (list (list :action 'write :path path)))))
            ,@body)
+       (dolist (pending mevedel-collaboration--store-notifications)
+         (cancel-timer (cdr pending)))
        (kill-buffer data-buffer)
        (mevedel-collaboration--artifact-stat-invalidate)
        (delete-directory root t))))
@@ -290,7 +301,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
   (test)
   :doc "lists the workspace store with attachment relative to the room"
   (mevedel-collaboration-artifact-test--with-store
-    (let ((rows (mevedel-collaboration--store-rows room)))
+    (let ((rows (append (plist-get (mevedel-collaboration--store-frame room) :artifacts) nil)))
       (should (equal '("draft" "page") (sort (mapcar (lambda (row) (plist-get row :id)) rows)
                                              #'string<)))
       (let ((page (cl-find "page" rows :key (lambda (row) (plist-get row :id)) :test #'equal)))
@@ -301,7 +312,11 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
         (should (= 1 (plist-get page :versions)))
         (should (integerp (plist-get page :modified)))))
     (should (cl-every (lambda (row) (eq :json-false (plist-get row :attached)))
-                      (mevedel-collaboration--store-rows lobby)))))
+                      (plist-get (mevedel-collaboration--store-frame lobby) :artifacts)))
+    ;; Unreadable metadata leaves its artifact out, not the listing.
+    (write-region "(:kind" nil (file-name-concat store "draft" "meta.el") nil 'silent)
+    (should (equal '("page") (mapcar (lambda (row) (plist-get row :id))
+                                     (mevedel-collaboration--store-rows workspace))))))
 
 (mevedel-deftest mevedel-collaboration--handle-store-action ()
   ,test
@@ -321,8 +336,9 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                                                            :id "page" :n 1)
                                                       :error)))
       (should (plist-get (act lobby 2 :action "versions" :id "../page") :error))
-      ;; Restoring records a new version and tells every room.
+      ;; Restoring records a new version and tells every room, once.
       (should (= 2 (plist-get (act room 2 :action "restore" :id "page" :n 1) :n)))
+      (mevedel-collaboration--notify-store workspace)
       (should (cl-find-if (lambda (entry)
                             (equal "store-artifacts" (plist-get (nth 2 entry) :t)))
                           sent))

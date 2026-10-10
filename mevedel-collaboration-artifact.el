@@ -58,6 +58,8 @@
 (autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
 
 ;; `mevedel-collaboration'
+(declare-function mevedel-transport-run-at-time "mevedel-transport"
+                  (seconds function &rest args))
 (declare-function mevedel-collaboration--guest
                   "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--observer-failure
@@ -66,7 +68,7 @@
                   "mevedel-collaboration" (room frame))
 (declare-function mevedel-collaboration--guest-link
                   "mevedel-collaboration" (room guest))
-(declare-function mevedel-collaboration--publish
+(declare-function mevedel-collaboration--schedule-publish
                   "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--room-data-buffer
                   "mevedel-collaboration" (room))
@@ -323,39 +325,56 @@ by artifact.  The sender is answered once it is gone or was refused."
                (lobby (mevedel-collaboration-lobby--find workspace)))
      (list lobby))))
 
+(defvar mevedel-collaboration--store-notifications nil
+  "Alist of workspaces whose rooms await the store's listing, with its timer.")
+
 (defun mevedel-collaboration-notify-artifacts-changed (workspace)
-  "Re-publish every room of WORKSPACE after its artifact store changed.
-Rooms and the lobby also receive the store's new listing."
+  "Tell WORKSPACE's rooms and lobby that its artifact store changed.
+Cached artifact stats drop at once.  The rooms follow on the next tick,
+once: one ApplyPatch changes the store several times, and every listing
+reads each artifact's metadata."
   ;; Only a loaded collaboration can have a room to tell.
   (when (featurep 'mevedel-collaboration)
     (mevedel-collaboration--artifact-stat-invalidate)
+    (unless (assq workspace mevedel-collaboration--store-notifications)
+      (push (cons workspace
+                  (mevedel-transport-run-at-time
+                   0 #'mevedel-collaboration--notify-store workspace))
+            mevedel-collaboration--store-notifications))))
+
+(defun mevedel-collaboration--notify-store (workspace)
+  "Send WORKSPACE's rooms and lobby the store's listing, built once.
+Session rooms republish their records too, through their own coalesced
+publication, since a card may now show its artifact deleted."
+  (when-let* ((pending (assq workspace mevedel-collaboration--store-notifications)))
+    (setq mevedel-collaboration--store-notifications
+          (delq pending mevedel-collaboration--store-notifications))
+    (when (timerp (cdr pending)) (cancel-timer (cdr pending))))
+  (let (rows)
     (dolist (room (mevedel-collaboration--workspace-rooms workspace))
       (condition-case err
           (progn
             (when (plist-get room :session)
-              (mevedel-collaboration--publish room))
-            (mevedel-collaboration--broadcast
-             room (mevedel-collaboration--store-frame room)))
+              (mevedel-collaboration--schedule-publish room))
+            (when (> (hash-table-count (plist-get room :guests)) 0)
+              (mevedel-collaboration--broadcast
+               room (mevedel-collaboration--store-frame
+                     room (or rows (setq rows (mevedel-collaboration--store-rows
+                                               workspace)))))))
         (error (mevedel-collaboration--observer-failure room err))))))
 
 
 ;;
 ;;; Store listing and actions
 
-(defun mevedel-collaboration--store-rows (room)
-  "Return ROOM's workspace artifacts as guests receive them.
-Attachment is relative to ROOM's session; a lobby has none."
-  (let* ((session (plist-get room :session))
-         (attached (and session (mevedel-session-attached-artifacts session)))
-         (workspace (mevedel-collaboration--room-workspace room)))
-    (mapcar (lambda (row)
+(defun mevedel-collaboration--store-rows (workspace)
+  "Return WORKSPACE's artifacts as guests receive them, attachment aside."
+  (mapcar (lambda (row)
               (let ((id (plist-get row :id)))
                 (list :id id
                       :title (plist-get row :title)
-                      :kind (symbol-name (plist-get row :kind))
-                      :artifact (concat id "/" (plist-get
-                                                (mevedel-artifact-store-meta workspace id)
-                                                :file))
+                      :kind (format "%s" (plist-get row :kind))
+                      :artifact (concat id "/" (plist-get row :file))
                       :size (plist-get row :size)
                       :modified (if (plist-get row :missing) nil
                                   (truncate (float-time (plist-get row :modified))))
@@ -364,17 +383,24 @@ Attachment is relative to ROOM's session; a lobby has none."
                                       mevedel-artifact-store-item-kinds)
                                 t :json-false)
                       :missing (if (plist-get row :missing) t :json-false)
-                      :attached (if (member id attached) t :json-false)
                       :conversation
-                      (if (plist-get (mevedel-artifact-store-meta workspace id)
-                                     :dedicated-session)
-                          t :json-false))))
-            (mevedel-artifact-store-list workspace))))
+                      (if (plist-get row :dedicated-session) t :json-false))))
+          (mevedel-artifact-store-list workspace)))
 
-(defun mevedel-collaboration--store-frame (room)
-  "Return the store listing frame for ROOM's guests."
-  (list :t "store-artifacts"
-        :artifacts (vconcat (mevedel-collaboration--store-rows room))))
+(defun mevedel-collaboration--store-frame (room &optional rows)
+  "Return the store listing frame for ROOM's guests.
+ROWS, from `mevedel-collaboration--store-rows', are shared by every room;
+each marks the artifacts its own session is attached to, a lobby none."
+  (let* ((session (plist-get room :session))
+         (attached (and session (mevedel-session-attached-artifacts session))))
+    (list :t "store-artifacts"
+          :artifacts
+          (vconcat
+           (mapcar (lambda (row)
+                     (append row (list :attached (if (member (plist-get row :id) attached)
+                                                     t :json-false))))
+                   (or rows (mevedel-collaboration--store-rows
+                             (mevedel-collaboration--room-workspace room))))))))
 
 (defun mevedel-collaboration--handle-store-list (room peer _frame)
   "Send guest PEER in ROOM the workspace's artifact listing."
