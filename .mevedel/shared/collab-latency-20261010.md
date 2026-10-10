@@ -142,13 +142,57 @@ for every room in that daemon waits while one runs.
 Estimated perceived edit latency (2 users): today ≈ 370–520 ms; after 1 ≈
 270 ms; after 1–2 ≈ 135 ms; after 1–4 ≈ 100 ms.
 
+## After the fixes (deployed `e4b135d`, same host, same method)
+
+Shipped: artifact-store, editor sends edits at once (50 ms floor), one
+control program per edit (commit cache under the item lease), one
+broadcast per room, fewer processes per control program, incremental
+publication projection with cost-paced publishes, stale busy flag, skill
+rescans. Old session artifacts were migrated into the public projects'
+stores (originals kept as `.mevedel/sessions.pre-store`).
+
+| Measurement (p50 / p95) | Before | After |
+|---|---|---|
+| Edit seen, 2 guests | 220 / 249 ms | **73 / 94 ms** |
+| Edit seen, 10 guests | — (branch: 115) | 77 / 95 ms |
+| Edit seen, 10 guests, 3 writers | — (branch: 92) | 74 / 123 ms |
+| Edit seen, 20 guests, 5 writers | — | 259 / 382 ms (queue saturated) |
+| Cursor, 2 / 20 guests | 12.5 / 21.5 ms | 12.6 / 20.8 ms |
+| Prompt seen by others | 140–172 ms | 136 / 203 ms |
+| Publish at 1,011 records | 360–500 ms | 55 / 164 ms |
+| Edit seen while that session streams | 373 ms, max 708 | **66 / 116 ms, max 180** |
+| Cursor p95 while it streams | 414 ms, half dropped | 68 ms, 5 % dropped |
+
+Host stages per edit: `--commit` 51 ms (one lease-fenced program),
+`editing--changed` 2.3 ms. Perceived edit latency for two people is now
+about 75 ms plus rendering; the browser no longer waits up to 300 ms.
+
+Still open:
+
+- **Writers share one queue.** At 20 guests / 5 writers each edit every
+  300 ms, saves arrive at ~17/s against a 51 ms commit: the workspace
+  queue runs ~90 % busy and edits wait 260 ms. Next: a cheaper commit
+  (the fenced program itself, ~50 ms in the container) or per-item queues.
+- **Joining a long session** still takes 1.7 s (2 guests) to 4.6 s
+  (4 joining at once) at 1,011 records: each welcome builds and sends the
+  whole snapshot.
+- **Prompt admission** keeps its cross-Emacs session-transfer checks
+  (several control programs) before the prompt is inserted.
+- The segment scan in `mevedel-transcript-segments` is now ~70 % of a
+  streaming publish; a resumable scan would make publishes independent of
+  transcript length.
+
 ## Side findings
 
 - **Stale busy flag:** `*mevedel:Project AGENTS.md Setup@snt-app*` kept
   `mevedel--current-request` set after its turn finished on 2026-10-09
   15:04 (summary written, no request process). `./update` and the nightly
-  update refused to run until `--force`.
-- `mevedel-skills-scan` runs twice per request (13 ms each on .43).
+  update refused to run until `--force`. Fixed: skill preparation that
+  outlived its turn restored the finished request; `mevedel-busy-p` is the
+  public predicate for the host's update check.
+- `mevedel-skills-scan` ran twice per request (13 ms each on .43): file
+  events in ancestors watched for missing skill directories marked skills
+  dirty after every turn. Fixed.
 - The deployed relay and nginx add nothing measurable.
 
 ## Not measured
