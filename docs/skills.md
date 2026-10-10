@@ -209,8 +209,12 @@ containing directory name. Raw names must match `[a-z0-9-]+`; visible
 names may include a generated `source:` or plugin prefix.
 
 Hot reload marks consuming chat buffers dirty when watched skill
-directories change. Completion and reminders rescan on demand when a
-buffer is dirty.
+directories change. A configured directory that does not exist yet is
+watched through its nearest existing ancestor, such as `.mevedel/` or the
+workspace root, where a change counts only on the path to that directory;
+the files a turn writes there do not mark buffers dirty. Completion,
+reminders and the skills section of the system prompt rescan on demand when
+a buffer is dirty.
 
 `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` is the read-only resource address
 for an exact discovered skill source. `SOURCE-KEY` is the full lowercase
@@ -722,6 +726,13 @@ resolution, while deny remains absolute across all buckets. Plan mode applies it
 ApplyPatch to explicit session-owned `work://` descendants has a bounded write
 exception, and directive planning has no patch exception. Goal execution uses
 ordinary request permissions. See [Plan mode](plan-mode.md).
+
+The preparation request holds the buffer's request slot while preparation
+runs, and puts back the request it took the slot from when it settles, unless
+a request admitted meanwhile now owns the slot. A turn that ends while a
+preparation for its steering or `Skill` call holds the slot cannot settle
+against a slot it does not own: its settlement waits and resumes once its
+request is back, and only then ends that request.
 
 ## ToolCall Primitives
 
