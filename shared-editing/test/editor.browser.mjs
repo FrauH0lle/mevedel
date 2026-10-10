@@ -64,6 +64,30 @@ test('editor interaction regressions', async (t) => {
       assert.ok(await page.evaluate(() => window.messages.some(m => m.args?.action === 'read')));
       await page.close();
     });
+    await t.test('a failed reread after a skipped revision stays visible and retries', async () => {
+      const {page, frame} = await open();
+      await page.evaluate(async () => {
+        const apply = window.apply;
+        let refused = false;
+        window.apply = args => args.action === 'read' && !refused
+          ? (refused = true, Promise.reject(new Error('Busy'))) : apply(args);
+        await apply({action:'patch', opId:'elsewhere-1',
+          changes:[{id:'one', after:{type:'rectangle', x:0, y:0, width:50, height:50}}]});
+        const second = await apply({action:'patch', opId:'elsewhere-2',
+          changes:[{id:'two', after:{type:'rectangle', x:100, y:0, width:50, height:50}}]});
+        window.port.postMessage({type:'changed', ...second});
+      });
+      await frame.locator('#saved', {hasText: 'reopen this item'}).waitFor();
+      // The next change, though contiguous, reads the item again.
+      await page.evaluate(async () => {
+        const third = await window.apply({action:'patch', opId:'elsewhere-3',
+          changes:[{id:'three', after:{type:'rectangle', x:200, y:0, width:50, height:50}}]});
+        window.port.postMessage({type:'changed', ...third});
+      });
+      await frame.locator('[data-shape="one"]').waitFor();
+      await frame.locator('#saved', {hasText: 'Saved on host'}).waitFor();
+      await page.close();
+    });
     await t.test('failed saves withdraw outgoing movement previews', async () => {
       const {page,frame}=await open();
       await page.evaluate(()=>{

@@ -96,7 +96,7 @@
       (should (file-exists-p (file-name-concat root ".mevedel/artifacts/board1/state.json")))
       (should (equal '(:kind whiteboard :title "Architecture" :file "state.json")
                      (cl-subseq (mevedel-artifact-store-meta workspace "board1") 0 6)))
-      (should (mevedel-artifact-lease-held-p workspace "board1"))
+      (should (mevedel-artifact-lease-held workspace "board1"))
       (should (equal '("board1") (mevedel-shared-editing-ids workspace)))
       (should (equal "Architecture"
                      (plist-get (car (mevedel-shared-editing-list workspace)) :title)))
@@ -370,6 +370,31 @@
                                (with-temp-buffer
                                  (insert-file-contents
                                   (mevedel-artifact-store-version-path workspace "board" 2))
+                                 (buffer-string)))
+                              :title)))))
+
+(mevedel-deftest mevedel-shared-editing-save-version--released
+  (:doc "Reads the store once the lease was released, though held again since")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (mevedel-artifact-lease-release workspace "board")
+    ;; Another Emacs takes it, renames it and releases it.
+    (let ((mevedel-session-durability--client-id (make-string 64 ?b))
+          (mevedel-artifact-lease--held (make-hash-table :test #'equal))
+          (state (mevedel-shared-editing--read workspace "board")))
+      (mevedel-artifact-lease-acquire workspace "board")
+      (mevedel-shared-editing--commit workspace (plist-put (copy-sequence state) :title "Laptop"))
+      (mevedel-artifact-lease-release workspace "board"))
+    ;; Taken back without an edit, as the cockpit's T does.
+    (mevedel-artifact-lease-ensure workspace "board" t)
+    (mevedel-shared-editing-save-version workspace "board")
+    (should (equal "Laptop"
+                   (plist-get (mevedel-shared-editing--parse
+                               (with-temp-buffer
+                                 (insert-file-contents
+                                  (mevedel-artifact-store-version-path workspace "board" 1))
                                  (buffer-string)))
                               :title)))))
 
