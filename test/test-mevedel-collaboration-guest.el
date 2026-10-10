@@ -55,7 +55,7 @@
   (test)
   :doc "splits records into chunks each under the wire bound"
   (progn
-    (should-not (mevedel-collaboration--snapshot-chunks nil))
+    (should (equal '(nil) (mevedel-collaboration--snapshot-chunks nil)))
     (let* ((record (list :id "assistant-x" :kind "assistant" :revision 0
                          :text (make-string 100000 937)))
            (chunks (mevedel-collaboration--snapshot-chunks
@@ -189,7 +189,18 @@
         (setq sent nil)
         (mevedel-collaboration--send-snapshot room 8)
         (should-not (plist-member (cdr (car (last sent))) :commands))
-        (should-not (plist-member (cdr (car (last sent))) :models))))))
+        (should-not (plist-member (cdr (car (last sent))) :models))))
+    ;; An empty room still ends each snapshot, or its guests keep loading.
+    (let ((room (list :transport 'transport :guests guests :records nil)))
+      (dotimes (_ 2)
+        (setq sent nil)
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame) (push (cons peer frame) sent) t)))
+          (mevedel-collaboration--send-snapshot room 8))
+        (should (= 2 (length sent)))
+        (let ((chunk (mevedel-test--frame (cdr (car sent)))))
+          (should (eq t (plist-get chunk :final)))
+          (should (equal [] (plist-get chunk :records))))))))
 
 
 ;;

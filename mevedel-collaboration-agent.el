@@ -241,11 +241,10 @@ A failure is remembered, so later guest polls are refused, not retried."
                                           (plist-get record :id))))))
                            record))
                        (mevedel-collaboration--canonical-records buffer)))
-                     (chunks (or (mevedel-collaboration--snapshot-chunks
-                                  records
-                                  (mevedel-collaboration--agent-frame-overhead
-                                   req-id path))
-                                 (list nil)))
+                     (chunks (mevedel-collaboration--snapshot-chunks
+                              records
+                              (mevedel-collaboration--agent-frame-overhead
+                               req-id path)))
                      (digest (secure-hash
                               'sha256
                               (mapconcat #'identity

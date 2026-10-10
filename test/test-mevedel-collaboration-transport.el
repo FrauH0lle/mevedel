@@ -649,9 +649,10 @@ relay's room plist."
 (mevedel-deftest mevedel-collaboration--transport-send
   (:doc "drops a frame over the wire bound instead of sending it")
   (let* ((sent nil)
-         (transport (list :state 'open :ws 'ws :key (make-string 32 ?k))))
+         ;; A real struct: compiled callers inline its accessors.
+         (transport (list :state 'open :ws (websocket-inner-create :url "ws://relay" :conn 'conn)
+                          :key (make-string 32 ?k))))
     (cl-letf (((symbol-function 'websocket-openp) (lambda (_ws) t))
-              ((symbol-function 'websocket-conn) (lambda (_ws) 'conn))
               ((symbol-function 'process-send-string)
                (lambda (_process frame) (push frame sent))))
       (should (mevedel-collaboration--transport-send

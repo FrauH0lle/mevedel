@@ -629,6 +629,8 @@ Record the publish's cost on ROOM to pace later coalesced publishes."
                               record))
                         new))
       (setq room (plist-put room :records new))
+      ;; A joining guest's snapshot encoding is of the records just replaced.
+      (plist-put room :snapshot-chunks nil)
       (dolist (record changed)
         (mevedel-collaboration--broadcast
          room (list :t "record"
