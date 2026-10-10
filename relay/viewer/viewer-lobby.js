@@ -46,6 +46,9 @@
     let requestSequence = 0;
     const opening = new Map();
     const deleting = new Map();
+    // How many browsers are in each live session, by session id.
+    let here = new Map();
+    let shown = [];
 
     // The header already names the project, and the tabs, when shown,
     // stand in for this heading on screen; it labels the section for
@@ -108,6 +111,7 @@
       const meta = [age(row.updated)];
       if (row.shared === true) meta.push('shared');
       else if (row.live === true) meta.push('open in Emacs');
+      if (here.get(row.id)) meta.push(`${here.get(row.id)} here`);
       main.append(el('span', 'lobby-meta', meta.filter(Boolean).join(' · ')));
       if (row.preview) main.append(el('p', 'lobby-preview', row.preview));
       item.append(main);
@@ -143,6 +147,7 @@
       filesTab.hidden = !filesAllowed();
       retitle();
       const rows = Array.isArray(frame.sessions) ? frame.sessions : [];
+      shown = rows;
       list.replaceChildren(...rows.map(renderRow));
       empty.hidden = rows.length > 0;
       const more = typeof frame.omitted === 'number' ? frame.omitted : 0;
@@ -196,7 +201,14 @@
       if (active && document.visibilityState === 'visible') reload();
     });
 
-    return Object.freeze({show, opened, deleted, created, active: () => active});
+    function counts(entries) {
+      if (!Array.isArray(entries)) return;
+      here = new Map(entries.filter(entry => entry && typeof entry.id === 'string')
+        .map(entry => [entry.id, entry.n]));
+      if (active) list.replaceChildren(...shown.map(renderRow));
+    }
+
+    return Object.freeze({show, opened, deleted, created, counts, active: () => active});
   }
 
   window.mevedelLobbyView = Object.freeze({create, age});

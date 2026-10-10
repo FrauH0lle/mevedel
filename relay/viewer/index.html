@@ -36,6 +36,7 @@
         </details>
         <button id="invite-button" class="btn quiet" type="button" hidden title="Copy a link to this room" aria-label="Invite to this room">Invite</button>
         <button id="notify-button" class="bell" type="button" hidden aria-pressed="false" title="Notifications off" aria-label="Notifications off">Notifications</button>
+        <span class="presence" data-presence role="img" hidden></span>
       </div>
     </header>
     <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
@@ -103,6 +104,7 @@
           <span id="artifact-title" class="panel-title"></span>
           <span id="artifact-meta" class="panel-meta"></span>
         </div>
+        <span class="presence" data-presence role="img" hidden></span>
         <button id="artifact-comment" class="btn quiet" type="button" hidden
                 aria-pressed="false">Comment</button>
         <button id="artifact-ask" class="btn quiet" type="button" hidden
@@ -121,6 +123,7 @@
     <div class="dock">
       <section id="editing-panel" class="viewer-panel" hidden role="dialog" aria-label="Shared editing">
         <header class="panel-head"><span class="wordmark">mevedel</span><span class="editor-location">Shared work</span><span id="editing-title" class="panel-title editor-title-hidden"></span>
+          <span class="presence" data-presence role="img" hidden></span>
           <button id="editing-close" class="btn quiet" type="button">Back to room</button></header>
         <div id="editing-body"></div>
       </section>
@@ -364,6 +367,7 @@
     <script src="/viewer-store.js" defer></script>
     <script src="/viewer-lobby.js" defer></script>
     <script src="/viewer-editing.js" defer></script>
+    <script src="/viewer-presence.js" defer></script>
     <script src="/viewer.js" defer></script>
   </body>
 </html>

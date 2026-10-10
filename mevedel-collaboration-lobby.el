@@ -78,6 +78,12 @@
                   "mevedel-collaboration-owner" (room peer frame))
 (autoload 'mevedel-collaboration--handle-new-session "mevedel-collaboration-owner")
 
+;; `mevedel-collaboration-presence'
+(declare-function mevedel-collaboration-presence-handle
+                  "mevedel-collaboration-presence" (room peer frame))
+(declare-function mevedel-collaboration-presence-publish
+                  "mevedel-collaboration-presence" (room))
+
 ;; `mevedel-collaboration-share'
 (declare-function mevedel-collaboration-share-dismiss
                   "mevedel-collaboration-share" (room))
@@ -484,7 +490,10 @@ whose link is meant to keep working."
           (pcase (plist-get frame :t)
             ("hello"
              (when (mevedel-collaboration--admit-hello lobby peer frame)
-               (mevedel-collaboration-lobby--send-listing lobby peer)))
+               (mevedel-collaboration-lobby--send-listing lobby peer)
+               (mevedel-collaboration-presence-publish lobby)))
+            ("viewing"
+             (mevedel-collaboration-presence-handle lobby peer frame))
             ("lobby-refresh"
              (when (mevedel-collaboration--guest lobby peer)
                (mevedel-collaboration-lobby--send-listing lobby peer)))
@@ -523,7 +532,8 @@ whose link is meant to keep working."
   "Forget PEER in ROOT's lobby when relay control EVENT says it left."
   (when-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies))
               ((eq event 'peer-left)))
-    (remhash peer (plist-get lobby :guests))))
+    (remhash peer (plist-get lobby :guests))
+    (mevedel-collaboration-presence-publish lobby)))
 
 (defun mevedel-collaboration-lobby--on-state (root state)
   "Track relay transport STATE for ROOT's lobby.
@@ -531,7 +541,8 @@ The relay collects the room with the host connection, so every guest
 rejoins with a fresh hello after a drop."
   (when-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies))
               ((eq state 'down)))
-    (clrhash (plist-get lobby :guests))))
+    (clrhash (plist-get lobby :guests))
+    (mevedel-collaboration-presence-publish lobby)))
 
 
 ;;
@@ -563,6 +574,7 @@ until it is stopped."
   (require 'mevedel-collaboration-files)
   (require 'mevedel-collaboration-guest)
   (require 'mevedel-collaboration-owner)
+  (require 'mevedel-collaboration-presence)
   (require 'mevedel-collaboration-projection)
   (require 'mevedel-collaboration-transport)
   (unless (require 'websocket nil t)
@@ -634,7 +646,9 @@ Only an exit leaves it recorded as running, to restart with Emacs."
         (when (> (hash-table-count (plist-get lobby :guests)) 0)
           (mevedel-collaboration--transport-send
            transport 0 (list :t "bye" :reason (format "%s" reason))))))
-    (ignore-errors (mevedel-collaboration--transport-stop transport))))
+    (ignore-errors (mevedel-collaboration--transport-stop transport)))
+  (unless (eq reason 'emacs-exit)
+    (ignore-errors (mevedel-collaboration-presence-publish lobby))))
 
 (defun mevedel-collaboration-lobby--stop-all ()
   "Stop every lobby before Emacs exits."

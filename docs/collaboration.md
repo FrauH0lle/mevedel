@@ -175,6 +175,26 @@ name field does not submit a message draft. Names are labels, not identities
 or unique handles.
 The guest's independent browser ID continues to identify its queued work.
 
+### Who else is here
+
+The header, the artifact panel and the editor tab's header show initials for
+the other people on the same page, with their names on hover. A page is the
+store artifact a tab has open -- a whiteboard, document, HTML page or image --
+or otherwise the tab's room. An artifact page spans every room and the lobby
+of the workspace, because one whiteboard can be open from a session's room and
+from its own conversation's; a room page is that room's alone. A browser counts
+once per page however many of its tabs are there, and is faded while all of
+them are hidden. Lobby session rows show how many people are in each live
+session, and artifact rows how many have the artifact open. Only browsers
+count; the host at Emacs does not appear.
+
+Each hello carries the tab's page and visibility, and a sealed `viewing`
+frame reports every later change. `mevedel-collaboration-presence` recomputes
+the workspace on each change, admission, departure, rename or room stop, and
+sends a guest a `presence` frame only when its content changed. Frames carry
+display names only; browser IDs stay on the host. Whiteboard cursors remain
+scoped to one room.
+
 Room and editor chrome share color tokens. **Appearance** selects a complete
 cool (default) or warm palette, system/light/dark appearance, and selective or
 minimal accent detail. Selective accents color participant attribution and the

@@ -34,7 +34,8 @@
       + '});})()<\/script>';
   }
 
-  function create({send, el, flash, summarize, reveal, canComment, canDelete, busy, ask}) {
+  function create({send, el, flash, summarize, reveal, canComment, canDelete, busy, ask,
+                   onPage = () => {}}) {
     const nav = document.getElementById('artifacts');
     const box = document.getElementById('artifacts-box');
     const boxSummary = document.getElementById('artifacts-summary');
@@ -118,6 +119,7 @@
       if (download) download.hidden = true;
       if (remove) remove.hidden = true;
       if (askButton) askButton.hidden = true;
+      onPage();
     }
 
     // Deleting removes the artifact for everyone, with its versions and
@@ -174,6 +176,7 @@
             (record.artifact || 'artifact') + (version ? ` · Version ${record.version}` : ''),
             {t: 'artifact-get', id: record.id, ...(version ? {version: record.version} : {})});
       view.store = typeof record.store === 'string' ? record.store : null;
+      onPage();
     }
 
     // A project file, named by its path in the project.
@@ -378,6 +381,7 @@
     }
 
     return Object.freeze({open, openFile, render, attachedRows, handle, handleDelete, close,
+                          page: () => (panel && !panel.hidden ? view.store : null),
                           setTheme, queue, handleComment, storedComments, discuss, activity});
   }
 

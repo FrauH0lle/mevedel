@@ -218,3 +218,13 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
   #editing-panel #editing-close { font-size:11px; padding:7px 9px; }
   #editing-panel .appearance-body { right:-105px; }
 }
+/* Who else is on this page: overlapping initials, faded while their tab is hidden. */
+.presence { display:flex; align-items:center; }
+.presence-chip, .presence-more { display:grid; place-items:center; flex:none; width:28px; height:28px; margin-left:-6px; border:2px solid var(--surface); border-radius:50%; font:600 11px/1 var(--font-ui); cursor:default; }
+.presence > :first-child { margin-left:0; }
+.presence-chip { color:var(--on-accent); background:var(--accent); }
+.presence-chip.away { opacity:.45; }
+.presence-more { color:var(--ink); background:var(--surface-2); }
+.header-actions .presence { order:-1; }
+.panel-head .presence { margin-left:auto; }
+#editing-panel .presence:not([hidden]) ~ #appearance-menu { margin-left:0; }

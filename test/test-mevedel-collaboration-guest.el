@@ -245,7 +245,19 @@
         (should (eq guest (gethash 2 guests)))
         (should (equal "Phone" (plist-get guest :name)))
         (should (plist-get guest :writable))
-        (should (plist-get guest :owner)))
+        (should (plist-get guest :owner))
+        ;; Without a page the guest is on the room itself.
+        (should-not (plist-get guest :viewing)))
+      ;; The hello carries the guest's page; a malformed one is the room.
+      (let ((hello (list :proto mevedel-collaboration--protocol-version
+                         :name "Tab" :page "board" :active t)))
+        (should (equal "board" (plist-get (mevedel-collaboration--admit-hello
+                                           room 3 hello)
+                                          :viewing)))
+        (should (eq t (plist-get (gethash 3 guests) :active)))
+        (should-not (plist-get (mevedel-collaboration--admit-hello
+                                room 4 (plist-put (copy-sequence hello) :page "../x"))
+                               :viewing)))
       ;; Admission alone sends nothing: what a guest is told depends on
       ;; whether it joined a room or a lobby.
       (should (= 1 (length sent))))))

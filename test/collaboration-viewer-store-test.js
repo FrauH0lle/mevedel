@@ -278,6 +278,16 @@ const press = (row, label) => {
   copying.store.show(listing);
   press(copying.list.children[0], 'Duplicate');
   assert.deepEqual(proposals, ['flow-copy']);
+  // Presence counts say how many people have each artifact open.
+  {
+    const {store, list} = build();
+    store.show(listing);
+    store.counts([{id: 'flow', n: 3}]);
+    const meta = row => textOf(row.children[0].children[1]);
+    assert.match(meta(list.children[0]), /3 here/);
+    assert.doesNotMatch(meta(list.children[1]), /here/);
+  }
+
   console.log('viewer store passed');
 })().catch(error => {
   console.error(error);

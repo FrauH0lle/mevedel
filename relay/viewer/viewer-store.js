@@ -15,6 +15,8 @@
     const pending = new Map();
     const expanded = new Set();
     const versions = new Map();
+    // How many browsers have each artifact open, by store id.
+    let here = new Map();
 
     // A placed menu would drift from its row; scrolling closes it.
     let shown = null;
@@ -176,6 +178,7 @@
       if (window.mevedelLobbyView) {
         meta.push(window.mevedelLobbyView.age(row.modified));
       }
+      if (here.get(row.id)) meta.push(`${here.get(row.id)} here`);
       if (room && row.attached === true) meta.push('in this session');
       if (!room && Number.isInteger(row.attachedSessions)) {
         meta.push(`${row.attachedSessions} session${row.attachedSessions === 1 ? '' : 's'}`);
@@ -277,7 +280,14 @@
       }
     }
 
-    return Object.freeze({show, handle, refresh, rows: () => rows});
+    function counts(entries) {
+      if (!Array.isArray(entries)) return;
+      here = new Map(entries.filter(entry => entry && typeof entry.id === 'string')
+        .map(entry => [entry.id, entry.n]));
+      render();
+    }
+
+    return Object.freeze({show, handle, refresh, counts, rows: () => rows});
   }
 
   window.mevedelStoreView = Object.freeze({create});

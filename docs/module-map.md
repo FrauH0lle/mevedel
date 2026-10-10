@@ -142,6 +142,7 @@ Chat / view
   mevedel-collaboration-artifact-comments.el artifact comment store, threads and conversations
   mevedel-collaboration-history.el archived browser segments and artifact metadata
   mevedel-collaboration-editing.el browser shared editing and selection questions
+  mevedel-collaboration-presence.el who else is on each guest's page; lobby counts
   mevedel-shared-conversation.el item-scoped request history from canonical live/archive turns
   mevedel-shared-editing.el   private editor engine queue and leased store commits
   mevedel-shared-library.el   host whiteboard element library and public Excalidraw collection

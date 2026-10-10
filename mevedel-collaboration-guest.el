@@ -101,6 +101,14 @@
 (autoload 'mevedel-collaboration--publish-history
   "mevedel-collaboration-history")
 
+;; `mevedel-collaboration-presence'
+(declare-function mevedel-collaboration-presence-handle
+                  "mevedel-collaboration-presence" (room peer frame))
+(declare-function mevedel-collaboration-presence-publish
+                  "mevedel-collaboration-presence" (room))
+(declare-function mevedel-collaboration-presence-state
+                  "mevedel-collaboration-presence" (frame))
+
 ;; `mevedel-collaboration-owner'
 (declare-function mevedel-collaboration--owner "mevedel-collaboration-owner" (room peer))
 (declare-function mevedel-collaboration--handle-new-session
@@ -701,10 +709,14 @@ Authority comes only from the tokens FRAME proves it holds."
              ;; without the other is a forgery attempt, not a tier.
              (owner (and writable claimed-owner
                          (equal claimed-owner (plist-get room :owner-token))))
-             (guest (list :name name :writable writable :owner owner
-                          :ready t
-                          :guest-id (mevedel-collaboration--sanitize-guest-id
-                                     (plist-get frame :guestId)))))
+             (guest (append
+                     (list :name name :writable writable :owner owner
+                           :ready t
+                           :guest-id (mevedel-collaboration--sanitize-guest-id
+                                      (plist-get frame :guestId)))
+                     (condition-case nil
+                         (mevedel-collaboration-presence-state frame)
+                       (error nil)))))
         (puthash peer guest (plist-get room :guests))
         guest))))
 
@@ -740,6 +752,7 @@ Authority comes only from the tokens FRAME proves it holds."
     (when (and (plist-get guest :writable)
                mevedel-collaboration-remote-interactions)
       (mevedel-collaboration--send-ui-requests room peer))
+    (mevedel-collaboration-presence-publish room)
     ;; Last, so an optional recovery fault cannot cost the owner the
     ;; frames above.
     (when (plist-get guest :owner)
@@ -1159,7 +1172,9 @@ sending guest instead of waiting for an answer."
                  ((stringp (plist-get frame :name))))
        (plist-put guest :name
                   (mevedel-collaboration--sanitize-guest-name
-                   (plist-get frame :name)))))
+                   (plist-get frame :name)))
+       (mevedel-collaboration-presence-publish room)))
+    ("viewing" (mevedel-collaboration-presence-handle room peer frame))
     ((or "push-subscribe" "push-unsubscribe" "push-state")
      (mevedel-collaboration--handle-push-subscription
       room peer frame))
@@ -1204,7 +1219,8 @@ sending guest instead of waiting for an answer."
       ('peer-joined nil)
       ('peer-left
        (mevedel-collaboration-editing-depart room peer)
-       (remhash peer (plist-get room :guests))))))
+       (remhash peer (plist-get room :guests))
+       (mevedel-collaboration-presence-publish room)))))
 
 (defun mevedel-collaboration--on-state (data-buffer state)
   "Track relay transport STATE for DATA-BUFFER's room."
@@ -1217,6 +1233,7 @@ sending guest instead of waiting for an answer."
        (maphash (lambda (peer _guest) (mevedel-collaboration-editing-depart room peer))
                 (plist-get room :guests))
        (clrhash (plist-get room :guests))
+       (mevedel-collaboration-presence-publish room)
        ;; The links and QR are handed out before the async dial settles.
        ;; A dial that has never succeeded -- wrong relay URL or a missing or
        ;; stale configured host token -- would otherwise retry forever
@@ -1242,6 +1259,7 @@ sending guest instead of waiting for an answer."
 (require 'mevedel-collaboration-artifact-comments)
 (require 'mevedel-collaboration-editing)
 (require 'mevedel-collaboration-files)
+(require 'mevedel-collaboration-presence)
 
 (provide 'mevedel-collaboration-guest)
 ;;; mevedel-collaboration-guest.el ends here
