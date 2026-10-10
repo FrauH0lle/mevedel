@@ -192,7 +192,8 @@
                            (plist-get (car (mevedel-session-recovery-issues session)) :category)))
             (should-not (string-search "credentials"
                                        (plist-get (car (mevedel-session-recovery-issues session)) :message)))
-            (fail '(:code "model_not_found" :message "Model gone does not exist") "404")
+            (mevedel-test--with-captured-messages nil
+              (fail '(:code "model_not_found" :message "Model gone does not exist") "404"))
             (should (equal "Fallback:kept" (mevedel-session-model-provider session)))
             (should (eq 'kept gptel-model))
             (should (string-search "using Fallback:kept"

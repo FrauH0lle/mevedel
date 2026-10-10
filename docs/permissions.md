@@ -219,10 +219,18 @@ never broaden the child sandbox.
 
 `mevedel-protected-paths` is an alist from glob to `read-only` or
 `inaccessible`. The default `.git` glob is read-only, and so is the
-[artifact store](view.md#artifact-store)'s bookkeeping -- each artifact's
-`meta.el`, `state.json`, `comments.json` and `versions/` -- and
+[artifact store](view.md#artifact-store)'s bookkeeping under
+`.mevedel/artifacts/.state/` -- metadata, shared item state, comments and versions -- and
 `.mevedel/leases/`, so a model write cannot bypass an item's lease, versions
-and validation; the artifact files themselves stay writable. The default SSH,
+and validation. These directory boundaries cover future artifact ids and missing
+bookkeeping files too. Authored files under `.mevedel/artifacts/ID/` stay writable,
+including file creation and atomic replacement. Before a confined launch, missing
+protected state directories and their parents are created; only the protected
+leaf is mounted read-only. These directories and their parents remain after
+execution, since removing an empty directory could detach another running
+sandbox's protection and allow it to recreate that path as writable. If a prepared state
+directory disappears before launch, confinement refuses to start the command.
+The default SSH,
 GnuPG, AWS, Azure, Google Cloud, and Kubernetes credential globs are
 inaccessible. On
 a trailing `/**`, policy covers both the directory and its descendants. On a
@@ -247,12 +255,10 @@ A failed or truncated native scan refuses preparation; it does not discard missi
 A pattern below `**/.mevedel/`, mevedel's own state directory, which exists
 only at a workspace root, protects in the Bash sandbox the whole directory its
 literal part names, at each discovery root and without a walk:
-`**/.mevedel/artifacts/*/meta.el` protects all of `.mevedel/artifacts`. That is
-one mount however many artifacts there are, it covers entries created later,
-and the directory is created when missing. Native tool checks match the
-pattern itself, at any depth, so ApplyPatch can still write an artifact's own
-files; confined Bash cannot write in the store at all. A `.mevedel` nested deeper in a
-root is covered by native tool checks only.
+`**/.mevedel/artifacts/.state/**` is one mount however many artifacts there
+are. A literal file pattern protects the file. Native
+tool checks match the pattern itself, at any depth; a `.mevedel` nested deeper
+in a root is covered by native tool checks only.
 Other patterns and targets retain the Lisp walker. Canonical target checks and
 final confinement validation remain unchanged.
 

@@ -44,7 +44,7 @@ This project's artifact store:
   patch again. Writing an artifact attaches it to this session, and a
   successful write also publishes its card to a live collaboration room.
 - The first file written into an id directory is the artifact; only it is
-  versioned.
+  versioned. The host keeps its bookkeeping in the protected `.state/` subtree.
 - **Self-contained, always.** No CDN scripts or stylesheets, no external
   fonts, no runtime `fetch`, no remote images. In the browser the
   artifact renders inside a sandbox whose Content-Security-Policy blocks

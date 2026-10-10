@@ -21,6 +21,7 @@
 (require 'mevedel-turn)
 (require 'mevedel-tools)
 (require 'mevedel-tool-editing)
+(require 'mevedel-shared-editing)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-agents)
 (require 'mevedel-structs)
@@ -224,7 +225,9 @@ With RAW-P, retain the full pipeline result including hidden render data."
 ;;; Driving a script through the pipeline
 
 (mevedel-deftest mevedel-ptc-driver-run
-  (:vars ((mevedel-ptc-driver--next-envelope-id 0))
+  (:vars ((mevedel-ptc-driver--next-envelope-id 0)
+          (mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+          (mevedel-artifact-lease--held (make-hash-table :test #'equal)))
    :vars* ((root (file-name-as-directory
                   (make-temp-file "mevedel-ptc-" t)))
            (save-path (make-temp-file "mevedel-ptc-save-" t))
@@ -251,6 +254,12 @@ With RAW-P, retain the full pipeline result including hidden render data."
                    gptel-tools (test-mevedel-ptc-driver--gptel-tools "Read"))))
    :after-each
    (progn
+     ;; SharedCreate owns a helper and a renewing item lease independently of
+     ;; the ToolCall buffer.  Retire both before removing their target store.
+     (mevedel-shared-editing-stop)
+     (mevedel-artifact-lease-release-all)
+     (maphash (lambda (directory _held) (mevedel-artifact-lease--forget directory))
+              mevedel-artifact-lease--held)
      (mevedel-tool-clear-registry)
      (when (buffer-live-p buffer) (kill-buffer buffer))
      (when (file-directory-p root) (delete-directory root t))

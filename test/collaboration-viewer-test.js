@@ -2230,6 +2230,18 @@ async function main() {
   assert.equal(artifactTab(), undefined, 'a deleted artifact has no tab');
   assert.equal(findByClass(findByRecordId(nodes.transcript, 'artifact-question'), 'dirchip').disabled, true);
 
+  // A store artifact can have a discussion without a transcript file card.
+  await deliverTo(sockets[1], {t: 'store-artifacts', artifacts: [
+    {id: 'a.html', artifact: 'a.html/index.html', missing: false},
+  ]});
+  assert.ok(artifactTab(), 'the store listing revives the artifact discussion');
+  artifactTab().dispatch('click');
+  await deliverTo(sockets[1], {t: 'store-artifacts', artifacts: []});
+  assert.equal(artifactTab(), undefined, 'store deletion removes the discussion');
+  assert.equal(nodes['composer-scope'].hidden, true);
+  assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
+  assert.equal(findByClass(findByRecordId(nodes.transcript, 'artifact-question'), 'dirchip').disabled, true);
+
   await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question','artifact-comment',
                                             'board-question','board-answer','artifact-question','a-card']});
   assert.equal(nodes['empty-state'].hidden, false, 'removing the final turn restores the empty state');

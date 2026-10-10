@@ -65,6 +65,7 @@
          (generation ".publications/generation-bbbbbbbbbbbbbbbbbbbb")
          (sidecar (concat generation "/000001.data"))
          (note (concat generation "/000002.data"))
+         (comments (concat generation "/000003.data"))
          (head (concat generation "/manifest.el")))
     (make-directory (file-name-concat directory generation) t)
     (make-directory (file-name-concat directory ".lease") t)
@@ -72,6 +73,11 @@
      (file-name-concat directory sidecar)
      (mevedel-migrate-artifacts-test--legacy-sidecar id "v0.5.10" 'portable))
     (write-region "# Notes" nil (file-name-concat directory note) nil 'silent)
+    (write-region (mevedel-migrate-artifacts-test--comments "notes.md") nil
+                  (file-name-concat directory comments) nil 'silent)
+    ;; Even a malformed fixed sidecar is no authority for portable comments.
+    (write-region "stale, unreadable cache" nil
+                  (file-name-concat directory "session.meta.el") nil 'silent)
     ;; A stale fixed cache is no authority.
     (make-directory (file-name-concat directory "artifacts") t)
     (write-region "stale" nil (file-name-concat directory "artifacts" "notes.md") nil 'silent)
@@ -83,7 +89,11 @@
                                            (file-name-concat directory sidecar)))
                             (list "artifacts/notes.md" :published note
                                   :sha256 (mevedel-migrate-session--hash
-                                           (file-name-concat directory note))))))
+                                           (file-name-concat directory note)))
+                            (list "artifacts/shared-editing/artifact-comments/notes.json"
+                                  :published comments
+                                  :sha256 (mevedel-migrate-session--hash
+                                           (file-name-concat directory comments))))))
     (mevedel-migrate-session--write
      (file-name-concat directory ".lease" "00000000000000000001.el")
      (list :generation 1 :transfer-generation 1 :status 'released
@@ -135,6 +145,9 @@
                                        (insert-file-contents
                                         (file-name-concat store "notes" "notes.md"))
                                        (buffer-string))))
+            (let ((thread (car (mevedel-collaboration--artifact-comments-read workspace "notes"))))
+              (should (equal "s2" (plist-get thread :session)))
+              (should (equal "Chat s2" (plist-get thread :session-name))))
             ;; Converted sessions are current and attached; originals unchanged.
             (let ((converted (mevedel-migrate-session--read
                               (file-name-concat destination "s1" "session.meta.el"))))
@@ -202,7 +215,15 @@
             (should (equal "Forked" (plist-get (mevedel-shared-editing--read workspace "board-1-2")
                                                :title)))
             (should (equal "board-1-2" (plist-get (mevedel-shared-editing--read workspace "board-1-2")
-                                                  :id)))))
+                                                  :id)))
+            ;; Retrying after editing a shared import must retain both origins.
+            (let ((state (mevedel-shared-editing--read workspace "board-1")))
+              (mevedel-migrate-artifacts--write
+               (file-name-concat (mevedel-artifact-store-bookkeeping-directory workspace "board-1")
+                                 "state.json")
+               (mevedel-shared-editing--json (plist-put state :title "Edited after migration"))))
+            (should (equal report (mevedel-migrate-artifacts root
+                                                             (file-name-concat root "retry"))))))
       (delete-directory root t)))
 
   :doc "copies a session closed before it ever published, and converts the rest"
@@ -225,19 +246,50 @@
             (should (member "mockup" (cdr (assoc "s1" report))))))
       (delete-directory root t)))
 
-  :doc "stops at a session it cannot move, naming it"
-  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-broken-" t)))
-         (destination (file-name-concat root "converted")))
+  :doc "preserves files whose names are reserved by store bookkeeping"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-names-" t)))
+         (workspace (mevedel-workspace--create :type 'project :id "w" :root root)))
     (unwind-protect
         (let ((directory (mevedel-migrate-artifacts-test--pid-session root "s1")))
-          (write-region "{" nil (file-name-concat directory "artifacts" "shared-editing"
-                                                  "artifact-comments" "abc.json")
-                        nil 'silent)
-          (should (string-match-p "\\`s1: " (cadr (should-error (mevedel-migrate-artifacts
-                                                                  root destination))))))
+          (dolist (name '("meta.el" "versions" "comments.json" "state.json"))
+            (write-region (concat "Payload for " name) nil
+                          (file-name-concat directory "artifacts" name) nil 'silent))
+          (let ((report (mevedel-migrate-artifacts root (file-name-concat root "converted"))))
+            (should-not (eq :unconverted (cadr (assoc "s1" report))))
+            (dolist (name '("meta.el" "versions" "comments.json" "state.json"))
+              (let* ((id (mevedel-migrate-artifacts--existing
+                          workspace (cons "s1" (concat "artifacts/" name))))
+                     (file (plist-get (mevedel-artifact-store-meta workspace id) :file)))
+                (should (equal name file))
+                (should (equal (concat "Payload for " name)
+                               (with-temp-buffer
+                                 (insert-file-contents
+                                  (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
+                                                    file))
+                                 (buffer-string))))))))
       (delete-directory root t)))
 
-  :doc "stops at a session holding a link, without copying what it points to"
+  :doc "copies a failing session unchanged, reports it, and converts later sessions"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-corrupt-" t)))
+         (destination (file-name-concat root "converted")))
+    (unwind-protect
+        (progn
+          (let ((directory (mevedel-migrate-artifacts-test--pid-session root "s0")))
+            (write-region "broken JSON" nil
+                          (file-name-concat directory "artifacts" "shared-editing" "board-1.json")
+                          nil 'silent))
+          (mevedel-migrate-artifacts-test--pid-session root "s1")
+          (let ((report (mevedel-migrate-artifacts root destination)))
+            (should (eq :failed (cadr (assoc "s0" report))))
+            (should (equal "broken JSON"
+                           (with-temp-buffer
+                             (insert-file-contents
+                              (file-name-concat destination "s0" "artifacts" "shared-editing" "board-1.json"))
+                             (buffer-string))))
+            (should (member "mockup" (cdr (assoc "s1" report))))))
+      (delete-directory root t)))
+
+  :doc "fails a session holding a link, without copying what it points to"
   (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-link-" t)))
          (destination (file-name-concat root "converted"))
          (outside (file-name-concat root "secret.html")))
@@ -245,8 +297,9 @@
         (let ((directory (mevedel-migrate-artifacts-test--pid-session root "s1")))
           (write-region "secret" nil outside nil 'silent)
           (make-symbolic-link outside (file-name-concat directory "artifacts" "host.html"))
-          (should (string-match-p "s1: .*link" (cadr (should-error (mevedel-migrate-artifacts
-                                                                    root destination)))))
+          (let ((report (mevedel-migrate-artifacts root destination)))
+            (should (eq :failed (cadr (assoc "s1" report))))
+            (should (string-match-p "link" (caddr (assoc "s1" report)))))
           (should-not (file-exists-p (file-name-concat root ".mevedel" "artifacts" "host"))))
       (delete-directory root t)))
 
@@ -258,7 +311,66 @@
           (write-region "(:pid 1)" nil (file-name-concat directory ".lock") nil 'silent)
           (should-error (mevedel-migrate-artifacts root destination))
           (should-not (file-exists-p destination))
-          (should-not (file-exists-p (file-name-concat root ".mevedel" "artifacts"))))
+          (should-not (file-exists-p (file-name-concat root ".mevedel" "artifacts")))
+          (delete-file (file-name-concat directory ".lock"))
+          (should-error (mevedel-migrate-artifacts root (file-name-concat directory "converted")))
+          (should-not (file-exists-p (file-name-concat directory "converted"))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-migrate-artifacts--import ()
+  ,test
+  (test)
+  :doc "removes interrupted imports so retries retain comments and a first version"
+  (dolist (kind '(file item))
+    (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-retry-" t)))
+           (workspace (mevedel-workspace--create :type 'project :id "w" :root root))
+           (import (lambda ()
+                     (if (eq kind 'item)
+                         (mevedel-migrate-artifacts--move-item
+                          workspace "s1" "artifacts/shared-editing/board-1.json"
+                          mevedel-migrate-artifacts-test--board)
+                       (mevedel-migrate-artifacts--move-file
+                        workspace "s1" "artifacts/a.html" "<p>Kept</p>"
+                        (list (list :id "thread" :text "Kept comment")) "Chat s1")))))
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'mevedel-artifact-store-record-version)
+                       (lambda (&rest _) (error "Interrupted version write"))))
+              (should-error (funcall import)))
+            (should-not (mevedel-artifact-store-ids workspace))
+            (let ((id (funcall import)))
+              (should (equal id (funcall import)))
+              (should (= 1 (length (mevedel-artifact-store-versions workspace id))))
+              (when (eq kind 'file)
+                (should (equal "Kept comment"
+                               (plist-get
+                                (car (mevedel-collaboration--artifact-comments-read workspace id))
+                                :text))))))
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-migrate-artifacts--fresh-id
+  (:doc "preserves bookkeeping-only artifacts restored through Git")
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-hidden-" t)))
+         (workspace (mevedel-workspace--create :type 'project :id "w" :root root)))
+    (unwind-protect
+        (progn
+          (mevedel-migrate-artifacts--move-item
+           workspace "s0" "artifacts/shared-editing/board-1.json"
+           mevedel-migrate-artifacts-test--board)
+          (delete-directory (mevedel-artifact-store-artifact-directory workspace "board-1"))
+          (should (equal "board-1-2" (mevedel-migrate-artifacts--fresh-id workspace "board-1.json")))
+          (let ((state (mevedel-shared-editing--read workspace "board-1")))
+            (should-error
+             (mevedel-migrate-artifacts--import workspace "board-1" '("s1" . "x")
+                                                (lambda () (ert-fail "Overwrote existing item"))))
+            (should (equal state (mevedel-shared-editing--read workspace "board-1"))))
+          (should
+           (equal "board-1-2"
+                  (mevedel-migrate-artifacts--move-item
+                   workspace "s1" "artifacts/shared-editing/board-1.json"
+                   (plist-put (copy-sequence mevedel-migrate-artifacts-test--board)
+                              :title "Diverged"))))
+          (should (equal "Plan" (plist-get (mevedel-shared-editing--read workspace "board-1") :title))))
       (delete-directory root t))))
 
 (provide 'test-mevedel-migrate-artifacts)

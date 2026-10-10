@@ -464,6 +464,39 @@
     (should (string-match-p (regexp-quote address) message))
     (should-not (string-match-p (regexp-quote save-path) message))))
 
+(mevedel-deftest mevedel-resource-within-root-p ()
+  ,test
+  (test)
+  :doc "concurrent root timestamp changes do not invalidate containment"
+  (let* ((root (make-temp-file "mevedel-resource-containment-" t))
+         (path (file-name-concat root "child"))
+         (attributes (symbol-function 'file-attributes)))
+    (unwind-protect
+        (progn
+          (make-directory path)
+          (cl-letf (((symbol-function 'file-attributes)
+                     (lambda (file &rest args)
+                       (let ((result (apply attributes file args)))
+                         (when (equal (directory-file-name file) root)
+                           ;; A sibling writer can update the directory between
+                           ;; the two stats used by `file-equal-p'.
+                           (set-file-times root
+                                           (time-add (file-attribute-modification-time result) 1)))
+                         result))))
+            (should (mevedel-resource-within-root-p path root))))
+      (delete-directory root t)))
+  :doc "canonical root equality and child boundaries work for remote names"
+  (let ((native-comp-enable-subr-trampolines nil)
+        (file-name-handler-alist nil)
+        (root "/ssh:example:/workspace/"))
+    (cl-letf (((symbol-function 'file-symlink-p) (lambda (_) nil))
+              ((symbol-function 'file-exists-p) (lambda (_) t))
+              ((symbol-function 'file-directory-p) (lambda (_) t))
+              ((symbol-function 'file-truename) #'identity))
+      (should (mevedel-resource-within-root-p root root))
+      (should (mevedel-resource-within-root-p (concat root "child") root))
+      (should-not (mevedel-resource-within-root-p "/ssh:example:/workspace-other/child" root)))))
+
 (mevedel-deftest mevedel-resource-containment-and-lifecycle
   (:doc "keeps symlink escapes and pending execution spools out of resources")
   ,test

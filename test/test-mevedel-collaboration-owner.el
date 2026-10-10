@@ -90,7 +90,11 @@
                      :write-token token :owner-token owner-token
                      :records nil
                      :ui-requests (make-hash-table :test #'eql))))
-    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+    ;; This admission fixture has no session or workspace.  Store projection
+    ;; is exercised with real workspaces in the artifact-store tests.
+    (cl-letf (((symbol-function 'mevedel-collaboration--store-frame)
+               (lambda (_room) '(:t "store-artifacts" :artifacts [])))
+              ((symbol-function 'mevedel-collaboration--transport-send)
                (lambda (&rest _) t)))
       (let ((hello (lambda (peer write owner)
                      (mevedel-collaboration--handle-hello

@@ -11,8 +11,10 @@ the project's view).
 ## Current decision
 
 **The workspace artifact store is the original.** Every artifact, whiteboard
-and document lives once in `<workspace>/.mevedel/artifacts/ID/`, the directory
-name being its stable id. Sessions do not own artifacts; they attach to them.
+and document has a stable id under `<workspace>/.mevedel/artifacts/ID/`.
+Authored files live there; metadata, versions, comments and live editor state
+live under the protected sibling `.mevedel/artifacts/.state/ID/`.
+Sessions do not own artifacts; they attach to them.
 One artifact can be attached to several sessions, and one session can attach
 several artifacts. A session persists only its attached ids; Fork and Save As
 carry that list, so a fork points at the same artifacts, and **Duplicate** is
@@ -35,8 +37,10 @@ wrote its primary file records one version when it settles.
 people and the model, so they are edited in place in the store. One editing
 queue per workspace in each Emacs serves every room and session there.
 Across Emacs instances an item lease, with the session lease's generation
-records, target clock, heartbeat and expiry, decides who commits; each write
-proves it in the same target program. Another Emacs sees the item read-only
+records, target clock, heartbeat and expiry, decides who commits. Lease
+transitions and state/metadata writes share a target-side `flock` on the
+stable `.mevedel/leases/artifacts/` directory; each write proves ownership,
+latest generation and expiry while holding that lock. Another Emacs sees the item read-only
 and asks the holder to hand it over, which happens once the holder's queue for
 it is idle and the item has had no edit there for 10 seconds; a lease whose
 holder stopped renewing, such as a suspended laptop's, is taken over by the
@@ -49,15 +53,17 @@ survive.
 
 **Versions.** Up to 20 per artifact, following Claude, and at most 64 MiB of
 versions per artifact (configurable; Claude publishes no such cap). The
-oldest go first; the latest always stays.
+oldest go first; the latest always stays. Version publication compares the
+previous index under the target mutation lock and retries concurrent changes.
+ApplyPatch versions use the committed bytes from that write.
 
 **Store contents are durable work, not machine state.** Whether the store is
 committed to Git is the project's choice; mevedel adds no ignore rule. Item
 leases therefore live outside it, under `.mevedel/leases/`. The store's
-bookkeeping -- metadata, item state, comments, versions -- and the leases are
-read-only to model tools by default, so edits cannot bypass leases, versions
-and validation; only an artifact's own files are written with ApplyPatch.
-Confined Bash cannot write in the store at all.
+bookkeeping -- metadata, item state, comments, versions -- lives in the
+separate `.state/` subtree. That subtree and the leases are read-only to model
+tools by default, so edits cannot bypass leases, versions and validation.
+Authored files remain writable with ApplyPatch and confined shell commands.
 
 **Dedicated session.** Each artifact may have one dedicated session, created
 on first use for conversation started outside any chat; the two name each
@@ -105,8 +111,9 @@ another session updates it only once attached; a publish built on an older
 copy is refused and redone; comments live on the artifact and reach the
 session working on it. Its Compliance API retains "up to roughly 20" versions.
 
-The item lease reuses the session durability generation primitives instead of
-a shared lease core. The session lease functions bind publication,
+The item lease reuses the session durability record codec and target clock,
+with artifact-local generation transitions under the store mutation lock,
+instead of a shared lease core. The session lease functions bind publication,
 unsettled-mutation, release-pending and transfer state into about 610
 race-critical lines; extracting a holder-neutral core would have put hooks
 into all of them for an item lease that needs only acquire, renew, release,
@@ -174,7 +181,57 @@ push out every earlier version, including the state before the turn.
   request, and two Emacs instances editing at once passed it back and
   forth. The holder now also waits until the item has had no edit for
   10 seconds.
-
+- **Pin authored files during store operations.** A deterministic late-symlink
+  probe made restore's ordinary file copy overwrite a file outside the workspace;
+  replacing duplicate's destination parent similarly redirected its copy.
+  Restore now writes the primary file and records the same captured bytes under
+  the store mutation lock. Duplicate reads and writes use the existing pinned
+  filesystem program, as do version reads without supplied ApplyPatch bytes.
+  Authored writes use its inline writer: staging temporary payloads by pathname
+  inside a mutable authored directory would reopen the race. A second probe
+  redirected the inline writer's own temporary pathname, so that writer now
+  proves its opened file descriptor before writing and changing modes through
+  it. Duplicate preserves file modes and applies directory modes after copying
+  descendants. Protected version and metadata writes retain staging, and
+  supplied patch bytes avoid rereads. Concurrent authored edits remain allowed;
+  these proofs prevent redirected access outside the authorized paths rather
+  than locking authored files against other writers.
+- **Prove shared reads on the target.** Initially a shared read walked the
+  same physical paths eight times through TRAMP before opening the files. On
+  provisioned SSH this cost 3.77 seconds per read, and two concurrent document
+  edits exceeded the browser's convergence deadline. Reading metadata and state
+  in one pinned target program reduced the same read to 0.155 seconds. Commits
+  likewise use their target proofs instead of repeating host-side walks; tests
+  still reject linked ancestors and linked metadata or state leaves.
+- **Separate authored files from bookkeeping.** Initially bookkeeping lived
+  beside authored files in each artifact directory. A real confined-shell probe
+  demonstrated that per-file wildcard mounts protected existing metadata but
+  allowed creating missing state, comments, versions and metadata for new ids.
+  Mounting the entire authored directory read-only would also prevent new assets
+  and atomic replacement. Bookkeeping now lives under one protected `.state/`
+  directory, whose mount covers existing and future ids. Launch preparation
+  creates missing protected directories and their parents and mounts only the
+  leaf. These directories persist: a concurrent-shell probe showed that cleaning
+  up the first launch's empty state root detached a second active sandbox's mount,
+  allowing that sandbox to recreate a writable root. Permanent directories avoid
+  cross-process cleanup coordination and preserve authored-file operations without
+  a workspace scan or per-artifact mount list.
+- **Fenced item commits.** Initially item writes verified the remembered
+  generation's bytes before writing, using the session generation primitives
+  for acquisition and renewal. Review found that a newer generation could
+  appear between that proof and the state write, and that an unpruned newer
+  generation or an expired lease did not prevent an old write. Item lease
+  changes and commits now share the existing target-program lock capability,
+  with explicit latest-generation and expiry proofs. The stable parent lock
+  survives deleting an item, and metadata title changes join the same commit
+  program so a previous holder cannot overwrite its successor's title.
+- **Concurrent publication.** Two Emacs processes originally read the same
+  version index and published the same next number, losing one writer's
+  version. Version and metadata changes now compare their previous bytes
+  while holding the target mutation lock. Dedicated conversations save before
+  claiming their metadata slot; a losing creator discards its unused session
+  and opens the winner. This preserves concurrent updates without adding a
+  separate coordination service.
 - **Deleting with an open conversation.** At first, deleting an artifact was
   refused while its dedicated session was open in Emacs or could not be
   deleted, so a buffer could not save the session straight back. In use, that

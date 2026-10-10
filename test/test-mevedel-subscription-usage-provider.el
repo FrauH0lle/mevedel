@@ -122,9 +122,12 @@
     (should-not (car result))
     (should (string-match-p "renewing; refresh shortly" (cadr result)))))
 
-(mevedel-deftest mevedel-subscription-usage-provider--codex (:quiet t)
+(mevedel-deftest mevedel-subscription-usage-provider--codex
+    (:quiet t :vars ((request-seen nil)))
   (mevedel-test-http
-   (lambda (_request) (and ,status (list ,status "" ,body)))
+   (lambda (_request)
+     (setq request-seen t)
+     (and ,status (list ,status "" ,body)))
    (lambda (url)
      (let* ((original-retrieve (symbol-function 'url-retrieve))
             (original-timer (symbol-function 'mevedel-transport-run-at-time))
@@ -147,7 +150,12 @@
                                            function args)))))
              (setq cancel (mevedel-subscription-usage-provider-fetch backend
                             (lambda (text error) (push (list text error) results))))
-             (if ,cancel (funcall cancel)
+             (if ,cancel
+                 (progn
+                   ;; Cancel an unanswered HTTP request.  Deleting a process
+                   ;; during async DNS lookup can spin in Emacs' gai_suspend.
+                   (mevedel-test--await 5 "HTTP request was not received" request-seen)
+                   (funcall cancel))
                (mevedel-test--await 5 "HTTP quota request did not settle" results))
              (if ,cancel (should-not results)
                (should (= 1 (length results)))

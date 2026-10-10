@@ -1585,17 +1585,18 @@ answer must not admit a path that has since been swapped."
           (setq symlink-p t)))
       (and lexical-p
            (not symlink-p)
-           ;; `file-in-directory-p' needs the directory to exist.  A local
-           ;; ApplyPatch may be the first operation that creates it, so keep
-           ;; lexical containment as the authority while the target is
-           ;; absent, and use the canonical check whenever both sides exist.
+           ;; ApplyPatch may be the first operation that creates the target.
+           ;; Keep lexical containment as the authority while it is absent,
+           ;; and prove canonical containment whenever both sides exist.
            (or (not (and (file-directory-p root) (file-exists-p path)))
                (let* ((true-root (file-name-as-directory
                                   (file-truename root)))
                       (true-path (file-truename path)))
                  (or (equal (directory-file-name true-root)
                             (directory-file-name true-path))
-                     (file-in-directory-p true-path true-root))))))))
+                     ;; `file-in-directory-p' compares root attributes twice;
+                     ;; an unrelated sibling write can change its timestamps.
+                     (string-prefix-p true-root true-path))))))))
 
 (defun mevedel-resource--skill-physical-path (skill root components)
   "Return the contained source or package path for SKILL.

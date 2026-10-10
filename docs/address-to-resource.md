@@ -53,7 +53,7 @@ current resource metadata has a usable surface:
   private pending state alone does not qualify;
 - `mcp://` requires at least one configured MCP server; and
 - `shared://` requires at least one shared whiteboard or document in the
-  session.
+  workspace.
 
 With no valid request session, the roster still contains `mevedel://` but no
 session-owned families. The roster reports request-time availability metadata; it does not itself

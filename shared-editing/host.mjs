@@ -555,7 +555,8 @@ export async function handle(request) {
           if (before.kind === 'whiteboard') {
             for (const [id, file] of Object.entries(filesOf(source))) putFile(doc, id, file);
             const elements = doc.getMap('elements');
-            for (const id of [...elements.keys()]) elements.delete(id);
+            const retained = new Set(target.content.map((element) => element.id));
+            for (const id of [...elements.keys()]) if (!retained.has(id)) elements.delete(id);
             for (const e of target.content) putElement(doc, e);
           } else restoreDocument(doc, source);
         });

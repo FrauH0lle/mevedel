@@ -143,6 +143,7 @@
 		  (&optional session outcome))
 (declare-function mevedel-plan-mode--post-response "mevedel-plan-mode"
 		  (start end))
+(autoload 'mevedel-plan-approval-abort "mevedel-plan-mode")
 (declare-function mevedel-plan-mode-restore-pending-approval
 		  "mevedel-plan-mode" (&optional session chat-buffer))
 
@@ -834,6 +835,16 @@ buffers."
           (push (cons (mevedel-session-name session) buf) sessions))))
     (nreverse sessions)))
 
+(defun mevedel--workspace-chat-sessions (workspace)
+  "Return WORKSPACE's ordinary live chats in buffer-list order.
+Dedicated artifact conversations remain reachable through their artifacts;
+each says so itself, so no artifact needs reading."
+  (cl-remove-if
+   (lambda (entry)
+     (mevedel-session-dedicated-artifact
+      (buffer-local-value 'mevedel--session (cdr entry))))
+   (mevedel--workspace-sessions workspace)))
+
 (defun mevedel--pick-session (sessions default)
   "Select a buffer from SESSIONS, or return a new display name.
 DEFAULT supplies the initial name.  Empty input creates an unnamed session.
@@ -908,7 +919,7 @@ Completion labels include identity, because display names need not be unique."
 When PROMPT-SESSION is non-nil, prompt for the target session.  When
 DIRECTORY-SCOPED is non-nil, only sessions whose working directory matches
 WORKING-DIRECTORY are considered."
-  (let* ((all-sessions (mevedel--workspace-sessions workspace))
+  (let* ((all-sessions (mevedel--workspace-chat-sessions workspace))
          (sessions (if directory-scoped
                        (mevedel--sessions-in-working-directory
                         all-sessions working-directory)
@@ -949,13 +960,7 @@ if none found."
      mevedel--data-buffer)
     ((bound-and-true-p mevedel--session) (current-buffer)))
    (when-let* ((workspace (or workspace (mevedel-workspace))))
-     ;; The workspace scan already preserves most-recent buffer order.  An
-     ;; artifact's conversation is never a default target.
-     (cdr (cl-find-if-not
-           (lambda (entry)
-             (mevedel-session-dedicated-artifact
-              (buffer-local-value 'mevedel--session (cdr entry))))
-           (mevedel--workspace-sessions workspace))))))
+     (cdar (mevedel--workspace-chat-sessions workspace)))))
 
 (defun mevedel--generate-final-patch (workspace request callback)
   "Generate final diffs for all tracked files in REQUEST, then call CALLBACK.
@@ -1115,8 +1120,9 @@ BUF defaults to the current buffer if not specified."
               ;; have a chance to settle first.
               (when (fboundp 'mevedel-permission-queue-abort-all)
 		(mevedel-permission-queue-abort-all))
-              (when (fboundp 'mevedel-plan-approval-abort)
-		(mevedel-plan-approval-abort))
+              (when (and mevedel--session
+                         (mevedel-session-pending-plan-approval mevedel--session))
+                (mevedel-plan-approval-abort))
               (when (and (boundp 'mevedel-compact-run-cancel)
 			 (functionp mevedel-compact-run-cancel))
 		(funcall mevedel-compact-run-cancel)))

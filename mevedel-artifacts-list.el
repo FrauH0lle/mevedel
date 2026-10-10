@@ -259,7 +259,8 @@ session it opens in the room of the item's own conversation."
   "View or restore a version of the selected artifact.
 Restoring copies the version over the artifact as a new version."
   (interactive)
-  (let* ((context (mevedel-cockpit-surface-context))
+  (let* ((buffer (current-buffer))
+         (context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
          (id (plist-get (mevedel-cockpit-surface-selected) :id))
@@ -285,14 +286,18 @@ Restoring copies the version over the artifact as a new version."
                      (?r "restore" "Restore it as the newest version")))))
       (?v (mevedel-artifacts-list--browse
            (mevedel-artifact-store-version-path workspace id n)))
-      (?r (let ((new (mevedel-artifact-store-restore-version
-                      workspace id n
-                      (and session (mevedel-session-session-id session)))))
-            (if (not new)
-                (message "mevedel: restoring %s to version %d" id n)
-              (mevedel-cockpit-surface-refresh id)
-              (message "mevedel: %s restored from version %d as version %d"
-                       id n new)))))))
+      (?r (mevedel-artifact-store-restore-version
+           workspace id n
+           (and session (mevedel-session-session-id session))
+           nil
+           (lambda (reply)
+             (if (plist-get reply :error)
+                 (message "mevedel: restoring %s: %s" id (plist-get reply :error))
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (mevedel-cockpit-surface-refresh id)))
+               (message "mevedel: %s restored from version %d as version %d"
+                        id n (plist-get reply :n)))))))))
 
 (defun mevedel-artifacts-list-save-version ()
   "Save the selected whiteboard or document as a new version."
