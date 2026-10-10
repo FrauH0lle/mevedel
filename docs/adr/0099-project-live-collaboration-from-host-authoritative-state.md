@@ -27,7 +27,9 @@ Link tiers grant progressively more typed actions:
   shared whiteboards and documents through the host.
 - **Owner:** additionally change permission mode and create a same-workspace
   isolated session directly. A full-link creation request instead requires
-  approval from Emacs or an owner-link guest.
+  approval from Emacs or an owner-link guest. An artifact's own
+  conversation is not such a session: a full link starts it on first use
+  ([ADR 0124](0124-keep-artifacts-in-a-workspace-store.md)).
 
 The host validates credentials, action, audience, byte limits, and current
 admission at receipt and, for queued invocations, delivery. Free text never runs

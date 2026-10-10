@@ -7,7 +7,9 @@
 ;; item a lease with the session lease's lifecycle: generations elected by
 ;; exclusive creation on the target, target-clock deadlines, heartbeat
 ;; renewal, release after a quiet period, cooperative hand-over and a takeover
-;; after expiry that only a person in Emacs confirms.  It reuses the session durability generation
+;; after expiry.  Writes replace the whole item and are fenced by the lease,
+;; so taking over from a holder that stopped renewing loses nothing: a late
+;; write from it fails.  It reuses the session durability generation
 ;; primitives on its own directory; no session state is involved.
 ;;
 ;; Leases are machine state, so they live outside the store, under
@@ -121,11 +123,10 @@ A missing directory is created first."
       (mevedel-session-control-fs-make-directory directory t)
       (mevedel-session-durability--observe-lease directory nil))))
 
-(defun mevedel-artifact-lease-acquire (workspace id &optional ask)
+(defun mevedel-artifact-lease-acquire (workspace id)
   "Make this Emacs the holder of WORKSPACE's item ID, or signal why not.
-A live foreign holder is asked to hand the item over when idle.  One that
-stopped renewing is taken over only when ASK is non-nil and the user
-confirms; otherwise this refuses, naming the cockpit command that asks."
+A live foreign holder is asked to hand the item over when idle; one that
+stopped renewing, such as a suspended laptop, is taken over."
   (let ((directory (mevedel-artifact-lease-directory workspace id)))
     (mevedel-session-durability-with-transaction
       (let* ((observed (mevedel-artifact-lease--observe directory))
@@ -160,16 +161,10 @@ confirms; otherwise this refuses, naming the cockpit command that asks."
                     (error "%s is being handed to another Emacs" id)))
                 (funcall claim))
                ((mevedel-artifact-lease--own-p head) (funcall claim))
-               ((and ask
-                     (y-or-n-p (format "Take over editing %s from %s, whose lease expired? "
-                                       id (mevedel-artifact-lease--holder head))))
-                ;; The answer can take longer than the observation stays
-                ;; true: the claim observes the clock and records again.
-                (mevedel-session-durability--claim-next
-                 directory head (mevedel-artifact-lease--label id)))
-               (ask (user-error "%s stays with %s" id (mevedel-artifact-lease--holder head)))
-               (t (user-error "This needs a decision in Emacs on the host first: %s's editor on %s stopped renewing; take it over with T in the artifacts cockpit"
-                              id (mevedel-artifact-lease--holder head))))))
+               (t
+                (message "mevedel: took over editing %s from %s, whose lease expired"
+                         id (mevedel-artifact-lease--holder head))
+                (funcall claim)))))
         (unless record
           (error "Another Emacs claimed %s at the same time; try again" id))
         ;; A request left by an earlier holder's requester is answered now.
@@ -178,12 +173,12 @@ confirms; otherwise this refuses, naming the cockpit command that asks."
                           (mevedel-artifact-lease--request-path directory))))
         (mevedel-artifact-lease--hold workspace id directory record)))))
 
-(defun mevedel-artifact-lease-ensure (workspace id &optional ask)
+(defun mevedel-artifact-lease-ensure (workspace id)
   "Return non-nil once this Emacs holds WORKSPACE's item ID for an edit.
 A held lease is reused without reading the target clock until its renewal
 margin has passed locally since it was last written; then the clock
 decides.  Otherwise it is acquired as `mevedel-artifact-lease-acquire'
-does with ASK."
+does."
   (let* ((directory (mevedel-artifact-lease-directory workspace id))
          (held (gethash directory mevedel-artifact-lease--held)))
     (if (and held
@@ -193,7 +188,7 @@ does with ASK."
                  (> (plist-get (plist-get held :record) :expires-at)
                     (mevedel-artifact-lease--now directory))))
         (plist-put held :touched (float-time))
-      (mevedel-artifact-lease-acquire workspace id ask))))
+      (mevedel-artifact-lease-acquire workspace id))))
 
 (defun mevedel-artifact-lease-held (workspace id)
   "Return the generation of this Emacs's lease on WORKSPACE's item ID, or nil.

@@ -455,9 +455,7 @@ characters so UTF-8 encoding never splits a character between writes."
                                  workspace (mevedel-shared-editing--valid-id id)))
                            (not (mevedel-shared-editing-present-p workspace id)))
                   (error "This item no longer exists"))
-                ;; Another Emacs editing the item leaves it read-only here.  A
-                ;; takeover never asks from the queue: a question would block
-                ;; every item of the workspace, so it is a cockpit command.
+                ;; Another Emacs editing the item leaves it read-only here.
                 (when mutation
                   ;; Until this job commits, the disk is the only truth.
                   (remhash id (plist-get runtime :committed))

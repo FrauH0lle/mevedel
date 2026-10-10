@@ -387,8 +387,8 @@
       (mevedel-artifact-lease-acquire workspace "board")
       (mevedel-shared-editing--commit workspace (plist-put (copy-sequence state) :title "Laptop"))
       (mevedel-artifact-lease-release workspace "board"))
-    ;; Taken back without an edit, as the cockpit's T does.
-    (mevedel-artifact-lease-ensure workspace "board" t)
+    ;; Taken back without an edit of this Emacs's own.
+    (mevedel-artifact-lease-ensure workspace "board")
     (mevedel-shared-editing-save-version workspace "board")
     (should (equal "Laptop"
                    (plist-get (mevedel-shared-editing--parse

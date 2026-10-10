@@ -122,38 +122,18 @@
       (should (gethash directory mevedel-artifact-lease--held))
       (should-not (file-exists-p (file-name-concat directory "request.el")))))
 
-  :doc "takes over an expired foreign lease only when asked to and confirmed"
+  :doc "takes over an expired foreign lease at the next edit, saying so"
   (mevedel-artifact-lease-test--with-workspace
     (mevedel-artifact-lease-acquire workspace "board")
     (cl-letf (((symbol-function 'mevedel-artifact-lease--now)
                (lambda (_directory) 1e12)))
       (mevedel-artifact-lease-test--as-other
-        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) (error "Asked"))))
-          (should (string-match-p
-                   "decision in Emacs.*artifacts cockpit"
-                   (cadr (should-error (mevedel-artifact-lease-acquire workspace "board")
-                                       :type 'user-error)))))
-        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) nil)))
-          (should-error (mevedel-artifact-lease-acquire workspace "board" t)
-                        :type 'user-error))
-        (should-not (mevedel-artifact-lease-held workspace "board"))
-        (let (asked-at)
-          (cl-letf (((symbol-function 'y-or-n-p)
-                     (lambda (_prompt)
-                       (setq asked-at (mevedel-session-control-fs-target-time
-                                       (mevedel-artifact-lease-directory workspace "board")))
-                       ;; A slow answer.
-                       (sleep-for 1.2)
-                       t)))
-            (mevedel-artifact-lease-acquire workspace "board" t))
-          (should (mevedel-artifact-lease-held workspace "board"))
-          ;; Its record starts from the clock after the answer.
-          (should (> (plist-get (plist-get (gethash (mevedel-artifact-lease-directory
-                                                     workspace "board")
-                                                    mevedel-artifact-lease--held)
-                                           :record)
-                                :renewed-at)
-                     asked-at))))))
+        (let (messages)
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) (error "Asked"))))
+            (mevedel-test--with-captured-messages messages
+              (mevedel-artifact-lease-acquire workspace "board")))
+          (should (string-match-p "took over editing board" messages)))
+        (should (mevedel-artifact-lease-held workspace "board")))))
 
   :doc "costs few target programs: one observation feeds the claim"
   (mevedel-artifact-lease-test--with-workspace
@@ -206,10 +186,9 @@
       (should (equal "one" (with-temp-buffer (insert-file-contents path) (buffer-string))))
       ;; Another client takes over behind this one's back.
       (cl-letf (((symbol-function 'mevedel-artifact-lease--now)
-                 (lambda (_directory) 1e12))
-                ((symbol-function 'y-or-n-p) (lambda (_prompt) t)))
+                 (lambda (_directory) 1e12)))
         (mevedel-artifact-lease-test--as-other
-          (mevedel-artifact-lease-acquire workspace "board" t)))
+          (mevedel-artifact-lease-acquire workspace "board")))
       (should-error (mevedel-artifact-lease-write workspace "board" path "two"))
       (should (equal "one" (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
 

@@ -259,28 +259,6 @@
           (mevedel-cockpit-goto-id "board")
           (should-error (mevedel-artifacts-list-visit) :type 'user-error))))))
 
-;; The lease itself is covered by `mevedel-artifact-lease-acquire'.
-(mevedel-deftest mevedel-artifacts-list-take-over (:quiet t)
-  ,test
-  (test)
-  :doc "asks for a whiteboard's lease interactively and refuses file artifacts"
-  (mevedel-artifacts-list-test--with-store
-    (mevedel-artifacts-list-test--artifact session store "page" "index.html" "x")
-    (make-directory (file-name-concat store "board") t)
-    (write-region "{}" nil (file-name-concat store "board" "state.json") nil 'silent)
-    (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
-    (let (asked)
-      (with-current-buffer (mevedel-artifacts-list-open
-                            (mevedel-artifacts-list-test--context session view data))
-        (should (eq 'mevedel-artifacts-list-take-over (key-binding "T")))
-        (cl-letf (((symbol-function 'mevedel-artifact-lease-ensure)
-                   (lambda (&rest args) (push args asked) t)))
-          (mevedel-cockpit-goto-id "board")
-          (mevedel-artifacts-list-take-over)
-          (should (equal (list (list workspace "board" t)) asked))
-          (mevedel-cockpit-goto-id "page")
-          (should-error (mevedel-artifacts-list-take-over) :type 'user-error))))))
-
 (mevedel-deftest mevedel-artifacts-list-delete (:quiet t)
   ,test
   (test)
