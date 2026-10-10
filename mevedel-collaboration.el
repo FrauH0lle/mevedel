@@ -86,7 +86,8 @@
 
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
-                  "mevedel-collaboration-projection" (data-buffer))
+                  "mevedel-collaboration-projection"
+                  (data-buffer &optional completion-buffer completions cache))
 (declare-function mevedel-collaboration--json-record
                   "mevedel-collaboration-projection" (record))
 (declare-function mevedel-collaboration--pending-tool-match
@@ -97,6 +98,8 @@
                   "mevedel-collaboration-projection" (id kind &rest fields))
 (declare-function mevedel-collaboration--record-without-revision
                   "mevedel-collaboration-projection" (record))
+(declare-function mevedel-collaboration--room-canonical-records
+                  "mevedel-collaboration-projection" (room))
 (declare-function mevedel-collaboration--routine-poll-p
                   "mevedel-collaboration-projection" (name args data status))
 (declare-function mevedel-collaboration--reuse-record-ids
@@ -119,6 +122,7 @@
 (autoload 'mevedel-collaboration--record "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--record-without-revision "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--reuse-record-ids "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--room-canonical-records "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--routine-poll-p "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--stable-record-id "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--tool-call-key "mevedel-collaboration-projection")
@@ -289,6 +293,12 @@ When nil, full links are capped at prompting and interrupting."
   :group 'mevedel)
 
 (defconst mevedel-collaboration--publish-delay 0.1)
+(defconst mevedel-collaboration--publish-cost-factor 4
+  "Coalesced publication waits at least this many times the last publish.
+A publish blocks the one Emacs thread every room shares, and its cost
+grows with the transcript.  Pacing streamed updates by that cost keeps a
+streaming room near a fifth of the thread, so edits, cursors and joins in
+every room still run between publishes.")
 (defconst mevedel-collaboration--max-prompt-bytes (* 256 1024))
 (defconst mevedel-collaboration--max-guest-name-chars 32)
 (defconst mevedel-collaboration--max-prompt-attachments 3)
@@ -583,9 +593,11 @@ identity.  The id never enters model context or the transcript."
       (mevedel-collaboration--transport-send transport 0 frame))))
 
 (defun mevedel-collaboration--publish (room)
-  "Publish changed records from ROOM to its connected guests."
+  "Publish changed records from ROOM to its connected guests.
+Record the publish's cost on ROOM to pace later coalesced publishes."
   (when room
-    (let* ((old (plist-get room :records))
+    (let* ((started (float-time))
+           (old (plist-get room :records))
            (new (mevedel-collaboration--reuse-record-ids
                  old (mevedel-collaboration--project-records room)))
            (old-by-id (make-hash-table :test #'equal))
@@ -629,6 +641,7 @@ identity.  The id never enters model context or the transcript."
       (mevedel-collaboration--publish-history room)
       (mevedel-collaboration--publish-agents room)
       (mevedel-collaboration--publish-tasks room)
+      (plist-put room :publish-cost (- (float-time) started))
       (plist-put room :observer-failed nil))))
 
 (defun mevedel-collaboration--queue-state (room)
@@ -812,14 +825,16 @@ request or prompt transaction."
   nil)
 
 (defun mevedel-collaboration--schedule-publish (room)
-  "Coalesce assistant stream updates for ROOM."
+  "Coalesce assistant stream updates for ROOM, paced by its last publish."
   ;; A plain timer armed while TRAMP suspends timers would vanish with that
   ;; list and block every later publish; hold it until the wait returns.
   (when (and room (not (mevedel--ui-timer-pending-p (plist-get room :publish-timer))))
     (setq room
           (plist-put room :publish-timer
                      (mevedel-transport-run-at-time
-                      mevedel-collaboration--publish-delay
+                      (max mevedel-collaboration--publish-delay
+                           (* mevedel-collaboration--publish-cost-factor
+                              (or (plist-get room :publish-cost) 0)))
                       #'mevedel-collaboration--publish-timer
                       (plist-get room :data-buffer))))))
 
@@ -1119,8 +1134,7 @@ Runs from a buffer-local hook, so the current buffer names the room."
             (setq existing entry)))
         (unless existing
           (let* ((canonical
-                  (mevedel-collaboration--canonical-records
-                   (plist-get room :data-buffer)))
+                  (mevedel-collaboration--room-canonical-records room))
                  (occurrences (plist-get room :tool-call-occurrences))
                  (occurrence (gethash call-key occurrences 0))
                  (explicit-id (or (plist-get info :id)
