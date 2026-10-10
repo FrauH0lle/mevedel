@@ -206,6 +206,16 @@ protocol, extraction directory, or generic resolver cache is needed.
   removed creation/deletion subprocesses, reducing repeated local single-read
   cost by 28% and existence-probe cost by 37%, while preserving binary diagnostics
   and early-stop behavior.
+- **Removing descriptor-path proof weakened authored writes.** A later latency
+  optimization replaced the inline writer's `readlink` proof with a non-symlink
+  check and inode equality. A deterministic race opened an outside file through
+  a temporary symlink, then replaced that name with a hard link to the same
+  inode. Equality accepted it and the write overwrote the outside file; the
+  descriptor's opened path rejected it. The path proof is restored for writes
+  and mode changes. The same review restored encoding stderr before command
+  substitution: delaying encoding removed an encoder on quiet programs but
+  dropped embedded NUL bytes from previously supported target diagnostics.
+  Regression tests cover both refusals and preserve arbitrary diagnostic bytes.
 - **Base64-encoded numeric scalars added a decoder process to each bounded read
   and guard.** Repeated local measurements put this at 18–22% after the diagnostic
   pipe change. Validated digit strings replaced that encoding. Bash substitution
