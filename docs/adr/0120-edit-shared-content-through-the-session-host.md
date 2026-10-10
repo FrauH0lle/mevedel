@@ -145,6 +145,14 @@ reported board, a complete host patch fell from roughly 1.6 seconds to 0.28
 seconds. State authority, validation, persistence, and acknowledgement order
 are unchanged; no helper state cache is introduced.
 
+Latency measurements then put the browser's remaining 300 ms send interval as
+the largest perceived-delay term: 0-300 ms, mean 150, before another
+participant began receiving an edit, beside a 119-220 ms host round trip. An
+edit now leaves as soon as no save is in flight; the single follow-up already
+coalesces while the host works. A 50 ms floor between sends keeps slider,
+color-picker and key-repeat input from committing one operation, and spending
+one receipt, per frame against a fast host.
+
 
 ## Usability findings from the first shared session
 

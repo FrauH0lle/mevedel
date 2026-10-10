@@ -141,6 +141,49 @@ test('editor interaction regressions', async (t) => {
       assert.equal(stored.revision,3,'retry does not commit the in-flight operation twice');
       await page.close();
     });
+    await t.test('an idle edit saves at once; edits during a save follow its reply as one', async () => {
+      const {page,frame}=await open({clock:true});
+      // Time passes only through runFor, so each wait below is exact.
+      await page.clock.pauseAt(Date.now()+1000);
+      await page.evaluate(()=>{
+        const apply=window.apply;
+        window.saves=[];
+        window.apply=async args=>{
+          if(args.action==='update') {
+            window.saves.push(args.opId);
+            if(window.holdSaves) await new Promise(resolve=>{window.releaseSave=resolve;});
+          }
+          return apply(args);
+        };
+        window.holdSaves=true;
+      });
+      const saves=()=>page.evaluate(()=>window.saves.length);
+      const text=async value=>{ await frame.locator('#shape-text').fill(value); await page.clock.runFor(1); };
+      await frame.locator('[data-shape="ellipse"]').dblclick();
+      await text('a');
+      await page.waitForFunction(()=>window.saves.length===1);
+      await text('ab');
+      await text('abc');
+      await page.clock.runFor(1000);
+      await new Promise(resolve=>setTimeout(resolve,200));
+      assert.equal(await saves(),1,'one save in flight');
+      await page.evaluate(()=>{ window.holdSaves=false; window.releaseSave(); });
+      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      assert.equal(await saves(),2,'the edits made during the save follow it as one');
+      // A fast host's next save waits out the floor since the previous one began.
+      await page.clock.runFor(100);
+      await text('abcd');
+      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      await text('abcde');
+      await new Promise(resolve=>setTimeout(resolve,200));
+      assert.equal(await saves(),3);
+      await page.clock.runFor(60);
+      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      assert.equal(await saves(),4);
+      const stored=await page.evaluate(()=>window.apply({action:'read'}));
+      assert.equal(stored.content.find(s=>s.containerId==='ellipse').text,'abcde');
+      await page.close();
+    });
     await t.test('save failure remains visible above a recovery-storage warning', async () => {
       const {page,frame}=await open({kind:'document'});
       await page.evaluate(()=>{
