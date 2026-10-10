@@ -124,7 +124,7 @@
         (should (= 1 publishes))))))
 
 (mevedel-deftest mevedel-collaboration--schedule-publish/cost
-  (:doc "paces coalesced publication by the last publish's measured cost")
+  (:doc "paces coalesced publication by the last publish's measured cost, up to a second")
   (with-temp-buffer
     (let* ((room (list :data-buffer (current-buffer)
                        :guests (make-hash-table :test #'eql)))
@@ -137,8 +137,12 @@
         (plist-put room :publish-cost 0.001)
         (mevedel-collaboration--schedule-publish room)
         (plist-put room :publish-cost 0.2)
+        (mevedel-collaboration--schedule-publish room)
+        ;; A pause inside one publish does not stall the stream for long.
+        (plist-put room :publish-cost 3.0)
         (mevedel-collaboration--schedule-publish room))
-      (should (equal (list (* mevedel-collaboration--publish-cost-factor 0.2)
+      (should (equal (list 1.0
+                           (* mevedel-collaboration--publish-cost-factor 0.2)
                            mevedel-collaboration--publish-delay)
                      delays)))))
 

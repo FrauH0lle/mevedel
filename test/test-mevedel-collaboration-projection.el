@@ -117,7 +117,8 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
       (dotimes (index 14)
         (insert (mevedel-test--projection-piece index)))
       (dotimes (step 300)
-        (let* ((mutation (mevedel-test--projection-mutate step))
+        (let* ((before (buffer-string))
+               (mutation (mevedel-test--projection-mutate step))
                (narrow (and (zerop (random 8)) (> (buffer-size) 2)))
                (from (and narrow (1+ (random (/ (buffer-size) 2)))))
                (to (and narrow (+ from 1 (random (- (point-max) from))))))
@@ -135,6 +136,12 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
                           (error err))))
               (should (equal (list step mutation narrow retained)
                              (list step mutation narrow full)))
+              ;; Undo a mutation that broke the transcript, so later steps
+              ;; keep comparing records rather than the same error.
+              (when (and (consp full) (symbolp (car full)) (get (car full) 'error-conditions))
+                (widen)
+                (erase-buffer)
+                (insert before))
               ;; Callers rewrite ids and revisions in the records they get.
               (when (plist-get (car-safe retained) :id)
                 (dolist (record retained)
@@ -198,6 +205,22 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
           (should (equal "finished" (plist-get (car retained) :result)))
           (should (equal retained (mevedel-collaboration--canonical-records
                                    (current-buffer)))))))))
+
+(mevedel-deftest mevedel-collaboration--canonical-records/plan-mode
+  (:doc "leaving plan mode reprojects a response it hid part of")
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "Plan it\n\n"
+            (propertize "Here is the plan:\n<proposed_plan>\n# Step one\n"
+                        'gptel 'response))
+    (let ((cache (mevedel-collaboration--projection-cache-create)))
+      (setq-local mevedel--session (mevedel-session--create :name "plan"))
+      (setf (mevedel-session-plan-mode mevedel--session) t)
+      (mevedel-collaboration--canonical-records (current-buffer) nil nil cache)
+      (setf (mevedel-session-plan-mode mevedel--session) nil)
+      (should (equal (mevedel-collaboration--canonical-records (current-buffer))
+                     (mevedel-collaboration--canonical-records
+                      (current-buffer) nil nil cache))))))
 
 (mevedel-deftest mevedel-collaboration--source-unchanged-p
   (:doc "detects character, property and accessibility changes")

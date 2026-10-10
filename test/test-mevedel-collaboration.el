@@ -1168,7 +1168,7 @@
             (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
                        (lambda (url _key &rest _) (setq dialed url) 'transport))
                       ((symbol-function 'mevedel-collaboration--canonical-records)
-                       (lambda (_) nil))
+                       (lambda (&rest _) nil))
                       ((symbol-function 'run-at-time)
                        (lambda (&rest args)
                          (push args scheduled)
@@ -1247,7 +1247,7 @@
                   ((symbol-function 'mevedel-collaboration--transport-send)
                    (lambda (&rest _) t))
                   ((symbol-function 'mevedel-collaboration--canonical-records)
-                   (lambda (_) nil)))
+                   (lambda (&rest _) nil)))
           (setq room-a (mevedel-collaboration--start session-a data-a)
                 room-b (mevedel-collaboration--start session-b data-b))
           ;; Two live rooms with distinct credentials and links.
