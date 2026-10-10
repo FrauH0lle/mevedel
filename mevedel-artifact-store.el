@@ -129,12 +129,6 @@ Live collaboration rooms follow the store through it.")
            (dolist (workspace workspaces)
              (mevedel-artifact-store--changed workspace)))))))
 
-(defun mevedel-artifact-store--changed (workspace)
-  "Notify observers of WORKSPACE, after the current mutation if collecting."
-  (if mevedel-artifact-store--pending-changes
-      (cl-pushnew workspace (cdr mevedel-artifact-store--pending-changes))
-    (run-hook-with-args 'mevedel-artifact-store-changed-functions workspace)))
-
 (defconst mevedel-artifact-store--content-change-delay 2
   "Seconds content-only changes of a workspace wait to be announced together.
 An edit reaches the item's viewers on its own; listings and artifact
@@ -144,17 +138,33 @@ room reread every artifact's metadata and republish after each one.")
 (defvar mevedel-artifact-store--content-changes (make-hash-table :test #'equal)
   "Pending content-change notification timers, by workspace root.")
 
+(defun mevedel-artifact-store--changed (workspace)
+  "Notify observers of WORKSPACE, after the current mutation if collecting.
+The notice also carries WORKSPACE's content changes awaiting theirs."
+  (if mevedel-artifact-store--pending-changes
+      (cl-pushnew workspace (cdr mevedel-artifact-store--pending-changes))
+    (let ((root (mevedel-workspace-root workspace)))
+      (when-let* ((timer (gethash root mevedel-artifact-store--content-changes)))
+        (cancel-timer timer)
+        (remhash root mevedel-artifact-store--content-changes)))
+    (run-hook-with-args 'mevedel-artifact-store-changed-functions workspace)))
+
 (defun mevedel-artifact-store--content-changed (workspace)
   "Notify observers of a content-only change to WORKSPACE shortly.
 Further content changes until then share that notification."
   (let ((root (mevedel-workspace-root workspace)))
     (unless (gethash root mevedel-artifact-store--content-changes)
       (puthash root
-               (run-at-time mevedel-artifact-store--content-change-delay nil
-                            (lambda ()
-                              (remhash root mevedel-artifact-store--content-changes)
-                              (mevedel-artifact-store--changed workspace)))
+               (mevedel-transport-run-at-time
+                mevedel-artifact-store--content-change-delay
+                #'mevedel-artifact-store--announce-content workspace)
                mevedel-artifact-store--content-changes))))
+
+(defun mevedel-artifact-store--announce-content (workspace)
+  "Announce WORKSPACE's content changes, unless a notice carried them already."
+  (when (gethash (mevedel-workspace-root workspace)
+                 mevedel-artifact-store--content-changes)
+    (mevedel-artifact-store--changed workspace)))
 
 (defun mevedel-artifact-store-directory (workspace)
   "Return WORKSPACE's artifact store directory, with trailing slash."
