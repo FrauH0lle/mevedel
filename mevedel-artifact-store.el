@@ -276,13 +276,14 @@ progress; that returns nil.  SESSION-ID names the session whose work it is."
 SESSION-ID is recorded as the restoring session.  Return the new version
 number.  A whiteboard or document restores through its editing queue as one
 revertible edit by ACTOR (default \"Host\"); that returns nil, and the
-version follows once it is saved.  CALLBACK then receives nil, or the
-reason it was not restored; without one, a failure is a message."
+version follows once it is saved.  CALLBACK then receives nil, or what
+went wrong: why it was not restored, or that it was but no version was
+saved; without one, a problem is a message."
   (let ((meta (mevedel-artifact-store-meta workspace id))
         (callback (or callback
                       (lambda (failure)
                         (when failure
-                          (message "mevedel: %s was not restored: %s" id failure))))))
+                          (message "mevedel: restoring %s: %s" id failure))))))
     (if (mevedel-artifact-store-item-p meta)
         (progn
           (mevedel-shared-editing-restore
@@ -294,7 +295,8 @@ reason it was not restored; without one, a failure is a message."
                               (progn (mevedel-shared-editing-save-version
                                       workspace id session-id)
                                      nil)
-                            (error (error-message-string err)))))))
+                            (error (format "Restored; no version saved: %s"
+                                           (error-message-string err))))))))
           nil)
       (mevedel-artifact-store--restore-file workspace id n meta session-id))))
 
