@@ -3,8 +3,10 @@
 Whiteboards and documents live in the workspace
 [artifact store](view.md#artifact-store), so every session and room of the
 project sees the same ones. The room's **Shared work** section separates
-creation and import controls from its list of the project's named whiteboards
-and documents; creating one attaches it to the room's session. Full and
+creation and import controls from its list of the whiteboards and documents
+attached to the room's session; creating, importing or editing one attaches
+it. The open item and local recoveries stay listed; **Project artifacts**
+lists the rest of the project. Full and
 owner links can create, rename, import, edit and delete them concurrently. View
 links can observe and download. Opening an item affects that browser only;
 other participants get a followable entry. Each editor opens in its own

@@ -24,6 +24,9 @@ window.mevedelEditingView = {
       outbound = Promise.resolve();
     let appearance = null, archived = [], conversationTruncated = false, conversationError = null;
     let available = false, checking = false, availabilityGeneration = 0;
+    // The room lists only items attached to its session; the open item and
+    // local recoveries stay listed so they remain reachable.
+    let attached = new Set();
     let unavailableReason = 'Checking shared editing on the Emacs host…';
     function setAppearance(value) {
       appearance = value;
@@ -214,7 +217,9 @@ window.mevedelEditingView = {
       recheck.disabled = !connected || checking;
       recheck.textContent = checking ? 'Checking…' : 'Recheck availability';
       list.replaceChildren();
-      for (const item of catalog.values()) {
+      const shown = [...catalog.values()].filter(
+        (item) => attached.has(item.id) || item.local || item.id === current);
+      for (const item of shown) {
         const button = el('button', 'btn quiet');
         const symbol = el('span', `item-symbol${item.kind === 'whiteboard' ? ' board' : ''}`, item.kind === 'whiteboard' ? 'MAP' : 'DOC');
         symbol.setAttribute('aria-hidden', 'true');
@@ -235,7 +240,7 @@ window.mevedelEditingView = {
           button.title = available ? '' : unavailableReason;
           button.setAttribute('aria-describedby', 'editing-status');
         });
-      summarize('editing', catalog.size ? `${catalog.size} shared` : 'Shared');
+      summarize('editing', shown.length ? `${shown.length} shared` : 'Shared');
     }
     function saveDraft(id, draft) {
       try {
@@ -746,6 +751,11 @@ window.mevedelEditingView = {
     function present(id) {
       return catalogKnown ? catalog.has(id) : catalogFailed ? true : null;
     }
-    return { welcome, connection, receive, open, openItem, conversation, refreshConversation, setAppearance, ask, present };
+    function attachedItems(ids) {
+      attached = new Set(ids);
+      if (!box.hidden) render();
+    }
+    return { welcome, connection, receive, open, openItem, conversation, refreshConversation, setAppearance, ask, present,
+             attachedItems };
   },
 };

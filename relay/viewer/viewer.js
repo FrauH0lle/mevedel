@@ -1337,6 +1337,8 @@
       if (!lobby.active()) {
         storeArtifacts = new Map(activeStore().rows().map(row => [row.id, row]));
         artifacts.attachedRows(frame.artifacts);
+        editing.attachedItems((Array.isArray(frame.artifacts) ? frame.artifacts : [])
+          .filter(row => row && row.attached === true && row.item === true).map(row => row.id));
         refreshFilter();
       }
     } else if (frame.t === 'store-action') {
