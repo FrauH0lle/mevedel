@@ -325,6 +325,8 @@ SESSION-ID is recorded as the restoring session."
 (defun mevedel-artifact-store-duplicate (workspace id new-id)
   "Copy artifact ID to the new, independent artifact NEW-ID.
 The copy starts with one version and its own metadata."
+  (unless (mevedel-artifact-store-id-p new-id)
+    (error "Name the copy with letters, digits, dashes or underscores"))
   (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
       (mevedel-shared-editing-duplicate workspace id new-id)
     (mevedel-artifact-store--duplicate-files workspace id new-id)))
@@ -411,8 +413,8 @@ every other one."
                        :title (plist-get meta :title) :file (plist-get meta :file)
                        :dedicated-session (plist-get meta :dedicated-session)
                        :path path
-                       :versions (length (mevedel-artifact-store-versions
-                                          workspace id)))
+                       :versions (length (ignore-errors
+                                           (mevedel-artifact-store-versions workspace id))))
                  (if attributes
                      (list :size (file-attribute-size attributes)
                            :modified (file-attribute-modification-time

@@ -103,9 +103,11 @@
         (progn
           (let ((folder (file-name-concat
                          (mevedel-migrate-artifacts-test--pid-session root "s1") "artifacts")))
-            ;; Hidden files and backups carry no artifact.
+            ;; Hidden files and directories and backups carry no artifact.
             (write-region "old" nil (file-name-concat folder "mockup.html~") nil 'silent)
-            (write-region "x" nil (file-name-concat folder ".hidden.html") nil 'silent))
+            (write-region "x" nil (file-name-concat folder ".hidden.html") nil 'silent)
+            (make-directory (file-name-concat folder ".cache") t)
+            (write-region "x" nil (file-name-concat folder ".cache" "page.html") nil 'silent))
           (mevedel-migrate-artifacts-test--portable-session root "s2")
           (let ((report (mevedel-migrate-artifacts root destination)))
             (should (equal '(("s1" "board-1" "mockup") ("s2" "notes"))
@@ -166,7 +168,17 @@
     (unwind-protect
         (progn
           (mevedel-migrate-artifacts-test--pid-session root "s1")
-          (mevedel-migrate-artifacts-test--pid-session root "s2")
+          ;; The fork added a thread of its own to the shared file.
+          (write-region (mevedel-shared-editing--json
+                         (list :artifact "mockup.html"
+                               :comments (vector (list :id "abcdefabcdefabcdefab" :actor "Bob"
+                                                       :text "Fork note"
+                                                       :anchor '(:kind "word" :selector "p" :label "p")
+                                                       :resolved :json-false :replies []))))
+                        nil (file-name-concat (mevedel-migrate-artifacts-test--pid-session root "s2")
+                                              "artifacts" "shared-editing" "artifact-comments"
+                                              "fork.json")
+                        nil 'silent)
           (let ((diverged (file-name-concat root ".mevedel" "sessions" "s3")))
             (mevedel-migrate-artifacts-test--pid-session root "s3")
             (write-region (mevedel-shared-editing--json
@@ -182,6 +194,10 @@
             (should (equal '("mockup") (cl-remove-if-not (lambda (id) (string-prefix-p "mockup" id))
                                                          (mevedel-artifact-store-ids workspace))))
             (should (member "mockup" (cdr (assoc "s3" report))))
+            (should (equal '("Bigger" "Fork note")
+                           (mapcar (lambda (c) (plist-get c :text))
+                                   (mevedel-collaboration--artifact-comments-read
+                                    workspace "mockup"))))
             (should (member "board-1-2" (cdr (assoc "s3" report))))
             (should (equal "Forked" (plist-get (mevedel-shared-editing--read workspace "board-1-2")
                                                :title)))

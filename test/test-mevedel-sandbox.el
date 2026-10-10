@@ -483,6 +483,30 @@
                                 candidates))))
         (delete-directory root t))))
 
+  :doc "protects a file below .mevedel as a file, and skips roots without one"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-sandbox-anchor-" t)))
+         (scratch (file-name-as-directory (make-temp-file "mevedel-sandbox-scratch-" t)))
+         (mevedel-protected-paths
+          '(("**/.mevedel/input-history.el" . read-only)
+            ("**/.mevedel/leases/**" . read-only))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat root ".mevedel") t)
+          (let ((candidates (mevedel-sandbox--protected-candidates
+                             root (list root scratch))))
+            (should (equal (list (list :path (file-name-concat root ".mevedel/input-history.el")
+                                       :mode 'read-only :directory-p nil)
+                                 (list :path (file-name-concat root ".mevedel/leases")
+                                       :mode 'read-only :directory-p t))
+                           (sort candidates (lambda (a b) (string< (plist-get a :path)
+                                                                   (plist-get b :path))))))
+            ;; Nothing is made where the file belongs, nor in a root
+            ;; without mevedel's state.
+            (should-not (file-exists-p (file-name-concat root ".mevedel/input-history.el")))
+            (should-not (file-exists-p (file-name-concat scratch ".mevedel")))))
+      (delete-directory root t)
+      (delete-directory scratch t)))
+
   :doc "protected glob expansion:
 `mevedel-sandbox--protected-candidates' finds concrete and missing roots"
   (let* ((root (make-temp-file "mevedel-sandbox-candidates-" t))

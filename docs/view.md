@@ -1172,9 +1172,9 @@ started outside any chat: a comment or question from the lobby, the cockpit's
 `c`, or **Conversation** in the browser. It is an ordinary session, created on
 first use, attached to the artifact and saved at once, and named "Artifact
 ID". The two name each other: `meta.el` records the session's id and the
-session records the artifact's (`:dedicated-artifact`). Only while both agree
-is the session hidden from the session chooser and the lobby listing and
-kept from expiry, so a `meta.el` copied outside mevedel never makes another
+session records the artifact's (`:dedicated-artifact`). A saved session is
+hidden from the session chooser and the lobby listing and kept from expiry
+only while both agree; an open one goes by its own record, so a `meta.el` copied outside mevedel never makes another
 artifact's conversation its own, and one whose artifact is gone is an
 ordinary session again. It is never the default chat buffer for directives,
 and a fork or Save As of it is an ordinary chat. Deleting the artifact deletes its
@@ -1197,8 +1197,9 @@ writes to the store:
 
 ApplyPatch matches hunks against current content, so a write planned on an
 older copy fails and the model rereads; that is the store's concurrency
-check, without a lease. Bash cannot write in the store: the sandbox mounts it
-read-only. Only the primary file, the
+check, without a lease. Confined Bash cannot write in the store: the sandbox
+mounts it read-only. Unconfined Bash -- the sandbox off or unavailable, or a
+command escalated past it -- can, and its writes record no version. Only the primary file, the
 first written into the id directory, is versioned; other files there (assets)
 change without versions.
 

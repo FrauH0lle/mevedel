@@ -63,6 +63,7 @@
 ;; `mevedel-collaboration'
 (declare-function mevedel-transport-run-at-time "mevedel-transport"
                   (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
 (declare-function mevedel-collaboration--guest
                   "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--observer-failure
@@ -365,25 +366,25 @@ reads each artifact's metadata."
             mevedel-collaboration--store-notifications))))
 
 (defun mevedel-collaboration--notify-store (workspace)
-  "Send WORKSPACE's rooms and lobby the store's listing, built once.
+  "Send WORKSPACE's rooms and lobby the store's pending listing, built once.
 Session rooms republish their records too, through their own coalesced
 publication, since a card may now show its artifact deleted."
   (when-let* ((pending (assq workspace mevedel-collaboration--store-notifications)))
     (setq mevedel-collaboration--store-notifications
           (delq pending mevedel-collaboration--store-notifications))
-    (when (timerp (cdr pending)) (cancel-timer (cdr pending))))
-  (let (rows)
-    (dolist (room (mevedel-collaboration--workspace-rooms workspace))
-      (condition-case err
-          (progn
-            (when (plist-get room :session)
-              (mevedel-collaboration--schedule-publish room))
-            (when (> (hash-table-count (plist-get room :guests)) 0)
-              (mevedel-collaboration--broadcast
-               room (mevedel-collaboration--store-frame
-                     room (or rows (setq rows (mevedel-collaboration--store-rows
-                                               workspace)))))))
-        (error (mevedel-collaboration--observer-failure room err))))))
+    (when (timerp (cdr pending)) (cancel-timer (cdr pending)))
+    (let (rows)
+      (dolist (room (mevedel-collaboration--workspace-rooms workspace))
+        (condition-case err
+            (progn
+              (when (plist-get room :session)
+                (mevedel-collaboration--schedule-publish room))
+              (when (> (hash-table-count (plist-get room :guests)) 0)
+                (mevedel-collaboration--broadcast
+                 room (mevedel-collaboration--store-frame
+                       room (or rows (setq rows (mevedel-collaboration--store-rows
+                                                 workspace)))))))
+          (error (mevedel-collaboration--observer-failure room err)))))))
 
 
 ;;
@@ -392,21 +393,21 @@ publication, since a card may now show its artifact deleted."
 (defun mevedel-collaboration--store-rows (workspace)
   "Return WORKSPACE's artifacts as guests receive them, attachment aside."
   (mapcar (lambda (row)
-              (let ((id (plist-get row :id)))
-                (list :id id
-                      :title (plist-get row :title)
-                      :kind (format "%s" (plist-get row :kind))
-                      :artifact (concat id "/" (plist-get row :file))
-                      :size (plist-get row :size)
-                      :modified (if (plist-get row :missing) nil
-                                  (truncate (float-time (plist-get row :modified))))
-                      :versions (plist-get row :versions)
-                      :item (if (memq (plist-get row :kind)
-                                      mevedel-artifact-store-item-kinds)
-                                t :json-false)
-                      :missing (if (plist-get row :missing) t :json-false)
-                      :conversation
-                      (if (plist-get row :dedicated-session) t :json-false))))
+            (let ((id (plist-get row :id)))
+              (list :id id
+                    :title (plist-get row :title)
+                    :kind (format "%s" (plist-get row :kind))
+                    :artifact (concat id "/" (plist-get row :file))
+                    :size (plist-get row :size)
+                    :modified (if (plist-get row :missing) nil
+                                (truncate (float-time (plist-get row :modified))))
+                    :versions (plist-get row :versions)
+                    :item (if (memq (plist-get row :kind)
+                                    mevedel-artifact-store-item-kinds)
+                              t :json-false)
+                    :missing (if (plist-get row :missing) t :json-false)
+                    :conversation
+                    (if (plist-get row :dedicated-session) t :json-false))))
           (mevedel-artifact-store-list workspace)))
 
 (defun mevedel-collaboration--store-frame (room &optional rows)

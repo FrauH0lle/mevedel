@@ -54,14 +54,19 @@ backups, which would carry other bytes into the store."
         (cl-loop for file in (directory-files-recursively folder "." nil)
                  for name = (file-name-nondirectory file)
                  unless (or (file-symlink-p file)
-                            (string-prefix-p "." name)
+                            (cl-some (lambda (part) (string-prefix-p "." part))
+                                     (split-string (file-relative-name file folder) "/"))
                             (string-suffix-p "~" name)
                             (string-prefix-p "#" name))
                  collect (cons (concat "artifacts/" (file-relative-name file folder))
-                               (with-temp-buffer
-                                 (set-buffer-multibyte nil)
-                                 (insert-file-contents-literally file)
-                                 (buffer-string))))))))
+                               (mevedel-migrate-artifacts--bytes file)))))))
+
+(defun mevedel-migrate-artifacts--bytes (file)
+  "Return FILE's exact bytes."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file)
+    (buffer-string)))
 
 (defun mevedel-migrate-artifacts--json (bytes)
   "Parse legacy UTF-8 JSON BYTES."
@@ -97,37 +102,45 @@ backups, which would carry other bytes into the store."
   "Move legacy artifact file LOGICAL with BYTES into WORKSPACE's store.
 COMMENTS are its legacy comment threads, which keep answering in session
 SESSION-ID called NAME.  Return the store id."
-  (let ((origin (cons session-id logical))
-        (file (file-name-nondirectory logical)))
+  (let* ((origin (cons session-id logical))
+         (file (file-name-nondirectory logical))
+         (tagged (mapcar (lambda (comment)
+                           (plist-put (plist-put (copy-sequence comment) :session session-id)
+                                      :session-name name))
+                         comments)))
     (or (mevedel-migrate-artifacts--existing workspace origin)
         ;; A fork copied its parent's files: the same bytes are the same
-        ;; artifact, as for whiteboards and documents.
-        (cl-find-if (lambda (id)
-                      (let ((meta (mevedel-artifact-store-meta workspace id)))
-                        (and (plist-get meta :migrated-from)
-                             (equal file (plist-get meta :file))
-                             (equal bytes
-                                    (with-temp-buffer
-                                      (set-buffer-multibyte nil)
-                                      (insert-file-contents-literally
-                                       (file-name-concat
-                                        (mevedel-artifact-store-artifact-directory workspace id)
-                                        file))
-                                      (buffer-string))))))
-                    (mevedel-artifact-store-ids workspace))
+        ;; artifact, as for whiteboards and documents, and threads the fork
+        ;; added join the parent's.
+        (when-let* ((id (cl-find-if
+                         (lambda (id)
+                           (let ((meta (mevedel-artifact-store-meta workspace id)))
+                             (and (plist-get meta :migrated-from)
+                                  (equal file (plist-get meta :file))
+                                  (equal bytes (mevedel-migrate-artifacts--bytes
+                                                (file-name-concat
+                                                 (mevedel-artifact-store-artifact-directory
+                                                  workspace id)
+                                                 file))))))
+                         (mevedel-artifact-store-ids workspace))))
+          (let* ((stored (mevedel-collaboration--artifact-comments-read workspace id))
+                 (added (cl-remove-if (lambda (comment)
+                                        (cl-find (plist-get comment :id) stored
+                                                 :key (lambda (c) (plist-get c :id))
+                                                 :test #'equal))
+                                      tagged)))
+            (when added
+              (mevedel-collaboration--artifact-comments-write
+               workspace id (append stored added))))
+          id)
         (let ((id (mevedel-migrate-artifacts--fresh-id workspace file)))
           (mevedel-migrate-artifacts--write
            (file-name-concat (mevedel-artifact-store-artifact-directory workspace id) file)
            bytes)
           (mevedel-artifact-store-create-meta workspace id file)
           (mevedel-artifact-store-update-meta workspace id :migrated-from origin)
-          (when comments
-            (mevedel-collaboration--artifact-comments-write
-             workspace id
-             (mapcar (lambda (comment)
-                       (plist-put (plist-put (copy-sequence comment) :session session-id)
-                                  :session-name name))
-                     comments)))
+          (when tagged
+            (mevedel-collaboration--artifact-comments-write workspace id tagged))
           (mevedel-artifact-store-record-version workspace id session-id)
           id))))
 

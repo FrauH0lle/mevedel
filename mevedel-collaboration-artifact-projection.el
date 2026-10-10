@@ -44,7 +44,8 @@
   "Cached (SIZE . MISSING-P) per published artifact's qualified path.
 Projection runs on every coalesced publish tick, so a remote session
 would otherwise pay one target round trip per artifact per tick.  The
-small cache is cleared whenever the artifact store changes.")
+small cache is cleared when ApplyPatch settles and whenever the artifact
+store changes.")
 
 (defun mevedel-collaboration--artifact-stat (path)
   "Return cached (SIZE . MISSING-P) for the artifact at qualified PATH."

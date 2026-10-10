@@ -456,7 +456,7 @@ each native directory scan and returns (PATH . BLOCKED) pairs."
                               exempt)))
                writable-roots)
             writable-roots))
-         target-home candidates)
+         target-home candidates anchored-roots anchored-directories)
     (cl-labels
         ((add-candidate
           (path mode directory-p)
@@ -583,25 +583,34 @@ each native directory scan and returns (PATH . BLOCKED) pairs."
                 (add-candidate
                  (file-name-concat root literal-directory) mode t)))
              ;; mevedel's own state sits at each workspace root.  A
-             ;; pattern below it protects the whole directory its literal
-             ;; part names: one mount, without a walk, that also covers
-             ;; entries created later.  The directory is created first,
-             ;; since a missing one would be stood in for by its first
-             ;; missing parent, all of `.mevedel'.
+             ;; pattern globbing below it protects the whole directory its
+             ;; literal part names: one mount, without a walk, that also
+             ;; covers entries created later.  That directory is created
+             ;; first, since a missing one would be stood in for by its
+             ;; first missing parent, all of `.mevedel'.  A literal file
+             ;; pattern protects the file.  A root without `.mevedel' has
+             ;; no state to protect.
              ((and (not absolute-pattern)
                    (string-prefix-p "**/" root-pattern)
                    (member (car (split-string (substring root-pattern 3) "/"))
                            mevedel-sandbox--root-anchored-names))
-              (let ((literal (string-join
-                              (seq-take-while
-                               (lambda (part) (not (glob-p part)))
-                               (split-string (substring root-pattern 3) "/" t))
-                              "/")))
+              (let* ((parts (split-string (substring root-pattern 3) "/" t))
+                     (literal (seq-take-while (lambda (part) (not (glob-p part))) parts))
+                     (directory-p (or directory-p (< (length literal) (length parts)))))
                 (dolist (root (delete-dups (copy-sequence discovery-roots)))
-                  (let ((directory (file-name-concat root literal)))
-                    (unless (file-directory-p directory)
-                      (make-directory directory t))
-                    (add-candidate directory mode t)))))
+                  (when (cdr (or (assoc root anchored-roots)
+                                 (car (push (cons root (file-directory-p
+                                                        (file-name-concat root (car parts))))
+                                            anchored-roots))))
+                    (let ((path (file-name-concat root (string-join literal "/"))))
+                      (unless (or (not directory-p)
+                                  (member path anchored-directories)
+                                  (file-directory-p path))
+                        ;; An unwritable root keeps its missing directory
+                        ;; protected the ordinary way.
+                        (ignore-errors (make-directory path t)))
+                      (when directory-p (push path anchored-directories))
+                      (add-candidate path mode directory-p))))))
              (t
               (let ((search-roots (copy-sequence discovery-roots)))
                 (when absolute-pattern
