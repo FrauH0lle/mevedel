@@ -244,7 +244,10 @@ A held item lease is neither released nor handed over while it does."
   (when-let* ((process (plist-get runtime :process)))
     (set-process-sentinel process #'ignore)
     (delete-process process))
-  (dolist (job (cons (plist-get runtime :active) (plist-get runtime :queue)))
+  ;; Settled here, so a drain still inside target I/O finds its job gone.
+  (dolist (job (prog1 (cons (plist-get runtime :active) (plist-get runtime :queue))
+                 (plist-put runtime :active nil)
+                 (plist-put runtime :queue nil)))
     (when job
       (condition-case nil
           (mevedel-shared-editing--in-job job
@@ -401,55 +404,72 @@ characters so UTF-8 encoding never splits a character between writes."
         (plist-put runtime :queue (cdr (plist-get runtime :queue)))
         (plist-put runtime :active job)
         (condition-case err
-            (let* ((args (copy-sequence (plist-get job :args)))
-                   (action (plist-get args :action))
-                   (id (plist-get args :id))
-                   (mutation (not (member action '("read" "view" "export" "list" "status" "library-view")))))
-              (when (plist-get job :cancelled) (error "Editing operation cancelled"))
-              (when-let* ((authorize (plist-get job :authorize)))
-                (unless (mevedel-shared-editing--in-job job (funcall authorize))
-                  (error "Editing authority ended")))
-              ;; Another Emacs editing the item leaves it read-only here.  A
-              ;; takeover never asks from the queue: a question would block
-              ;; every item of the workspace, so it is a cockpit command.
-              (when mutation
-                (mevedel-artifact-lease-ensure
-                 workspace (mevedel-shared-editing--valid-id id)))
-              (cond
-               ((equal action "list")
-                (mevedel-shared-editing--finish
-                 runtime job (list :result (vconcat (mevedel-shared-editing-list workspace)))))
-               ;; Deleting needs no helper; queued, it cannot overtake a save.
-               ((equal action "delete")
-                (mevedel-shared-editing--finish
-                 runtime job (mevedel-shared-editing--delete workspace args)))
-               (t
-                (unless (member action '("create" "import" "status" "library-view"))
-                  (setq args (plist-put args :state
-                                        (mevedel-shared-editing--read workspace id))))
-                (when (member action '("create" "import"))
-                  ;; Metadata naming the item without its state is a create
-                  ;; that was interrupted; any other directory is taken.
-                  (when (and (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
-                             (not (mevedel-artifact-store-item-p
-                                   (mevedel-artifact-store-meta workspace id))))
-                    (error "Artifact %s already exists" id))
-                  (when (mevedel-shared-editing--present-p workspace id)
-                    (let ((existing (mevedel-shared-editing--read workspace id)))
-                      (unless (and (stringp (plist-get args :opId))
-                                   (plist-member (plist-get existing :receipts)
-                                                 (intern (concat ":" (plist-get args :opId)))))
-                        (error "Shared item already exists; reopen it instead"))
-                      (setq args (plist-put args :state existing)
-                            args (plist-put args :action "update")))))
-                (setq args (plist-put args :requestId (plist-get job :requestId)))
-                ;; A check starts fresh so repaired resources and runtime
-                ;; changes are verified, without discarding queued work.
-                (mevedel-shared-editing--send
-                 (mevedel-shared-editing--process runtime (equal action "status")) args)
-                (plist-put runtime :timeout
-                           (run-at-time
-                            30 nil (lambda () (mevedel-shared-editing-stop runtime)))))))
+            (catch 'stopped
+              (let* ((args (copy-sequence (plist-get job :args)))
+                     (action (plist-get args :action))
+                     (id (plist-get args :id))
+                     (mutation (not (member action '("read" "view" "export" "list" "status" "library-view"))))
+                     ;; Target I/O runs timers and sentinels; one that stopped
+                     ;; the runtime has settled this job already.
+                     (current (lambda ()
+                                (unless (and (mevedel-shared-editing--live-p runtime)
+                                             (eq job (plist-get runtime :active)))
+                                  (throw 'stopped nil)))))
+                (when (plist-get job :cancelled) (error "Editing operation cancelled"))
+                (when-let* ((authorize (plist-get job :authorize)))
+                  (unless (mevedel-shared-editing--in-job job (funcall authorize))
+                    (error "Editing authority ended")))
+                ;; A stale browser editing a deleted item must not lease it
+                ;; back into being.  A held lease means it still exists: a
+                ;; deletion needs the lease too.
+                (when (and mutation (not (member action '("create" "import")))
+                           (not (mevedel-artifact-lease-held-p
+                                 workspace (mevedel-shared-editing--valid-id id)))
+                           (not (mevedel-shared-editing--present-p workspace id)))
+                  (error "This item no longer exists"))
+                ;; Another Emacs editing the item leaves it read-only here.  A
+                ;; takeover never asks from the queue: a question would block
+                ;; every item of the workspace, so it is a cockpit command.
+                (when mutation
+                  (mevedel-artifact-lease-ensure
+                   workspace (mevedel-shared-editing--valid-id id)))
+                (funcall current)
+                (cond
+                 ((equal action "list")
+                  (mevedel-shared-editing--finish
+                   runtime job (list :result (vconcat (mevedel-shared-editing-list workspace)))))
+                 ;; Deleting needs no helper; queued, it cannot overtake a save.
+                 ((equal action "delete")
+                  (mevedel-shared-editing--finish
+                   runtime job (mevedel-shared-editing--delete workspace args)))
+                 (t
+                  (unless (member action '("create" "import" "status" "library-view"))
+                    (setq args (plist-put args :state
+                                          (mevedel-shared-editing--read workspace id))))
+                  (when (member action '("create" "import"))
+                    ;; Metadata naming the item without its state is a create
+                    ;; that was interrupted; any other directory is taken.
+                    (when (and (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
+                               (not (mevedel-artifact-store-item-p
+                                     (mevedel-artifact-store-meta workspace id))))
+                      (error "Artifact %s already exists" id))
+                    (when (mevedel-shared-editing--present-p workspace id)
+                      (let ((existing (mevedel-shared-editing--read workspace id)))
+                        (unless (and (stringp (plist-get args :opId))
+                                     (plist-member (plist-get existing :receipts)
+                                                   (intern (concat ":" (plist-get args :opId)))))
+                          (error "Shared item already exists; reopen it instead"))
+                        (setq args (plist-put args :state existing)
+                              args (plist-put args :action "update")))))
+                  (setq args (plist-put args :requestId (plist-get job :requestId)))
+                  (funcall current)
+                  ;; A check starts fresh so repaired resources and runtime
+                  ;; changes are verified, without discarding queued work.
+                  (mevedel-shared-editing--send
+                   (mevedel-shared-editing--process runtime (equal action "status")) args)
+                  (plist-put runtime :timeout
+                             (run-at-time
+                              30 nil (lambda () (mevedel-shared-editing-stop runtime))))))))
           ;; A quit during target I/O must settle the job too, or the
           ;; workspace queue would wait for it forever.
           ((error quit)

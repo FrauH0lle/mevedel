@@ -96,8 +96,7 @@
       (should (file-exists-p (file-name-concat root ".mevedel/artifacts/board1/state.json")))
       (should (equal '(:kind whiteboard :title "Architecture" :file "state.json")
                      (cl-subseq (mevedel-artifact-store-meta workspace "board1") 0 6)))
-      (should (gethash (mevedel-artifact-lease-directory workspace "board1")
-                       mevedel-artifact-lease--held))
+      (should (mevedel-artifact-lease-held-p workspace "board1"))
       (should (equal '("board1") (mevedel-shared-editing-ids workspace)))
       (should (equal "Architecture"
                      (plist-get (car (mevedel-shared-editing-list workspace)) :title)))
@@ -177,6 +176,9 @@
   ,test (test)
   :doc "The queue never asks to take an item over; a refusal settles the job"
   (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "Plan"
+                 :actor "Alice" :opId "one"))
     (cl-letf (((symbol-function 'mevedel-artifact-lease-ensure)
                (lambda (_workspace _id &optional ask)
                  (should-not ask)
@@ -195,8 +197,38 @@
                                              :actor "Alice" :opId "b"))
                                 :error))))
     (should-not (plist-get (mevedel-shared-editing--runtime workspace) :active))
-    (should (equal [] (plist-get (mevedel-shared-editing-test--call workspace '(:action "list"))
-                                 :result))))
+    (should (= 1 (length (plist-get (mevedel-shared-editing-test--call
+                                     workspace '(:action "list"))
+                                    :result)))))
+
+  :doc "Stopping the runtime during lease I/O settles the job once and sends nothing"
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "Plan"
+                 :actor "Alice" :opId "one"))
+    (let ((runtime (mevedel-shared-editing--runtime workspace))
+          (replies nil))
+      (cl-letf (((symbol-function 'mevedel-artifact-lease-ensure)
+                 (lambda (&rest _) (mevedel-shared-editing-stop runtime "Helper exited") t)))
+        (mevedel-shared-editing-call
+         workspace '(:action "rename" :id "board" :title "Lost" :actor "Alice" :opId "two")
+         (lambda (reply) (push reply replies)))
+        (let ((deadline (+ (float-time) 1)))
+          (while (< (float-time) deadline)
+            (accept-process-output nil 0.05))))
+      (should (equal '((:error "Helper exited")) replies))
+      (should-not (process-live-p (plist-get runtime :process)))
+      (should (equal "Plan" (plist-get (mevedel-shared-editing--read workspace "board")
+                                       :title)))))
+
+  :doc "Editing a deleted item fails without leasing it again"
+  (mevedel-shared-editing-test--with-workspace
+    (should (equal "This item no longer exists"
+                   (plist-get (mevedel-shared-editing-test--call
+                               workspace '(:action "rename" :id "ghost" :title "X"
+                                           :actor "Guest" :opId "a"))
+                              :error)))
+    (should-not (file-exists-p (mevedel-artifact-lease-directory workspace "ghost"))))
 
   :doc "An interrupted create, its metadata written but not its state, retries"
   (mevedel-shared-editing-test--with-workspace

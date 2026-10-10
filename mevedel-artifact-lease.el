@@ -188,6 +188,12 @@ does with ASK."
         (plist-put held :touched (float-time))
       (mevedel-artifact-lease-acquire workspace id ask))))
 
+(defun mevedel-artifact-lease-held-p (workspace id)
+  "Return non-nil while this Emacs holds WORKSPACE's item ID."
+  (and (gethash (mevedel-artifact-lease-directory workspace id)
+                mevedel-artifact-lease--held)
+       t))
+
 (defun mevedel-artifact-lease-write (workspace id path content)
   "Write CONTENT to PATH while this Emacs still holds item ID's lease.
 The ownership proof and the write are one target program, so a client that
