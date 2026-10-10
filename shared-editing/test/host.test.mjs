@@ -420,3 +420,28 @@ test('restoring a saved version is one revertible change that keeps history', as
   await assert.rejects(handle({ action: 'restore', state: one.state, actor: 'Host', opId: 'restore3',
     target: version }), /own kind/);
 });
+
+test('restoring a document version keeps comments on unchanged blocks', async () => {
+  const para = (id, text) => ({ type: 'paragraph', attrs: { id }, content: [{ type: 'text', text }] });
+  let { state } = await handle({ action: 'create', id: 'doc3', kind: 'document', title: 'Notes',
+    actor: 'Alice', opId: 'create1', content: { type: 'doc', content: [para('a', 'Keep this passage.'), para('b', 'Old text.')] } });
+  const version = state.crdt;
+  const doc = restore(Buffer.from(state.crdt, 'base64'));
+  const text = doc.getXmlFragment('document').get(0).get(0);
+  const range = { anchor: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, 0, -1)),
+    head: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, 4, -1)) };
+  doc.destroy();
+  const { contentHash } = await import('../view.mjs');
+  const { captureContext } = await import('../context.mjs');
+  const live = restore(Buffer.from(state.crdt, 'base64'));
+  const expected = contentHash(captureContext(live, { range }).snapshot);
+  live.destroy();
+  ({ state } = await handle({ action: 'comment', state, actor: 'Alice', opId: 'note', text: 'Why?', range, expected }));
+  ({ state } = await handle({ action: 'patch', state, actor: 'Agent', opId: 'edit1', changes: [
+    { id: 'b', hash: h(para('b', 'Old text.')), after: para('b', 'New text.') },
+    { id: 'c', after: para('c', 'Added.') }] }));
+  const restored = await handle({ action: 'restore', state, actor: 'Alice', opId: 'restore1', target: version });
+  assert.deepEqual(restored.result.content.content.map((n) => n.content[0].text), ['Keep this passage.', 'Old text.']);
+  assert.equal(restored.result.comments[0].anchorStatus, 'current', 'the unchanged block keeps its anchor');
+  assert.deepEqual(restored.state.transactions[0].changes.map((c) => c.id).sort(), ['b', 'c']);
+});

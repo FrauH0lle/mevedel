@@ -585,7 +585,9 @@ when a model turn that edited the item settles, and on **Save version** (the
 cockpit's `s`, or the store list in a room or the lobby). Restoring a version
 is one ordinary, attributed edit through the queue: lineage, comments and
 history stay, concurrent editors receive it as an update, and the restore can
-itself be reverted.
+itself be reverted. A document's blocks that are the same in the version keep
+their identity, so comments anchored in them stay current; changed blocks are
+replaced whole.
 
 Sessions only attach to items, so Resume, Save As, Fork and Rewind neither
 copy nor roll them back. Closing a browser or ending the share leaves the host
