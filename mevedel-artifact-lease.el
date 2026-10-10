@@ -226,9 +226,13 @@ does."
   "Return a token for this Emacs's lease on WORKSPACE's item ID, or nil.
 The token is `eq' only to itself: a lease lost, released or deleted with
 its item and then acquired again yields a new one, even where the
-generation number repeats."
+generation number repeats.  A lease not renewed for a whole lease period,
+as across a suspend, may have expired and been taken over unnoticed, so
+it yields nil until `mevedel-artifact-lease-ensure' or renewal settles it."
   (when-let* ((held (gethash (mevedel-artifact-lease-directory workspace id)
-                             mevedel-artifact-lease--held)))
+                             mevedel-artifact-lease--held))
+              ((< (- (float-time) (plist-get held :renewed))
+                  mevedel-session-lease-seconds)))
     (plist-get held :holding)))
 
 (defun mevedel-artifact-lease-run (workspace id operations)

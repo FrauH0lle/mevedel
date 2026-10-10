@@ -563,7 +563,80 @@
         (mevedel-test--await 10 "edits settle" (= 2 (length replies))))
       (should (cl-every (lambda (reply) (plist-get reply :error)) replies))
       (should-not (plist-get runtime :batch))
-      (should (equal "First" (plist-get (mevedel-shared-editing--read workspace "board") :title))))))
+      (should (equal "First" (plist-get (mevedel-shared-editing--read workspace "board") :title)))))
+
+  :doc "a batch whose lease was lost and claimed again is not committed"
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let (replies lost)
+      (cl-letf (((symbol-function 'mevedel-shared-editing--drain)
+                 (let ((drain (symbol-function 'mevedel-shared-editing--drain)))
+                   (lambda (runtime)
+                     ;; Another Emacs may have edited the item meanwhile.
+                     (when (and (plist-get runtime :batch) (not lost))
+                       (setq lost t)
+                       (mevedel-artifact-lease--forget
+                        (mevedel-artifact-lease-directory workspace "board")))
+                     (funcall drain runtime)))))
+        (dolist (title '("A" "B"))
+          (mevedel-shared-editing-call
+           workspace (list :action "rename" :id "board" :title title
+                           :actor "Alice" :opId title)
+           (lambda (reply) (push reply replies))))
+        (mevedel-test--await 10 "edits settle" (= 2 (length replies))))
+      (should lost)
+      (should (cl-every (lambda (reply) (plist-get reply :error)) replies))
+      (should (equal "First" (plist-get (mevedel-shared-editing--read workspace "board") :title)))))
+
+  :doc "cancelling a batched edit leaves the item unchanged"
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let (replies cancel)
+      (cl-letf (((symbol-function 'mevedel-shared-editing--drain)
+                 (let ((drain (symbol-function 'mevedel-shared-editing--drain)))
+                   (lambda (runtime)
+                     (when (plist-get runtime :batch) (funcall cancel))
+                     (funcall drain runtime)))))
+        (setq cancel (mevedel-shared-editing-call
+                      workspace '(:action "rename" :id "board" :title "A"
+                                  :actor "Alice" :opId "A")
+                      (lambda (reply) (push reply replies))))
+        (mevedel-shared-editing-call
+         workspace '(:action "rename" :id "board" :title "B" :actor "Alice" :opId "B")
+         (lambda (reply) (push reply replies)))
+        (mevedel-test--await 10 "edits settle" (= 2 (length replies))))
+      (should (cl-every (lambda (reply) (plist-get reply :error)) replies))
+      (should (equal "First" (plist-get (mevedel-shared-editing--read workspace "board") :title)))))
+
+  :doc "a stop requested while a batch commits on its own takes effect after it"
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let ((runtime (mevedel-shared-editing--runtime workspace))
+          (commit (symbol-function 'mevedel-shared-editing--commit))
+          replies)
+      (cl-letf (((symbol-function 'mevedel-shared-editing--commit)
+                 (lambda (&rest args)
+                   ;; The edit's timeout or the helper's exit, during target I/O.
+                   (mevedel-shared-editing-stop runtime)
+                   (apply commit args))))
+        (mevedel-shared-editing-call
+         workspace '(:action "rename" :id "board" :title "Kept" :actor "Alice" :opId "a")
+         (lambda (reply) (push (cons "a" reply) replies)))
+        (mevedel-shared-editing-call
+         workspace '(:action "rename" :id "board" :title "Refused" :actor "Alice" :opId "b")
+         (lambda (reply) (push (cons "b" reply) replies))
+         (lambda () (equal "Refused" "never")))
+        (mevedel-test--await 10 "edits settle" (= 2 (length replies))))
+      (should-not (plist-get (cdr (assoc "a" replies)) :error))
+      (should (plist-get (cdr (assoc "b" replies)) :error))
+      (should-not (mevedel-shared-editing--live-p runtime))
+      (should (equal "Kept" (plist-get (mevedel-shared-editing--read workspace "board") :title))))))
 
 (mevedel-deftest mevedel-shared-editing--commit-directory
   (:doc "an authored directory replaced by a file cannot partially commit a new state")

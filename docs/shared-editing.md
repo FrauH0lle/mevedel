@@ -568,7 +568,11 @@ before acknowledging Saved on host. Consecutive queued edits of one item
 (updates, patches, inserts, renames and background changes) commit together:
 each is computed from the state the previous one left, and up to 16 are
 written by one commit, then acknowledged and announced in order. When an edit
-continuing such a batch fails, the batch commits on its own. Under several
+continuing such a batch fails, the batch commits on its own. A batch commits
+only while none of its edits was cancelled or lost its authority and this
+Emacs still holds the item's lease as it did when the batch began; otherwise
+every edit in it is reported unsaved, since each was computed from the one
+before. Under several
 writers the commit, one fenced target program, otherwise made edits wait for
 each other's commits. Embedded images travel with their item's
 state. Ordinary read-only artifact addresses gain no new mutation capability.
@@ -602,8 +606,8 @@ replaces the whole item under the lease, so a late write from the old holder
 fails instead of overwriting.
 While the lease is held and was renewed within the last minute, an edit does
 not read the target clock again. While this Emacs still holds the lease it
-last committed under, an edit starts from that commit instead of reading the
-item back: the lease fences every state write, so one fenced target program
+last committed under, and renewed it within one lease period, an edit or read
+starts from that commit instead of reading the item back: the lease fences every state write, so one fenced target program
 per edit remains. Metadata has other writers, so the commit verifies it and,
 when it changed meanwhile, rereads it and retries once. Reading needs no lease. An open editor that
 receives a change skipping a revision, as after a hand-over between two Emacs
