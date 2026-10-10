@@ -409,8 +409,9 @@ Resolve the `.git' pointer and its `commondir' file on PATH's target."
 
 (defconst mevedel-sandbox--root-anchored-names '(".mevedel")
   "Directories that exist only at a workspace root.
-Protected `**/NAME/...' patterns below them are expanded at each discovery
-root instead of walking it; native checks still match them at any depth.")
+A protected `**/NAME/...' pattern below one protects, at each discovery
+root, the whole directory its literal part names, without walking the
+root; native checks still match the pattern itself at any depth.")
 
 (defun mevedel-sandbox--find-protected-directory (root name executable)
   "Find literal protected NAME below local ROOT with GNU find EXECUTABLE.
@@ -581,17 +582,26 @@ each native directory scan and returns (PATH . BLOCKED) pairs."
                 (search-literal-directory root literal-directory mode)
                 (add-candidate
                  (file-name-concat root literal-directory) mode t)))
-             ;; mevedel's own state sits at each workspace root: its
-             ;; protected descendants expand there, without a walk.
+             ;; mevedel's own state sits at each workspace root.  A
+             ;; pattern below it protects the whole directory its literal
+             ;; part names: one mount, without a walk, that also covers
+             ;; entries created later.  The directory is created first,
+             ;; since a missing one would be stood in for by its first
+             ;; missing parent, all of `.mevedel'.
              ((and (not absolute-pattern)
                    (string-prefix-p "**/" root-pattern)
                    (member (car (split-string (substring root-pattern 3) "/"))
-                           mevedel-sandbox--root-anchored-names)
-                   (not (string-search "**" (substring root-pattern 3))))
-              (dolist (root (delete-dups (copy-sequence discovery-roots)))
-                (dolist (path (file-expand-wildcards
-                               (file-name-concat root (substring root-pattern 3)) t))
-                  (add-candidate path mode directory-p))))
+                           mevedel-sandbox--root-anchored-names))
+              (let ((literal (string-join
+                              (seq-take-while
+                               (lambda (part) (not (glob-p part)))
+                               (split-string (substring root-pattern 3) "/" t))
+                              "/")))
+                (dolist (root (delete-dups (copy-sequence discovery-roots)))
+                  (let ((directory (file-name-concat root literal)))
+                    (unless (file-directory-p directory)
+                      (make-directory directory t))
+                    (add-candidate directory mode t)))))
              (t
               (let ((search-roots (copy-sequence discovery-roots)))
                 (when absolute-pattern
