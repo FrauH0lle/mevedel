@@ -198,9 +198,9 @@ before the operation ran."
    "        limit=$payload\n"
    "        [[ \"$limit\" =~ ^[0-9]+$ ]] || exit 67\n"
    "        test -f \"$leaf\" || exit 68\n"
-   "        (set -o pipefail; dd if=\"$leaf\" iflag=nofollow,count_bytes,nonblock count=\"$limit\" status=none | base64 -w0) || exit 67\n"
+   "        dd if=\"$leaf\" iflag=nofollow,count_bytes,nonblock count=\"$limit\" status=none | base64 -w0 || exit 67\n"
    "      else\n"
-   "        (set -o pipefail; dd if=\"$leaf\" iflag=nofollow status=none | base64 -w0) || exit 67\n"
+   "        dd if=\"$leaf\" iflag=nofollow status=none | base64 -w0 || exit 67\n"
    "      fi\n"
    "      ;;\n"
    "    verify)\n"
@@ -228,7 +228,9 @@ before the operation ran."
    ;; before reopening it for output; payload writes and chmod never follow
    ;; the mutable temporary pathname.
    "      exec 8<\"$temporary\" || exit 66\n"
-   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
+   ;; The same inode under a name that is no symlink: what was opened is
+   ;; the temporary itself, not something it pointed at.
+   "      [[ ! -L $temporary && /proc/self/fd/8 -ef $temporary ]] || exit 70\n"
    "      exec 8>/proc/self/fd/8 || exit 66\n"
    "      if test \"$op\" = write-mode; then\n"
    "        (set -o pipefail; decode_payload | {\n"
@@ -373,7 +375,7 @@ before the operation ran."
    "      rmdir -- \"$leaf\" 2>/dev/null || exit 72\n"
    "      ;;\n"
    "    verify-latest)\n"
-   "      suffix=$(decode_payload) || exit 71\n"
+   "      suffix=$payload\n"
    "      test -n \"$suffix\" || exit 71\n"
    "      for entry in ./*\"$suffix\"; do\n"
    "        test ! -L \"$entry\" || exit 69\n"
@@ -498,14 +500,15 @@ before the operation ran."
    "  while read_operation; do emit; done\n"
    "fi\n"
    "}\n"
-   ;; Operation frames bypass the diagnostic pipe through descriptor 3.
-   ;; Encode stderr before command substitution: shell variables cannot hold
-   ;; NUL bytes.  This avoids a temporary file and its creation/removal
-   ;; processes on every program, including successful read-only probes.
+   ;; Operation frames bypass the diagnostic capture through descriptor 3.
+   ;; Stderr is captured directly, which avoids a temporary file, and only
+   ;; encoded when there is any: a program that succeeded quietly costs no
+   ;; encoder process.  Diagnostics are text; a NUL byte in them is dropped.
    "exec 3>&1\n"
    "set -o pipefail\n"
    "program_status=0\n"
-   "diagnostics=$(run_program \"$@\" 2>&1 1>&3 | base64 -w0) || program_status=$?\n"
+   "diagnostics=$(run_program \"$@\" 2>&1 1>&3) || program_status=$?\n"
+   "if test -n \"$diagnostics\"; then diagnostics=$(printf '%s' \"$diagnostics\" | base64 -w0); fi\n"
    "printf 'diagnostic 0\\0%s\\0' \"$diagnostics\"\n"
    "exit \"$program_status\"\n")
   "Target-side script running a whole program of pinned control operations.
@@ -513,7 +516,8 @@ before the operation ran."
 Content payloads are base64 so one framing carries arbitrary bytes, including
 NUL-separated listing names and content that a shell cannot pass through a
 command substitution literally.  Numeric request fields travel as digits and
-are validated by the target.  `base64' resolves through the target PATH,
+are validated by the target, and so does a `verify-latest' suffix, a short
+file-name ending, as plain text.  `base64' resolves through the target PATH,
 like `stat'.")
 
 (defvar mevedel-session-control-fs--programs (make-hash-table :test #'equal)
@@ -637,7 +641,8 @@ parent must not turn into a `Setting current directory' failure."
             (number-to-string (plist-get op :max-bytes)))
            ((null content) "")
            ((memq (plist-get op :op)
-                  '(verify-mode directory-mode before-time write-staged create-staged))
+                  '(verify-mode directory-mode before-time verify-latest
+                    write-staged create-staged))
             content)
            ((multibyte-string-p content)
             (base64-encode-string

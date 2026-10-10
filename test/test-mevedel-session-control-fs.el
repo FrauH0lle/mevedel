@@ -1604,7 +1604,9 @@
                   (list (list :op 'write :path path :content "replacement")
                         (list :op 'create :path later :content "unreachable")))))
             (should (eq 'failed (plist-get (car results) :status)))
-            (should (equal forged (plist-get (car results) :diagnostic)))
+            ;; Diagnostics are text: their NUL bytes are dropped.
+            (should (equal (string-replace "\0" "" forged)
+                           (plist-get (car results) :diagnostic)))
             (should (eq 'skipped (plist-get (cadr results) :status)))
             (should-not (file-exists-p later))
             (should (equal "original" (mevedel-session-control-fs-read-file path))))
