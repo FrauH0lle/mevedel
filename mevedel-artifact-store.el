@@ -81,6 +81,14 @@ even when it alone exceeds this size."
   :type 'natnum
   :group 'mevedel)
 
+(defvar mevedel-artifact-store-changed-functions nil
+  "Functions called with a WORKSPACE after its artifact store changed.
+Live collaboration rooms follow the store through it.")
+
+(defun mevedel-artifact-store--changed (workspace)
+  "Tell `mevedel-artifact-store-changed-functions' that WORKSPACE's store changed."
+  (run-hook-with-args 'mevedel-artifact-store-changed-functions workspace))
+
 (defconst mevedel-artifact-store--bookkeeping
   '("meta.el" "versions" "comments.json" "state.json")
   "Top-level names in an artifact directory that belong to the host.")
@@ -157,6 +165,7 @@ KIND and TITLE default to what FILE's name says."
     (mevedel-artifact-store--write
      (file-name-concat (mevedel-artifact-store-artifact-directory workspace id) "meta.el")
      meta)
+    (mevedel-artifact-store--changed workspace)
     meta))
 
 (defun mevedel-artifact-store--versions-dir (workspace id)
@@ -222,6 +231,7 @@ reduced copy of its state.  Return the version number."
       (unless (memq row kept)
         (ignore-errors
           (delete-file (file-name-concat directory (plist-get row :file))))))
+    (mevedel-artifact-store--changed workspace)
     n))
 
 (defun mevedel-artifact-store-restore-version (workspace id n &optional session-id)
@@ -268,6 +278,11 @@ The copy starts with one version and its own metadata."
       (error "Artifact %s already exists" new-id))
     (copy-directory source target nil t t)
     (delete-directory (mevedel-artifact-store--versions-dir workspace new-id) t)
+    ;; Comments belong to the original.
+    (let ((comments (file-name-concat
+                     (mevedel-artifact-store-artifact-directory workspace new-id)
+                     "comments.json")))
+      (when (file-exists-p comments) (delete-file comments)))
     (mevedel-artifact-store-create-meta workspace new-id (plist-get meta :file)
                                         (plist-get meta :kind) (plist-get meta :title))
     (mevedel-artifact-store-record-version workspace new-id)
@@ -286,7 +301,8 @@ save it straight back, or held by another client."
       (when (and (file-directory-p save-path)
                  (not (mevedel-session-persistence-delete workspace save-path)))
         (error "The conversation of %s is still in use elsewhere" id))))
-  (delete-directory (mevedel-artifact-store-artifact-directory workspace id) t))
+  (delete-directory (mevedel-artifact-store-artifact-directory workspace id) t)
+  (mevedel-artifact-store--changed workspace))
 
 (defun mevedel-artifact-store-list (workspace)
   "Return WORKSPACE's artifacts as plists, newest modification first.
@@ -321,7 +337,8 @@ otherwise the next session save carries the attachment."
     (setf (mevedel-session-attached-artifacts session)
           (append (mevedel-session-attached-artifacts session) (list id)))
     (when buffer
-      (mevedel-session-persistence-write-sidecar-now session buffer))))
+      (mevedel-session-persistence-write-sidecar-now session buffer))
+    (mevedel-artifact-store--changed (mevedel-session-workspace session))))
 
 (defun mevedel-artifact-store-update-meta (workspace id &rest properties)
   "Set PROPERTIES in the metadata of artifact ID and return it."

@@ -88,6 +88,18 @@ assert.match(textOf(nodes.artifacts), /mockup\.html20 B/);
 assert.equal(nodes.artifacts.children[1].disabled, true);
 assert.match(textOf(nodes.artifacts.children[1]), /deleted/);
 
+// Attached store artifacts join the chips; whiteboards and documents
+// stay under Shared work.
+controller.attachedRows([
+  {id: 'flow', artifact: 'flow/index.html', size: 5, attached: true},
+  {id: 'other', artifact: 'other/a.md', size: 1, attached: false},
+  {id: 'board', artifact: 'board/state.json', size: 9, attached: true, item: true},
+]);
+assert.equal(nodes.artifacts.children.length, 3);
+assert.match(textOf(nodes.artifacts), /flow\/index\.html/);
+assert.doesNotMatch(textOf(nodes.artifacts), /state\.json|other/);
+controller.attachedRows([]);
+
 nodes.artifacts.children[0].dispatch('click');
 assert.deepEqual({...sent[0]}, {t: 'artifact-get', reqId: 1, id: 'new'});
 assert.equal(nodes['artifact-panel'].hidden, false);

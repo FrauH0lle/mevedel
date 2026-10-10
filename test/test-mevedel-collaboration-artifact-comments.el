@@ -120,7 +120,9 @@ DIRECTORY is the workspace root, WORKSPACE its file workspace with store
 artifacts schema, notes and gone, and SENT collects outgoing frames."
   (declare (indent 0))
   `(mevedel-view-test--with-buffers
-     (let* ((directory (file-name-as-directory
+     (let* (;; The room's records are this fixture's, not a projection.
+            (mevedel-artifact-store-changed-functions nil)
+            (directory (file-name-as-directory
                         (make-temp-file "mevedel-artifact-comments-" t)))
             (workspace (mevedel-workspace--create :type 'file :id "artifact-comments"
                                                   :root directory))

@@ -366,8 +366,10 @@ An owner also receives the models it may create a session on."
 (defun mevedel-collaboration-lobby--saved-entry (workspace id)
   "Return WORKSPACE's saved session entry for session ID, or nil.
 The id only selects among sessions the listing would show; it never
-becomes a path of its own."
-  (cl-find id (mevedel-session-persistence-list-sessions workspace)
+becomes a path of its own.  An artifact's dedicated session is reached
+through its artifact."
+  (cl-find id (mevedel-session-persistence-without-dedicated
+               workspace (mevedel-session-persistence-list-sessions workspace))
            :key (lambda (entry)
                   (plist-get (plist-get entry :summary) :session-id))
            :test #'equal))

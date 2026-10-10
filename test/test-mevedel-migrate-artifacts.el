@@ -146,6 +146,32 @@
             (should (equal '("board-1" "mockup" "notes") (mevedel-artifact-store-ids workspace)))))
       (delete-directory root t)))
 
+  :doc "shares a forked item that did not diverge and separates one that did"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-fork-" t)))
+         (destination (file-name-concat root "converted"))
+         (workspace (mevedel-workspace--create :type 'project :id "w" :root root)))
+    (unwind-protect
+        (progn
+          (mevedel-migrate-artifacts-test--pid-session root "s1")
+          (mevedel-migrate-artifacts-test--pid-session root "s2")
+          (let ((diverged (file-name-concat root ".mevedel" "sessions" "s3")))
+            (mevedel-migrate-artifacts-test--pid-session root "s3")
+            (write-region (mevedel-shared-editing--json
+                           (plist-put (copy-sequence mevedel-migrate-artifacts-test--board)
+                                      :title "Forked"))
+                          nil (file-name-concat diverged "artifacts" "shared-editing"
+                                                "board-1.json")
+                          nil 'silent))
+          (let ((report (mevedel-migrate-artifacts root destination)))
+            (should (member "board-1" (cdr (assoc "s1" report))))
+            (should (member "board-1" (cdr (assoc "s2" report))))
+            (should (member "board-1-2" (cdr (assoc "s3" report))))
+            (should (equal "Forked" (plist-get (mevedel-shared-editing--read workspace "board-1-2")
+                                               :title)))
+            (should (equal "board-1-2" (plist-get (mevedel-shared-editing--read workspace "board-1-2")
+                                                  :id)))))
+      (delete-directory root t)))
+
   :doc "refuses before writing anything while a session is open"
   (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-open-" t)))
          (destination (file-name-concat root "converted")))

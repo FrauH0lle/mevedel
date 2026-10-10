@@ -171,6 +171,10 @@
       (should (= 1 (length (mevedel-artifact-store-versions workspace "b"))))
       (should (= 2 (length (mevedel-artifact-store-versions workspace "a"))))
       (should-error (mevedel-artifact-store-duplicate workspace "a" "b"))
+      ;; Comments stay with the original.
+      (mevedel-artifact-store-test--write store "a/comments.json" "{}")
+      (mevedel-artifact-store-duplicate workspace "a" "c")
+      (should-not (file-exists-p (file-name-concat store "c/comments.json")))
       (should-error (mevedel-artifact-store-duplicate workspace "a" "../c")))))
 
 (mevedel-deftest mevedel-artifact-store-delete ()
@@ -208,16 +212,35 @@
 (mevedel-deftest mevedel-artifact-store-attach ()
   ,test
   (test)
-  :doc "attaches once, keeps order, and writes the sidecar only with a buffer"
-  (let ((session (mevedel-session--create))
-        written)
+  :doc "attaches once, keeps order, writes the sidecar only with a buffer, and announces it"
+  (let* ((session (mevedel-session--create :workspace 'workspace))
+         changed written
+         (mevedel-artifact-store-changed-functions
+          (list (lambda (workspace) (push workspace changed)))))
     (cl-letf (((symbol-function 'mevedel-session-persistence-write-sidecar-now)
                (lambda (&rest args) (push args written))))
       (mevedel-artifact-store-attach session "a")
       (mevedel-artifact-store-attach session "b" 'buffer)
       (mevedel-artifact-store-attach session "a" 'buffer))
     (should (equal '("a" "b") (mevedel-session-attached-artifacts session)))
-    (should (equal (list (list session 'buffer)) written))))
+    (should (equal (list (list session 'buffer)) written))
+    (should (equal '(workspace workspace) changed))))
+
+(mevedel-deftest mevedel-artifact-store--changed ()
+  ,test
+  (test)
+  :doc "announces versions, new artifacts and deletions"
+  (mevedel-artifact-store-test--with-workspace
+    (let* (changed
+           (mevedel-artifact-store-changed-functions
+            (list (lambda (seen) (push seen changed)))))
+      (mevedel-artifact-store-test--note
+       (mevedel-session--create :workspace workspace)
+       (mevedel-artifact-store-test--write store "a/x.md" "1"))
+      (should (>= (length changed) 2))
+      (setq changed nil)
+      (mevedel-artifact-store-delete workspace "a")
+      (should (equal (list workspace) changed)))))
 
 ;; ponytail: one real lifecycle case; the chat setup is too slow for several.
 (mevedel-deftest mevedel-artifact-store-conversation (:quiet t)

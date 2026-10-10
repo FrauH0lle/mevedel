@@ -297,8 +297,10 @@
       paint();
     }
 
+    // Whiteboards and documents list under Shared work, in their editor.
     function attachedRows(rows) {
-      attached = Array.isArray(rows) ? rows.filter(row => row && row.attached === true) : [];
+      attached = Array.isArray(rows)
+        ? rows.filter(row => row && row.attached === true && row.item !== true) : [];
       paint();
     }
 

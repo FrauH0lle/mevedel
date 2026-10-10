@@ -297,6 +297,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
         (should (eq t (plist-get page :attached)))
         (should (equal "html" (plist-get page :kind)))
         (should (equal "page/index.html" (plist-get page :artifact)))
+        (should (eq :json-false (plist-get page :item)))
         (should (= 1 (plist-get page :versions)))
         (should (integerp (plist-get page :modified)))))
     (should (cl-every (lambda (row) (eq :json-false (plist-get row :attached)))
