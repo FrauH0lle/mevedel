@@ -21,7 +21,7 @@ import {
   LIMIT,
   same,
 } from './model.mjs';
-import { initializeDocument, patchDocument, markdown, selectedText } from './document.mjs';
+import { initializeDocument, patchDocument, restoreDocument, markdown, selectedText } from './document.mjs';
 import { boardSVG, documentHTML, usedFonts } from './render.mjs';
 import { parseScene, serializeScene, parseLibrary, placeElements } from './excalidraw.mjs';
 import { extent } from './scene.mjs';
@@ -557,12 +557,8 @@ export async function handle(request) {
             const elements = doc.getMap('elements');
             for (const id of [...elements.keys()]) elements.delete(id);
             for (const e of target.content) putElement(doc, e);
-          } else {
-            const root = doc.getXmlFragment('document');
-            root.delete(0, root.length);
-          }
+          } else restoreDocument(doc, source);
         });
-        if (before.kind === 'document') initializeDocument(doc, target.content);
         validate(doc);
       } finally {
         source.destroy();
