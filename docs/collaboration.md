@@ -770,8 +770,9 @@ Full and owner links can **Delete** an open artifact after confirming, in a
 room or the lobby. The host resolves it from its own record of the card or
 from the store id, never from a guest path, and deletes the whole artifact --
 its id directory with versions and comments, and its dedicated session --
-through the same path as the Emacs cockpit. A dedicated session open in Emacs,
-or held by another client, refuses the deletion. The card then reads as
+through the same path as the Emacs cockpit. A dedicated session open in Emacs
+is closed first; only a turn running there refuses the deletion (see
+[the artifact store](view.md#artifact-store)). The card then reads as
 deleted. Every live room of the workspace is re-published, and every room and
 the lobby receive the store's new listing.
 
