@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'mevedel-agent-control)
 (require 'mevedel-agents)
 (require 'mevedel-execution-target)
 (require 'mevedel-permission-queue)
@@ -107,7 +108,26 @@
     (with-temp-buffer
       (should (eq t (mevedel-busy-p))))
     (setq-local mevedel--turn-settlements-pending nil)
-    (should-not (mevedel-busy-p))))
+    (should-not (mevedel-busy-p)))
+
+  :doc "retained agents keep the host busy through admission and settlement"
+  (with-temp-buffer
+    (let* ((record (mevedel-agent-record--create :path "/root/worker" :activity 'running))
+           (session (mevedel-session--create :agent-registry (list (cons "/root/worker" record)))))
+      (setq-local mevedel--session session)
+      (should-not (mevedel-turn-busy-p))
+      (should (mevedel-busy-p))
+      (setf (mevedel-agent-record-activity record) 'idle)
+      (should-not (mevedel-busy-p))
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create
+                   :transcript-status 'completed
+                   :runtime-pending-response '(:response "Done")))
+      (should (mevedel-busy-p))
+      (setf (mevedel-agent-invocation-runtime-pending-response mevedel--agent-invocation) nil)
+      (should-not (mevedel-busy-p))
+      (setf (mevedel-session-agent-reservations session) '(reservation))
+      (should (mevedel-busy-p)))))
 
 (mevedel-deftest mevedel-request-state-label ()
   ,test
@@ -767,6 +787,22 @@
           (mevedel-request-end)))
       (should (equal (list (list ws "board" (mevedel-session-session-id session))) saved))
       (should (string-match-p "no version of gone" messages))))
+
+  :doc "a request admitted during artifact versioning keeps its running activity"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create 'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           admitted)
+      (mevedel-request-begin session)
+      (setf (mevedel-request-edited-artifacts mevedel--current-request)
+            (list (cons ws "board")))
+      (cl-letf (((symbol-function 'mevedel-artifact-store-save-version)
+                 (lambda (&rest _)
+                   (setq admitted (mevedel-request-begin session)))))
+        (mevedel-request-end))
+      (should (eq admitted mevedel--current-request))
+      (should (eq 'running (mevedel-session-agent-root-activity session)))
+      (mevedel-request-end)))
 
   :doc "offers the workspace an expiry sweep when a root turn ends"
   (with-temp-buffer

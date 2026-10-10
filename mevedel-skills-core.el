@@ -1186,7 +1186,12 @@ are refreshed to match the freshly scanned skill set."
     (setf (mevedel-session-skills session) skills)
     (when (buffer-live-p buffer)
       (mevedel-skills--register-buffer
-       buffer dirs (mevedel-session-execution-target session)))
+       buffer dirs (mevedel-session-execution-target session)
+       (append (delq nil (mapcar (lambda (raw)
+                                  (car (mevedel-skills--resolve-dir raw root)))
+                                mevedel-skill-dirs))
+               (mapcar #'file-name-as-directory
+                       (mevedel-skills--plugin-skill-dirs ws)))))
     (mevedel-skills--refresh-mtime-cache skills buffer)
     (remhash buffer mevedel-skills--dirty-buffers)
     session))
@@ -1293,6 +1298,10 @@ manually."
 
 ;;;; State
 
+(defvar-local mevedel-skills--watch-roots nil
+  "Resolved discovery roots used by this buffer's file notification filter.
+Captured at installation so notifications do not resolve remote paths.")
+
 (defvar mevedel-skills--watchers (make-hash-table :test #'equal)
   "Live `file-notify' watchers keyed by absolute directory path.
 Values are descriptors returned by `file-notify-add-watch'.  Entries
@@ -1386,14 +1395,17 @@ nil.  Plugin roots are resolved from plugins enabled in WORKSPACE."
       (maphash (lambda (k _v) (push k result)) dirs)
       result)))
 
-(defun mevedel-skills--register-buffer (buffer dirs &optional target)
+(defun mevedel-skills--register-buffer (buffer dirs &optional target roots)
   "Register BUFFER as a consumer of every directory in DIRS.
 Drops BUFFER's prior registrations to keep the registry consistent
 when the resolved directory set changes (e.g. a leaf directory was
 deleted), then installs watchers on the new set when `watch-files' is
 active.  TARGET supplies cached remote notification capabilities.
+ROOTS are the resolved discovery roots used to filter ancestor events.
 Removes now-orphan watchers."
   (mevedel-skills--unregister-buffer buffer)
+  (with-current-buffer buffer
+    (setq mevedel-skills--watch-roots roots))
   (dolist (dir dirs)
     (let ((entry (gethash dir mevedel-skills--dir-buffers)))
       (puthash dir (cons buffer entry) mevedel-skills--dir-buffers)))
@@ -1483,19 +1495,13 @@ Any change inside a skill directory counts.  A configured root that does
 not exist yet is watched through its nearest existing ancestor, where
 mevedel and other programs write unrelated files; there only an entry on
 the path to a configured root counts."
-  (let* ((session (buffer-local-value 'mevedel--session buffer))
-         (workspace (and session (mevedel-session-workspace session)))
-         (workspace-root (and workspace (mevedel-workspace-root workspace)))
-         (roots (delq nil (mapcar (lambda (raw)
-                                    (car (mevedel-skills--resolve-dir
-                                          raw workspace-root)))
-                                  mevedel-skill-dirs))))
+  (let ((roots (buffer-local-value 'mevedel-skills--watch-roots buffer)))
     (or (not (cl-some (lambda (root)
                         (and (string-prefix-p dir root) (not (equal dir root))))
                       roots))
         (cl-some (lambda (root) (string-prefix-p root dir)) roots)
         (cl-some (lambda (file)
-                   (let ((path (file-name-as-directory (expand-file-name file))))
+                   (let ((path (file-name-as-directory (expand-file-name file dir))))
                      (cl-some (lambda (root) (string-prefix-p path root)) roots)))
                  files))))
 

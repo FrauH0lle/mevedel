@@ -248,7 +248,11 @@ mevedel reports the limitation once per target capability state and leaves
 save-triggered checks plus `M-x mevedel-skills-rescan` available.  After
 installing a notifier, refresh target readiness and rescan to install the
 watcher.  `stat-when-checking` remains an explicit opt-in because it adds one
-remote stat per known skill at each pull check.
+remote stat per known skill at each pull check. Notification filtering uses
+resolved roots cached at installation, including enabled plugin roots; it does
+not recheck filesystem containment on each event. A watched ancestor of a
+missing root ignores unrelated entries, while every change within a discovery
+root still invalidates its consumers.
 
 ## Local Slash Commands
 
@@ -732,7 +736,10 @@ runs, and puts back the request it took the slot from when it settles, unless
 a request admitted meanwhile now owns the slot. A turn that ends while a
 preparation for its steering or `Skill` call holds the slot cannot settle
 against a slot it does not own: its settlement waits and resumes once its
-request is back, and only then ends that request.
+request is back, and only then ends that request. Nested preparations restore
+in stack order even when their asynchronous work finishes out of order. Each
+callback sees its restored request and agent invocation; a newer admitted
+request retains both of its ownership slots.
 
 ## ToolCall Primitives
 
