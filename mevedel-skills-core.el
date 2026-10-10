@@ -15,6 +15,7 @@
 (require 'mevedel-utilities)
 
 (defvar mevedel-skills--dirty-buffers)
+(defvar mevedel-skills--watch-roots)
 
 ;; `filenotify'
 (declare-function file-notify-add-watch "filenotify"
@@ -1185,6 +1186,8 @@ are refreshed to match the freshly scanned skill set."
          (dirs (mevedel-skills--collect-roots root skills ws)))
     (setf (mevedel-session-skills session) skills)
     (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (setq-local mevedel-skills--watch-roots (mevedel-skills--resolved-roots root)))
       (mevedel-skills--register-buffer
        buffer dirs (mevedel-session-execution-target session)))
     (mevedel-skills--refresh-mtime-cache skills buffer)
@@ -1477,19 +1480,23 @@ returns directories that have at least one consumer."
 
 ;;;; watch-files strategy
 
+(defvar-local mevedel-skills--watch-roots nil
+  "Configured skill roots this buffer's watchers serve, resolved at install.
+Resolving them in a file-notification callback would touch a remote
+workspace from inside a process filter.")
+
+(defun mevedel-skills--resolved-roots (workspace-root)
+  "Return `mevedel-skill-dirs' resolved against WORKSPACE-ROOT."
+  (delq nil (mapcar (lambda (raw) (car (mevedel-skills--resolve-dir raw workspace-root)))
+                    mevedel-skill-dirs)))
+
 (defun mevedel-skills--watch-event-relevant-p (buffer dir files)
   "Return non-nil when FILES changing in watched DIR can change BUFFER's skills.
 Any change inside a skill directory counts.  A configured root that does
 not exist yet is watched through its nearest existing ancestor, where
 mevedel and other programs write unrelated files; there only an entry on
 the path to a configured root counts."
-  (let* ((session (buffer-local-value 'mevedel--session buffer))
-         (workspace (and session (mevedel-session-workspace session)))
-         (workspace-root (and workspace (mevedel-workspace-root workspace)))
-         (roots (delq nil (mapcar (lambda (raw)
-                                    (car (mevedel-skills--resolve-dir
-                                          raw workspace-root)))
-                                  mevedel-skill-dirs))))
+  (let ((roots (buffer-local-value 'mevedel-skills--watch-roots buffer)))
     (or (not (cl-some (lambda (root)
                         (and (string-prefix-p dir root) (not (equal dir root))))
                       roots))
