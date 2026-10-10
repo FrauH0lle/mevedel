@@ -17,7 +17,7 @@
 (mevedel-deftest mevedel-session-fork-clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-		   (should (= 89
+		   (should (= 90
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -104,7 +104,8 @@
            :pending-plan-approval '(:proposal pending)
            :plan-metadata '(:status accepted :nested source)
            :goal goal
-           :attached-artifacts (list "board")))
+           :attached-artifacts (list "board")
+           :dedicated-artifact "board"))
          (fork
           (mevedel-session-fork-clone-session
            source 'fork
@@ -218,6 +219,8 @@
     ;; Fork and Save As carry artifact references, each in its own list.
     (dolist (child (list fork save-as))
       (should (equal '("board") (mevedel-session-attached-artifacts child)))
+      ;; A copy of an artifact's conversation is an ordinary chat.
+      (should-not (mevedel-session-dedicated-artifact child))
       (should-not (eq (mevedel-session-attached-artifacts source)
                       (mevedel-session-attached-artifacts child))))
     (should (eq 'portable (mevedel-session-authority-mode fork)))

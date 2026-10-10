@@ -77,11 +77,6 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
 		  "mevedel-agents" (cl-x) t)
 
-;; `mevedel-artifact-store'
-(declare-function mevedel-artifact-store-dedicated-ids
-                  "mevedel-artifact-store" (workspace))
-(autoload 'mevedel-artifact-store-dedicated-ids "mevedel-artifact-store")
-
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
@@ -202,6 +197,7 @@
 (declare-function mevedel-request-untracked-effects "mevedel-structs"
                   (cl-x) t)
 (declare-function mevedel-session-audit-session "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-dedicated-artifact "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-create "mevedel-structs"
 		  (name workspace &optional working-directory session-id))
 (declare-function mevedel-session-enqueue-pending-reminder "mevedel-structs"
@@ -955,13 +951,11 @@ if none found."
    (when-let* ((workspace (or workspace (mevedel-workspace))))
      ;; The workspace scan already preserves most-recent buffer order.  An
      ;; artifact's conversation is never a default target.
-     (let ((dedicated (mevedel-artifact-store-dedicated-ids workspace)))
-       (cdr (cl-find-if-not
-             (lambda (entry)
-               (member (mevedel-session-session-id
-                        (buffer-local-value 'mevedel--session (cdr entry)))
-                       dedicated))
-             (mevedel--workspace-sessions workspace)))))))
+     (cdr (cl-find-if-not
+           (lambda (entry)
+             (mevedel-session-dedicated-artifact
+              (buffer-local-value 'mevedel--session (cdr entry))))
+           (mevedel--workspace-sessions workspace))))))
 
 (defun mevedel--generate-final-patch (workspace request callback)
   "Generate final diffs for all tracked files in REQUEST, then call CALLBACK.

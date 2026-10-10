@@ -1171,9 +1171,13 @@ An artifact may have one dedicated session, its own conversation for work
 started outside any chat: a comment or question from the lobby, the cockpit's
 `c`, or **Conversation** in the browser. It is an ordinary session, created on
 first use, attached to the artifact and saved at once, and named "Artifact
-ID"; `meta.el` records its id. It is hidden from the session chooser and the
-lobby listing, is never the default chat buffer for directives, and is kept
-from expiry while the artifact exists. Deleting the artifact deletes its
+ID". The two name each other: `meta.el` records the session's id and the
+session records the artifact's (`:dedicated-artifact`). Only while both agree
+is the session hidden from the session chooser and the lobby listing and
+kept from expiry, so a `meta.el` copied outside mevedel never makes another
+artifact's conversation its own, and one whose artifact is gone is an
+ordinary session again. It is never the default chat buffer for directives,
+and a fork or Save As of it is an ordinary chat. Deleting the artifact deletes its
 dedicated session too. One open in this Emacs is closed first, ending its
 room, unless a turn is still running there, which refuses the deletion. One
 that cannot be deleted yet, because another client holds it or journal

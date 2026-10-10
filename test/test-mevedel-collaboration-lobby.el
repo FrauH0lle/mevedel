@@ -172,7 +172,7 @@ running lobby touches no real state."
   (:doc "lists unsaved live sessions first and marks open saved ones")
   (let ((live-buffer (generate-new-buffer " *lobby-live*"))
         (shared-buffer (generate-new-buffer " *lobby-shared*"))
-        (dedicated nil))
+        (s3 (list :session-id "s3")))
     (unwind-protect
         (let ((mevedel-collaboration--rooms
                (mevedel-test-room-registry
@@ -186,17 +186,17 @@ running lobby touches no real state."
           (cl-letf (((symbol-function 'mevedel--workspace-sessions)
                      (lambda (_workspace)
                        `(("new" . ,live-buffer) ("renamed" . ,shared-buffer))))
-                    ((symbol-function 'mevedel-artifact-store-dedicated-ids)
-                     (lambda (_workspace) dedicated))
+                    ((symbol-function 'mevedel-artifact-store-dedicated-p)
+                     (lambda (_workspace session-id id)
+                       (equal (list session-id id) '("s3" "board"))))
                     ((symbol-function
                       'mevedel-session-persistence-list-sessions)
                      (lambda (_workspace &optional _cached)
-                       '((:save-path "/s2/"
+                       `((:save-path "/s2/"
                           :summary (:session-id "s2" :session-name "old"
                                     :updated-at "2026-09-15T00-49-14"
                                     :latest-user-message "hello"))
-                         (:save-path "/s3/"
-                          :summary (:session-id "s3"))))))
+                         (:save-path "/s3/" :summary ,s3)))))
             (let ((rows (mevedel-collaboration-lobby--rows 'workspace)))
               (should (equal '("fresh" "s2" "s3")
                              (mapcar (lambda (row) (plist-get row :id)) rows)))
@@ -214,7 +214,10 @@ running lobby touches no real state."
                                :shared :json-false)
                              (nth 2 rows))))
             ;; An artifact's conversation is reached from its artifact.
-            (setq dedicated '("fresh" "s3"))
+            (setf (mevedel-session-dedicated-artifact
+                   (buffer-local-value 'mevedel--session live-buffer))
+                  "board")
+            (plist-put s3 :dedicated-artifact "board")
             (should (equal '("s2")
                            (mapcar (lambda (row) (plist-get row :id))
                                    (mevedel-collaboration-lobby--rows 'workspace))))))
@@ -250,7 +253,6 @@ running lobby touches no real state."
                         (mevedel-collaboration-lobby-test--session "s1")))
           (cl-letf (((symbol-function 'mevedel--workspace-sessions)
                      (lambda (_workspace) `(("one" . ,live))))
-                    ((symbol-function 'mevedel-artifact-store-dedicated-ids) #'ignore)
                     ((symbol-function
                       'mevedel-session-persistence-list-sessions)
                      (lambda (_workspace &optional _cached)
@@ -347,7 +349,6 @@ running lobby touches no real state."
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport peer frame)
                        (push (cons peer frame) sent) t))
-                    ((symbol-function 'mevedel-artifact-store-dedicated-ids) #'ignore)
                     ((symbol-function 'mevedel--workspace-sessions)
                      (lambda (_workspace) `(("draw" . ,live))))
                     ((symbol-function

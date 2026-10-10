@@ -25,7 +25,7 @@
           (old (cl-loop for (key value) on (mevedel-session-codec-serialize session) by #'cddr
                         unless (or (memq key '(:recovery-issues :pending-follow-ups :pending-steering
                                                                 :pending-input-next-id :pending-input-paused :pending-input-failure-paused
-                                                                :attached-artifacts))
+                                                                :attached-artifacts :dedicated-artifact))
                                    (and (equal ,version "v0.5.6") (eq key :external-conversations)))
                         append (list key value)))
           (head ".publications/generation-bbbbbbbbbbbbbbbbbbbb/manifest.el")
@@ -71,7 +71,7 @@
                      :turns-run 1 :plan-reference nil :created-at "created" :updated-at "updated")))
     (dolist (key '(:external-conversations :recovery-issues :pending-follow-ups :pending-steering
                                            :pending-input-next-id :pending-input-paused :pending-input-failure-paused
-                                           :attached-artifacts))
+                                           :attached-artifacts :dedicated-artifact))
       (cl-remf data key))
     (setq data (plist-put (plist-put data :version "v0.5.6") :goal goal))
     (let ((restored (mevedel-session-codec--goal-from-plist
@@ -120,11 +120,14 @@
   (let ((data (test-mevedel-session-persistence--complete-sidecar
                '(:version "v0.5.10" :pending-input-next-id 4))))
     (cl-remf data :attached-artifacts)
+    (cl-remf data :dedicated-artifact)
     (let ((converted (mevedel-migrate-session--sidecar data)))
       (should (equal "v0.5.11" (plist-get converted :version)))
       (should (= 4 (plist-get converted :pending-input-next-id)))
       (should (plist-member converted :attached-artifacts))
       (should-not (plist-get converted :attached-artifacts))
+      (should (plist-member converted :dedicated-artifact))
+      (should-not (plist-get converted :dedicated-artifact))
       (should-error (mevedel-migrate-session--sidecar
                      (plist-put (copy-tree data) :attached-artifacts '("x"))))))
 

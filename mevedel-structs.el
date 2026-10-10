@@ -317,7 +317,11 @@ workspace."
   ;; The session-owned current `mevedel-goal', or nil.
   goal
   ;; Ids of the workspace store artifacts this session is attached to.
-  attached-artifacts)
+  attached-artifacts
+  ;; Id of the artifact whose own conversation this session is, or nil.  The
+  ;; artifact's metadata names the session back; only when both agree is the
+  ;; session hidden from lists, kept from expiry and deleted with it.
+  dedicated-artifact)
 
 (defun mevedel-session-authority-mode-for-workspace (workspace)
   "Return the durable authority mode required by WORKSPACE.

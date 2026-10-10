@@ -306,10 +306,18 @@
                  (id (mevedel-session-session-id session)))
             (should (equal "Artifact flow" (mevedel-session-name session)))
             (should (equal '("flow") (mevedel-session-attached-artifacts session)))
-            (should (equal (list id) (mevedel-artifact-store-dedicated-ids workspace)))
+            (should (equal "flow" (mevedel-session-dedicated-artifact session)))
+            (should (mevedel-artifact-store-dedicated-p workspace id "flow"))
             (should (file-exists-p (mevedel-session-artifacts-sidecar-path
                                     (mevedel-session-save-path session))))
             (should (eq buffer (mevedel-artifact-store-conversation workspace "flow")))
+            ;; A copy made outside mevedel names the same conversation;
+            ;; deleting it leaves that conversation to its own artifact.
+            (copy-directory (file-name-concat store "flow") (file-name-concat store "copy"))
+            (mevedel-artifact-store-delete workspace "copy")
+            (should-not (file-exists-p (file-name-concat store "copy")))
+            (should (buffer-live-p buffer))
+            (should (mevedel-artifact-store-dedicated-p workspace id "flow"))
             ;; A running turn keeps its artifact.
             (let (failure)
               (cl-letf (((symbol-function 'mevedel-turn-busy-p) (lambda (&rest _) t)))

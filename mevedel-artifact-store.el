@@ -68,6 +68,9 @@
 (declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
 (autoload 'mevedel-session-persistence-delete "mevedel-session-persistence")
+(declare-function mevedel-session-persistence-list-sessions
+                  "mevedel-session-persistence" (workspace &optional cached))
+(autoload 'mevedel-session-persistence-list-sessions "mevedel-session-persistence")
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 (autoload 'mevedel-turn-busy-p "mevedel-turn")
 (defvar mevedel-collaboration-stop-reason)
@@ -347,7 +350,8 @@ ended, unless a turn is still running there.  One that cannot be deleted
 yet -- held by another client, or pinned by pending journal capture --
 stays as an ordinary session and expires like one."
   (when-let* ((session-id (plist-get (mevedel-artifact-store-meta workspace id)
-                                     :dedicated-session)))
+                                     :dedicated-session))
+              ((mevedel-artifact-store--conversation-agrees-p workspace session-id id)))
     (when-let* ((buffer (mevedel-artifact-store--live-buffer workspace session-id)))
       (when (mevedel-turn-busy-p buffer)
         (error "The conversation of %s is still working; stop it first" id))
@@ -413,12 +417,28 @@ otherwise the next session save carries the attachment."
      meta)
     meta))
 
-(defun mevedel-artifact-store-dedicated-ids (workspace)
-  "Return the session ids dedicated to WORKSPACE's artifacts."
-  (delq nil (mapcar (lambda (id)
-                      (plist-get (mevedel-artifact-store-meta workspace id)
-                                 :dedicated-session))
-                    (mevedel-artifact-store-ids workspace))))
+(defun mevedel-artifact-store-dedicated-p (workspace session-id id)
+  "Return non-nil when SESSION-ID is the conversation of WORKSPACE's artifact ID.
+ID is what the session records as its artifact; the artifact must name the
+session back, so a copied `meta.el' or a deleted artifact does not make
+another session its conversation."
+  (and (mevedel-artifact-store-id-p id)
+       (equal session-id
+              (plist-get (ignore-errors (mevedel-artifact-store-meta workspace id))
+                         :dedicated-session))))
+
+(defun mevedel-artifact-store--conversation-agrees-p (workspace session-id id)
+  "Return non-nil when session SESSION-ID records WORKSPACE's artifact ID.
+A session that does not, such as one a copied `meta.el' names, is never
+deleted with ID."
+  (if-let* ((buffer (mevedel-artifact-store--live-buffer workspace session-id)))
+      (equal id (mevedel-session-dedicated-artifact
+                 (buffer-local-value 'mevedel--session buffer)))
+    (cl-some (lambda (entry)
+               (let ((summary (plist-get entry :summary)))
+                 (and (equal session-id (plist-get summary :session-id))
+                      (equal id (plist-get summary :dedicated-artifact)))))
+             (mevedel-session-persistence-list-sessions workspace))))
 
 (defun mevedel-artifact-store--live-buffer (workspace session-id)
   "Return the live root data buffer of WORKSPACE's SESSION-ID, or nil."
@@ -446,6 +466,7 @@ before anyone has written in it."
         (let* ((buffer (mevedel--chat-buffer nil t workspace))
                (session (buffer-local-value 'mevedel--session buffer)))
           (mevedel--ensure-chat-preset buffer)
+          (setf (mevedel-session-dedicated-artifact session) id)
           (mevedel-artifact-store-attach session id)
           (mevedel-session-artifacts-save session buffer nil t)
           (mevedel-session-naming-rename session buffer (format "Artifact %s" id))
