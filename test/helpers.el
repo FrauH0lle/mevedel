@@ -360,6 +360,7 @@ connection."
   (dolist (timer (append timer-list timer-idle-list))
     (when (or (memq (timer--function timer)
                     '(mevedel-session-durability-lease-renew
+                      mevedel-artifact-store--announce-content
                       mevedel-session-persistence--checkpoint-tick
                       mevedel-transport-run-when-idle
                       mevedel-transport--retry))
@@ -370,6 +371,8 @@ connection."
                    (let ((view (car (timer--args timer))))
                      (and (bufferp view) (not (buffer-live-p view))))))
       (cancel-timer timer)))
+  (when (boundp 'mevedel-artifact-store--content-changes)
+    (clrhash mevedel-artifact-store--content-changes))
   (when (fboundp 'mevedel-session-persistence-stop-checkpoints)
     (mevedel-session-persistence-stop-checkpoints))
   (when (fboundp 'mevedel-transport-cancel-pending)

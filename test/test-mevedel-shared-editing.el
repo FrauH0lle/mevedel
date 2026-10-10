@@ -182,20 +182,33 @@
        workspace '(:action "create" :id "board" :kind "whiteboard"
                    :title "First" :actor "Alice" :opId "one"))
       (should (= 1 observed))
-      (let ((state (mevedel-shared-editing--read workspace "board")))
+      (let ((state (mevedel-shared-editing--read workspace "board"))
+            timer)
         (dotimes (step 2)
           (mevedel-shared-editing--commit
-           workspace (plist-put (copy-sequence state) :revision (+ 2 step)))))
-      (should (= 1 observed))
-      ;; The metadata itself is current at once.
-      (should (= 3 (plist-get (mevedel-artifact-store-meta workspace "board") :revision)))
-      (let ((timer (gethash (mevedel-workspace-root workspace)
-                            mevedel-artifact-store--content-changes)))
+           workspace (plist-put (copy-sequence state) :revision (+ 2 step))))
+        (should (= 1 observed))
+        ;; The metadata itself is current at once.
+        (should (= 3 (plist-get (mevedel-artifact-store-meta workspace "board") :revision)))
+        (setq timer (gethash (mevedel-workspace-root workspace)
+                             mevedel-artifact-store--content-changes))
         (should (timerp timer))
         (cancel-timer timer)
-        (funcall (timer--function timer)))
-      (should (= 2 observed))
-      (should (= 0 (hash-table-count mevedel-artifact-store--content-changes)))))
+        (apply (timer--function timer) (timer--args timer))
+        (should (= 2 observed))
+        (should (= 0 (hash-table-count mevedel-artifact-store--content-changes)))
+        ;; A title change announces at once and carries pending content.
+        (mevedel-shared-editing--commit
+         workspace (plist-put (copy-sequence state) :revision 4))
+        (setq timer (gethash (mevedel-workspace-root workspace)
+                             mevedel-artifact-store--content-changes))
+        (mevedel-shared-editing--commit
+         workspace (plist-put (plist-put (copy-sequence state) :revision 5) :title "New"))
+        (should (= 3 observed))
+        (should-not (memq timer timer-list))
+        ;; A held timer that fires anyway announces nothing twice.
+        (apply (timer--function timer) (timer--args timer))
+        (should (= 3 observed)))))
 
   :doc "Another Emacs's item is read-only here"
   (mevedel-shared-editing-test--with-workspace

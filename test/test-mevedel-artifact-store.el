@@ -50,19 +50,21 @@
   ,test
   (test)
   :doc "nested mutations notify once after completion, including partial failure"
-  (let (seen
+  (let ((one (mevedel-workspace--create :type 'file :id "one" :root "/one/"))
+        (two (mevedel-workspace--create :type 'file :id "two" :root "/two/"))
+        seen
         (mevedel-artifact-store--pending-changes nil))
     (let ((mevedel-artifact-store-changed-functions
            (list (lambda (workspace) (push workspace seen)))))
       (should-error
        (mevedel-artifact-store--with-changes
-         (mevedel-artifact-store--changed 'one)
+         (mevedel-artifact-store--changed one)
          (mevedel-artifact-store--with-changes
-           (mevedel-artifact-store--changed 'one)
-           (mevedel-artifact-store--changed 'two))
+           (mevedel-artifact-store--changed one)
+           (mevedel-artifact-store--changed two))
          (should-not seen)
          (error "Partial mutation")))
-      (should (equal '(one two) seen)))))
+      (should (equal (list one two) seen)))))
 
 (mevedel-deftest mevedel-artifact-store-directory ()
   ,test
@@ -615,7 +617,8 @@
   ,test
   (test)
   :doc "attaches once, keeps order, writes the sidecar only with a buffer, and announces it"
-  (let* ((session (mevedel-session--create :workspace 'workspace))
+  (let* ((workspace (mevedel-workspace--create :type 'file :id "w" :root "/w/"))
+         (session (mevedel-session--create :workspace workspace))
          changed written
          (mevedel-artifact-store-changed-functions
           (list (lambda (workspace) (push workspace changed)))))
@@ -626,7 +629,7 @@
       (mevedel-artifact-store-attach session "a" 'buffer))
     (should (equal '("a" "b") (mevedel-session-attached-artifacts session)))
     (should (equal (list (list session 'buffer)) written))
-    (should (equal '(workspace workspace) changed))))
+    (should (equal (list workspace workspace) changed))))
 
 (mevedel-deftest mevedel-artifact-store--changed ()
   ,test
