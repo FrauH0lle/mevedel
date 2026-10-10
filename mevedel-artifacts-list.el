@@ -34,7 +34,7 @@
 (declare-function mevedel-artifact-store-list
                   "mevedel-artifact-store" (workspace))
 (declare-function mevedel-artifact-store-restore-version
-                  "mevedel-artifact-store" (workspace id n &optional session-id))
+                  "mevedel-artifact-store" (workspace id n &optional session-id actor callback))
 (declare-function mevedel-artifact-store-version-path
                   "mevedel-artifact-store" (workspace id n))
 (declare-function mevedel-artifact-store-versions

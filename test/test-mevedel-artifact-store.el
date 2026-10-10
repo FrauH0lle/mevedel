@@ -197,7 +197,27 @@
       (should (equal "s2" (plist-get (car (last (mevedel-artifact-store-versions
                                                   workspace "a")))
                                      :session)))
-      (should-error (mevedel-artifact-store-restore-version workspace "a" 9)))))
+      (should-error (mevedel-artifact-store-restore-version workspace "a" 9))))
+
+  :doc "restores a whiteboard as ACTOR's edit, then versions it and reports"
+  (mevedel-artifact-store-test--with-workspace
+    (make-directory (file-name-concat store "board") t)
+    (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+    (let (edits saved outcomes)
+      (cl-letf (((symbol-function 'mevedel-shared-editing-restore)
+                 (lambda (_workspace id n actor callback)
+                   (push (list id n actor) edits)
+                   (funcall callback (if (= n 1) '(:result t) '(:error "Busy")))))
+                ((symbol-function 'mevedel-shared-editing-save-version)
+                 (lambda (_workspace id session-id) (push (list id session-id) saved) 2)))
+        (should-not (mevedel-artifact-store-restore-version
+                     workspace "board" 1 "s2" "Guest: Ann"
+                     (lambda (failure) (push failure outcomes))))
+        (mevedel-artifact-store-restore-version
+         workspace "board" 2 "s2" nil (lambda (failure) (push failure outcomes))))
+      (should (equal '(("board" 2 "Host") ("board" 1 "Guest: Ann")) edits))
+      (should (equal '(("board" "s2")) saved))
+      (should (equal '("Busy" nil) outcomes)))))
 
 (mevedel-deftest mevedel-artifact-store-duplicate ()
   ,test
