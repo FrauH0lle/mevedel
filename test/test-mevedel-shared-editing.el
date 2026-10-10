@@ -96,7 +96,8 @@
       (should (file-exists-p (file-name-concat root ".mevedel/artifacts/board1/state.json")))
       (should (equal '(:kind whiteboard :title "Architecture" :file "state.json")
                      (cl-subseq (mevedel-artifact-store-meta workspace "board1") 0 6)))
-      (should (eq 'owned (mevedel-artifact-lease-status workspace "board1")))
+      (should (gethash (mevedel-artifact-lease-directory workspace "board1")
+                       mevedel-artifact-lease--held))
       (should (equal '("board1") (mevedel-shared-editing-ids workspace)))
       (should (equal "Architecture"
                      (plist-get (car (mevedel-shared-editing-list workspace)) :title)))
@@ -174,20 +175,18 @@
 (mevedel-deftest mevedel-shared-editing--drain
   ()
   ,test (test)
-  :doc "A takeover asks only when the caller could; refusing settles the job"
+  :doc "The queue never asks to take an item over; a refusal settles the job"
   (mevedel-shared-editing-test--with-workspace
     (cl-letf (((symbol-function 'mevedel-artifact-lease-ensure)
-               (lambda (&rest _) (y-or-n-p "Take over? "))))
-      (let ((inhibit-interaction t) reply)
-        (mevedel-shared-editing-call
-         workspace '(:action "rename" :id "board" :title "X" :actor "Guest" :opId "a")
-         (lambda (value) (setq reply value)))
-        (let ((inhibit-interaction nil)
-              (deadline (+ (float-time) 5)))
-          (while (and (not reply) (< (float-time) deadline))
-            (accept-process-output nil 0.02)))
-        (should (string-match-p "decision in Emacs" (plist-get reply :error)))))
-    ;; A quit at the question settles the job and leaves the queue working.
+               (lambda (_workspace _id &optional ask)
+                 (should-not ask)
+                 (user-error "This needs a decision in Emacs on the host first"))))
+      (should (string-match-p "decision in Emacs"
+                              (plist-get (mevedel-shared-editing-test--call
+                                          workspace '(:action "rename" :id "board" :title "X"
+                                                      :actor "Guest" :opId "a"))
+                                         :error))))
+    ;; A quit during target I/O settles the job and leaves the queue working.
     (cl-letf (((symbol-function 'mevedel-artifact-lease-ensure)
                (lambda (&rest _) (signal 'quit nil))))
       (should (equal "Editing operation cancelled"

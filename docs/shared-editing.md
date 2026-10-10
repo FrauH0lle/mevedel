@@ -575,9 +575,14 @@ After `mevedel-artifact-lease-idle-seconds` without edits, or when Emacs
 exits, the lease is released. Another Emacs that tries to edit a held item
 gets a read-only refusal and asks the holder to hand it over; the holder
 releases it to that Emacs at its next renewal once its queue for the item is
-idle. A lease whose holder stopped renewing is taken over after confirmation;
-a browser or lobby request, which cannot ask, is refused with the usual
-"needs a decision in Emacs" notice. Reading needs no lease.
+idle and nobody has edited the item there for 10 seconds, so a person still
+drawing keeps it. A lease whose holder stopped renewing is never taken over
+by an edit: the editing queue serves every item of the workspace and must not
+wait on a question, so every edit, from Emacs or a browser, is refused with
+"needs a decision in Emacs". `T` on the item's row in the artifacts cockpit
+takes it over after confirmation, or asks a live holder to hand it over.
+While the lease is held and was renewed within the last minute, an edit does
+not read the target clock again. Reading needs no lease.
 
 Versions follow the store's caps. A version keeps the item's content, title
 and comments but not its receipts or contribution history. One is recorded

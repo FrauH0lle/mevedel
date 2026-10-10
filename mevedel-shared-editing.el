@@ -218,14 +218,13 @@ The copy starts with the source's content and one version."
     (eq runtime (gethash (mevedel-workspace-root workspace)
                          mevedel-shared-editing--runtimes))))
 
-(defun mevedel-shared-editing--busy-item-p (workspace id)
-  "Return non-nil while WORKSPACE's runtime has work for item ID."
+(defun mevedel-shared-editing-item-busy-p (workspace id)
+  "Return non-nil while WORKSPACE's runtime has work for item ID.
+A held item lease is neither released nor handed over while it does."
   (when-let* ((runtime (gethash (mevedel-workspace-root workspace)
                                 mevedel-shared-editing--runtimes)))
     (cl-some (lambda (job) (and job (equal id (plist-get (plist-get job :args) :id))))
              (cons (plist-get runtime :active) (plist-get runtime :queue)))))
-
-(setq mevedel-artifact-lease-busy-function #'mevedel-shared-editing--busy-item-p)
 
 (cl-defun mevedel-shared-editing-stop (&optional runtime reason)
   "Stop RUNTIME, or every runtime, and settle its callbacks with REASON."
@@ -411,14 +410,11 @@ characters so UTF-8 encoding never splits a character between writes."
                 (unless (mevedel-shared-editing--in-job job (funcall authorize))
                   (error "Editing authority ended")))
               ;; Another Emacs editing the item leaves it read-only here.  A
-              ;; takeover asks only when the caller could have asked.
+              ;; takeover never asks from the queue: a question would block
+              ;; every item of the workspace, so it is a cockpit command.
               (when mutation
-                (condition-case nil
-                    (let ((inhibit-interaction (plist-get job :inhibit-interaction)))
-                      (mevedel-artifact-lease-ensure
-                       workspace (mevedel-shared-editing--valid-id id)))
-                  (inhibited-interaction
-                   (error "This needs a decision in Emacs on the host first"))))
+                (mevedel-artifact-lease-ensure
+                 workspace (mevedel-shared-editing--valid-id id)))
               (cond
                ((equal action "list")
                 (mevedel-shared-editing--finish
@@ -454,7 +450,7 @@ characters so UTF-8 encoding never splits a character between writes."
                 (plist-put runtime :timeout
                            (run-at-time
                             30 nil (lambda () (mevedel-shared-editing-stop runtime)))))))
-          ;; A quit at a takeover question must settle the job too, or the
+          ;; A quit during target I/O must settle the job too, or the
           ;; workspace queue would wait for it forever.
           ((error quit)
            (mevedel-shared-editing--finish
@@ -479,10 +475,7 @@ session makes them; CALLBACK runs in the buffer current now."
                             sum (or (plist-get job :bytes) 0)))
            (sequence (1+ (plist-get runtime :sequence)))
            (job (list :args args :callback callback :buffer (current-buffer)
-                      :authorize authorize :commit commit :requestId sequence :bytes bytes
-                      ;; The queue runs from timers, after the caller's
-                      ;; binding is gone.
-                      :inhibit-interaction inhibit-interaction)))
+                      :authorize authorize :commit commit :requestId sequence :bytes bytes)))
       (when (> (+ bytes queued) (* 32 1024 1024))
         (error "Shared editing queue is full; wait for pending saves"))
       (plist-put runtime :sequence sequence)
