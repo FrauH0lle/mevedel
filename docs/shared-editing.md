@@ -564,7 +564,13 @@ metadata records without parsing the item's CRDT state or history.
 Emacs serializes operations per
 workspace in one queue, which every room and session of this Emacs shares,
 validates candidates in the helper, checks continuing authority, and commits
-before acknowledging Saved on host. Embedded images travel with their item's
+before acknowledging Saved on host. Consecutive queued edits of one item
+(updates, patches, inserts, renames and background changes) commit together:
+each is computed from the state the previous one left, and up to 16 are
+written by one commit, then acknowledged and announced in order. When an edit
+continuing such a batch fails, the batch commits on its own. Under several
+writers the commit, one fenced target program, otherwise made edits wait for
+each other's commits. Embedded images travel with their item's
 state. Ordinary read-only artifact addresses gain no new mutation capability.
 Requests and helper replies arriving during a remote file operation retain
 their continuations until the transport is idle, so TRAMP's temporary timer
