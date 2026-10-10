@@ -144,20 +144,37 @@ A new item gets its store metadata; a renamed one updates its title."
       (mevedel-artifact-store-update-meta
        workspace id :title (plist-get state :title)))))
 
-(defun mevedel-shared-editing--version-content (state)
+(defun mevedel-shared-editing--version-state (state)
   "Return STATE as a version keeps it: without receipts and history."
   (let ((state (copy-sequence state)))
     (cl-remf state :receipts)
     (cl-remf state :transactions)
-    (mevedel-shared-editing--json state)))
+    state))
 
 (defun mevedel-shared-editing-save-version (workspace id &optional session-id)
   "Record WORKSPACE's shared item ID as a new version and return its number.
-SESSION-ID names the session that edited it, if any."
+SESSION-ID names the session that edited it, if any.  The state this
+Emacs last committed serves while it still holds the item, so a large
+item's history is not read back."
   (mevedel-artifact-store-record-version
    workspace id session-id
-   (mevedel-shared-editing--version-content
-    (mevedel-shared-editing--read workspace id))))
+   (mevedel-shared-editing--json
+    (or (and (mevedel-artifact-lease-held-p workspace id)
+             (when-let* ((runtime (gethash (mevedel-workspace-root workspace)
+                                           mevedel-shared-editing--runtimes)))
+               (gethash id (plist-get runtime :committed))))
+        (mevedel-shared-editing--version-state
+         (mevedel-shared-editing--read workspace id))))))
+
+(defun mevedel-shared-editing-save-version-later (workspace id &optional session-id)
+  "Record WORKSPACE's shared item ID as a version through its editing queue.
+It follows any save in progress and waits while the store's connection is
+busy.  SESSION-ID names the session that edited it; a failure is a message."
+  (mevedel-shared-editing-call
+   workspace (list :action "version" :id id :session session-id)
+   (lambda (reply)
+     (when-let* ((failure (plist-get reply :error)))
+       (message "mevedel: no version of %s was saved: %s" id failure)))))
 
 (defun mevedel-shared-editing--op-id ()
   "Return a fresh operation identity."
@@ -205,7 +222,9 @@ The copy starts with the source's content and one version."
   "Return WORKSPACE's editing runtime, creating it on first use."
   (let ((key (mevedel-workspace-root workspace)))
     (or (gethash key mevedel-shared-editing--runtimes)
-        (puthash key (list :workspace workspace :queue nil :sequence 0)
+        (puthash key (list :workspace workspace :queue nil :sequence 0
+                           ;; Item id -> its last committed version state.
+                           :committed (make-hash-table :test #'equal))
                  mevedel-shared-editing--runtimes))))
 
 (defun mevedel-shared-editing--live-p (runtime)
@@ -292,6 +311,9 @@ A held item lease is neither released nor handed over while it does."
                        (when-let* ((state (plist-get reply :state)))
                          (let ((workspace (plist-get runtime :workspace)))
                            (mevedel-shared-editing--commit workspace state)
+                           (puthash (plist-get state :id)
+                                    (mevedel-shared-editing--version-state state)
+                                    (plist-get runtime :committed))
                            (mevedel-shared-editing--notify
                             workspace state (plist-get reply :result))))
                        (mevedel-shared-editing--finish runtime job reply))
@@ -404,7 +426,8 @@ characters so UTF-8 encoding never splits a character between writes."
               (let* ((args (copy-sequence (plist-get job :args)))
                      (action (plist-get args :action))
                      (id (plist-get args :id))
-                     (mutation (not (member action '("read" "view" "export" "list" "status" "library-view"))))
+                     (mutation (not (member action '("read" "view" "export" "list" "status" "library-view"
+                                                    "version"))))
                      ;; Target I/O runs timers and sentinels; one that stopped
                      ;; the runtime has settled this job already.
                      (current (lambda ()
@@ -427,6 +450,8 @@ characters so UTF-8 encoding never splits a character between writes."
                 ;; takeover never asks from the queue: a question would block
                 ;; every item of the workspace, so it is a cockpit command.
                 (when mutation
+                  ;; Until this job commits, the disk is the only truth.
+                  (remhash id (plist-get runtime :committed))
                   (mevedel-artifact-lease-ensure
                    workspace (mevedel-shared-editing--valid-id id)))
                 (funcall current)
@@ -434,6 +459,10 @@ characters so UTF-8 encoding never splits a character between writes."
                  ((equal action "list")
                   (mevedel-shared-editing--finish
                    runtime job (list :result (vconcat (mevedel-shared-editing-list workspace)))))
+                 ((equal action "version")
+                  (mevedel-shared-editing--finish
+                   runtime job (list :result (mevedel-shared-editing-save-version
+                                              workspace id (plist-get args :session)))))
                  ;; Deleting needs no helper; queued, it cannot overtake a save.
                  ((equal action "delete")
                   (mevedel-shared-editing--finish

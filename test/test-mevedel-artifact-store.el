@@ -181,6 +181,22 @@
       (should (equal '(3) (mapcar (lambda (row) (plist-get row :n))
                                   (mevedel-artifact-store-versions workspace "a")))))))
 
+(mevedel-deftest mevedel-artifact-store-save-version ()
+  ,test
+  (test)
+  :doc "versions a file at once and a whiteboard through its editing queue"
+  (mevedel-artifact-store-test--with-workspace
+    (mevedel-artifact-store-test--write store "page/index.html" "x")
+    (mevedel-artifact-store-create-meta workspace "page" "index.html")
+    (make-directory (file-name-concat store "board") t)
+    (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+    (let (queued)
+      (cl-letf (((symbol-function 'mevedel-shared-editing-save-version-later)
+                 (lambda (&rest args) (push args queued))))
+        (should (= 1 (mevedel-artifact-store-save-version workspace "page" "s1")))
+        (should-not (mevedel-artifact-store-save-version workspace "board" "s1")))
+      (should (equal (list (list workspace "board" "s1")) queued)))))
+
 (mevedel-deftest mevedel-artifact-store-restore-version ()
   ,test
   (test)

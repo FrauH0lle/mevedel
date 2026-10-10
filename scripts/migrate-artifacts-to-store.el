@@ -139,7 +139,8 @@ the one already moved.  Return the store id."
            workspace id "state.json" (intern (plist-get state :kind)) (plist-get state :title))
           (mevedel-artifact-store-update-meta workspace id :migrated-from origin)
           (mevedel-artifact-store-record-version
-           workspace id session-id (mevedel-shared-editing--version-content state))
+           workspace id session-id (mevedel-shared-editing--json
+                                       (mevedel-shared-editing--version-state state)))
           id))))
 
 (defun mevedel-migrate-artifacts-session (workspace directory)

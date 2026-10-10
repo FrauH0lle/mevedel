@@ -345,7 +345,8 @@ ApplyPatch do not accept `shared://`. Views are computed by the workspace's
 editing host from committed state, without a browser.
 
 Creating or editing an item attaches it to the model's session. When a turn
-that edited items settles, each of them gets a version in the store.
+that created or changed items settles, each of them gets a version in the
+store; an edit that changed nothing does not count.
 
 `SharedCreate` creates a named item and returns its address. `SharedEdit`
 applies patches, inserts library items, renames, sets a board's background,
@@ -586,7 +587,8 @@ not read the target clock again. Reading needs no lease.
 
 Versions follow the store's caps. A version keeps the item's content, title
 and comments but not its receipts or contribution history. One is recorded
-when a model turn that edited the item settles, and on **Save version** (the
+through the item's editing queue, after the saves before it, when a model
+turn that changed the item settles, and on **Save version** (the
 cockpit's `s`, or the store list in a room or the lobby). Restoring a version
 is one ordinary, attributed edit through the queue: lineage, comments and
 history stay, concurrent editors receive it as an update, and the restore can
