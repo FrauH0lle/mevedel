@@ -236,7 +236,8 @@ an artifact only by its record id, never by a filesystem path."
   "Per-segment records retained between projections of one live transcript.
 An entry is reused only while its source characters and text properties,
 the projection context, and every live lookup it made are unchanged, so a
-retained projection equals a full one."
+retained projection equals a full one.  A segment's projection may
+therefore read only its source text, that context and observed lookups."
   context tick bounds segments
   (entries (make-hash-table :test #'equal)))
 
@@ -257,8 +258,8 @@ that is not `equal' to the one it was projected from."
   (let ((session (bound-and-true-p mevedel--session)))
     (list session (and session (mevedel-session-save-path session))
           major-mode default-directory
-          ;; Tool renderers depend on transcript text and this state only.
-          (mevedel-view--session-render-state-fingerprint session))))
+          ;; Plan mode hides an unclosed proposed plan in a response.
+          (and session (mevedel-session-plan-mode session) t))))
 
 (defun mevedel-collaboration--source (from to)
   "Return the buffer's FROM..TO with snapshots of its property values."
@@ -274,21 +275,10 @@ that is not `equal' to the one it was projected from."
 
 (defun mevedel-collaboration--source-unchanged-p (from source)
   "Return non-nil when the buffer at FROM still holds SOURCE.
-Compare characters, then text properties interval by interval."
-  (let ((to (+ from (length source)))
-        (pos 0)
-        (end (length source)))
+Its characters and text properties, compared by value, must match."
+  (let ((to (+ from (length source))))
     (and (<= (point-min) from) (<= to (point-max))
-         (string= source (buffer-substring-no-properties from to))
-         (progn
-           (while (and pos (< pos end))
-             (let ((next (next-property-change pos source end)))
-               (setq pos (and (equal (text-properties-at pos source)
-                                     (text-properties-at (+ from pos)))
-                              (eql (+ from next)
-                                   (next-property-change (+ from pos) nil to))
-                              next))))
-           pos))))
+         (equal-including-properties source (buffer-substring from to)))))
 
 (defun mevedel-collaboration--projection-entry (cache key unchanged)
   "Return CACHE's entry for segment KEY while it remains valid.

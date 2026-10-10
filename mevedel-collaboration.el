@@ -94,6 +94,8 @@
                   "mevedel-collaboration-projection" (info pending))
 (declare-function mevedel-collaboration--project-records
                   "mevedel-collaboration-projection" (room))
+(declare-function mevedel-collaboration--projection-cache-create
+                  "mevedel-collaboration-projection" (&rest slots))
 (declare-function mevedel-collaboration--record
                   "mevedel-collaboration-projection" (id kind &rest fields))
 (declare-function mevedel-collaboration--record-without-revision
@@ -119,6 +121,7 @@
 (autoload 'mevedel-collaboration--json-record "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--pending-tool-match "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--project-records "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--projection-cache-create "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--record "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--record-without-revision "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--reuse-record-ids "mevedel-collaboration-projection")
@@ -298,7 +301,8 @@ When nil, full links are capped at prompting and interrupting."
 A publish blocks the one Emacs thread every room shares, and its cost
 grows with the transcript.  Pacing streamed updates by that cost keeps a
 streaming room near a fifth of the thread, so edits, cursors and joins in
-every room still run between publishes.")
+every room still run between publishes.  One slow publish, such as a
+garbage collection, delays the next by at most a second.")
 (defconst mevedel-collaboration--max-prompt-bytes (* 256 1024))
 (defconst mevedel-collaboration--max-guest-name-chars 32)
 (defconst mevedel-collaboration--max-prompt-attachments 3)
@@ -835,8 +839,8 @@ request or prompt transaction."
           (plist-put room :publish-timer
                      (mevedel-transport-run-at-time
                       (max mevedel-collaboration--publish-delay
-                           (* mevedel-collaboration--publish-cost-factor
-                              (or (plist-get room :publish-cost) 0)))
+                           (min 1.0 (* mevedel-collaboration--publish-cost-factor
+                                       (or (plist-get room :publish-cost) 0))))
                       #'mevedel-collaboration--publish-timer
                       (plist-get room :data-buffer))))))
 
@@ -934,8 +938,10 @@ returning the live room."
                (key (mevedel-collaboration--random-bytes 32))
                (write-token (mevedel-collaboration--random-bytes 16))
                (owner-token (mevedel-collaboration--random-bytes 16))
+               ;; The room keeps the projection its first publish reuses.
+               (projection-cache (mevedel-collaboration--projection-cache-create))
                (records (mevedel-collaboration--canonical-records
-                         data-buffer)))
+                         data-buffer nil nil projection-cache)))
     (unless (require 'websocket nil t)
       (user-error "Collaboration requires the 'websocket' package; install it first"))
     (let (transport)
@@ -968,6 +974,7 @@ returning the live room."
                          :write-token write-token
                          :owner-token owner-token
                          :records records
+                         :projection-cache projection-cache
                          :queue nil
                          :pending-tools nil
                          :tool-call-occurrences

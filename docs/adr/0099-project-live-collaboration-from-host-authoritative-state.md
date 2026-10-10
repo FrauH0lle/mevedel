@@ -193,7 +193,8 @@ The following changes belong to ADR 0099 unless another ID is named.
   1,001 records in 12 ms instead of 63 ms on the desktop, with the same result.
   The whole-transcript segment scan remains because a later closing control
   can reclassify earlier text, so coalesced publishes are also paced by their
-  measured cost.
+  measured cost, capped at one second so a single garbage-collection pause
+  does not hold the stream for several seconds.
 - **Combined skill selection, 2026-09-20:** the single armed chip and automatic
   menu dismissal prevented composing several skills on one message. The menu
   now stays open, selected skills travel as an explicit name array, and the

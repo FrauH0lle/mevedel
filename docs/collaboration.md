@@ -563,14 +563,16 @@ never raw hidden audit or internal render data or arbitrary mutation commands.
 Each projection builds one tool-boundary index, avoiding repeated searches
 through historical tool results as new text arrives. A room also retains each
 transcript segment's records between publishes. A segment is reprojected only
-when its characters or text properties, the session context, or a live input
-it read -- a running execution, pending completion evidence, an artifact's file
-stat, the tool registry -- has changed, so the result always equals a full
-projection. Segment classification still scans the whole transcript: while a
+when its characters or text properties, the session context including plan
+mode, or a live input it read -- a running execution, pending completion
+evidence, an artifact's file stat, the tool registry -- has changed, so the
+result always equals a full projection. A room's first projection fills this
+cache. Segment classification still scans the whole transcript: while a
 reply streams, a publish costs about a fifth of a full projection, but still
 grows with transcript length. Streamed updates therefore coalesce for at least
-0.1 s and at least four times the previous publish's cost, keeping a streaming
-room to about a fifth of the Emacs thread that every room shares.
+0.1 s and four times the previous publish's cost, up to one second, keeping a
+streaming room to about a fifth of the Emacs thread that every room shares
+without letting one slow publish stall the stream.
 A tool record keeps
 one stable identity from running through its settled canonical result. A
 guest prompt enters the ordinary pending-input queue as a queued follow-up;
