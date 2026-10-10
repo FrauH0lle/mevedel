@@ -193,8 +193,12 @@ current the commit reads it and retries.  Return the metadata's bytes."
                         (mevedel-session-control-fs-program-value metadata)))))
          (meta (and bytes (car (read-from-string (decode-coding-string bytes 'utf-8-unix)))))
          (kind (intern (plist-get state :kind)))
-         (changed (or (not (equal (plist-get meta :title) (plist-get state :title)))
-                      (not (eq (plist-get meta :kind) kind))
+         ;; What listings show beyond size and time: they follow content
+         ;; changes with a delay.
+         (listed (or (not bytes)
+                     (not (equal (plist-get meta :title) (plist-get state :title)))
+                     (not (eq (plist-get meta :kind) kind))))
+         (changed (or listed
                       (not (equal (plist-get meta :revision) (plist-get state :revision))))))
     (unless bytes (mevedel-session-control-fs-make-directory directory t))
     (when changed
@@ -232,7 +236,9 @@ current the commit reads it and retries.  Return the metadata's bytes."
           (mevedel-session-control-fs-program-value (car results)))
         (dolist (result (cdr results))
           (mevedel-session-control-fs-program-value result))
-        (mevedel-artifact-store--changed workspace)
+        (if listed
+            (mevedel-artifact-store--changed workspace)
+          (mevedel-artifact-store--content-changed workspace))
         (or written bytes)))))
 
 (defun mevedel-shared-editing--version-state (state)

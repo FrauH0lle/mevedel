@@ -135,6 +135,27 @@ Live collaboration rooms follow the store through it.")
       (cl-pushnew workspace (cdr mevedel-artifact-store--pending-changes))
     (run-hook-with-args 'mevedel-artifact-store-changed-functions workspace)))
 
+(defconst mevedel-artifact-store--content-change-delay 2
+  "Seconds content-only changes of a workspace wait to be announced together.
+An edit reaches the item's viewers on its own; listings and artifact
+cards show only its size and time.  Announcing every save made each
+room reread every artifact's metadata and republish after each one.")
+
+(defvar mevedel-artifact-store--content-changes (make-hash-table :test #'equal)
+  "Pending content-change notification timers, by workspace root.")
+
+(defun mevedel-artifact-store--content-changed (workspace)
+  "Notify observers of a content-only change to WORKSPACE shortly.
+Further content changes until then share that notification."
+  (let ((root (mevedel-workspace-root workspace)))
+    (unless (gethash root mevedel-artifact-store--content-changes)
+      (puthash root
+               (run-at-time mevedel-artifact-store--content-change-delay nil
+                            (lambda ()
+                              (remhash root mevedel-artifact-store--content-changes)
+                              (mevedel-artifact-store--changed workspace)))
+               mevedel-artifact-store--content-changes))))
+
 (defun mevedel-artifact-store-directory (workspace)
   "Return WORKSPACE's artifact store directory, with trailing slash."
   (file-name-as-directory

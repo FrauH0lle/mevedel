@@ -172,6 +172,31 @@
                    :actor "Alice" :opId "two"))
       (should (equal '(("Later" "Later") ("First" "First")) observed))))
 
+  :doc "Content-only commits reach store observers together, after a delay"
+  (mevedel-shared-editing-test--with-workspace
+    (let* ((observed 0)
+           (mevedel-artifact-store--content-changes (make-hash-table :test #'equal))
+           (mevedel-artifact-store-changed-functions
+            (list (lambda (_changed) (cl-incf observed)))))
+      (mevedel-shared-editing-test--call
+       workspace '(:action "create" :id "board" :kind "whiteboard"
+                   :title "First" :actor "Alice" :opId "one"))
+      (should (= 1 observed))
+      (let ((state (mevedel-shared-editing--read workspace "board")))
+        (dotimes (step 2)
+          (mevedel-shared-editing--commit
+           workspace (plist-put (copy-sequence state) :revision (+ 2 step)))))
+      (should (= 1 observed))
+      ;; The metadata itself is current at once.
+      (should (= 3 (plist-get (mevedel-artifact-store-meta workspace "board") :revision)))
+      (let ((timer (gethash (mevedel-workspace-root workspace)
+                            mevedel-artifact-store--content-changes)))
+        (should (timerp timer))
+        (cancel-timer timer)
+        (funcall (timer--function timer)))
+      (should (= 2 observed))
+      (should (= 0 (hash-table-count mevedel-artifact-store--content-changes)))))
+
   :doc "Another Emacs's item is read-only here"
   (mevedel-shared-editing-test--with-workspace
     (should-not (plist-get (mevedel-shared-editing-test--call
