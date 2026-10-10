@@ -3,7 +3,9 @@
 ;;; Commentary:
 
 ;; Reconstructs the allowlisted collaboration records from the authoritative
-;; data buffer and tracks live tool records until canonical settlement.
+;; data buffer and tracks live tool records until canonical settlement.  A
+;; room retains each segment's records between publishes and reprojects only
+;; the segments whose source or live inputs changed.
 
 ;;; Code:
 
@@ -185,14 +187,10 @@ The canonical transcript parser exposes no stable hook identity for a growing
 response.  Matching the ordered role streams lets a replacement retain its
 room-local ID without using a numeric buffer position or a guessed tool-call
 key."
-  (let ((by-kind (make-hash-table :test #'eq)))
-    (dolist (record old)
-      (let ((kind (plist-get record :kind)))
-        (puthash kind
-                 (append (gethash kind by-kind)
-                         (unless (plist-get record :pending)
-                           (list record)))
-                 by-kind)))
+  (let ((by-kind (make-hash-table :test #'equal)))
+    (dolist (record (reverse old))
+      (unless (plist-get record :pending)
+        (push record (gethash (plist-get record :kind) by-kind))))
     (mapcar
      (lambda (record)
        (if (plist-get record :identity-fixed)
@@ -227,6 +225,85 @@ an artifact only by its record id, never by a filesystem path."
                     (plist-get record key))
               out)))
     (nreverse out)))
+
+
+;;
+;;; Retained projection
+
+(cl-defstruct (mevedel-collaboration--projection-cache
+               (:constructor mevedel-collaboration--projection-cache-create)
+               (:copier nil))
+  "Per-segment records retained between projections of one live transcript.
+An entry is reused only while its source characters and text properties,
+the projection context, and every live lookup it made are unchanged, so a
+retained projection equals a full one."
+  context tick bounds segments
+  (entries (make-hash-table :test #'equal)))
+
+(defvar mevedel-collaboration--observed nil
+  "Cell whose car collects one segment's live lookups, or nil.")
+
+(defun mevedel-collaboration--observe (function &rest args)
+  "Return FUNCTION applied to ARGS, recorded as a live projection input.
+A retained segment is reprojected once a recorded lookup returns a value
+that is not `equal' to the one it was projected from."
+  (let ((value (apply function args)))
+    (when mevedel-collaboration--observed
+      (push (list function args value) (car mevedel-collaboration--observed)))
+    value))
+
+(defun mevedel-collaboration--projection-context ()
+  "Return the current buffer's non-text inputs shared by all records."
+  (let ((session (bound-and-true-p mevedel--session)))
+    (list session (and session (mevedel-session-save-path session))
+          major-mode default-directory
+          ;; Tool renderers depend on transcript text and this state only.
+          (mevedel-view--session-render-state-fingerprint session))))
+
+(defun mevedel-collaboration--source (from to)
+  "Return the buffer's FROM..TO with snapshots of its property values."
+  (let* ((source (buffer-substring from to))
+         (end (length source))
+         (pos 0))
+    (while (< pos end)
+      (let ((next (next-property-change pos source end)))
+        (set-text-properties
+         pos next (copy-tree (text-properties-at pos source)) source)
+        (setq pos next)))
+    source))
+
+(defun mevedel-collaboration--source-unchanged-p (from source)
+  "Return non-nil when the buffer at FROM still holds SOURCE.
+Compare characters, then text properties interval by interval."
+  (let ((to (+ from (length source)))
+        (pos 0)
+        (end (length source)))
+    (and (<= (point-min) from) (<= to (point-max))
+         (string= source (buffer-substring-no-properties from to))
+         (progn
+           (while (and pos (< pos end))
+             (let ((next (next-property-change pos source end)))
+               (setq pos (and (equal (text-properties-at pos source)
+                                     (text-properties-at (+ from pos)))
+                              (eql (+ from next)
+                                   (next-property-change (+ from pos) nil to))
+                              next))))
+           pos))))
+
+(defun mevedel-collaboration--projection-entry (cache key unchanged)
+  "Return CACHE's entry for segment KEY while it remains valid.
+UNCHANGED means the buffer was not modified since CACHE was last filled."
+  (when-let* ((entry (and cache
+                          (gethash key (mevedel-collaboration--projection-cache-entries
+                                        cache))))
+              ((or unchanged
+                   (mevedel-collaboration--source-unchanged-p
+                    (plist-get entry :from) (plist-get entry :source))))
+              ((cl-every (lambda (lookup)
+                           (equal (apply (car lookup) (cadr lookup))
+                                  (nth 2 lookup)))
+                         (plist-get entry :live))))
+    entry))
 
 
 ;;
@@ -277,6 +354,14 @@ An empty string is meaningful: a completed command may produce no output."
              (stringp (plist-get data :execution-output)))
     (plist-get data :execution-output)))
 
+(defun mevedel-collaboration--live-execution (id)
+  "Return the current session's execution record for ID, or nil."
+  (and mevedel--session
+       (fboundp 'mevedel-execution-list-user)
+       (cl-find id (mevedel-execution-list-user mevedel--session)
+                :key (lambda (record) (plist-get record :execution-id))
+                :test #'equal)))
+
 (defun mevedel-collaboration--live-bash-data (parsed)
   "Return PARSED with the owner's live Bash tail when its process is running.
 The snapshot includes cumulative preview truncation, distinct from per-poll
@@ -284,12 +369,8 @@ omissions.  Terminal render data replaces it once the command settles.  No
 polling row becomes a second output owner."
   (let* ((data (plist-get parsed :render-data))
          (id (plist-get data :execution-id))
-         (live (and id mevedel--session
-                    (fboundp 'mevedel-execution-list-user)
-                    (cl-find id (mevedel-execution-list-user mevedel--session)
-                             :key (lambda (record)
-                                    (plist-get record :execution-id))
-                             :test #'equal))))
+         (live (and id (mevedel-collaboration--observe
+                        #'mevedel-collaboration--live-execution id))))
     (if (and live (eq (plist-get live :state) 'running))
         (let ((copy (copy-sequence parsed))
               (data (copy-sequence data)))
@@ -359,9 +440,11 @@ Keep the raw parsed model value and transcript metadata unchanged."
                                   (or (and (hash-table-p completions)
                                            (gethash (plist-get child :id) completions))
                                       (and (buffer-live-p completion-buffer)
-                                           (mevedel-execution-transcript-pending-render-data
+                                           (mevedel-collaboration--observe
+                                            #'mevedel-execution-transcript-pending-render-data
                                             completion-buffer (plist-get child :id)))
-                                      (mevedel-execution-transcript-pending-render-data
+                                      (mevedel-collaboration--observe
+                                       #'mevedel-execution-transcript-pending-render-data
                                        data-buffer (plist-get child :id)))))
                             (missing (and (equal (plist-get child :tool) "Bash")
                                           (not terminal)
@@ -437,7 +520,9 @@ are exported, with one shared text/structure budget across the entire tree."
                                      (eq (plist-get data :state) 'unknown)
                                      (plist-get direct :result))
                                 result))
-                    (tool (and (stringp name) (mevedel-tool-for-call name)))
+                    (tool (and (stringp name)
+                               (mevedel-collaboration--observe
+                                #'mevedel-tool-for-call name)))
                     (rendering
                      (or (and tool (mevedel-view--invoke-renderer tool data args result))
                          (mevedel-view--generic-tool-rendering name args result nil data)))
@@ -581,9 +666,11 @@ RENDER-END includes a following, separately classified hidden metadata block."
                                    (gethash (plist-get parsed :tool-use-id)
                                             completions))
                               (and (buffer-live-p completion-buffer)
-                                   (mevedel-execution-transcript-pending-render-data
+                                   (mevedel-collaboration--observe
+                                    #'mevedel-execution-transcript-pending-render-data
                                     completion-buffer (plist-get parsed :tool-use-id)))
-                              (mevedel-execution-transcript-pending-render-data
+                              (mevedel-collaboration--observe
+                               #'mevedel-execution-transcript-pending-render-data
                                data-buffer (plist-get parsed :tool-use-id)))))
            (parsed (if terminal
                        (plist-put (copy-sequence parsed) :render-data terminal)
@@ -606,7 +693,9 @@ RENDER-END includes a following, separately classified hidden metadata block."
                              (plist-get parsed :render-data)))
            (files (and (equal effective-name "ApplyPatch")
                        (equal (plist-get base :status) "completed")
-                       (mevedel-collaboration--artifact-fields
+                       ;; File sizes and presence are live inputs.
+                       (mevedel-collaboration--observe
+                        #'mevedel-collaboration--artifact-fields
                         effective-data)))
            (all-files (and (eq (plist-get effective-data :kind)
                                'patch)
@@ -881,30 +970,52 @@ mailboxes are not guest completion records."
                                   (plist-get facts :exit-code))))))
 
 (defun mevedel-collaboration--canonical-records
-    (data-buffer &optional completion-buffer completions)
+    (data-buffer &optional completion-buffer completions cache)
   "Return allowlisted records reconstructed from DATA-BUFFER.
 Records inside a directive turn carry that directive's id, and records
 inside a shared-item turn that item's id, so a viewer can filter the
 transcript to one discussion client-side; user records
 attributed to a collaboration guest carry that guest's name.
 COMPLETION-BUFFER and COMPLETIONS supply later terminal evidence for archived
-segments."
+segments.  CACHE, a `mevedel-collaboration--projection-cache' for a live
+transcript, retains each segment's records between calls; a segment is
+reprojected only when its source, the shared context, or a live lookup it
+made has changed.  The result is the same as without CACHE, and its records
+are fresh copies the caller may modify."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
-      (let ((mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
-            (ranges (mevedel-collaboration--directive-ranges))
-            ;; Item turns are ranges too; a malformed attribution leaves
-            ;; records in the main conversation instead of failing.
-            (items (ignore-errors (mevedel-shared-conversation-ranges)))
-            (segments (mevedel-transcript-segments (point-min) (point-max)))
-            (following-render-data (make-hash-table :test #'eql))
-            (breadcrumbs (mevedel-transcript-audit-buffer-spans
-                          'execution-breadcrumb))
-            (forwarded-executions (make-hash-table :test #'equal))
-            (prior-executions (and completions
-                                   (gethash :prior-executions completions)))
-            (prior-ready (and completions t))
-            records user-starts (occurrences (make-hash-table :test #'equal)))
+      (when (and cache (not (equal (mevedel-collaboration--projection-context)
+                                   (mevedel-collaboration--projection-cache-context
+                                    cache))))
+        (setf (mevedel-collaboration--projection-cache-context cache)
+              (mevedel-collaboration--projection-context)
+              (mevedel-collaboration--projection-cache-tick cache) nil
+              (mevedel-collaboration--projection-cache-entries cache)
+              (make-hash-table :test #'equal)))
+      (let* ((tick (buffer-modified-tick))
+             (bounds (cons (point-min) (point-max)))
+             (unchanged
+              (and cache
+                   (eql tick (mevedel-collaboration--projection-cache-tick cache))
+                   (equal bounds
+                          (mevedel-collaboration--projection-cache-bounds cache))))
+             (entries (and cache (make-hash-table :test #'equal)))
+             (mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
+             (ranges (mevedel-collaboration--directive-ranges))
+             ;; Item turns are ranges too; a malformed attribution leaves
+             ;; records in the main conversation instead of failing.
+             (items (ignore-errors (mevedel-shared-conversation-ranges)))
+             (segments (if unchanged
+                           (mevedel-collaboration--projection-cache-segments cache)
+                         (mevedel-transcript-segments (point-min) (point-max))))
+             (following-render-data (make-hash-table :test #'eql))
+             (breadcrumbs (mevedel-transcript-audit-buffer-spans
+                           'execution-breadcrumb))
+             (forwarded-executions (make-hash-table :test #'equal))
+             (prior-executions (and completions
+                                    (gethash :prior-executions completions)))
+             (prior-ready (and completions t))
+             records user-starts (occurrences (make-hash-table :test #'equal)))
         (cl-labels
             ((add-execution (completion scope)
                (when-let* ((owner (plist-get completion :owner))
@@ -938,7 +1049,49 @@ segments."
                            ((not (and prior-executions
                                       (gethash key prior-executions)))))
                  (puthash key t forwarded-executions)
-                 (push (mevedel-collaboration--scoped record scope) records))))
+                 (push (mevedel-collaboration--scoped record scope) records)))
+             (project-segment (segment render-end compute-value occurrence-key
+                                       compute-records)
+               ;; Return (VALUE . RECORDS) for SEGMENT.  COMPUTE-VALUE reads
+               ;; only buffer text and returns (VALUE FROM . TO), the source
+               ;; range it depends on, with a nil FROM when that range is
+               ;; open-ended.  OCCURRENCE-KEY names repeated identical
+               ;; values; COMPUTE-RECORDS builds records from the value and
+               ;; its occurrence, recording its live lookups.
+               (let* ((key (list (car segment) (cadr segment) (caddr segment)
+                                 render-end))
+                      (old (mevedel-collaboration--projection-entry
+                            cache key unchanged))
+                      (computed (unless old (funcall compute-value)))
+                      (value (if old (plist-get old :value) (car computed)))
+                      (occurrence-key (funcall occurrence-key value))
+                      (occurrence (when occurrence-key
+                                    (let ((count (gethash occurrence-key
+                                                          occurrences 0)))
+                                      (puthash occurrence-key (1+ count)
+                                               occurrences)
+                                      count)))
+                      (reuse (and old (eql occurrence
+                                           (plist-get old :occurrence))))
+                      (observed (list nil))
+                      (result (if reuse
+                                  (plist-get old :records)
+                                (let ((mevedel-collaboration--observed
+                                       (and cache observed)))
+                                  (funcall compute-records value occurrence))))
+                      (from (if old (plist-get old :from) (cadr computed))))
+                 (when (and entries from)
+                   (puthash key
+                            (list :value value :from from
+                                  :source (if old
+                                              (plist-get old :source)
+                                            (mevedel-collaboration--source
+                                             from (cddr computed)))
+                                  :occurrence occurrence :records result
+                                  :live (if reuse (plist-get old :live)
+                                          (car observed)))
+                            entries))
+                 (cons value result))))
         ;; On reload gptel classifies the hidden render-data block separately
         ;; from its preceding tool row.  Include it when parsing the row, but
         ;; leave the raw model-visible result and transcript segments intact.
@@ -954,72 +1107,111 @@ segments."
                              (mevedel-collaboration--scope-at
                               ranges items (plist-get span :start)))))
           (let ((scope (mevedel-collaboration--scope-at
-                        ranges items (cadr segment))))
+                        ranges items (cadr segment)))
+                (start (cadr segment))
+                (end (caddr segment)))
             (cond
              ((memq (car segment) '(user response))
               (let* ((userp (eq (car segment) 'user))
-                     (kind (if userp "user" "assistant"))
-                     (text (if userp
-                               (mevedel-collaboration--clean-user
-                                segment data-buffer)
-                             (mevedel-collaboration--clean-response
-                              (buffer-substring
-                               (cadr segment) (caddr segment))))))
-                (unless (string-empty-p text)
-                  (let* ((key (list kind text))
-                         (occurrence (gethash key occurrences 0)))
-                    (puthash key (1+ occurrence) occurrences)
-                    (push (apply
-                           #'mevedel-collaboration--record
-                           (mevedel-collaboration--stable-record-id
-                            kind text occurrence) kind
-                           :revision 0
-                           :text (mevedel-collaboration--truncate-bytes
-                                  text
-                                  mevedel-collaboration--max-record-text-bytes)
-                           scope)
-                          records)
-                    (when userp
-                      (push (cons (cadr segment) (car records))
-                            user-starts))))))
+                     (kind (if userp "user" "assistant")))
+                (dolist (record
+                         (cdr (project-segment
+                               segment nil
+                               (lambda ()
+                                 (cons (if userp
+                                           (mevedel-collaboration--clean-user
+                                            segment data-buffer)
+                                         (mevedel-collaboration--clean-response
+                                          (buffer-substring start end)))
+                                       (cons start end)))
+                               (lambda (text)
+                                 (unless (string-empty-p text) (list kind text)))
+                               (lambda (text occurrence)
+                                 (unless (string-empty-p text)
+                                   (list (mevedel-collaboration--record
+                                          (mevedel-collaboration--stable-record-id
+                                           kind text occurrence)
+                                          kind
+                                          :revision 0
+                                          :text (mevedel-collaboration--truncate-bytes
+                                                 text
+                                                 mevedel-collaboration--max-record-text-bytes))))))))
+                  (push (mevedel-collaboration--scoped
+                         (copy-sequence record) scope)
+                        records)
+                  (when userp
+                    (push (cons start (car records)) user-starts)))))
              ((memq (car segment) '(ignored render-data))
-              (let ((summary (cdr (mevedel-tool-render-data-extract
-                                   (buffer-substring
-                                    (cadr segment) (caddr segment))))))
-                (when (and (eq (plist-get summary :kind) 'request-summary)
-                           (eq (plist-get summary :outcome) 'error))
-                  (let* ((text (concat "Assistant request failed. "
-                                       (or (plist-get summary :message)
-                                           "Retry from the host or send a follow-up.")))
-                         (key (list "failure" text))
-                         (occurrence (gethash key occurrences 0)))
-                    (puthash key (1+ occurrence) occurrences)
-                    (push (mevedel-collaboration--record
-                           (mevedel-collaboration--stable-record-id
-                            "failure" text occurrence)
-                           "assistant" :revision 0 :status "failed"
-                           :text (mevedel-collaboration--truncate-bytes text 2000))
-                          records)))))
+              (dolist (record
+                       (cdr (project-segment
+                             segment nil
+                             (lambda ()
+                               (let ((summary (cdr (mevedel-tool-render-data-extract
+                                                    (buffer-substring start end)))))
+                                 (cons (and (eq (plist-get summary :kind) 'request-summary)
+                                            (eq (plist-get summary :outcome) 'error)
+                                            (concat "Assistant request failed. "
+                                                    (or (plist-get summary :message)
+                                                        "Retry from the host or send a follow-up.")))
+                                       (cons start end))))
+                             (lambda (text) (and text (list "failure" text)))
+                             (lambda (text occurrence)
+                               (when text
+                                 (list (mevedel-collaboration--record
+                                        (mevedel-collaboration--stable-record-id
+                                         "failure" text occurrence)
+                                        "assistant" :revision 0 :status "failed"
+                                        :text (mevedel-collaboration--truncate-bytes
+                                               text 2000))))))))
+                (push (copy-sequence record) records)))
              ((eq (car segment) 'mailbox)
-              (when-let* ((completion (mevedel-collaboration--forwarded-execution
-                                       segment)))
+              (when-let* ((completion
+                           (car (project-segment
+                                 segment nil
+                                 (lambda ()
+                                   (cons (mevedel-collaboration--forwarded-execution
+                                          segment)
+                                         (cons start end)))
+                                 #'ignore #'ignore))))
                 (add-execution completion scope)))
              ((eq (car segment) 'tool)
-              (let* ((start (cadr segment))
-                     (end (caddr segment))
-                     (raw (buffer-substring-no-properties start end))
-                     (key (list "tool" raw))
-                     (occurrence (gethash key occurrences 0)))
-                (puthash key (1+ occurrence) occurrences)
-                (dolist (record (mevedel-collaboration--tool-segment-records
-                                 data-buffer segment occurrence completion-buffer
-                                 (gethash end following-render-data) completions))
-                  (push (mevedel-collaboration--scoped record scope) records)))))))
+              (let ((render-end (gethash end following-render-data)))
+                (dolist (record
+                         (cdr (project-segment
+                               segment render-end
+                               (lambda ()
+                                 ;; The parse also reads the enclosing tool
+                                 ;; block; an unclosed one may grow later.
+                                 (let ((block (mevedel-view--tool-block-bounds
+                                               start (or render-end end))))
+                                   (cons (buffer-substring-no-properties start end)
+                                         (and block
+                                              (cons (min start (car block))
+                                                    (max (or render-end end)
+                                                         (cdr block)))))))
+                               (lambda (raw) (list "tool" raw))
+                               (lambda (_raw occurrence)
+                                 (mevedel-collaboration--tool-segment-records
+                                  data-buffer segment occurrence completion-buffer
+                                  render-end completions)))))
+                  (push (mevedel-collaboration--scoped
+                         (copy-sequence record) scope)
+                        records)))))))
         (dolist (span breadcrumbs)
           (add-execution (plist-get span :record)
                          (mevedel-collaboration--scope-at
                           ranges items (plist-get span :start))))
         (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))
+        (when cache
+          ;; Projection does not edit the transcript; if anything did, the
+          ;; retained sources describe no single state, so start over.
+          (let ((current (eql tick (buffer-modified-tick))))
+            (setf (mevedel-collaboration--projection-cache-tick cache)
+                  (and current tick)
+                  (mevedel-collaboration--projection-cache-bounds cache) bounds
+                  (mevedel-collaboration--projection-cache-segments cache) segments
+                  (mevedel-collaboration--projection-cache-entries cache)
+                  (if current entries (make-hash-table :test #'equal)))))
         (nreverse records))))))
 
 (defun mevedel-collaboration--tool-records (records)
@@ -1096,6 +1288,18 @@ call key; a previous identical poll must not consume a later pending call."
                           (cadr segment) (caddr segment))))))))
        (mevedel-transcript-segments (point-min) (point-max))))))
 
+(defun mevedel-collaboration--room-canonical-records (room)
+  "Return the canonical records of ROOM's live transcript.
+ROOM retains the per-segment projection between calls, so a publish while a
+reply streams reprojects only the segments that changed."
+  (mevedel-collaboration--canonical-records
+   (plist-get room :data-buffer) nil nil
+   (or (plist-get room :projection-cache)
+       (let ((cache (mevedel-collaboration--projection-cache-create)))
+         ;; A room plist is never empty, so this mutates it in place.
+         (plist-put room :projection-cache cache)
+         cache))))
+
 (defun mevedel-collaboration--project-records (room)
   "Return the current semantic projection for ROOM.
 
@@ -1103,8 +1307,7 @@ Pending tool records are a live-only projection until their settled
 canonical transcript record appears.  A pending record's identity is copied
 onto that canonical record, so a viewer updates one card from running through
 completion instead of seeing a duplicate tool card."
-  (let* ((canonical (mevedel-collaboration--canonical-records
-                     (plist-get room :data-buffer)))
+  (let* ((canonical (mevedel-collaboration--room-canonical-records room))
          (pending (plist-get room :pending-tools))
          (canonical-tools (mevedel-collaboration--tool-records canonical))
          (claimed nil)

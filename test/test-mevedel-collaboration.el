@@ -452,7 +452,7 @@
          (mevedel-collaboration--rooms (mevedel-test-room-registry room))
            canonical invalidated)
       (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
-                 (lambda (_) canonical))
+                 (lambda (&rest _) canonical))
                 ((symbol-function
                   'mevedel-collaboration--artifact-stat-invalidate)
                  (lambda () (setq invalidated t))))
@@ -518,7 +518,7 @@
                       :baseline-tool-count 0 :baseline-record-count 0))
          (room (list :data-buffer 'data :pending-tools (list stuck))))
     (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
-               (lambda (_) (mapcar #'copy-sequence canonical))))
+               (lambda (&rest _) (mapcar #'copy-sequence canonical))))
       (let ((records (mevedel-collaboration--project-records room)))
         ;; One card, keeping the pending identity with canonical content.
         (should (= 1 (length records)))
@@ -530,7 +530,7 @@
     (let ((room (list :data-buffer 'data
                       :pending-tools (list (copy-sequence stuck)))))
       (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
-                 (lambda (_) nil)))
+                 (lambda (&rest _) nil)))
         (let ((records (mevedel-collaboration--project-records room)))
           (should (= 1 (length records)))
           (should (equal "running" (plist-get (car records) :status))))))))
@@ -544,7 +544,7 @@
                                  :status "completed" :pending t
                                  :baseline-tool-count 0 :baseline-record-count 0)))))
     (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
-               (lambda (_) nil))
+               (lambda (&rest _) nil))
               ((symbol-function 'mevedel-collaboration--suppressed-tool-landed-p)
                (lambda (_data _entry) landed)))
       (should (= 1 (length (mevedel-collaboration--project-records room))))

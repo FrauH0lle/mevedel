@@ -123,6 +123,25 @@
           (while (zerop publishes) (accept-process-output nil 0.02)))
         (should (= 1 publishes))))))
 
+(mevedel-deftest mevedel-collaboration--schedule-publish/cost
+  (:doc "paces coalesced publication by the last publish's measured cost")
+  (with-temp-buffer
+    (let* ((room (list :data-buffer (current-buffer)
+                       :guests (make-hash-table :test #'eql)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           delays)
+      (mevedel-collaboration--publish room)
+      (should (numberp (plist-get room :publish-cost)))
+      (cl-letf (((symbol-function 'mevedel-transport-run-at-time)
+                 (lambda (delay &rest _) (push delay delays) nil)))
+        (plist-put room :publish-cost 0.001)
+        (mevedel-collaboration--schedule-publish room)
+        (plist-put room :publish-cost 0.2)
+        (mevedel-collaboration--schedule-publish room))
+      (should (equal (list (* mevedel-collaboration--publish-cost-factor 0.2)
+                           mevedel-collaboration--publish-delay)
+                     delays)))))
+
 (mevedel-deftest mevedel-collaboration-notify-history-changed
   (:doc "coalesces committed history changes and isolates observer failures")
   (with-temp-buffer
