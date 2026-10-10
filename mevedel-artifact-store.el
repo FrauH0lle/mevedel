@@ -129,12 +129,6 @@ Live collaboration rooms follow the store through it.")
            (dolist (workspace workspaces)
              (mevedel-artifact-store--changed workspace)))))))
 
-(defun mevedel-artifact-store--changed (workspace)
-  "Notify observers of WORKSPACE, after the current mutation if collecting."
-  (if mevedel-artifact-store--pending-changes
-      (cl-pushnew workspace (cdr mevedel-artifact-store--pending-changes))
-    (run-hook-with-args 'mevedel-artifact-store-changed-functions workspace)))
-
 (defconst mevedel-artifact-store--content-change-delay 2
   "Seconds content-only changes of a workspace wait to be announced together.
 An edit reaches the item's viewers on its own; listings and artifact
@@ -143,6 +137,18 @@ room reread every artifact's metadata and republish after each one.")
 
 (defvar mevedel-artifact-store--content-changes (make-hash-table :test #'equal)
   "Pending content-change notification timers, by workspace root.")
+
+(defun mevedel-artifact-store--changed (workspace)
+  "Notify observers of WORKSPACE, after the current mutation if collecting."
+  (if mevedel-artifact-store--pending-changes
+      (cl-pushnew workspace (cdr mevedel-artifact-store--pending-changes))
+    ;; This notice also carries any content changes waiting to be announced.
+    (let* ((root (mevedel-workspace-root workspace))
+           (timer (gethash root mevedel-artifact-store--content-changes)))
+      (when timer
+        (cancel-timer timer)
+        (remhash root mevedel-artifact-store--content-changes)))
+    (run-hook-with-args 'mevedel-artifact-store-changed-functions workspace)))
 
 (defun mevedel-artifact-store--content-changed (workspace)
   "Notify observers of a content-only change to WORKSPACE shortly.

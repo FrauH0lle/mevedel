@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-execution-target)
+(require 'mevedel-artifact-store)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -60,6 +61,20 @@
       (setplist 'mevedel-test--nested-registry-case nil)
       (when (ert-test-boundp 'mevedel-test--nested-registry-case/test)
         (ert-delete-test 'mevedel-test--nested-registry-case/test)))))
+
+(mevedel-deftest mevedel-test--release-leaked-state
+  (:doc "retires delayed store notifications before another test can observe them")
+  (let* ((mevedel-artifact-store--content-changes (make-hash-table :test #'equal))
+         (workspace (mevedel-workspace--create :root "/fixture/")))
+    (mevedel-artifact-store--content-changed workspace)
+    (let ((timer (gethash "/fixture/" mevedel-artifact-store--content-changes)))
+      (unwind-protect
+          (progn
+            (should (memq timer timer-list))
+            (mevedel-test--release-leaked-state)
+            (should-not (memq timer timer-list))
+            (should (= 0 (hash-table-count mevedel-artifact-store--content-changes))))
+        (cancel-timer timer)))))
 
 (mevedel-deftest mevedel-test--ensure-mock-tramp-method
   (:quiet t

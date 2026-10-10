@@ -114,8 +114,9 @@ Other metadata writers are not fenced, so a commit verifies META-BYTES.
 A stale entry is dropped."
   (let ((table (plist-get runtime :committed)))
     (when-let* ((entry (gethash id table)))
-      (if (eq (car entry)
-              (mevedel-artifact-lease-held (plist-get runtime :workspace) id))
+      (if (and (car entry)
+               (eq (car entry)
+                   (mevedel-artifact-lease-held (plist-get runtime :workspace) id t)))
           (cdr entry)
         (remhash id table)
         nil))))
@@ -366,6 +367,7 @@ A held item lease is neither released nor handed over while it does."
     (plist-put runtime :active nil)
     (plist-put runtime :queue nil)
     (plist-put runtime :batch nil)
+    (plist-put runtime :batch-holding nil)
     (plist-put runtime :carry nil)
     (dolist (job jobs)
       (when job
@@ -385,9 +387,12 @@ A held item lease is neither released nor handed over while it does."
     (plist-put runtime :active nil)
     (unwind-protect (mevedel-shared-editing--in-job job
                       (funcall (plist-get job :callback) reply))
-      (when (mevedel-shared-editing--live-p runtime)
-        (plist-put runtime :timer
-                   (mevedel-transport-run-at-time 0 #'mevedel-shared-editing--drain runtime))))))
+      (if (and (plist-get runtime :stop-requested)
+               (not (plist-get runtime :committing)))
+          (mevedel-shared-editing-stop runtime)
+        (when (mevedel-shared-editing--live-p runtime)
+          (plist-put runtime :timer
+                     (mevedel-transport-run-at-time 0 #'mevedel-shared-editing--drain runtime)))))))
 
 (defun mevedel-shared-editing--store-busy-p (runtime)
   "Return non-nil when RUNTIME's store must not be touched now."
@@ -436,6 +441,10 @@ META-BYTES is as `mevedel-shared-editing--commit' takes it."
 The next edit starts from REPLY's state, carried with the metadata bytes
 JOB started from."
   (let ((state (plist-get reply :state)))
+    (unless (plist-get runtime :batch)
+      (plist-put runtime :batch-holding
+                 (mevedel-artifact-lease-held
+                  (plist-get runtime :workspace) (plist-get state :id))))
     (plist-put runtime :batch (append (plist-get runtime :batch) (list (cons job reply))))
     (plist-put runtime :carry (cons (plist-get state :id)
                                     (cons (car (plist-get job :committed)) state)))
@@ -450,6 +459,7 @@ JOB started from."
   "Settle RUNTIME's batched edits, announcing them unless ERROR says why not."
   (let ((batch (plist-get runtime :batch)))
     (plist-put runtime :batch nil)
+    (plist-put runtime :batch-holding nil)
     (plist-put runtime :carry nil)
     (pcase-dolist (`(,job . ,reply) batch)
       (condition-case nil
@@ -461,6 +471,22 @@ JOB started from."
             (funcall (plist-get job :callback) (if error (list :error error) reply)))
         (error nil)))))
 
+(defun mevedel-shared-editing--validate-batch (runtime)
+  "Signal if RUNTIME's deferred edits no longer have authority to commit.
+Later candidates include every earlier edit, so a revoked or cancelled edit
+invalidates the entire uncommitted batch."
+  (when-let* ((carry (plist-get runtime :carry)))
+    (unless (and (plist-get runtime :batch-holding)
+                 (eq (plist-get runtime :batch-holding)
+                     (mevedel-artifact-lease-held
+                      (plist-get runtime :workspace) (car carry))))
+      (error "The editing lease ended; pending edits were not saved"))
+    (pcase-dolist (`(,job . ,_reply) (plist-get runtime :batch))
+      (when (plist-get job :cancelled) (error "Editing operation cancelled"))
+      (when-let* ((authorize (plist-get job :authorize)))
+        (unless (mevedel-shared-editing--in-job job (funcall authorize))
+          (error "Editing authority ended"))))))
+
 (defun mevedel-shared-editing--flush-batch (runtime)
   "Commit RUNTIME's batched edits on their own, then settle them.
 The edit that was to continue them did not commit."
@@ -469,6 +495,7 @@ The edit that was to continue them did not commit."
     (unwind-protect
         (condition-case err
             (progn
+              (mevedel-shared-editing--validate-batch runtime)
               (mevedel-shared-editing--store runtime (cddr carry) (cadr carry))
               (mevedel-shared-editing--settle-batch runtime))
           (error (mevedel-shared-editing--settle-batch
@@ -484,6 +511,7 @@ The edit that was to continue them did not commit."
                                 runtime job reply))
       (condition-case err
           (progn
+            (mevedel-shared-editing--validate-batch runtime)
             (when (plist-get job :cancelled) (error "Editing operation cancelled"))
             (when-let* ((authorize (plist-get job :authorize)))
               (unless (mevedel-shared-editing--in-job job (funcall authorize))
@@ -641,6 +669,7 @@ characters so UTF-8 encoding never splits a character between writes."
                 (when mutation
                   (mevedel-artifact-lease-ensure
                    workspace (mevedel-shared-editing--valid-id id))
+                  (mevedel-shared-editing--validate-batch runtime)
                   ;; Until this job commits, the disk is the only truth; the
                   ;; commit it starts from travels with the job.
                   (unless (member action '("create" "import"))
@@ -726,11 +755,13 @@ callback with the caller's cancellation settlement deferred until its outcome.
 All calls for one workspace in this Emacs are serialized, whichever room or
 session makes them; CALLBACK runs in the buffer current now."
   (let ((runtime (mevedel-shared-editing--runtime workspace)))
-    (when (>= (length (plist-get runtime :queue)) 64)
+    (when (>= (+ (length (plist-get runtime :queue))
+                 (length (plist-get runtime :batch))) 64)
       (error "Shared editing queue is full"))
     (let* ((bytes (string-bytes (mevedel-shared-editing--json args)))
-           (queued (cl-loop for job in (cons (plist-get runtime :active)
-                                             (plist-get runtime :queue))
+           (queued (cl-loop for job in (append (mapcar #'car (plist-get runtime :batch))
+                                               (cons (plist-get runtime :active)
+                                                     (plist-get runtime :queue)))
                             sum (or (plist-get job :bytes) 0)))
            (sequence (1+ (plist-get runtime :sequence)))
            (job (list :args args :callback callback :buffer (current-buffer)
