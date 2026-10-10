@@ -348,6 +348,8 @@ parent identity."
                   (mevedel-session-name session)
                   (plist-get transaction :new-name)
                   (mevedel-session-naming-state session) 'explicit
+                  ;; The saved copy is the user's own chat.
+                  (mevedel-session-dedicated-artifact session) nil
                   (mevedel-session-forked-from-session-id session)
                   (plist-get transaction :old-id)
                   (mevedel-session-forked-from-turn session)

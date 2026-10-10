@@ -2689,6 +2689,8 @@ their directory.  Repoint DATA-BUF at the child after it commits."
                     (mevedel-session-session-id session) new-id
                     (mevedel-session-name session) display-name
                     (mevedel-session-naming-state session) 'explicit
+                    ;; The saved copy is the user's own chat.
+                    (mevedel-session-dedicated-artifact session) nil
                     (mevedel-session-forked-from-session-id session) old-id
                     (mevedel-session-forked-from-turn session)
                     (mevedel-session-turn-count session))

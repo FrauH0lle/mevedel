@@ -2724,6 +2724,8 @@
             (setq-local mevedel--session session)
             (insert "original\n")
             (mevedel-session-artifacts-save session buffer)
+            ;; Saving an artifact's conversation as a copy makes a chat.
+            (setf (mevedel-session-dedicated-artifact session) "board")
             (goto-char (point-max))
             (insert "pending\n")
             (cl-letf
@@ -2746,6 +2748,7 @@
               (mevedel-session-artifacts-sidecar-path
                (mevedel-session-save-path session))
               published))
+            (should-not (mevedel-session-dedicated-artifact session))
             (should-not (buffer-modified-p)))
         (test-mevedel-session-persistence--release-and-kill buffer session)
         (delete-directory tempdir t)
@@ -2773,7 +2776,8 @@
                       old-id (mevedel-session-session-id fixture-session)
                       old-save-path session-dir
                       buffer (generate-new-buffer " *save-as-lease*"))
-                (setf (mevedel-session-naming-state session) 'pending)
+                (setf (mevedel-session-naming-state session) 'pending
+                      (mevedel-session-dedicated-artifact session) "board")
                 (let* ((mevedel-session-durability--client-id owner-id)
                        (mevedel-session-durability--disclosed-targets
                         (make-hash-table :test #'equal))
@@ -2899,6 +2903,7 @@
                       (mevedel-save-session t))
                   (should target-probed)
                   (should (eq 'explicit (mevedel-session-naming-state session)))
+                  (should-not (mevedel-session-dedicated-artifact session))
                   (should competitor-blocked)
                   (should materialized)
                   (should-not copy-called)

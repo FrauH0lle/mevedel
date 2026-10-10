@@ -251,7 +251,7 @@ literal part names, at each discovery root and without a walk:
 one mount however many artifacts there are, it covers entries created later,
 and the directory is created when missing. Native tool checks match the
 pattern itself, at any depth, so ApplyPatch can still write an artifact's own
-files; Bash cannot write in the store at all. A `.mevedel` nested deeper in a
+files; confined Bash cannot write in the store at all. A `.mevedel` nested deeper in a
 root is covered by native tool checks only.
 Other patterns and targets retain the Lisp walker. Canonical target checks and
 final confinement validation remain unchanged.

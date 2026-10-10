@@ -54,7 +54,7 @@ leases therefore live outside it, under `.mevedel/leases/`. The store's
 bookkeeping -- metadata, item state, comments, versions -- and the leases are
 read-only to model tools by default, so edits cannot bypass leases, versions
 and validation; only an artifact's own files are written with ApplyPatch.
-Bash cannot write in the store at all.
+Confined Bash cannot write in the store at all.
 
 **Dedicated session.** Each artifact may have one dedicated session, created
 on first use for conversation started outside any chat; the two name each

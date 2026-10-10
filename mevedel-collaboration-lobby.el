@@ -46,10 +46,18 @@
                   "mevedel-collaboration-artifact" (room peer frame))
 (declare-function mevedel-collaboration--handle-store-list
                   "mevedel-collaboration-artifact" (room peer frame))
+;; Starting a lobby loads them; a frame from a peer it never admitted
+;; must still find them.
+(autoload 'mevedel-collaboration--handle-artifact-delete "mevedel-collaboration-artifact")
+(autoload 'mevedel-collaboration--handle-artifact-get "mevedel-collaboration-artifact")
+(autoload 'mevedel-collaboration--handle-store-action "mevedel-collaboration-artifact")
+(autoload 'mevedel-collaboration--handle-store-list "mevedel-collaboration-artifact")
 
 ;; `mevedel-collaboration-artifact-comments'
 (declare-function mevedel-collaboration--handle-artifact-comment
                   "mevedel-collaboration-artifact-comments" (room peer frame))
+(autoload 'mevedel-collaboration--handle-artifact-comment
+  "mevedel-collaboration-artifact-comments")
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--admit-hello
