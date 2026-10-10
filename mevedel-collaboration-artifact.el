@@ -119,6 +119,27 @@
 (defconst mevedel-collaboration--artifact-fetch-window 1.0
   "Seconds within which repeated artifact fetches from one guest drop.")
 
+(defconst mevedel-collaboration--store-read-budget '(8 . 2.0)
+  "At most CAR store reads per guest within CDR seconds.
+Listing the store, or an artifact's versions or comments, reads files
+for each one; a link that may only view must not keep the host busy.")
+
+(defun mevedel-collaboration--store-read-allowed-p (guest)
+  "Count one store read for GUEST; return nil once its budget is spent."
+  (let ((now (float-time))
+        (window (plist-get guest :store-reads)))
+    (unless (and window (< (- now (car window))
+                           (cdr mevedel-collaboration--store-read-budget)))
+      (setq window (cons now 0))
+      (plist-put guest :store-reads window))
+    (<= (setcdr window (1+ (cdr window)))
+        (car mevedel-collaboration--store-read-budget))))
+
+(defun mevedel-collaboration--store-read (guest)
+  "Count one store read for GUEST, or signal when its budget is spent."
+  (unless (mevedel-collaboration--store-read-allowed-p guest)
+    (error "Too many requests; try again in a moment")))
+
 (defconst mevedel-collaboration--max-artifact-bytes (* 16 1024 1024)
   "Largest artifact file the host will send to a guest.")
 
@@ -403,8 +424,11 @@ each marks the artifacts its own session is attached to, a lobby none."
                              (mevedel-collaboration--room-workspace room))))))))
 
 (defun mevedel-collaboration--handle-store-list (room peer _frame)
-  "Send guest PEER in ROOM the workspace's artifact listing."
-  (when (mevedel-collaboration--guest room peer)
+  "Send guest PEER in ROOM the workspace's artifact listing.
+A request beyond the guest's read budget is dropped: every store change
+sends the listing anyway."
+  (when-let* ((guest (mevedel-collaboration--guest room peer))
+              ((mevedel-collaboration--store-read-allowed-p guest)))
     (mevedel-collaboration--transport-send
      (plist-get room :transport) peer
      (mevedel-collaboration--store-frame room))))
@@ -442,6 +466,7 @@ error with a message for the guest when the action is refused."
       (error "This link can view artifacts but not change them"))
     (pcase action
       ("versions"
+       (mevedel-collaboration--store-read guest)
        (list :id id
              :versions
              (vconcat
