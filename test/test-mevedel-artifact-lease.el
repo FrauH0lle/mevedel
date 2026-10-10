@@ -61,13 +61,13 @@
   :doc "lets one client edit and asks the holder to hand over for another"
   (mevedel-artifact-lease-test--with-workspace
     (mevedel-artifact-lease-acquire workspace "board")
-    (should (mevedel-artifact-lease-held-p workspace "board"))
+    (should (mevedel-artifact-lease-held workspace "board"))
     (should (mevedel-artifact-lease-ensure workspace "board"))
     (should (string-prefix-p (expand-file-name ".mevedel/leases/artifacts/board" root)
                              (mevedel-artifact-lease-directory workspace "board")))
     (mevedel-artifact-lease-test--as-other
       (should-error (mevedel-artifact-lease-acquire workspace "board"))
-      (should-not (mevedel-artifact-lease-held-p workspace "board"))
+      (should-not (mevedel-artifact-lease-held workspace "board"))
       (should (file-exists-p (file-name-concat
                               (mevedel-artifact-lease-directory workspace "board")
                               "request.el")))))
@@ -97,7 +97,7 @@
       (should-error (mevedel-artifact-lease-acquire workspace "board"))
       (mevedel-artifact-lease-test--as-other
         (mevedel-artifact-lease-acquire workspace "board")
-        (should (mevedel-artifact-lease-held-p workspace "board")))
+        (should (mevedel-artifact-lease-held workspace "board")))
       ;; The answered request does not linger to hand a later holder's
       ;; item away.
       (should-not (file-exists-p (file-name-concat directory "request.el")))))
@@ -116,10 +116,10 @@
         (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) nil)))
           (should-error (mevedel-artifact-lease-acquire workspace "board" t)
                         :type 'user-error))
-        (should-not (mevedel-artifact-lease-held-p workspace "board"))
+        (should-not (mevedel-artifact-lease-held workspace "board"))
         (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) t)))
           (mevedel-artifact-lease-acquire workspace "board" t))
-        (should (mevedel-artifact-lease-held-p workspace "board")))))
+        (should (mevedel-artifact-lease-held workspace "board")))))
 
   :doc "costs few target programs: one observation feeds the claim"
   (mevedel-artifact-lease-test--with-workspace
