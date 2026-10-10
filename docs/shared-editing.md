@@ -577,8 +577,9 @@ exits, the lease is released. Another Emacs that tries to edit a held item
 gets a read-only refusal and asks the holder to hand it over; the holder
 releases it to that Emacs at its next renewal once its queue for the item is
 idle and nobody has edited the item there for 10 seconds, so a person still
-drawing keeps it. A lease whose holder stopped renewing is never taken over
-by an edit: the editing queue serves every item of the workspace and must not
+drawing keeps it. A request that is not repeated within one lease period
+lapses, so a requester who walked away does not take the item later. A
+lease whose holder stopped renewing is never taken over by an edit: the editing queue serves every item of the workspace and must not
 wait on a question, so every edit, from Emacs or a browser, is refused with
 "needs a decision in Emacs". `T` on the item's row in the artifacts cockpit
 takes it over after confirmation, or asks a live holder to hand it over.

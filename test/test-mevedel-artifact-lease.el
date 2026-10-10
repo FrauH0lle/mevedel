@@ -102,6 +102,26 @@
       ;; item away.
       (should-not (file-exists-p (file-name-concat directory "request.el")))))
 
+  :doc "ignores a request nobody repeated within a lease period"
+  (mevedel-artifact-lease-test--with-workspace
+    (let ((directory (mevedel-artifact-lease-directory workspace "board")))
+      (mevedel-artifact-lease-acquire workspace "board")
+      (mevedel-artifact-lease-test--as-other
+        (ignore-errors (mevedel-artifact-lease-acquire workspace "board")))
+      (let ((request (mevedel-session-durability--read-plist
+                      (file-name-concat directory "request.el"))))
+        (should (numberp (plist-get request :at)))
+        (mevedel-session-durability--write-plist
+         (file-name-concat directory "request.el")
+         (plist-put request :at (- (plist-get request :at)
+                                   mevedel-session-lease-seconds 1))))
+      ;; Quiet long enough to hand over, not yet to release.
+      (plist-put (gethash directory mevedel-artifact-lease--held) :touched
+                 (- (float-time) 20))
+      (mevedel-artifact-lease--renew directory)
+      (should (gethash directory mevedel-artifact-lease--held))
+      (should-not (file-exists-p (file-name-concat directory "request.el")))))
+
   :doc "takes over an expired foreign lease only when asked to and confirmed"
   (mevedel-artifact-lease-test--with-workspace
     (mevedel-artifact-lease-acquire workspace "board")
@@ -117,9 +137,23 @@
           (should-error (mevedel-artifact-lease-acquire workspace "board" t)
                         :type 'user-error))
         (should-not (mevedel-artifact-lease-held workspace "board"))
-        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) t)))
-          (mevedel-artifact-lease-acquire workspace "board" t))
-        (should (mevedel-artifact-lease-held workspace "board")))))
+        (let (asked-at)
+          (cl-letf (((symbol-function 'y-or-n-p)
+                     (lambda (_prompt)
+                       (setq asked-at (mevedel-session-control-fs-target-time
+                                       (mevedel-artifact-lease-directory workspace "board")))
+                       ;; A slow answer.
+                       (sleep-for 1.2)
+                       t)))
+            (mevedel-artifact-lease-acquire workspace "board" t))
+          (should (mevedel-artifact-lease-held workspace "board"))
+          ;; Its record starts from the clock after the answer.
+          (should (> (plist-get (plist-get (gethash (mevedel-artifact-lease-directory
+                                                     workspace "board")
+                                                    mevedel-artifact-lease--held)
+                                           :record)
+                                :renewed-at)
+                     asked-at))))))
 
   :doc "costs few target programs: one observation feeds the claim"
   (mevedel-artifact-lease-test--with-workspace
