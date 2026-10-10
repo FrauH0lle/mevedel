@@ -224,13 +224,19 @@ before the operation ran."
    "      test ! -L \"$leaf\" || exit 69\n"
    "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
    "      trap 'rm -f -- \"$temporary\"' EXIT\n"
+   ;; Authored parents may have untrusted writers.  Prove the opened inode
+   ;; before reopening it for output; payload writes and chmod never follow
+   ;; the mutable temporary pathname.
+   "      exec 8<\"$temporary\" || exit 66\n"
+   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
+   "      exec 8>/proc/self/fd/8 || exit 66\n"
    "      if test \"$op\" = write-mode; then\n"
    "        (set -o pipefail; decode_payload | {\n"
    "          IFS= read -r mode || exit 66\n"
    "          [[ \"$mode\" =~ ^[0-7]+$ ]] || exit 66\n"
-   "          cat >\"$temporary\" && chmod \"$mode\" -- \"$temporary\"; }) || exit 66\n"
+   "          cat >&8 && chmod \"$mode\" -- /proc/self/fd/8; }) || exit 66\n"
    "      else\n"
-   "        decode_payload >\"$temporary\" || exit 66\n"
+   "        decode_payload >&8 || exit 66\n"
    "      fi\n"
    "      mv -fT -- \"$temporary\" \"$leaf\" || exit 67\n"
    "      trap - EXIT\n"
@@ -321,6 +327,13 @@ before the operation ran."
    "      else\n"
    "        exit 75\n"
    "      fi\n"
+   "      ;;\n"
+   "    directory-mode)\n"
+   "      [[ \"$payload\" =~ ^[0-7]+$ ]] || exit 67\n"
+   "      test ! -L \"$leaf\" && test -d \"$leaf\" || exit 69\n"
+   "      exec 8<\"$leaf\" || exit 70\n"
+   "      test \"$(cd /proc/self/fd/8 && pwd -P)\" = \"${parent%/}/$leaf\" || exit 70\n"
+   "      chmod \"$payload\" -- /proc/self/fd/8 || exit 67\n"
    "      ;;\n"
    "    probe)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
@@ -558,6 +571,7 @@ parent must not turn into a `Setting current directory' failure."
     (create-staged . "create-staged")
     (write-staged . "write-staged")
     (make-directory . "mkdir")
+    (directory-mode . "directory-mode")
     (path-exists-p . "probe")
     (directory-p . "directory")
     (delete-file . "delete-file")
@@ -623,7 +637,7 @@ parent must not turn into a `Setting current directory' failure."
             (number-to-string (plist-get op :max-bytes)))
            ((null content) "")
            ((memq (plist-get op :op)
-                  '(verify-mode before-time write-staged create-staged))
+                  '(verify-mode directory-mode before-time write-staged create-staged))
             content)
            ((multibyte-string-p content)
             (base64-encode-string
@@ -1042,11 +1056,11 @@ batch or an invalid archive causes a fresh ordinary read program.
 No archive is extracted, and caller byte/hash validation remains unchanged.
 The program stops at the first operation that does not succeed, and
 its remaining operations report `skipped'; that is what lets a caller state a
-precondition as a `verify' its writes depend on.  This narrows the window
-between the proof and the write to two adjacent syscall sequences in one
-target process, but it does not close it: nothing excludes another client
-from the leaf in between, and the exclusive `create' verb is the only
-atomic election primitive here.  Each result carries
+precondition as a `verify' its writes depend on.  Without LOCK-DIRECTORY,
+this narrows the window between proof and write but does not close it:
+another client can change the leaf in between.  With LOCK-DIRECTORY,
+cooperating callers serialize the entire program under the same target lock.
+Each result carries
 `:status' from the shared vocabulary -- `ok', `conflict', `absent',
 `mismatch', `failed', `skipped' -- so a caller reproduces the nil-versus-
 signal contract of the single-operation wrappers per operation."

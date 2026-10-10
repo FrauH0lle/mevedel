@@ -37,7 +37,14 @@ class Element {
   }
   click() { this.clicked = true; }
   focus() { this.focused = true; }
-  hidePopover() { this.popoverOpen = false; }
+  showPopover() {
+    this.dispatch('beforetoggle', {newState: 'open'});
+    this.popoverOpen = true;
+  }
+  hidePopover() {
+    this.dispatch('beforetoggle', {newState: 'closed'});
+    this.popoverOpen = false;
+  }
   // <dialog> is the whole modal, so the stub carries its three moving
   // parts: open state, a return value, and the close event.
   showModal() { this.open = true; }

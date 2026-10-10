@@ -1614,22 +1614,28 @@ npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-artifacts-to-store.el 
 
 For each session it reads the session's `artifacts/` entries -- a portable
 session's from its verified publication, never its fixed cache; a PID-lock
-session's folder without hidden files and backups -- and creates one store
-artifact per file, whiteboard and document. A file artifact gets an id from its
-file name; a whiteboard or document keeps its own id. A fork's copy that did
-not change is the same artifact as its parent's. Artifact comments move with
-their file, and each thread keeps answering in the session that discussed it.
-Every new artifact starts with one version. The session is then converted as
-above into the destination, attached to the artifacts it held and without its
-old `artifacts/` folder and manifest entries; it is not made their dedicated
-session. A session the converter has nothing to read in, one older than
-v0.5.6 or one closed before it ever saved, is copied unchanged. Any other
-failure stops the run and names the session. The script prints each session's
-artifacts.
+session's folder without links, hidden files and backups -- and creates one
+store artifact per file, whiteboard and document. A file artifact gets an id
+from its file name; a whiteboard or document keeps its own id. A fork's copy
+that did not change is the same artifact as its parent's, and threads the fork
+added join it. Artifact comments move with their file, and each thread keeps
+answering in the session that discussed it. Every new artifact starts with
+one version. Legacy payload names and bytes are preserved; store bookkeeping
+lives in the separate `.state/ID/` directory. The session is then converted
+as above into the destination, attached to the artifacts it held and without
+its old `artifacts/` folder and manifest entries; it is not made their
+dedicated session. A session the converter has nothing to read in, one older
+than v0.5.6 or one closed before it ever saved, is copied unchanged. One that
+fails, for example on an unreadable artifact payload, is copied unchanged too
+and reported as FAILED with its reason, while the remaining sessions are
+processed; the script then exits with an error naming how many failed. The
+script prints each session's artifacts.
 
 Nothing in the original sessions changes, so a failed run loses nothing. A
 rerun into a new destination reuses the store artifacts an earlier run
-created. After checking the destination, move the
+completed, including shared items reused across forked sessions. Interrupted
+imports are removed on failure and retried with their comments and first
+version intact. After checking the destination, move the
 original sessions directory aside as a backup and put the destination in its
 place.
 

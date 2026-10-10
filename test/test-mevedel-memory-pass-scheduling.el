@@ -294,8 +294,10 @@
                  :doc "transport deferral can be cancelled without inference or a leaked opportunity"
                  (let ((key (list 'memory-pass workspace)))
                    (dotimes (n 5) (digest (1+ n)))
+                   ;; Queue the opportunity before the transport becomes busy;
+                   ;; scheduling inside a handler now correctly holds its timer.
+                   (mevedel-memory-pass-schedule workspace)
                    (let ((mevedel-transport--depth 1))
-                     (mevedel-memory-pass-schedule workspace)
                      (accept-process-output nil 0.05)
                      (should (= 0 calls))
                      (should (gethash key mevedel-transport--pending))

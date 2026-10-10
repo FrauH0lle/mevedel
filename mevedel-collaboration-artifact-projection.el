@@ -24,10 +24,7 @@
 (autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
 (declare-function mevedel-artifact-store-relative
                   "mevedel-artifact-store" (workspace path))
-(declare-function mevedel-artifact-store-bookkeeping-p
-                  "mevedel-artifact-store" (relative))
 (autoload 'mevedel-artifact-store-relative "mevedel-artifact-store")
-(autoload 'mevedel-artifact-store-bookkeeping-p "mevedel-artifact-store")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -81,7 +78,7 @@ for the deleted path will re-project as missing."
                                      (mevedel-session-workspace session) full)))
                 ((and (not (string-empty-p relative))
                       ;; Host bookkeeping is not an artifact.
-                      (not (mevedel-artifact-store-bookkeeping-p relative)))))
+                      (not (string-prefix-p ".state/" relative)))))
       (let ((stat (mevedel-collaboration--artifact-stat full))
             (slash (string-search "/" relative)))
         (append (list :artifact relative :artifact-path full)

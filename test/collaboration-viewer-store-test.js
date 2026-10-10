@@ -11,6 +11,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 function build({writable = true, room = false, connected = true, prompt = null} = {}) {
   const list = new Element('ul');
   const empty = new Element('p');
+  const creation = new Element('div');
   const document = {createElement: tag => new Element(tag)};
   const window = {mevedelTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
                   addEventListener() {}, prompt};
@@ -21,24 +22,25 @@ function build({writable = true, room = false, connected = true, prompt = null} 
   const followed = [];
   const answer = {value: 'copy'};
   const confirmed = {value: false};
+  const state = {writable};
   const store = window.mevedelStoreView.create({
     send: frame => (connected ? sent.push(frame) : Promise.resolve(false)),
     el: (tag, className, text) => element(document, tag, className, text),
-    list, empty, state: {writable}, room,
+    list, empty, creation, state, room,
     open: record => opened.push(record),
     notice: text => notices.push(text),
     navigate: link => followed.push(link),
     ...(prompt ? {} : {ask: () => answer.value}),
     confirm: () => confirmed.value,
   });
-  return {store, list, empty, sent, opened, notices, followed, answer, confirmed};
+  return {store, list, empty, creation, state, sent, opened, notices, followed, answer, confirmed};
 }
 
 const listing = {t: 'store-artifacts', artifacts: [
   {id: 'old', title: 'old.md', kind: 'markdown', artifact: 'old/old.md', size: 3,
    modified: 10, versions: 1, missing: false, attached: false},
   {id: 'flow', title: 'index.html', kind: 'html', artifact: 'flow/index.html', size: 9,
-   modified: 20, versions: 2, missing: false, attached: true},
+   modified: 20, versions: 2, missing: false, attached: true, attachedSessions: 2},
 ]};
 
 // A row shows Open beside its name and the other actions in its menu.
@@ -78,6 +80,7 @@ const press = (row, label) => {
   assert.deepEqual(buttons(view.list.children[0]), ['Open', 'Versions']);
   const lobby = build();
   lobby.store.show(listing);
+  assert.match(textOf(lobby.list.children[0]), /2 sessions/);
   assert.deepEqual(buttons(lobby.list.children[1]),
                    ['Open', 'Versions', 'Duplicate', 'Conversation', 'Delete']);
 }
@@ -94,8 +97,8 @@ const press = (row, label) => {
   store.handle({t: 'store-action', reqId: 1, ok: true,
                 versions: [{n: 2, time: 20, bytes: 9}, {n: 1, time: 10, bytes: 5}]});
   const versions = list.children[0].children[0].children.at(-1);
-  assert.match(textOf(versions), /Version 2 \(current\).*Version 1/);
-  versions.children[1].children[1].dispatch('click');
+  assert.match(textOf(versions), /Version 2 \(latest saved\).*Version 1/);
+  versions.children[1].children[2].dispatch('click');
   assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 2, action: 'restore',
                                         id: 'flow', n: 1});
   store.handle({t: 'store-action', reqId: 2, ok: true, n: 3});
@@ -131,7 +134,7 @@ const press = (row, label) => {
   press(restoring.list.children[0], 'Versions');
   restoring.store.handle({t: 'store-action', reqId: 1, ok: true,
                           versions: [{n: 2, time: 20, bytes: 9}, {n: 1, time: 10, bytes: 5}]});
-  restoring.list.children[0].children[0].children.at(-1).children[1].children[1].dispatch('click');
+  restoring.list.children[0].children[0].children.at(-1).children[1].children[2].dispatch('click');
   restoring.store.handle({t: 'store-action', reqId: 2, ok: true});
   assert.deepEqual(restoring.notices, ['Restored.']);
   // Replies nobody asked for are ignored.
@@ -166,10 +169,75 @@ const press = (row, label) => {
   assert.deepEqual(lobbyView.opened, []);
   assert.deepEqual(plain(lobbyView.sent.at(-1)), {t: 'store-action', reqId: 1,
                                                   action: 'conversation', id: 'plan'});
-  // A view link cannot start the conversation an item would open in.
+  // A view link opens the item through a room capped to its own tier.
   const viewer = build({writable: false});
   viewer.store.show(board);
-  assert.deepEqual(buttons(viewer.list.children[0]), ['Versions']);
+  assert.deepEqual(buttons(viewer.list.children[0]), ['Open', 'Versions']);
+  press(viewer.list.children[0], 'Open');
+  assert.equal(viewer.sent.at(-1).action, 'conversation');
+}
+
+// Live browser/Bash edits may differ from the latest saved version too.
+{
+  const {store, list, sent} = build();
+  store.show(listing);
+  press(list.children[0], 'Versions');
+  store.handle({reqId: 1, ok: true, versions: [{n: 2, time: 20, bytes: 9}]});
+  const latest = list.children[0].children[0].children.at(-1).children[0];
+  assert.match(textOf(latest), /latest saved/);
+  latest.children.find(child => textOf(child) === 'Restore').dispatch('click');
+  assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 2,
+                                      action: 'restore', id: 'flow', n: 2});
+}
+
+// Historical previews open the existing panel without restoring any state.
+{
+  const {store, list, sent, opened, creation} = build({writable: false});
+  store.show(listing);
+  assert.equal(creation.children.length, 0);
+  press(list.children[0], 'Versions');
+  store.handle({reqId: 1, ok: true, versions: [{n: 1, time: 10, bytes: 5}]});
+  const version = list.children[0].children[0].children.at(-1).children[0];
+  version.children[1].dispatch('click');
+  assert.equal(opened[0].version, 1);
+  assert.equal(opened[0].store, 'flow');
+  assert.equal(sent.length, 1);
+}
+
+// Writable lobby guests create an item and then open its dedicated editor room.
+{
+  const {store, creation, sent, answer, followed} = build();
+  store.show({artifacts: []});
+  assert.deepEqual(creation.children.map(textOf), ['New whiteboard', 'New document']);
+  answer.value = ' Design notes ';
+  creation.children[1].dispatch('click');
+  assert.deepEqual(plain(sent[0]), {t: 'store-action', reqId: 1, action: 'create',
+                                  id: null, kind: 'document', title: 'Design notes'});
+  store.handle({reqId: 1, ok: true, id: 'new-doc'});
+  assert.deepEqual(plain(sent[1]), {t: 'store-action', reqId: 2,
+                                  action: 'conversation', id: 'new-doc'});
+  store.handle({reqId: 2, ok: true, link: 'editor-link'});
+  assert.deepEqual(followed, ['editor-link']);
+}
+
+// A refresh racing an open menu preserves it, using the new row and authority.
+{
+  const {store, list, state, sent} = build({room: true});
+  store.show(listing);
+  menu(list.children[0]).showPopover();
+  // beforetoggle has fired; the later toggle task has not run yet.
+  store.show(listing);
+  assert.equal(menu(list.children[0]).popoverOpen, true);
+  press(list.children[0], 'Conversation');
+  assert.equal(sent.at(-1).action, 'conversation');
+  menu(list.children[0]).showPopover();
+  state.writable = false;
+  store.show(listing);
+  assert.equal(menu(list.children[0]).popoverOpen, true);
+  assert.deepEqual(buttons(list.children[0]), ['Open', 'Versions']);
+  store.show({artifacts: [listing.artifacts[0]]});
+  assert.notEqual(menu(list.children[0]).popoverOpen, true,
+                  'deleting the open row must not open another row menu');
 }
 
 // A deleted artifact that was expanded is forgotten, not asked about again;

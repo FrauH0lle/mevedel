@@ -503,7 +503,7 @@ running as one batch."
                (unless (mevedel-transport-run-when-idle
                         (list tag key) path #'run #'forget)
                  (forget)))))
-        (setq timer (run-at-time 0 nil #'attempt))
+        (setq timer (mevedel-transport-run-at-time 0 #'attempt))
         (puthash key timer table)
         timer))))
 

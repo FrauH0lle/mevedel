@@ -778,6 +778,22 @@
           (should (= 0 (hash-table-count table))))
       (mevedel-transport-cancel-idle table 'test-idle)))
 
+  :doc "retains the initial opportunity across TRAMP's suspended timer list"
+  (let ((table (make-hash-table :test #'equal)) timer fired)
+    (unwind-protect
+        (progn
+          (mevedel-transport--handler-advice
+           (lambda ()
+             (let (timer-list timer-idle-list)
+               (setq timer (mevedel-transport-schedule-idle
+                            table "nested" 'test-idle "/srv/project"
+                            (lambda () (setq fired t)))))))
+          (should (memq timer timer-list))
+          (with-timeout (2 (ert-fail "Nested opportunity never ran"))
+            (while (not fired) (accept-process-output nil 0.01)))
+          (should (= 0 (hash-table-count table))))
+      (mevedel-transport-cancel-idle table 'test-idle)))
+
   :doc "cancellation fences a queued timer so its thunk never runs"
   (let ((table (make-hash-table :test #'equal)) (runs 0))
     (let* ((timer (mevedel-transport-schedule-idle
