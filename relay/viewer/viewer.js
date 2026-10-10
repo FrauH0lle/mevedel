@@ -211,13 +211,22 @@
   const uploads = window.mevedelFilesView.uploader({send});
   const files = window.mevedelFilesView.create(
     {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile});
-  // The workspace artifact store: the room's Project artifacts section
-  // and the lobby's Artifacts tab; one is active at a time.
+  // The workspace artifact store: the room's Project artifacts sheet and
+  // the lobby's Artifacts tab; one is active at a time.
+  const storeSheet = document.getElementById('store-sheet');
   const roomStore = window.mevedelStoreView.create({
     send, el, state, room: true, notice: flashNotice,
-    open: record => (record.item ? editing.open(record.store) : artifacts.open(record)),
+    open: record => {
+      storeSheet.close();
+      if (record.item) editing.open(record.store);
+      else artifacts.open(record);
+    },
     list: document.getElementById('store-list'),
     empty: document.getElementById('store-empty'),
+  });
+  document.getElementById('store-button').addEventListener('click', () => {
+    roomStore.refresh();
+    storeSheet.showModal();
   });
   const lobbyStore = window.mevedelStoreView.create({
     send, el, state, open: artifacts.open, notice: flashNotice,
@@ -1395,6 +1404,9 @@
       lobby.created(frame);
     } else if (frame.t === 'room') {
       sessions.offerRoom({name: frame.name, link: frame.link});
+    } else if (frame.t === 'bye' && frame.reason === 'artifact-deleted') {
+      showTerminal('Artifact deleted', 'This artifact was deleted together with '
+                   + 'its conversation. Its project lobby lists the others.');
     } else if (frame.t === 'bye') {
       showTerminal('Session ended', 'The host has ended this shared session. '
                    + 'Ask the host for a new invitation to continue.');

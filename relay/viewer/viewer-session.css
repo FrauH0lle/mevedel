@@ -313,13 +313,28 @@ body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
 
 .lobby-row .btn { flex: 0 0 auto; }
 
-/* An artifact row carries several actions; on a narrow screen they wrap
-   under its name instead of squeezing it. */
-.store-row { flex-wrap: wrap; }
-.store-row .lobby-main { flex-basis: 16rem; }
+/* An artifact row shows Open and keeps its other actions in a menu, so it
+   stays one line down to phone width.  The menu is a popover placed by
+   script beside its trigger. */
+.store-more { padding-inline: .7rem; }
+.store-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  min-width: 11rem;
+  padding: .3rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  box-shadow: var(--shadow);
+}
+.store-menu:popover-open { display: grid; }
+.store-menu:not([data-placed]) { visibility: hidden; }
+.store-menu .btn { background: none; border: 0; text-align: left; font-weight: 500; }
+.store-menu .btn:hover, .store-menu .btn:focus-visible { background: var(--accent-soft); filter: none; }
+.lobby-row .store-menu .btn.danger { color: var(--failed); border: 0; }
 .store-versions { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; gap: .25rem; }
 .store-version { display: flex; align-items: center; gap: .5rem; }
-.store-list { margin-top: .5rem; }
 .lobby-empty { color: var(--muted); margin: 1rem 0 0; }
 .lobby-empty[hidden] { display: none; }
 

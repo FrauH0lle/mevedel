@@ -1174,8 +1174,10 @@ first use, attached to the artifact and saved at once, and named "Artifact
 ID"; `meta.el` records its id. It is hidden from the session chooser and the
 lobby listing, is never the default chat buffer for directives, and is kept
 from expiry while the artifact exists. Deleting the artifact deletes its
-dedicated session, which is refused while that session is open in Emacs or
-held by another client.
+dedicated session too. One open in this Emacs is closed first, ending its
+room, unless a turn is still running there, which refuses the deletion. One
+that cannot be deleted yet, because another client holds it or journal
+capture is pending, stays as an ordinary session and expires like one.
 
 The model writes artifacts with ordinary ApplyPatch; there is no artifact
 tool. After a settled ApplyPatch, `mevedel-tool-patch-apply` reports its

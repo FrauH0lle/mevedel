@@ -268,38 +268,45 @@ every frame was written."
               start end)))
     sent))
 
-(defun mevedel-collaboration-delete-artifact (workspace name)
+(defun mevedel-collaboration-delete-artifact (workspace name &optional callback)
   "Delete WORKSPACE's store artifact NAME and update the workspace's rooms.
 NAME is the path relative to the store, as cards show it; the whole
 artifact directory it lies in goes, with metadata, versions, comments and
 its dedicated session.  A whiteboard or document is deleted through its
-editing queue, after any save in progress, so its editors learn of it."
+editing queue, after any save in progress, so its editors learn of it.
+CALLBACK receives nil once the artifact is gone, or the reason it was
+not deleted; without one, a refusal is reported as a message."
   (let* ((slash (string-search "/" name))
-         (id (and slash (substring name 0 slash))))
+         (id (and slash (substring name 0 slash)))
+         (callback (or callback
+                       (lambda (failure)
+                         (when failure
+                           (message "mevedel: %s was not deleted: %s" name failure))))))
     (cond
      ((null id)
-      (delete-file (expand-file-name
-                    name (mevedel-artifact-store-directory workspace)))
-      (mevedel-collaboration-notify-artifacts-changed workspace))
+      (delete-file (expand-file-name name (mevedel-artifact-store-directory workspace)))
+      (mevedel-collaboration-notify-artifacts-changed workspace)
+      (funcall callback nil))
      ((mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
       (mevedel-shared-editing-call
        workspace (list :action "delete" :id id :actor "Host")
-       (lambda (reply)
-         (when (plist-get reply :error)
-           (message "mevedel: %s was not deleted: %s" id (plist-get reply :error))))))
-     (t (mevedel-artifact-store-delete workspace id)))))
+       (lambda (reply) (funcall callback (plist-get reply :error)))))
+     (t
+      (funcall callback (condition-case err
+                            (progn (mevedel-artifact-store-delete workspace id) nil)
+                          (error (error-message-string err))))))))
 
 (defun mevedel-collaboration--handle-artifact-delete (room peer frame)
   "Delete the published artifact FRAME names for writable guest PEER in ROOM.
-The file comes from the host's own record, never from the frame.  Every
-refusal is answered to the sender."
+The file comes from the host's own record, never from the frame.  The
+sender is answered once the artifact is gone or was refused."
   (let ((guest (mevedel-collaboration--guest room peer))
         (req-id (plist-get frame :reqId)))
     (when (and guest (mevedel-collaboration--request-id-p req-id))
-      (mevedel-collaboration--transport-send
-       (plist-get room :transport) peer
-       (append
-        (list :t "artifact-delete" :reqId req-id)
+      (let ((reply (lambda (fields)
+                     (mevedel-collaboration--transport-send
+                      (plist-get room :transport) peer
+                      (append (list :t "artifact-delete" :reqId req-id) fields)))))
         (condition-case err
             (let ((record (mevedel-collaboration--artifact-target
                            room guest (plist-get frame :id))))
@@ -310,9 +317,11 @@ refusal is answered to the sender."
                 (error "This artifact is no longer on the host"))
               (mevedel-collaboration-delete-artifact
                (mevedel-collaboration--room-workspace room)
-               (plist-get record :artifact))
-              (list :ok t :artifact (plist-get record :artifact)))
-          (error (list :error (error-message-string err)))))))))
+               (plist-get record :artifact)
+               (lambda (failure)
+                 (funcall reply (if failure (list :error failure)
+                                  (list :ok t :artifact (plist-get record :artifact)))))))
+          (error (funcall reply (list :error (error-message-string err)))))))))
 
 (defun mevedel-collaboration--workspace-rooms (workspace)
   "Return WORKSPACE's live session rooms followed by its lobby, if any."
@@ -405,7 +414,9 @@ A whiteboard or document opens straight in its editor there."
 
 (defun mevedel-collaboration--store-action (room guest frame)
   "Perform GUEST's store FRAME in ROOM and return the reply fields.
-Signal an error with a message for the guest when the action is refused."
+An action that finishes later returns a function instead, to be called
+with a function receiving nil when done or why it failed.  Signal an
+error with a message for the guest when the action is refused."
   (let* ((action (plist-get frame :action))
          (workspace (mevedel-collaboration--room-workspace room))
          (session (plist-get room :session))
@@ -453,6 +464,12 @@ Signal an error with a message for the guest when the action is refused."
            (mevedel-artifact-store-attach
             session new-id (mevedel-collaboration--room-data-buffer room)))
          (list :id new-id)))
+      ;; Deleting may wait for the item's editing queue, so it answers later.
+      ("delete"
+       (lambda (done)
+         (mevedel-collaboration-delete-artifact
+          workspace (concat id "/" (plist-get (mevedel-artifact-store-meta workspace id) :file))
+          done)))
       ("conversation"
        (condition-case nil
            (list :id id :link (mevedel-collaboration--store-conversation-link
@@ -465,15 +482,21 @@ Signal an error with a message for the guest when the action is refused."
   (let ((guest (mevedel-collaboration--guest room peer))
         (req-id (plist-get frame :reqId)))
     (when (and guest (mevedel-collaboration--request-id-p req-id))
-      (mevedel-collaboration--transport-send
-       (plist-get room :transport) peer
-       (append (list :t "store-action" :reqId req-id
-                     :action (plist-get frame :action))
-               (condition-case err
-                   (append (list :ok t)
-                           (mevedel-collaboration--store-action room guest frame))
-                 (error (list :ok :json-false
-                              :error (error-message-string err)))))))))
+      (let ((reply (lambda (fields)
+                     (mevedel-collaboration--transport-send
+                      (plist-get room :transport) peer
+                      (append (list :t "store-action" :reqId req-id
+                                    :action (plist-get frame :action))
+                              fields))))
+            (refused (lambda (message) (list :ok :json-false :error message))))
+        (condition-case err
+            (let ((result (mevedel-collaboration--store-action room guest frame)))
+              (if (functionp result)
+                  (funcall result (lambda (failure)
+                                    (funcall reply (if failure (funcall refused failure)
+                                                     (list :ok t)))))
+                (funcall reply (append (list :ok t) result))))
+          (error (funcall reply (funcall refused (error-message-string err)))))))))
 
 (add-hook 'mevedel-artifact-store-changed-functions
           #'mevedel-collaboration-notify-artifacts-changed)

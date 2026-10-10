@@ -1327,7 +1327,11 @@
       (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
                  (lambda (_room reason) (setq stopped reason))))
         (mevedel-collaboration--stop-for-buffer)
-        (should (eq 'data-buffer-killed stopped))))))
+        (should (eq 'data-buffer-killed stopped))
+        ;; A caller killing it for a reason tells the guests that one.
+        (let ((mevedel-collaboration-stop-reason 'artifact-deleted))
+          (mevedel-collaboration--stop-for-buffer))
+        (should (eq 'artifact-deleted stopped))))))
 
 (mevedel-deftest mevedel-collaboration--stop-for-session
   ()

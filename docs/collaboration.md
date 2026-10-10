@@ -777,22 +777,31 @@ the lobby receive the store's new listing.
 
 ### The artifact store in the browser
 
-A room's dock has a **Project artifacts** section and the lobby an
-**Artifacts** tab, both listing the workspace's
-[artifact store](view.md#artifact-store) newest first: name, id, kind, size,
-version count, and in a room whether the artifact is attached to the room's
-session. The host sends the listing when a guest joins a room or asks for it
+A room's dock has a **Project artifacts** button, which opens a sheet, and
+the lobby an **Artifacts** tab, both listing the workspace's
+[artifact store](view.md#artifact-store) newest first, one line each: name,
+kind, size, version count, age of the last change, and in a room whether the
+artifact is attached to the room's session; the id shows on hovering the name.
+The host sends the listing when a guest joins a room or asks for it
 (`store-list`), and to every room and lobby of the workspace after each store
-change (`store-artifacts`). Any link can **Open** an artifact in the panel and
-list its **Versions**. Full and owner links also act through `store-action`
-frames:
+change (`store-artifacts`). Each row shows **Open**, which any link can use to
+open the artifact in the panel, and keeps its other actions in a `⋯` menu. Any
+link can list an artifact's **Versions** there. Full and owner links also act
+through `store-action` frames:
 
 - **Restore** makes an older version the newest;
+- **Save version**, for a whiteboard or document, keeps its current state as a
+  version;
 - **Attach**, in a room, attaches the artifact to the room's session;
 - **Duplicate** copies it into a new, independent artifact under a name the
   guest gives, attached to the room's session;
 - **Conversation** opens the artifact's dedicated session in a room of its
-  own, created on first use.
+  own, created on first use;
+- **Delete** deletes it for everyone, after a confirmation, with its
+  versions, comments and dedicated session. The answer waits for a
+  whiteboard's or document's editing queue. A dedicated session open in Emacs
+  is closed, so guests in its room see "Artifact deleted" rather than a
+  session the host ended.
 
 Actions that would need a decision in Emacs, such as resuming a dedicated
 session another client holds, are refused with the usual notice.

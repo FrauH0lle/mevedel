@@ -641,7 +641,7 @@ async function main() {
                'lobby-title', 'lobby-new', 'lobby-refresh',
                'lobby-tabs', 'lobby-tab-sessions', 'lobby-tab-artifacts', 'lobby-tab-files',
                'lobby-sessions', 'lobby-artifacts', 'lobby-store-list', 'lobby-store-empty',
-               'store-box', 'store-list', 'store-empty',
+               'store-button', 'store-sheet', 'store-list', 'store-empty',
                'lobby-files', 'files-path', 'files-list',
                'files-status', 'files-upload', 'files-input', 'artifact-ask',
                'editing-status', 'editing-recheck', 'editing-box', 'editing-items', 'editing-panel', 'editing-body',

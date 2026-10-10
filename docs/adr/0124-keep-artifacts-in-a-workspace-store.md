@@ -57,7 +57,8 @@ and validation; only an artifact's own files are written with ApplyPatch.
 on first use for conversation started outside any chat. It is an ordinary
 session, hidden from session lists and the default chat target, reachable from
 the artifact as its conversation, and exempt from expiry while the artifact
-exists. Deleting the artifact deletes it, which is refused while it is open.
+exists. Deleting the artifact closes and deletes it, unless a turn is running
+there; one that cannot be deleted yet stays as an ordinary session.
 
 **Comment routing** follows where the comment is written, then sticks to its
 thread: written in a chat's room, to that chat; written from the lobby, to the
@@ -136,3 +137,15 @@ not by the Bash sandbox.
   https://code.claude.com/docs/en/artifacts
 - Version retention: https://platform.claude.com/docs/en/api/compliance/code/artifacts
   (`versions`: "Up to roughly 20 most-recently-published versions").
+
+## Decision history
+
+- **Deleting with an open conversation.** At first, deleting an artifact was
+  refused while its dedicated session was open in Emacs or could not be
+  deleted, so a buffer could not save the session straight back. In use, that
+  made a whiteboard opened from the lobby undeletable from the browser:
+  opening it opens its dedicated session for the room it is edited in. A
+  conversation with captured turns also stays pinned until journal capture
+  finishes, which blocked the artifact too. Deletion now closes an idle open
+  conversation and keeps one it cannot delete yet as an ordinary session; only
+  a running turn still refuses it.

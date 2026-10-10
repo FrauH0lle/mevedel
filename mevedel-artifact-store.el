@@ -65,6 +65,9 @@
 (declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
 (autoload 'mevedel-session-persistence-delete "mevedel-session-persistence")
+(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
+(autoload 'mevedel-turn-busy-p "mevedel-turn")
+(defvar mevedel-collaboration-stop-reason)
 (autoload 'mevedel-session-persistence-resume-id "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-write-sidecar-now
   "mevedel-session-persistence")
@@ -290,17 +293,26 @@ The copy starts with one version and its own metadata."
 
 (defun mevedel-artifact-store-delete (workspace id)
   "Delete artifact ID with its metadata, versions and dedicated session.
-Refuse while the dedicated session is open in Emacs, whose buffer would
-save it straight back, or held by another client."
+A dedicated session open in this Emacs is closed first, and its room
+ended, unless a turn is still running there.  One that cannot be deleted
+yet -- held by another client, or pinned by pending journal capture --
+stays as an ordinary session and expires like one."
   (when-let* ((session-id (plist-get (mevedel-artifact-store-meta workspace id)
                                      :dedicated-session)))
-    (when (mevedel-artifact-store--live-buffer workspace session-id)
-      (error "Close the conversation of %s in Emacs first" id))
+    (when-let* ((buffer (mevedel-artifact-store--live-buffer workspace session-id)))
+      (when (mevedel-turn-busy-p buffer)
+        (error "The conversation of %s is still working; stop it first" id))
+      ;; Opening an item from the lobby opens this session for its room, so
+      ;; its buffer is no reason to keep the artifact.
+      (let ((kill-buffer-query-functions nil)
+            (mevedel-collaboration-stop-reason 'artifact-deleted))
+        (kill-buffer buffer)))
     (let ((save-path (file-name-concat
                       (mevedel-session-artifacts-sessions-dir workspace) session-id)))
       (when (and (file-directory-p save-path)
                  (not (mevedel-session-persistence-delete workspace save-path)))
-        (error "The conversation of %s is still in use elsewhere" id))))
+        (message "mevedel: the conversation of %s is still in use; it stays as an ordinary session"
+                 id))))
   (delete-directory (mevedel-artifact-store-artifact-directory workspace id) t)
   (mevedel-artifact-store--changed workspace))
 

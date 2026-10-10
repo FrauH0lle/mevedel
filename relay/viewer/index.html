@@ -150,11 +150,6 @@
             <summary id="artifacts-summary">Artifacts</summary>
             <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
           </details>
-          <details id="store-box" class="dock-submenu">
-            <summary>Project artifacts</summary>
-            <p id="store-empty" class="lobby-empty" hidden>No artifacts in this project yet.</p>
-            <ul id="store-list" class="lobby-list store-list"></ul>
-          </details>
           <section id="activity" class="activity" aria-label="Progress"><h2>Progress</h2>
           <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
           <ul id="agents-done-list" class="dock-disclosure-list agents-done-list"></ul>
@@ -169,6 +164,8 @@
             <button id="new-session-button" class="btn quiet" type="button" hidden
                     title="Start a separate session — this room stays open"
                     aria-label="New session"><span aria-hidden="true">＋</span> Session</button>
+            <button id="store-button" class="btn quiet" type="button"
+                    title="Every artifact, whiteboard and document of this project">Project artifacts</button>
             <button id="rooms-button" class="btn quiet" type="button" hidden
                     title="Other rooms this browser can get back to"
                     aria-label="Rooms">Rooms</button>
@@ -269,6 +266,16 @@
                     formnovalidate>Cancel</button>
             <button id="new-session-create" value="create" class="btn"
                     type="submit">Request</button>
+          </menu>
+        </form>
+      </dialog>
+      <dialog id="store-sheet" class="sheet" aria-labelledby="store-title">
+        <form method="dialog" class="sheet-form">
+          <h2 id="store-title" class="sheet-title">Project artifacts</h2>
+          <p id="store-empty" class="lobby-empty" hidden>No artifacts in this project yet.</p>
+          <ul id="store-list" class="lobby-list"></ul>
+          <menu class="sheet-actions">
+            <button value="close" class="btn quiet" type="submit">Done</button>
           </menu>
         </form>
       </dialog>

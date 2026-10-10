@@ -86,7 +86,7 @@
 
 ;; `mevedel-collaboration-artifact'
 (declare-function mevedel-collaboration-delete-artifact
-                  "mevedel-collaboration-artifact" (workspace name))
+                  "mevedel-collaboration-artifact" (workspace name &optional callback))
 (declare-function mevedel-collaboration-notify-artifacts-changed
                   "mevedel-collaboration-artifact" (workspace))
 (autoload 'mevedel-collaboration-delete-artifact "mevedel-collaboration-artifact")
@@ -357,27 +357,20 @@ progress, together with its comments and history."
   (let* ((context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (item (mevedel-cockpit-surface-selected))
-         (id (plist-get item :item)))
-    (if id
-        (when (yes-or-no-p (format "Delete %s with its comments and history? "
-                                   (plist-get item :name)))
-          (let ((buffer (current-buffer)))
-            (mevedel-shared-editing-call
-             workspace (list :action "delete" :id id :actor "Host")
-             (lambda (reply)
-               (if-let* ((failure (plist-get reply :error)))
-                   (message "mevedel: %s was not deleted: %s" (plist-get item :name) failure)
-                 (when (buffer-live-p buffer)
-                   (with-current-buffer buffer (mevedel-cockpit-surface-refresh)))
-                 (message "mevedel: %s deleted" (plist-get item :name)))))))
-      (when (yes-or-no-p (format "Delete artifact %s with its versions? "
-                                 (plist-get item :id)))
-        (mevedel-collaboration-delete-artifact
-         workspace
-         (file-relative-name (plist-get item :path)
-                             (mevedel-artifact-store-directory workspace)))
-        (mevedel-cockpit-surface-refresh)
-        (message "mevedel: artifact %s deleted" (plist-get item :id))))))
+         (name (or (plist-get item :title) (plist-get item :id)))
+         (buffer (current-buffer)))
+    (when (yes-or-no-p (format "Delete %s with its versions, comments and conversation? "
+                               name))
+      (mevedel-collaboration-delete-artifact
+       workspace
+       (file-relative-name (plist-get item :path)
+                           (mevedel-artifact-store-directory workspace))
+       (lambda (failure)
+         (if failure
+             (message "mevedel: %s was not deleted: %s" name failure)
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer (mevedel-cockpit-surface-refresh)))
+           (message "mevedel: %s deleted" name)))))))
 
 (defun mevedel-artifacts-list-quit ()
   "Quit the artifacts cockpit."
