@@ -262,6 +262,12 @@ See `mevedel--turn-displaced-p'.")
            (or (bound-and-true-p mevedel--current-request)
                mevedel--turn-settlements-pending)))))
 
+;;;###autoload
+(defun mevedel-busy-p ()
+  "Return non-nil while any buffer in this Emacs runs or settles a turn.
+For callers outside mevedel, such as a host deciding when to restart."
+  (and (cl-some #'mevedel-turn-busy-p (buffer-list)) t))
+
 (defun mevedel-request-state-label (&optional buffer)
   "Return BUFFER's compact request state label."
   (let ((buffer (or buffer (current-buffer))))
