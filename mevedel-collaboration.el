@@ -84,6 +84,10 @@
                   "mevedel-collaboration-lobby" ())
 (defvar mevedel-collaboration-lobby--lobbies)
 
+;; `mevedel-collaboration-presence'
+(declare-function mevedel-collaboration-presence-publish
+                  "mevedel-collaboration-presence" (room))
+
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
                   "mevedel-collaboration-projection"
@@ -893,6 +897,11 @@ request or prompt transaction."
           (error nil)))
       (condition-case nil
           (mevedel-collaboration--transport-stop transport)
+        (error nil)))
+    ;; The workspace's other rooms and lobby lose this room's guests.
+    (unless (eq reason 'emacs-exit)
+      (condition-case nil
+          (mevedel-collaboration-presence-publish room)
         (error nil)))))
 
 (defvar mevedel-collaboration-stop-reason nil

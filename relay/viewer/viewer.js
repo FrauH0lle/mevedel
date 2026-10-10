@@ -161,8 +161,12 @@
     return `${count} ${noun}${count === 1 ? '' : 's'}`;
   }
 
+  // The page is an open whiteboard, document or artifact, else the room.
+  const presence = window.mevedelPresence.create(
+    {send, el, page: () => editing.page() || artifacts.page()});
   const artifacts = window.mevedelArtifactView.create({
     send, el, flash: flashNotice, summarize: summarizeSession,
+    onPage: () => presence.report(),
     // A lobby has no welcome; its link tier decides instead.
     canComment: () => (state.connected && !state.readOnly)
       || (lobby.active() && state.writable),
@@ -204,7 +208,11 @@
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
   const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession,
-    onVisibility: window.mevedelAppearance.editorVisible, onCatalog: refreshFilter});
+    onVisibility: visible => {
+      window.mevedelAppearance.editorVisible(visible);
+      presence.report();
+    },
+    onCatalog: refreshFilter});
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
      summarize: summarizeSession, notice: flashNotice});
@@ -1392,6 +1400,10 @@
         sessionLabel.textContent = `Lobby · ${frame.project}`;
       }
       setConnection('Connected', 'connected');
+    } else if (frame.t === 'presence') {
+      presence.show(frame);
+      lobby.counts(frame.sessions);
+      lobbyStore.counts(frame.artifacts);
     } else if (frame.t === 'open-session') {
       lobby.opened(frame);
     } else if (frame.t === 'delete-session') {
@@ -1574,7 +1586,7 @@
         joinGraceMs: JOIN_GRACE_MS,
         hello: () => {
           const hello = {t: 'hello', proto: PROTO, name: guestName(),
-                         guestId: guestId()};
+                         guestId: guestId(), ...presence.hello()};
           if (credentials.writeToken) {
             hello.writeToken = base64urlEncode(credentials.writeToken);
           }

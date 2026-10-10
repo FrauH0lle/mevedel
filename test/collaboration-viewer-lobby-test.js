@@ -301,4 +301,16 @@ function openButton(nodes, index) {
   assert.equal(textOf(nodes['lobby-title']), 'Sessions');
 }
 
+// Presence counts say how many people are in each live session.
+{
+  const {lobby, nodes} = build();
+  lobby.counts([{id: 'a', n: 2}]);
+  lobby.show(listing);
+  const meta = row => textOf(row.children[0].children[1]);
+  assert.match(meta(nodes['lobby-list'].children[0]), /· 2 here$/);
+  assert.doesNotMatch(meta(nodes['lobby-list'].children[1]), /here/);
+  lobby.counts([]);
+  assert.doesNotMatch(meta(nodes['lobby-list'].children[0]), /here/);
+}
+
 console.log('viewer lobby controller passed');

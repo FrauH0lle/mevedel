@@ -756,6 +756,6 @@ window.mevedelEditingView = {
       if (!box.hidden) render();
     }
     return { welcome, connection, receive, open, openItem, conversation, refreshConversation, setAppearance, ask, present,
-             attachedItems };
+             attachedItems, page: () => (panel.hidden ? null : current) };
   },
 };

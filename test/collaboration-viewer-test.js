@@ -843,6 +843,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-store.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-lobby.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-presence.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
   assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
@@ -866,8 +867,9 @@ async function main() {
   // write token, anything else is rejected.
   const api = context.window.mevedelViewer;
   assert.equal((window.listeners.visibilitychange || []).length, 0);
-  // Notification presence and the lobby's foreground refresh.
-  assert.equal(document.listeners.visibilitychange.length, 2);
+  // Notification presence, the lobby's foreground refresh, and the
+  // page report that marks a hidden tab away.
+  assert.equal(document.listeners.visibilitychange.length, 3);
   const view = api.parseFragment(`#${roomId}.${base64url(keyBytes)}`);
   assert.equal(view.roomId, roomId);
   assert.equal(view.writeToken, null);
