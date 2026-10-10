@@ -583,7 +583,9 @@ wait on a question, so every edit, from Emacs or a browser, is refused with
 "needs a decision in Emacs". `T` on the item's row in the artifacts cockpit
 takes it over after confirmation, or asks a live holder to hand it over.
 While the lease is held and was renewed within the last minute, an edit does
-not read the target clock again. Reading needs no lease.
+not read the target clock again. Reading needs no lease. An open editor that
+receives a change skipping a revision, as after a hand-over between two Emacs
+instances, rereads the whole item instead of applying only that change.
 
 Versions follow the store's caps. A version keeps the item's content, title
 and comments but not its receipts or contribution history. One is recorded

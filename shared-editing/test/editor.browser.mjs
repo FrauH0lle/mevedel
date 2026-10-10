@@ -49,6 +49,21 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('[data-live-preview="true"]').count(),0);
       await page.close();
     });
+    await t.test('a skipped revision rereads the item instead of trusting its diff', async () => {
+      const {page, frame} = await open();
+      await page.evaluate(async () => {
+        // Another Emacs committed the first edit; only the second arrives.
+        await window.apply({action:'patch', opId:'elsewhere-1',
+          changes:[{id:'one', after:{type:'rectangle', x:0, y:0, width:50, height:50}}]});
+        const second = await window.apply({action:'patch', opId:'elsewhere-2',
+          changes:[{id:'two', after:{type:'rectangle', x:100, y:0, width:50, height:50}}]});
+        window.port.postMessage({type:'changed', ...second});
+      });
+      await frame.locator('[data-shape="two"]').waitFor();
+      await frame.locator('[data-shape="one"]').waitFor();
+      assert.ok(await page.evaluate(() => window.messages.some(m => m.args?.action === 'read')));
+      await page.close();
+    });
     await t.test('failed saves withdraw outgoing movement previews', async () => {
       const {page,frame}=await open();
       await page.evaluate(()=>{
