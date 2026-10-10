@@ -447,17 +447,71 @@ allowed-tools:
           (should-not mevedel--current-request)
           (should (mevedel-request-cancelled-p turn))))))
 
+  :doc "out-of-order nested completion restores ownership before callbacks"
+  (let ((session (mevedel-skills-test--make-session))
+        (turn (mevedel-request--create :id "turn"))
+        (invocation (mevedel-agent-invocation--create :path "/root/worker"))
+        events)
+    (with-temp-buffer
+      (setq-local mevedel--current-request turn
+                  mevedel--agent-invocation invocation)
+      (let* ((outer-finish
+              (mevedel-skills--preparation-settler
+               session nil nil
+               (lambda (outcome)
+                 (should (eq turn mevedel--current-request))
+                 (should (eq invocation mevedel--agent-invocation))
+                 (push outcome events))))
+             (outer mevedel--current-request)
+             (inner-finish
+              (mevedel-skills--preparation-settler
+               session nil nil
+               (lambda (outcome)
+                 (should (eq outer mevedel--current-request))
+                 (should-not mevedel--agent-invocation)
+                 (push outcome events))))
+             (inner mevedel--current-request))
+        (funcall outer-finish 'outer)
+        (should-not events)
+        (should (eq inner mevedel--current-request))
+        (should-not mevedel--agent-invocation)
+        (with-temp-buffer (funcall inner-finish 'inner))
+        (should (equal '(outer inner) events))
+        (should (eq turn mevedel--current-request))
+        (should-not mevedel--turn-displaced-settlements)
+        (funcall outer-finish 'duplicate)
+        (should (equal '(outer inner) events)))))
+
+  :doc "an inner callback error still restores a completed outer preparation"
+  (let ((session (mevedel-skills-test--make-session))
+        (turn (mevedel-request--create :id "turn"))
+        completed)
+    (with-temp-buffer
+      (setq-local mevedel--current-request turn)
+      (let* ((outer (mevedel-skills--preparation-settler
+                     session nil nil (lambda (_) (setq completed t))))
+             (inner (mevedel-skills--preparation-settler
+                     session nil nil (lambda (_) (error "Callback failed")))))
+        (funcall outer 'done)
+        (should-error (funcall inner 'done) :type 'error)
+        (should completed)
+        (should (eq turn mevedel--current-request))
+        (should-not mevedel--turn-displaced-settlements))))
+
   :doc "a request admitted after preparation teardown keeps the slot"
   (let ((session (mevedel-skills-test--make-session))
         (previous (mevedel-request--create :id "previous"))
-        (admitted (mevedel-request--create :id "admitted")))
+        (admitted (mevedel-request--create :id "admitted"))
+        (new-invocation (mevedel-agent-invocation--create)))
     (with-temp-buffer
       (setq-local mevedel--current-request previous)
       (let ((settle (mevedel-skills--preparation-settler
                      session nil nil #'ignore)))
-        (setq-local mevedel--current-request admitted)
+        (setq-local mevedel--current-request admitted
+                    mevedel--agent-invocation new-invocation)
         (funcall settle 'done)
-        (should (eq admitted mevedel--current-request))))))
+        (should (eq admitted mevedel--current-request))
+        (should (eq new-invocation mevedel--agent-invocation))))))
 
 (mevedel-deftest mevedel-skills--preparation-success-outcome ()
   ,test

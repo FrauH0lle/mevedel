@@ -373,7 +373,24 @@
           (should (= 1 (mevedel-session-turn-count session))))
       (kill-buffer chat-buf))))
 
-(mevedel-deftest mevedel--turn-displaced-p ()
+(mevedel-deftest mevedel-turn-defer-displaced ()
+  ,test
+  (test)
+  :doc "preparations without correlation IDs defer by request identity"
+  (with-temp-buffer
+    (let ((request (mevedel-request--create))
+          resumed)
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :displaced request))
+      (should (mevedel-turn-defer-displaced
+               (current-buffer) request (lambda () (setq resumed t))))
+      (should-not resumed)
+      (setq-local mevedel--current-request request)
+      (mevedel-turn-resume-displaced (current-buffer))
+      (should resumed)
+      (should-not mevedel--turn-displaced-settlements))))
+
+(mevedel-deftest mevedel--turn-defer-displaced ()
   ,test
   (test)
   :doc "a preparation request displaces the turn it took the slot from"
@@ -382,30 +399,30 @@
            (fsm (gptel-make-fsm
                  :info (list :buffer (current-buffer) :mevedel-request-id "turn"))))
       (setq-local mevedel--current-request turn)
-      (should-not (mevedel--turn-displaced-p fsm))
+      (should-not (mevedel--turn-defer-displaced fsm #'ignore))
       (setq-local mevedel--current-request
                   (mevedel-request--create :displaced turn))
-      (should (mevedel--turn-displaced-p fsm))
+      (should (mevedel--turn-defer-displaced fsm #'ignore))
       ;; Preparations nest.
       (setq-local mevedel--current-request
                   (mevedel-request--create :displaced mevedel--current-request))
-      (should (mevedel--turn-displaced-p fsm))))
+      (should (mevedel--turn-defer-displaced fsm #'ignore))))
 
   :doc "an admitted replacement, an empty slot or no identity is not displacement"
   (with-temp-buffer
     (let ((fsm (gptel-make-fsm
                 :info (list :buffer (current-buffer) :mevedel-request-id "turn"))))
       (setq-local mevedel--current-request (mevedel-request--create :id "newer"))
-      (should-not (mevedel--turn-displaced-p fsm))
+      (should-not (mevedel--turn-defer-displaced fsm #'ignore))
       (setq-local mevedel--current-request nil)
-      (should-not (mevedel--turn-displaced-p fsm))
+      (should-not (mevedel--turn-defer-displaced fsm #'ignore))
       (setq-local mevedel--current-request 'request)
-      (should-not (mevedel--turn-displaced-p fsm))
+      (should-not (mevedel--turn-defer-displaced fsm #'ignore))
       (setq-local mevedel--current-request
                   (mevedel-request--create
                    :displaced (mevedel-request--create :id "turn")))
-      (should-not (mevedel--turn-displaced-p
-                   (gptel-make-fsm :info (list :buffer (current-buffer))))))))
+      (should-not (mevedel--turn-defer-displaced
+                   (gptel-make-fsm :info (list :buffer (current-buffer))) #'ignore)))))
 
 (mevedel-deftest mevedel-turn-resume-displaced ()
   ,test
@@ -444,7 +461,20 @@
       (mevedel-test--with-captured-diagnostics diagnostics
         (mevedel-turn-resume-displaced (current-buffer)))
       (should ran)
-      (should (string-match-p "Boom" diagnostics)))))
+      (should (string-match-p "Boom" diagnostics))))
+
+  :doc "quitting one callback drains the remaining continuations before propagating"
+  (with-temp-buffer
+    (let (ran quit-signalled)
+      (setq-local mevedel--turn-displaced-settlements
+                  (list (lambda () (signal 'quit nil))
+                        (lambda () (setq ran t))))
+      (condition-case nil
+          (mevedel-turn-resume-displaced (current-buffer))
+        (quit (setq quit-signalled t)))
+      (should ran)
+      (should quit-signalled)
+      (should-not mevedel--turn-displaced-settlements))))
 
 (mevedel-deftest mevedel--defer-turn-steps-displaced
   (:vars ((mevedel-transport--enabled-p t)))
@@ -475,7 +505,30 @@
               (while mevedel--turn-settlements-pending
                 (accept-process-output nil 0.01)))
             (should (equal (list (list 'second turn) 'first) events))))
-      (kill-buffer buffer))))
+      (kill-buffer buffer)))
+
+  :doc "killing a displaced settlement cancels its checkpoint and releases the hold"
+  (let* ((buffer (generate-new-buffer " *mevedel-turn-displaced-kill*"))
+         (turn (mevedel-request--create :id "turn"))
+         cancelled
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :mevedel-request-id "turn"
+                           :mevedel-checkpoint-cancel (lambda () (setq cancelled t))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--current-request turn)
+            (mevedel--defer-turn-steps
+             fsm
+             (list (lambda (_machine)
+                     (setq-local mevedel--current-request
+                                 (mevedel-request--create :displaced turn)))
+                   #'ignore)))
+          (should-not cancelled)
+          (kill-buffer buffer)
+          (should cancelled)
+          (should (zerop (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
 (mevedel-deftest mevedel--turn-lost-p ()
   ,test

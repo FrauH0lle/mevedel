@@ -159,8 +159,9 @@
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-begin "mevedel-turn"
                   (session &optional directive-uuid))
+(declare-function mevedel-turn-defer-displaced
+                  "mevedel-turn" (buffer request thunk))
 (declare-function mevedel-turn-resume-displaced "mevedel-turn" (buffer))
-(autoload 'mevedel-turn-resume-displaced "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -783,18 +784,26 @@ restore resumes it after CALLBACK."
                  :plan-read-only (and plan-read-only t)))
     (setq-local mevedel--agent-invocation nil)
     (let ((request mevedel--current-request))
-      (lambda (outcome)
-        (unless settled
-          (setq settled t)
-          (when (buffer-live-p origin-buffer)
-            (with-current-buffer origin-buffer
-              (when (memq mevedel--current-request (list request nil))
-                (setq-local mevedel--current-request previous-request))
-              (if invocation-local-p
-                  (setq-local mevedel--agent-invocation previous-invocation)
-                (kill-local-variable 'mevedel--agent-invocation))))
-          (unwind-protect (funcall callback outcome)
-            (mevedel-turn-resume-displaced origin-buffer)))))))
+      (cl-labels
+          ((finish (outcome)
+             (unless (or settled
+                         (mevedel-turn-defer-displaced
+                          origin-buffer request
+                          (lambda () (finish outcome))))
+               (setq settled t)
+               (when (buffer-live-p origin-buffer)
+                 (with-current-buffer origin-buffer
+                   (when (memq mevedel--current-request (list request nil))
+                     (setq-local mevedel--current-request previous-request)
+                     (if invocation-local-p
+                         (setq-local mevedel--agent-invocation previous-invocation)
+                       (kill-local-variable 'mevedel--agent-invocation)))))
+               (unwind-protect
+                   (if (buffer-live-p origin-buffer)
+                       (with-current-buffer origin-buffer (funcall callback outcome))
+                     (funcall callback outcome))
+                 (mevedel-turn-resume-displaced origin-buffer)))))
+        #'finish))))
 
 (defun mevedel-skills--preparation-success-outcome
     (metadata original expanded decision)
