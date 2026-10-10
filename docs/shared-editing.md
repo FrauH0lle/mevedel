@@ -321,7 +321,7 @@ whiteboard finds `SharedCreate`. The prompt's resource roster lists
 
 | Address | Read returns |
 | --- | --- |
-| `shared://` | the project's items with kind, title and revision, marking those attached to the session, and `shared://library` |
+| `shared://` | the project's items with kind and title, marking those attached to the session, and `shared://library` |
 | `shared://ID` | a header with kind, title, revision and the related addresses, then one line per element in drawing order or per top-level block in document order |
 | `shared://ID/elements/ELEMENT` | one element or block in full, with each stroke point on its own line |
 | `shared://ID/view.png` | the board rendered, long edge at most 2048 px |
@@ -345,7 +345,8 @@ ApplyPatch do not accept `shared://`. Views are computed by the workspace's
 editing host from committed state, without a browser.
 
 Creating or editing an item attaches it to the model's session. When a turn
-that edited items settles, each of them gets a version in the store.
+that created or changed items settles, each of them gets a version in the
+store; an edit that changed nothing does not count.
 
 `SharedCreate` creates a named item and returns its address. `SharedEdit`
 applies patches, inserts library items, renames, sets a board's background,
@@ -575,17 +576,27 @@ After `mevedel-artifact-lease-idle-seconds` without edits, or when Emacs
 exits, the lease is released. Another Emacs that tries to edit a held item
 gets a read-only refusal and asks the holder to hand it over; the holder
 releases it to that Emacs at its next renewal once its queue for the item is
-idle. A lease whose holder stopped renewing is taken over after confirmation;
-a browser or lobby request, which cannot ask, is refused with the usual
-"needs a decision in Emacs" notice. Reading needs no lease.
+idle and nobody has edited the item there for 10 seconds, so a person still
+drawing keeps it. A lease whose holder stopped renewing is never taken over
+by an edit: the editing queue serves every item of the workspace and must not
+wait on a question, so every edit, from Emacs or a browser, is refused with
+"needs a decision in Emacs". `T` on the item's row in the artifacts cockpit
+takes it over after confirmation, or asks a live holder to hand it over.
+While the lease is held and was renewed within the last minute, an edit does
+not read the target clock again. Reading needs no lease. An open editor that
+receives a change skipping a revision, as after a hand-over between two Emacs
+instances, rereads the whole item instead of applying only that change.
 
 Versions follow the store's caps. A version keeps the item's content, title
 and comments but not its receipts or contribution history. One is recorded
-when a model turn that edited the item settles, and on **Save version** (the
+through the item's editing queue, after the saves before it, when a model
+turn that changed the item settles, and on **Save version** (the
 cockpit's `s`, or the store list in a room or the lobby). Restoring a version
 is one ordinary, attributed edit through the queue: lineage, comments and
 history stay, concurrent editors receive it as an update, and the restore can
-itself be reverted.
+itself be reverted. A document's blocks that are the same in the version keep
+their identity, so comments anchored in them stay current; changed blocks are
+replaced whole.
 
 Sessions only attach to items, so Resume, Save As, Fork and Rewind neither
 copy nor roll them back. Closing a browser or ending the share leaves the host

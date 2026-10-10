@@ -36,7 +36,7 @@
 (declare-function mevedel-artifact-store-list "mevedel-artifact-store" (workspace))
 (declare-function mevedel-artifact-store-meta "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-restore-version
-                  "mevedel-artifact-store" (workspace id n &optional session-id))
+                  "mevedel-artifact-store" (workspace id n &optional session-id actor callback))
 (declare-function mevedel-artifact-store-versions
                   "mevedel-artifact-store" (workspace id))
 (autoload 'mevedel-artifact-store-artifact-directory "mevedel-artifact-store")
@@ -482,13 +482,17 @@ error with a message for the guest when the action is refused."
         session id (mevedel-collaboration--room-data-buffer room))
        (list :id id))
       ("restore"
-       (let ((n (plist-get frame :n)))
+       (let ((n (plist-get frame :n))
+             (session-id (and session (mevedel-session-session-id session))))
          (unless (natnump n) (error "No such version"))
-         (let ((new (mevedel-artifact-store-restore-version
-                     workspace id n
-                     (and session (mevedel-session-session-id session)))))
-           ;; A whiteboard or document restores as a queued edit.
-           (list :id id :n (or new :json-false)))))
+         (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+             ;; A whiteboard or document restores as a queued edit by the
+             ;; guest, and answers once it is saved.
+             (lambda (done)
+               (mevedel-artifact-store-restore-version
+                workspace id n session-id (mevedel-collaboration--guest-actor guest) done))
+           (list :id id :n (mevedel-artifact-store-restore-version
+                            workspace id n session-id)))))
       ("save-version"
        (unless (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
          (error "File artifacts keep a version of every saved change"))
@@ -504,7 +508,7 @@ error with a message for the guest when the action is refused."
            (mevedel-artifact-store-attach
             session new-id (mevedel-collaboration--room-data-buffer room)))
          (list :id new-id)))
-      ;; Deleting may wait for the item's editing queue, so it answers later.
+      ;; Deleting may wait for the item's editing queue, so it answers later too.
       ("delete"
        (lambda (done)
          (mevedel-artifact-store-delete

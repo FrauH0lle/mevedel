@@ -174,21 +174,31 @@
   (mevedel-tool-editing-test--with-session
     (should (string-search "No shared whiteboards or documents"
                            (text (run "Read" '(:file_path "shared://")))))
+    (setq-local mevedel--current-request (mevedel-request--create :session session))
     (let* ((board (parse (run "SharedCreate" '(:kind "whiteboard" :title "Plan"))))
            (id (plist-get board :id))
            (address (concat "shared://" id)))
+      ;; Created and changed items are versioned when the turn settles; a
+      ;; no-op edit is not.
+      (should (equal (list (cons workspace id))
+                     (mevedel-request-edited-artifacts mevedel--current-request)))
+      (setf (mevedel-request-edited-artifacts mevedel--current-request) nil)
+      (run "SharedEdit" (list :id id :action "rename" :title "Plan"))
+      (should-not (mevedel-request-edited-artifacts mevedel--current-request))
       (run "SharedEdit" (list :id id :action "patch"
                               :changes (vector (list :id "api" :after (list :type "rectangle" :x 0 :y 0
                                                                             :width 100 :height 50))
                                                (list :id "api-label" :after
                                                      (list :type "text" :x 0 :y 0 :width 0 :height 0
                                                            :text "Billing API" :containerId "api")))))
-      (should (string-search (format "%s\twhiteboard \"Plan\" · revision 2" address)
+      (should (equal (list (cons workspace id))
+                     (mevedel-request-edited-artifacts mevedel--current-request)))
+      (should (string-search (format "%s\twhiteboard \"Plan\"" address)
                              (text (run "Read" '(:file_path "shared://")))))
       (let* ((overview (text (run "Read" (list :file_path address))))
              (hash (and (string-match "\\([0-9a-f]\\{12\\}\\) {\"id\":\"api\"" overview)
                         (match-string 1 overview))))
-        (should (string-search "whiteboard \"Plan\" · revision 2 · 2 elements" overview))
+        (should (string-search "whiteboard \"Plan\" · revision 3 · 2 elements" overview))
         (should hash)
         (should (string-search "Billing API" (text (run "Grep" (list :pattern "Billing" :path address
                                                                       :output_mode "content")))))
@@ -199,7 +209,7 @@
         (let ((edited (parse (run "SharedEdit" (list :id id :action "patch"
                                                      :changes (vector (list :id "api" :hash hash
                                                                             :set (list :strokeColor "#e03131"))))))))
-          (should (= 3 (plist-get edited :revision)))
+          (should (= 4 (plist-get edited :revision)))
           (should (string-search "#e03131" (aref (plist-get edited :changed) 0))))
         ;; The hash the model read is stale after its own edit.
         (let ((stale (run "SharedEdit" (list :id id :action "patch"

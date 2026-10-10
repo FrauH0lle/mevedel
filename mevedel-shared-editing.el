@@ -75,14 +75,14 @@ RESULT.  Observers cannot change whether the preceding commit succeeded.")
      (json-parse-string text :object-type 'plist :array-type 'array
                         :null-object :null :false-object :json-false))))
 
-(defun mevedel-shared-editing--present-p (workspace id)
+(defun mevedel-shared-editing-present-p (workspace id)
   "Return non-nil when WORKSPACE's store holds shared item ID."
   (and (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
        (file-exists-p (mevedel-shared-editing--state-path workspace id))))
 
 (defun mevedel-shared-editing--read (workspace id)
   "Read committed shared item ID of WORKSPACE."
-  (unless (mevedel-shared-editing--present-p workspace id)
+  (unless (mevedel-shared-editing-present-p workspace id)
     (error "This item no longer exists"))
   (mevedel-shared-editing--parse
    (with-temp-buffer
@@ -102,7 +102,7 @@ The item's whole artifact goes with it: content, images, comments,
 history, versions and its dedicated session.  Observers learn of it as a
 state with `:deleted' and the deleting `:actor'."
   (let ((id (plist-get args :id)))
-    (unless (mevedel-shared-editing--present-p workspace id)
+    (unless (mevedel-shared-editing-present-p workspace id)
       (error "This item no longer exists"))
     (mevedel-artifact-store--delete workspace id)
     (mevedel-artifact-lease-forget-item workspace id)
@@ -110,24 +110,20 @@ state with `:deleted' and the deleting `:actor'."
      workspace (list :id id :deleted t :actor (plist-get args :actor)) nil)
     (list :result (list :id id :deleted t))))
 
+(defun mevedel-shared-editing-list (workspace)
+  "Return WORKSPACE's shared items as plists of `:id', `:kind' and `:title'.
+Only their metadata is read: an item's state can run to megabytes, and
+the prompt's resource roster lists items on every request."
+  (cl-loop for id in (mevedel-artifact-store-ids workspace)
+           for meta = (mevedel-artifact-store-meta workspace id)
+           when (mevedel-artifact-store-item-p meta)
+           collect (list :id id :kind (symbol-name (plist-get meta :kind))
+                         :title (plist-get meta :title))))
+
 (defun mevedel-shared-editing-ids (workspace)
   "Return the ids of WORKSPACE's shared items, reading only their metadata."
-  (cl-remove-if-not
-   (lambda (id)
-     (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id)))
-   (mevedel-artifact-store-ids workspace)))
-
-(defun mevedel-shared-editing-list (workspace)
-  "Return WORKSPACE's shared item catalog."
-  (delq nil
-        (mapcar (lambda (id)
-                  (condition-case nil
-                      (let ((state (mevedel-shared-editing--read workspace id)))
-                        (list :id id :kind (plist-get state :kind)
-                              :title (plist-get state :title)
-                              :revision (plist-get state :revision)))
-                    (error nil)))
-                (mevedel-shared-editing-ids workspace))))
+  (mapcar (lambda (item) (plist-get item :id))
+          (mevedel-shared-editing-list workspace)))
 
 (defun mevedel-shared-editing--commit (workspace state)
   "Durably commit candidate STATE of WORKSPACE under this Emacs's item lease.
@@ -148,20 +144,37 @@ A new item gets its store metadata; a renamed one updates its title."
       (mevedel-artifact-store-update-meta
        workspace id :title (plist-get state :title)))))
 
-(defun mevedel-shared-editing--version-content (state)
+(defun mevedel-shared-editing--version-state (state)
   "Return STATE as a version keeps it: without receipts and history."
   (let ((state (copy-sequence state)))
     (cl-remf state :receipts)
     (cl-remf state :transactions)
-    (mevedel-shared-editing--json state)))
+    state))
 
 (defun mevedel-shared-editing-save-version (workspace id &optional session-id)
   "Record WORKSPACE's shared item ID as a new version and return its number.
-SESSION-ID names the session that edited it, if any."
+SESSION-ID names the session that edited it, if any.  The state this
+Emacs last committed serves while it still holds the item, so a large
+item's history is not read back."
   (mevedel-artifact-store-record-version
    workspace id session-id
-   (mevedel-shared-editing--version-content
-    (mevedel-shared-editing--read workspace id))))
+   (mevedel-shared-editing--json
+    (or (and (mevedel-artifact-lease-held-p workspace id)
+             (when-let* ((runtime (gethash (mevedel-workspace-root workspace)
+                                           mevedel-shared-editing--runtimes)))
+               (gethash id (plist-get runtime :committed))))
+        (mevedel-shared-editing--version-state
+         (mevedel-shared-editing--read workspace id))))))
+
+(defun mevedel-shared-editing-save-version-later (workspace id &optional session-id)
+  "Record WORKSPACE's shared item ID as a version through its editing queue.
+It follows any save in progress and waits while the store's connection is
+busy.  SESSION-ID names the session that edited it; a failure is a message."
+  (mevedel-shared-editing-call
+   workspace (list :action "version" :id id :session session-id)
+   (lambda (reply)
+     (when-let* ((failure (plist-get reply :error)))
+       (message "mevedel: no version of %s was saved: %s" id failure)))))
 
 (defun mevedel-shared-editing--op-id ()
   "Return a fresh operation identity."
@@ -209,7 +222,9 @@ The copy starts with the source's content and one version."
   "Return WORKSPACE's editing runtime, creating it on first use."
   (let ((key (mevedel-workspace-root workspace)))
     (or (gethash key mevedel-shared-editing--runtimes)
-        (puthash key (list :workspace workspace :queue nil :sequence 0)
+        (puthash key (list :workspace workspace :queue nil :sequence 0
+                           ;; Item id -> its last committed version state.
+                           :committed (make-hash-table :test #'equal))
                  mevedel-shared-editing--runtimes))))
 
 (defun mevedel-shared-editing--live-p (runtime)
@@ -218,14 +233,13 @@ The copy starts with the source's content and one version."
     (eq runtime (gethash (mevedel-workspace-root workspace)
                          mevedel-shared-editing--runtimes))))
 
-(defun mevedel-shared-editing--busy-item-p (workspace id)
-  "Return non-nil while WORKSPACE's runtime has work for item ID."
+(defun mevedel-shared-editing-item-busy-p (workspace id)
+  "Return non-nil while WORKSPACE's runtime has work for item ID.
+A held item lease is neither released nor handed over while it does."
   (when-let* ((runtime (gethash (mevedel-workspace-root workspace)
                                 mevedel-shared-editing--runtimes)))
     (cl-some (lambda (job) (and job (equal id (plist-get (plist-get job :args) :id))))
              (cons (plist-get runtime :active) (plist-get runtime :queue)))))
-
-(setq mevedel-artifact-lease-busy-function #'mevedel-shared-editing--busy-item-p)
 
 (cl-defun mevedel-shared-editing-stop (&optional runtime reason)
   "Stop RUNTIME, or every runtime, and settle its callbacks with REASON."
@@ -245,7 +259,10 @@ The copy starts with the source's content and one version."
   (when-let* ((process (plist-get runtime :process)))
     (set-process-sentinel process #'ignore)
     (delete-process process))
-  (dolist (job (cons (plist-get runtime :active) (plist-get runtime :queue)))
+  ;; Settled here, so a drain still inside target I/O finds its job gone.
+  (dolist (job (prog1 (cons (plist-get runtime :active) (plist-get runtime :queue))
+                 (plist-put runtime :active nil)
+                 (plist-put runtime :queue nil)))
     (when job
       (condition-case nil
           (mevedel-shared-editing--in-job job
@@ -294,6 +311,9 @@ The copy starts with the source's content and one version."
                        (when-let* ((state (plist-get reply :state)))
                          (let ((workspace (plist-get runtime :workspace)))
                            (mevedel-shared-editing--commit workspace state)
+                           (puthash (plist-get state :id)
+                                    (mevedel-shared-editing--version-state state)
+                                    (plist-get runtime :committed))
                            (mevedel-shared-editing--notify
                             workspace state (plist-get reply :result))))
                        (mevedel-shared-editing--finish runtime job reply))
@@ -402,59 +422,80 @@ characters so UTF-8 encoding never splits a character between writes."
         (plist-put runtime :queue (cdr (plist-get runtime :queue)))
         (plist-put runtime :active job)
         (condition-case err
-            (let* ((args (copy-sequence (plist-get job :args)))
-                   (action (plist-get args :action))
-                   (id (plist-get args :id))
-                   (mutation (not (member action '("read" "view" "export" "list" "status" "library-view")))))
-              (when (plist-get job :cancelled) (error "Editing operation cancelled"))
-              (when-let* ((authorize (plist-get job :authorize)))
-                (unless (mevedel-shared-editing--in-job job (funcall authorize))
-                  (error "Editing authority ended")))
-              ;; Another Emacs editing the item leaves it read-only here.  A
-              ;; takeover asks only when the caller could have asked.
-              (when mutation
-                (condition-case nil
-                    (let ((inhibit-interaction (plist-get job :inhibit-interaction)))
-                      (mevedel-artifact-lease-ensure
-                       workspace (mevedel-shared-editing--valid-id id)))
-                  (inhibited-interaction
-                   (error "This needs a decision in Emacs on the host first"))))
-              (cond
-               ((equal action "list")
-                (mevedel-shared-editing--finish
-                 runtime job (list :result (vconcat (mevedel-shared-editing-list workspace)))))
-               ;; Deleting needs no helper; queued, it cannot overtake a save.
-               ((equal action "delete")
-                (mevedel-shared-editing--finish
-                 runtime job (mevedel-shared-editing--delete workspace args)))
-               (t
-                (unless (member action '("create" "import" "status" "library-view"))
-                  (setq args (plist-put args :state
-                                        (mevedel-shared-editing--read workspace id))))
-                (when (member action '("create" "import"))
-                  ;; Metadata naming the item without its state is a create
-                  ;; that was interrupted; any other directory is taken.
-                  (when (and (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
-                             (not (mevedel-artifact-store-item-p
-                                   (mevedel-artifact-store-meta workspace id))))
-                    (error "Artifact %s already exists" id))
-                  (when (mevedel-shared-editing--present-p workspace id)
-                    (let ((existing (mevedel-shared-editing--read workspace id)))
-                      (unless (and (stringp (plist-get args :opId))
-                                   (plist-member (plist-get existing :receipts)
-                                                 (intern (concat ":" (plist-get args :opId)))))
-                        (error "Shared item already exists; reopen it instead"))
-                      (setq args (plist-put args :state existing)
-                            args (plist-put args :action "update")))))
-                (setq args (plist-put args :requestId (plist-get job :requestId)))
-                ;; A check starts fresh so repaired resources and runtime
-                ;; changes are verified, without discarding queued work.
-                (mevedel-shared-editing--send
-                 (mevedel-shared-editing--process runtime (equal action "status")) args)
-                (plist-put runtime :timeout
-                           (run-at-time
-                            30 nil (lambda () (mevedel-shared-editing-stop runtime)))))))
-          ;; A quit at a takeover question must settle the job too, or the
+            (catch 'stopped
+              (let* ((args (copy-sequence (plist-get job :args)))
+                     (action (plist-get args :action))
+                     (id (plist-get args :id))
+                     (mutation (not (member action '("read" "view" "export" "list" "status" "library-view"
+                                                    "version"))))
+                     ;; Target I/O runs timers and sentinels; one that stopped
+                     ;; the runtime has settled this job already.
+                     (current (lambda ()
+                                (unless (and (mevedel-shared-editing--live-p runtime)
+                                             (eq job (plist-get runtime :active)))
+                                  (throw 'stopped nil)))))
+                (when (plist-get job :cancelled) (error "Editing operation cancelled"))
+                (when-let* ((authorize (plist-get job :authorize)))
+                  (unless (mevedel-shared-editing--in-job job (funcall authorize))
+                    (error "Editing authority ended")))
+                ;; A stale browser editing a deleted item must not lease it
+                ;; back into being.  A held lease means it still exists: a
+                ;; deletion needs the lease too.
+                (when (and mutation (not (member action '("create" "import")))
+                           (not (mevedel-artifact-lease-held-p
+                                 workspace (mevedel-shared-editing--valid-id id)))
+                           (not (mevedel-shared-editing-present-p workspace id)))
+                  (error "This item no longer exists"))
+                ;; Another Emacs editing the item leaves it read-only here.  A
+                ;; takeover never asks from the queue: a question would block
+                ;; every item of the workspace, so it is a cockpit command.
+                (when mutation
+                  ;; Until this job commits, the disk is the only truth.
+                  (remhash id (plist-get runtime :committed))
+                  (mevedel-artifact-lease-ensure
+                   workspace (mevedel-shared-editing--valid-id id)))
+                (funcall current)
+                (cond
+                 ((equal action "list")
+                  (mevedel-shared-editing--finish
+                   runtime job (list :result (vconcat (mevedel-shared-editing-list workspace)))))
+                 ((equal action "version")
+                  (mevedel-shared-editing--finish
+                   runtime job (list :result (mevedel-shared-editing-save-version
+                                              workspace id (plist-get args :session)))))
+                 ;; Deleting needs no helper; queued, it cannot overtake a save.
+                 ((equal action "delete")
+                  (mevedel-shared-editing--finish
+                   runtime job (mevedel-shared-editing--delete workspace args)))
+                 (t
+                  (unless (member action '("create" "import" "status" "library-view"))
+                    (setq args (plist-put args :state
+                                          (mevedel-shared-editing--read workspace id))))
+                  (when (member action '("create" "import"))
+                    ;; Metadata naming the item without its state is a create
+                    ;; that was interrupted; any other directory is taken.
+                    (when (and (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
+                               (not (mevedel-artifact-store-item-p
+                                     (mevedel-artifact-store-meta workspace id))))
+                      (error "Artifact %s already exists" id))
+                    (when (mevedel-shared-editing-present-p workspace id)
+                      (let ((existing (mevedel-shared-editing--read workspace id)))
+                        (unless (and (stringp (plist-get args :opId))
+                                     (plist-member (plist-get existing :receipts)
+                                                   (intern (concat ":" (plist-get args :opId)))))
+                          (error "Shared item already exists; reopen it instead"))
+                        (setq args (plist-put args :state existing)
+                              args (plist-put args :action "update")))))
+                  (setq args (plist-put args :requestId (plist-get job :requestId)))
+                  (funcall current)
+                  ;; A check starts fresh so repaired resources and runtime
+                  ;; changes are verified, without discarding queued work.
+                  (mevedel-shared-editing--send
+                   (mevedel-shared-editing--process runtime (equal action "status")) args)
+                  (plist-put runtime :timeout
+                             (run-at-time
+                              30 nil (lambda () (mevedel-shared-editing-stop runtime))))))))
+          ;; A quit during target I/O must settle the job too, or the
           ;; workspace queue would wait for it forever.
           ((error quit)
            (mevedel-shared-editing--finish
@@ -479,10 +520,7 @@ session makes them; CALLBACK runs in the buffer current now."
                             sum (or (plist-get job :bytes) 0)))
            (sequence (1+ (plist-get runtime :sequence)))
            (job (list :args args :callback callback :buffer (current-buffer)
-                      :authorize authorize :commit commit :requestId sequence :bytes bytes
-                      ;; The queue runs from timers, after the caller's
-                      ;; binding is gone.
-                      :inhibit-interaction inhibit-interaction)))
+                      :authorize authorize :commit commit :requestId sequence :bytes bytes)))
       (when (> (+ bytes queued) (* 32 1024 1024))
         (error "Shared editing queue is full; wait for pending saves"))
       (plist-put runtime :sequence sequence)

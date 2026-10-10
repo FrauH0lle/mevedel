@@ -241,8 +241,8 @@
       } else if (request.action === 'duplicate') {
         notice(`Copied as ${frame.id}.`);
       } else if (request.action === 'restore') {
-        notice(typeof frame.n === 'number' ? `Restored as version ${frame.n}.`
-          : 'Restoring; the editor shows it once saved.');
+        // A whiteboard or document answers once its restore is saved.
+        notice(typeof frame.n === 'number' ? `Restored as version ${frame.n}.` : 'Restored.');
       } else if (request.action === 'delete') {
         notice(`Deleted ${request.title}.`);
       } else if (request.action === 'save-version') {
