@@ -870,11 +870,10 @@ bytes available; cleanup failure is diagnostic and retried on a later save.
 Snapshot contents remain raw and owner-only. Readers resolve the names in the
 checkpoint index; saving does not rewrite existing archived history.
 
-A session published before the artifact store may still carry `artifacts/...`
-logical entries. Saves no longer include or tombstone them, so the manifest
-overlay carries them along, but nothing reads them: the
-[artifact migration](#moving-artifacts-into-the-store) moves their content
-into the store and leaves the entries as unused bytes.
+Sessions no longer publish `artifacts/...` logical entries. The
+[artifact migration](#moving-artifacts-into-the-store) moves the content of a
+session published before the store into it and drops those entries from the
+converted copy.
 
 Retained idle agents remain registry entries until their first conversation access;
 resume eagerly hydrates only active abandoned turns needed for partial-response
@@ -1614,20 +1613,23 @@ npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-artifacts-to-store.el 
 ```
 
 For each session it reads the session's `artifacts/` entries -- a portable
-session's from its verified publication, never its fixed cache -- and creates
-one store artifact per file, whiteboard and document. A file artifact gets an
-id from its file name; a whiteboard or document keeps its own id. Artifact
-comments move with their file, and each thread keeps answering in the session
-that discussed it. Every new artifact starts with one version. The session is
-then converted as above into the destination, attached to the artifacts it
-held; it is not made their dedicated session. A session no converter accepts,
-such as one older than v0.5.6 or one closed before it ever saved, is copied
-unchanged. The script prints each
-session's artifacts.
+session's from its verified publication, never its fixed cache; a PID-lock
+session's folder without hidden files and backups -- and creates one store
+artifact per file, whiteboard and document. A file artifact gets an id from its
+file name; a whiteboard or document keeps its own id. A fork's copy that did
+not change is the same artifact as its parent's. Artifact comments move with
+their file, and each thread keeps answering in the session that discussed it.
+Every new artifact starts with one version. The session is then converted as
+above into the destination, attached to the artifacts it held and without its
+old `artifacts/` folder and manifest entries; it is not made their dedicated
+session. A session the converter has nothing to read in, one older than
+v0.5.6 or one closed before it ever saved, is copied unchanged. Any other
+failure stops the run and names the session. The script prints each session's
+artifacts.
 
-Nothing in the original sessions changes, and their old `artifacts/` entries
-stay where they are, so a failed run loses nothing. A rerun reuses the store
-artifacts an earlier run created. After checking the destination, move the
+Nothing in the original sessions changes, so a failed run loses nothing. A
+rerun into a new destination reuses the store artifacts an earlier run
+created. After checking the destination, move the
 original sessions directory aside as a backup and put the destination in its
 place.
 

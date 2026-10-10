@@ -101,7 +101,11 @@
          (store (mevedel-artifact-store-directory workspace)))
     (unwind-protect
         (progn
-          (mevedel-migrate-artifacts-test--pid-session root "s1")
+          (let ((folder (file-name-concat
+                         (mevedel-migrate-artifacts-test--pid-session root "s1") "artifacts")))
+            ;; Hidden files and backups carry no artifact.
+            (write-region "old" nil (file-name-concat folder "mockup.html~") nil 'silent)
+            (write-region "x" nil (file-name-concat folder ".hidden.html") nil 'silent))
           (mevedel-migrate-artifacts-test--portable-session root "s2")
           (let ((report (mevedel-migrate-artifacts root destination)))
             (should (equal '(("s1" "board-1" "mockup") ("s2" "notes"))
@@ -137,6 +141,14 @@
                              (sort (copy-sequence (plist-get converted :attached-artifacts))
                                    #'string<)))
               (mevedel-session-codec-validate-current-sidecar converted))
+            ;; The converted copies drop the moved `artifacts/' entries.
+            (should-not (file-exists-p (file-name-concat destination "s1" "artifacts")))
+            (should-not (file-exists-p (file-name-concat destination "s2" "artifacts")))
+            (let ((manifest (mevedel-migrate-session--read
+                             (file-name-concat destination "s2" ".publications"
+                                               "generation-bbbbbbbbbbbbbbbbbbbb" "manifest.el"))))
+              (should (equal '("session.meta.el")
+                             (mapcar #'car (plist-get manifest :artifacts)))))
             (should (equal "v0.5.10" (plist-get (mevedel-migrate-session--read
                                                  (file-name-concat root ".mevedel" "sessions"
                                                                    "s1" "session.meta.el"))
@@ -166,6 +178,10 @@
           (let ((report (mevedel-migrate-artifacts root destination)))
             (should (member "board-1" (cdr (assoc "s1" report))))
             (should (member "board-1" (cdr (assoc "s2" report))))
+            ;; A forked file with the same bytes is the same artifact too.
+            (should (equal '("mockup") (cl-remove-if-not (lambda (id) (string-prefix-p "mockup" id))
+                                                         (mevedel-artifact-store-ids workspace))))
+            (should (member "mockup" (cdr (assoc "s3" report))))
             (should (member "board-1-2" (cdr (assoc "s3" report))))
             (should (equal "Forked" (plist-get (mevedel-shared-editing--read workspace "board-1-2")
                                                :title)))
@@ -191,6 +207,31 @@
             (should (file-exists-p (file-name-concat destination "s0" ".lease"
                                                      "00000000000000000001.el")))
             (should (member "mockup" (cdr (assoc "s1" report))))))
+      (delete-directory root t)))
+
+  :doc "stops at a session it cannot move, naming it"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-broken-" t)))
+         (destination (file-name-concat root "converted")))
+    (unwind-protect
+        (let ((directory (mevedel-migrate-artifacts-test--pid-session root "s1")))
+          (write-region "{" nil (file-name-concat directory "artifacts" "shared-editing"
+                                                  "artifact-comments" "abc.json")
+                        nil 'silent)
+          (should (string-match-p "\\`s1: " (cadr (should-error (mevedel-migrate-artifacts
+                                                                  root destination))))))
+      (delete-directory root t)))
+
+  :doc "stops at a session holding a link, without copying what it points to"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-link-" t)))
+         (destination (file-name-concat root "converted"))
+         (outside (file-name-concat root "secret.html")))
+    (unwind-protect
+        (let ((directory (mevedel-migrate-artifacts-test--pid-session root "s1")))
+          (write-region "secret" nil outside nil 'silent)
+          (make-symbolic-link outside (file-name-concat directory "artifacts" "host.html"))
+          (should (string-match-p "s1: .*link" (cadr (should-error (mevedel-migrate-artifacts
+                                                                    root destination)))))
+          (should-not (file-exists-p (file-name-concat root ".mevedel" "artifacts" "host"))))
       (delete-directory root t)))
 
   :doc "refuses before writing anything while a session is open"
