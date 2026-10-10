@@ -419,18 +419,22 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
          (session (mevedel-session--create :name "s" :workspace workspace
                                            :authority-mode 'pid-lock))
          (guests (make-hash-table :test #'eql))
+         (logo (file-name-concat dir "mockup" "logo.png"))
          (room (list :session session :guests guests :transport 'transport
                      :records
                      (list (list :id "tool-1" :kind "tool" :name "ApplyPatch"
-                                 :artifact "mockup/index.html" :artifact-path path))))
+                                 :artifact "mockup/index.html" :artifact-path path)
+                           (list :id "tool-2" :kind "tool" :name "ApplyPatch"
+                                 :artifact "mockup/logo.png" :artifact-path logo))))
          sent)
     (puthash 1 (list :name "viewer" :writable nil :ready t) guests)
     (puthash 2 (list :name "writer" :writable t :ready t) guests)
     (unwind-protect
         (progn
-          (dolist (file (list path comments other))
+          (dolist (file (list path comments other logo))
             (make-directory (file-name-directory file) t)
             (with-temp-file file (insert "x")))
+          (mevedel-artifact-store-create-meta workspace "mockup" "index.html")
           (mevedel-artifact-store-create-meta workspace "other" "page.html")
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport peer frame) (push (cons peer frame) sent) t))
@@ -442,6 +446,11 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                           (cdr (car sent))))
               (should (string-match-p "not delete" (plist-get (reply 1 "tool-1") :error)))
               (should (file-exists-p path))
+              ;; Deleting goes by artifact, so a file beside its main one
+              ;; does not take the whole artifact.
+              (should (string-match-p "belongs to artifact mockup"
+                                      (plist-get (reply 2 "tool-2") :error)))
+              (should (file-exists-p logo))
               (should (eq t (plist-get (reply 2 "tool-1") :ok)))
               ;; The whole artifact goes, not only the carded file.
               (should-not (file-exists-p (file-name-concat dir "mockup")))

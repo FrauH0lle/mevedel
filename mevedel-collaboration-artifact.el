@@ -22,7 +22,7 @@
 (declare-function mevedel-artifact-store-conversation
                   "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-delete
-                  "mevedel-artifact-store" (workspace id))
+                  "mevedel-artifact-store" (workspace id &optional actor callback))
 (declare-function mevedel-artifact-store-directory
                   "mevedel-artifact-store" (workspace))
 (declare-function mevedel-artifact-store-duplicate
@@ -268,38 +268,15 @@ every frame was written."
               start end)))
     sent))
 
-(defun mevedel-collaboration-delete-artifact (workspace name &optional callback)
-  "Delete WORKSPACE's store artifact NAME and update the workspace's rooms.
-NAME is the path relative to the store, as cards show it; the whole
-artifact directory it lies in goes, with metadata, versions, comments and
-its dedicated session.  A whiteboard or document is deleted through its
-editing queue, after any save in progress, so its editors learn of it.
-CALLBACK receives nil once the artifact is gone, or the reason it was
-not deleted; without one, a refusal is reported as a message."
-  (let* ((slash (string-search "/" name))
-         (id (and slash (substring name 0 slash)))
-         (callback (or callback
-                       (lambda (failure)
-                         (when failure
-                           (message "mevedel: %s was not deleted: %s" name failure))))))
-    (cond
-     ((null id)
-      (delete-file (expand-file-name name (mevedel-artifact-store-directory workspace)))
-      (mevedel-collaboration-notify-artifacts-changed workspace)
-      (funcall callback nil))
-     ((mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
-      (mevedel-shared-editing-call
-       workspace (list :action "delete" :id id :actor "Host")
-       (lambda (reply) (funcall callback (plist-get reply :error)))))
-     (t
-      (funcall callback (condition-case err
-                            (progn (mevedel-artifact-store-delete workspace id) nil)
-                          (error (error-message-string err))))))))
+(defun mevedel-collaboration--guest-actor (guest)
+  "Return how edits by GUEST are attributed."
+  (concat "Guest: " (plist-get guest :name)))
 
 (defun mevedel-collaboration--handle-artifact-delete (room peer frame)
   "Delete the published artifact FRAME names for writable guest PEER in ROOM.
-The file comes from the host's own record, never from the frame.  The
-sender is answered once the artifact is gone or was refused."
+The file comes from the host's own record, never from the frame.  A card
+for a file beside an artifact's main one is refused, since deleting goes
+by artifact.  The sender is answered once it is gone or was refused."
   (let ((guest (mevedel-collaboration--guest room peer))
         (req-id (plist-get frame :reqId)))
     (when (and guest (mevedel-collaboration--request-id-p req-id))
@@ -308,19 +285,30 @@ sender is answered once the artifact is gone or was refused."
                       (plist-get room :transport) peer
                       (append (list :t "artifact-delete" :reqId req-id) fields)))))
         (condition-case err
-            (let ((record (mevedel-collaboration--artifact-target
-                           room guest (plist-get frame :id))))
+            (let* ((record (mevedel-collaboration--artifact-target
+                            room guest (plist-get frame :id)))
+                   (workspace (mevedel-collaboration--room-workspace room))
+                   (id (plist-get record :store))
+                   (name (plist-get record :artifact))
+                   (done (lambda (failure)
+                           (funcall reply (if failure (list :error failure)
+                                            (list :ok t :artifact name))))))
               (unless (plist-get guest :writable)
                 (error "This link can view artifacts but not delete them"))
-              (unless (and record (or (plist-get record :store)
-                                      (not (plist-get record :missing))))
+              (unless (and record (or id (not (plist-get record :missing))))
                 (error "This artifact is no longer on the host"))
-              (mevedel-collaboration-delete-artifact
-               (mevedel-collaboration--room-workspace room)
-               (plist-get record :artifact)
-               (lambda (failure)
-                 (funcall reply (if failure (list :error failure)
-                                  (list :ok t :artifact (plist-get record :artifact)))))))
+              (cond
+               ;; A file written straight into the store is no artifact.
+               ((null id)
+                (delete-file (expand-file-name name (mevedel-artifact-store-directory workspace)))
+                (mevedel-collaboration-notify-artifacts-changed workspace)
+                (funcall done nil))
+               ((not (equal name (concat id "/" (plist-get (mevedel-artifact-store-meta workspace id)
+                                                           :file))))
+                (error "%s belongs to artifact %s; delete the artifact from its main file"
+                       (file-name-nondirectory name) id))
+               (t (mevedel-artifact-store-delete
+                   workspace id (mevedel-collaboration--guest-actor guest) done))))
           (error (funcall reply (list :error (error-message-string err)))))))))
 
 (defun mevedel-collaboration--workspace-rooms (workspace)
@@ -456,9 +444,8 @@ error with a message for the guest when the action is refused."
          (list :id id :n n)))
       ("duplicate"
        (let ((new-id (plist-get frame :newId)))
-         (unless (and (stringp new-id)
-                      (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._-]\\{0,79\\}\\'" new-id))
-           (error "Name the copy with letters, digits, dots, dashes or underscores"))
+         (unless (mevedel-artifact-store-id-p new-id)
+           (error "Name the copy with letters, digits, dashes or underscores"))
          (mevedel-artifact-store-duplicate workspace id new-id)
          (when session
            (mevedel-artifact-store-attach
@@ -467,9 +454,8 @@ error with a message for the guest when the action is refused."
       ;; Deleting may wait for the item's editing queue, so it answers later.
       ("delete"
        (lambda (done)
-         (mevedel-collaboration-delete-artifact
-          workspace (concat id "/" (plist-get (mevedel-artifact-store-meta workspace id) :file))
-          done)))
+         (mevedel-artifact-store-delete
+          workspace id (mevedel-collaboration--guest-actor guest) done)))
       ("conversation"
        (condition-case nil
            (list :id id :link (mevedel-collaboration--store-conversation-link

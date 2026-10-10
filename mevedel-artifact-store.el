@@ -34,6 +34,9 @@
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
 
 ;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
+                  (workspace args callback &optional authorize commit))
+(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
 (declare-function mevedel-shared-editing-duplicate
                   "mevedel-shared-editing" (workspace id new-id))
 (declare-function mevedel-shared-editing-restore
@@ -102,11 +105,11 @@ Live collaboration rooms follow the store through it.")
    (file-name-concat (mevedel-workspace-state-dir workspace) "artifacts")))
 
 (defun mevedel-artifact-store-id-p (id)
-  "Return non-nil when ID names one visible store directory."
+  "Return non-nil when ID is a valid artifact id.
+Letters, digits, `-' and `_', at most 80 of them: the rule shared items,
+browser names and the migration all follow."
   (and (stringp id)
-       (not (string-empty-p id))
-       (not (string-prefix-p "." id))
-       (not (string-match-p "/" id))))
+       (string-match-p "\\`[A-Za-z0-9_-]\\{1,80\\}\\'" id)))
 
 (defun mevedel-artifact-store-artifact-directory (workspace id)
   "Return the directory of artifact ID in WORKSPACE's store."
@@ -121,16 +124,21 @@ Reads directory names only, so it stays cheap enough for a menu redraw."
     (when (file-directory-p dir)
       (sort (cl-loop for (name . attributes)
                      in (directory-files-and-attributes dir nil "\\`[^.]" t)
-                     when (eq t (file-attribute-type attributes))
+                     when (and (eq t (file-attribute-type attributes))
+                               (mevedel-artifact-store-id-p name))
                      collect name)
             #'string<))))
 
 (defun mevedel-artifact-store--read (file)
-  "Return the Lisp datum in FILE, or nil when it is missing or unreadable."
-  (ignore-errors
-    (with-temp-buffer
-      (insert-file-contents file)
-      (read (current-buffer)))))
+  "Return the Lisp datum in FILE, or nil when FILE does not exist.
+A file that exists but cannot be read signals: a passing failure, such
+as a dropped remote connection, must not read as absent metadata or an
+empty version index, which the next write would then replace."
+  (condition-case nil
+      (with-temp-buffer
+        (insert-file-contents file)
+        (read (current-buffer)))
+    (file-missing nil)))
 
 (defun mevedel-artifact-store--write (file datum)
   "Atomically replace FILE with the printed DATUM."
@@ -139,9 +147,20 @@ Reads directory names only, so it stays cheap enough for a menu redraw."
           (prin1-to-string datum))))
 
 (defun mevedel-artifact-store-meta (workspace id)
-  "Return the metadata plist of artifact ID, or nil."
-  (mevedel-artifact-store--read
-   (file-name-concat (mevedel-artifact-store-artifact-directory workspace id) "meta.el")))
+  "Return the metadata plist of artifact ID, or nil when it has none.
+Metadata naming a primary file outside the artifact's directory signals:
+the store may come from version control, and restoring a version writes
+that file."
+  (let ((meta (mevedel-artifact-store--read
+               (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
+                                 "meta.el"))))
+    (when meta
+      (let ((file (plist-get meta :file)))
+        (unless (and (stringp file) (not (string-empty-p file))
+                     (not (file-name-absolute-p file))
+                     (not (member ".." (split-string file "/"))))
+          (error "Artifact %s names an invalid file: %S" id file))))
+    meta))
 
 (defun mevedel-artifact-store--kind (file)
   "Return the artifact kind for FILE's extension."
@@ -160,9 +179,10 @@ Reads directory names only, so it stays cheap enough for a menu redraw."
 
 (defun mevedel-artifact-store-create-meta (workspace id file &optional kind title)
   "Write the metadata of new artifact ID whose primary file is FILE.
-KIND and TITLE default to what FILE's name says."
+KIND defaults to what FILE's name says and TITLE to ID, which names what
+the artifact shows where its file is often just index.html."
   (let ((meta (list :kind (or kind (mevedel-artifact-store--kind file))
-                    :title (or title (file-name-nondirectory file))
+                    :title (or title id)
                     :file file
                     :created (format-time-string "%FT%T%z"))))
     (mevedel-artifact-store--write
@@ -237,6 +257,14 @@ reduced copy of its state.  Return the version number."
     (mevedel-artifact-store--changed workspace)
     n))
 
+(defun mevedel-artifact-store-save-version (workspace id &optional session-id)
+  "Record artifact ID's current state as a new version and return its number.
+A whiteboard or document records its reduced state; a file artifact, its
+primary file.  SESSION-ID names the session whose work it is."
+  (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+      (mevedel-shared-editing-save-version workspace id session-id)
+    (mevedel-artifact-store-record-version workspace id session-id)))
+
 (defun mevedel-artifact-store-restore-version (workspace id n &optional session-id)
   "Restore version N of artifact ID as its newest version.
 SESSION-ID is recorded as the restoring session.  Return the new version
@@ -258,10 +286,12 @@ saved."
 (defun mevedel-artifact-store--restore-file (workspace id n meta session-id)
   "Copy version N of file artifact ID, described by META, back as newest.
 SESSION-ID is recorded as the restoring session."
-  (copy-file (mevedel-artifact-store-version-path workspace id n)
-             (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
-                               (plist-get meta :file))
-             t)
+  (let ((target (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
+                                  (plist-get meta :file))))
+    ;; Copying onto a link would write wherever it points.
+    (when (file-symlink-p target)
+      (error "Artifact %s's file is a symbolic link" id))
+    (copy-file (mevedel-artifact-store-version-path workspace id n) target t))
   (mevedel-artifact-store-record-version workspace id session-id))
 
 (defun mevedel-artifact-store-duplicate (workspace id new-id)
@@ -279,20 +309,39 @@ The copy starts with one version and its own metadata."
                   (error "Artifact %s has no metadata" id))))
     (when (file-exists-p target)
       (error "Artifact %s already exists" new-id))
-    (copy-directory source target nil t t)
-    (delete-directory (mevedel-artifact-store--versions-dir workspace new-id) t)
-    ;; Comments belong to the original.
-    (let ((comments (file-name-concat
-                     (mevedel-artifact-store-artifact-directory workspace new-id)
-                     "comments.json")))
-      (when (file-exists-p comments) (delete-file comments)))
+    (make-directory target t)
+    ;; The files only: versions, comments and metadata belong to the original.
+    (dolist (name (directory-files source nil directory-files-no-dot-files-regexp t))
+      (unless (member name mevedel-artifact-store--bookkeeping)
+        (let ((from (file-name-concat source name)))
+          (if (file-directory-p from)
+              (copy-directory from (file-name-concat target name) t t)
+            (copy-file from (file-name-concat target name) nil t t)))))
     (mevedel-artifact-store-create-meta workspace new-id (plist-get meta :file)
                                         (plist-get meta :kind) (plist-get meta :title))
     (mevedel-artifact-store-record-version workspace new-id)
     new-id))
 
-(defun mevedel-artifact-store-delete (workspace id)
+(defun mevedel-artifact-store-delete (workspace id &optional actor callback)
   "Delete artifact ID with its metadata, versions and dedicated session.
+A whiteboard or document is deleted through its editing queue, after any
+save in progress, so its editors learn of it from ACTOR (default
+\"Host\").  CALLBACK receives nil once the artifact is gone or the
+reason it was not deleted; without one, a refusal is a message."
+  (let ((callback (or callback
+                      (lambda (failure)
+                        (when failure
+                          (message "mevedel: %s was not deleted: %s" id failure))))))
+    (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+        (mevedel-shared-editing-call
+         workspace (list :action "delete" :id id :actor (or actor "Host"))
+         (lambda (reply) (funcall callback (plist-get reply :error))))
+      (funcall callback (condition-case err
+                            (progn (mevedel-artifact-store--delete workspace id) nil)
+                          (error (error-message-string err)))))))
+
+(defun mevedel-artifact-store--delete (workspace id)
+  "Delete artifact ID's directory and dedicated session now.
 A dedicated session open in this Emacs is closed first, and its room
 ended, unless a turn is still running there.  One that cannot be deleted
 yet -- held by another client, or pinned by pending journal capture --
@@ -404,10 +453,12 @@ before anyone has written in it."
            workspace id :dedicated-session (mevedel-session-session-id session))
           buffer))))
 
-(defun mevedel-artifact-store-note-writes (session changes)
+(defun mevedel-artifact-store-note-writes (session changes &optional request)
   "Record settled ApplyPatch CHANGES of SESSION that land in the store.
-A write into a new id directory creates the artifact; a write of an
-artifact's primary file records a version.  Either attaches SESSION."
+A write into a new id directory creates the artifact, and any write
+attaches SESSION.  A write of an artifact's primary file is versioned once
+REQUEST settles, so a turn's many small patches leave one version and the
+one before the turn survives; without a request it is versioned now."
   (let ((workspace (mevedel-session-workspace session)))
     (when-let* ((store (and workspace
                             (expand-file-name
@@ -429,8 +480,12 @@ artifact's primary file records a version.  Either attaches SESSION."
                             (mevedel-artifact-store-create-meta
                              workspace id file))))
               (when (equal file (plist-get meta :file))
-                (mevedel-artifact-store-record-version
-                 workspace id (mevedel-session-session-id session)))
+                (if request
+                    (cl-pushnew (cons workspace id)
+                                (mevedel-request-edited-artifacts request)
+                                :test #'equal)
+                  (mevedel-artifact-store-record-version
+                   workspace id (mevedel-session-session-id session))))
               (mevedel-artifact-store-attach session id))))))))
 
 (provide 'mevedel-artifact-store)

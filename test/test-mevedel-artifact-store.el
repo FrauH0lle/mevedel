@@ -72,7 +72,8 @@
     (let ((session (mevedel-session--create :workspace workspace :session-id "s1")))
       (mevedel-artifact-store-test--note
        session (mevedel-artifact-store-test--write store "flow/index.html" "<p>1</p>"))
-      (should (equal '(:kind html :title "index.html" :file "index.html")
+      ;; Titled by its id, which says what it shows; the file is index.html.
+      (should (equal '(:kind html :title "flow" :file "index.html")
                      (cl-subseq (mevedel-artifact-store-meta workspace "flow") 0 6)))
       (should (equal '("flow") (mevedel-session-attached-artifacts session)))
       (let ((versions (mevedel-artifact-store-versions workspace "flow")))
@@ -103,6 +104,38 @@
       (should (= 2 (length (mevedel-artifact-store-versions workspace "flow"))))
       (should (equal '("flow") (mevedel-session-attached-artifacts session)))))
 
+  :doc "during a turn, notes the artifact for one version when it settles"
+  (mevedel-artifact-store-test--with-workspace
+    (let* ((session (mevedel-session--create :workspace workspace :session-id "s1"))
+           (request (mevedel-request--create)))
+      (dolist (content '("1" "2" "3"))
+        (mevedel-artifact-store-note-writes
+         session
+         (list (list :action 'write
+                     :path (mevedel-artifact-store-test--write store "flow/index.html" content)))
+         request))
+      (should-not (mevedel-artifact-store-versions workspace "flow"))
+      (should (equal (list (cons workspace "flow")) (mevedel-request-edited-artifacts request)))
+      (should (= 1 (mevedel-artifact-store-save-version workspace "flow" "s1")))))
+
+  :doc "a failed metadata read is not taken for a new artifact"
+  (mevedel-artifact-store-test--with-workspace
+    (let ((session (mevedel-session--create :workspace workspace)))
+      (mevedel-artifact-store-test--note
+       session (mevedel-artifact-store-test--write store "flow/index.html" "1"))
+      (let ((before (mevedel-artifact-store-meta workspace "flow")))
+        (cl-letf* ((insert (symbol-function 'insert-file-contents))
+                   ((symbol-function 'insert-file-contents)
+                    (lambda (file &rest args)
+                      (if (string-suffix-p "meta.el" file)
+                          (signal 'file-error (list "Connection lost" file))
+                        (apply insert file args)))))
+          (should-error (mevedel-artifact-store-note-writes
+                         session (list (list :action 'write
+                                             :path (mevedel-artifact-store-test--write
+                                                    store "flow/logo.png" "png"))))))
+        (should (equal before (mevedel-artifact-store-meta workspace "flow"))))))
+
   :doc "writes outside the store are ignored"
   (mevedel-artifact-store-test--with-workspace
     (let ((session (mevedel-session--create :workspace workspace))
@@ -112,6 +145,17 @@
       (mevedel-artifact-store-test--note session path)
       (should-not (mevedel-session-attached-artifacts session))
       (should-not (file-exists-p store)))))
+
+(mevedel-deftest mevedel-artifact-store-meta ()
+  ,test
+  (test)
+  :doc "refuses metadata naming a file outside the artifact"
+  (mevedel-artifact-store-test--with-workspace
+    (dolist (file '("../../.bashrc" "/etc/passwd" ""))
+      (make-directory (file-name-concat store "evil") t)
+      (mevedel-artifact-store--write (file-name-concat store "evil" "meta.el")
+                                     (list :kind 'html :file file))
+      (should-error (mevedel-artifact-store-meta workspace "evil")))))
 
 (mevedel-deftest mevedel-artifact-store-record-version ()
   ,test
@@ -267,8 +311,12 @@
                                     (mevedel-session-save-path session))))
             (should (eq buffer (mevedel-artifact-store-conversation workspace "flow")))
             ;; A running turn keeps its artifact.
-            (cl-letf (((symbol-function 'mevedel-turn-busy-p) (lambda (&rest _) t)))
-              (should-error (mevedel-artifact-store-delete workspace "flow")))
+            (let (failure)
+              (cl-letf (((symbol-function 'mevedel-turn-busy-p) (lambda (&rest _) t)))
+                (mevedel-artifact-store-delete workspace "flow" nil
+                                               (lambda (why) (setq failure why))))
+              (should (string-match-p "still working" failure))
+              (should (file-exists-p (file-name-concat store "flow"))))
             (test-mevedel-session-persistence--release-and-kill buffer session)
             (setq buffer (mevedel-artifact-store-conversation workspace "flow"))
             (should (equal id (mevedel-session-session-id

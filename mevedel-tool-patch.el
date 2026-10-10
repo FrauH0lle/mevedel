@@ -26,7 +26,7 @@
 
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-note-writes
-                  "mevedel-artifact-store" (session changes))
+                  "mevedel-artifact-store" (session changes &optional request))
 (autoload 'mevedel-artifact-store-note-writes "mevedel-artifact-store")
 
 ;; `mevedel-directive'
@@ -1276,7 +1276,8 @@ Refresh file tracking immediately and diagnostics before continuation."
            session (plist-get change :path) 'modify))))
     ;; The write is committed; bookkeeping failure must not fail the tool.
     (condition-case err
-        (mevedel-artifact-store-note-writes session changes)
+        (mevedel-artifact-store-note-writes
+         session changes (buffer-local-value 'mevedel--current-request data-buffer))
       (error (message "mevedel: artifact store bookkeeping failed: %s"
                       (error-message-string err)))))
   (cl-labels

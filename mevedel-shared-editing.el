@@ -37,8 +37,7 @@ RESULT.  Observers cannot change whether the preceding commit succeeded.")
 
 (defun mevedel-shared-editing--valid-id (id)
   "Return ID when it is a valid shared item identity, else signal."
-  (unless (and (stringp id)
-               (string-match-p "\\`[a-zA-Z0-9_-]\\{1,80\\}\\'" id))
+  (unless (mevedel-artifact-store-id-p id)
     (error "Invalid shared item identity"))
   id)
 
@@ -105,7 +104,7 @@ state with `:deleted' and the deleting `:actor'."
   (let ((id (plist-get args :id)))
     (unless (mevedel-shared-editing--present-p workspace id)
       (error "This item no longer exists"))
-    (mevedel-artifact-store-delete workspace id)
+    (mevedel-artifact-store--delete workspace id)
     (mevedel-artifact-lease-forget-item workspace id)
     (mevedel-shared-editing--notify
      workspace (list :id id :deleted t :actor (plist-get args :actor)) nil)

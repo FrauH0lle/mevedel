@@ -104,7 +104,7 @@ encode these as vectors so the host does not mistake them for objects."
          (when (stringp id)
            (mevedel-artifact-store-attach session id)
            (when request
-             (cl-pushnew (cons workspace id) (mevedel-request-edited-items request)
+             (cl-pushnew (cons workspace id) (mevedel-request-edited-artifacts request)
                          :test #'equal)))
          (funcall callback
                   (append (list :result (mevedel-shared-editing--json model))
