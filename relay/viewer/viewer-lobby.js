@@ -38,6 +38,7 @@
     const title = document.getElementById('lobby-title');
     const newButton = document.getElementById('lobby-new');
     const uploadButton = document.getElementById('files-upload');
+    const createButtons = document.getElementById('lobby-store-create');
     const refresh = document.getElementById('lobby-refresh');
 
     let active = false;
@@ -53,6 +54,7 @@
       title.textContent = {files: 'Files', artifacts: 'Artifacts'}[tab] || 'Sessions';
       newButton.hidden = !state.owner || tab !== 'sessions';
       uploadButton.hidden = tab !== 'files';
+      createButtons.hidden = tab !== 'artifacts';
     }
 
     // Project files are a full-link feature; a view link sees sessions and

@@ -283,6 +283,9 @@ body[data-lobby] :is(.skip-link, #filter, #history, #transcript, #empty-state,
   overflow-wrap: anywhere;
 }
 .lobby-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-left: auto; }
+/* The artifacts tab's create buttons join the head's action row. */
+.lobby-create { display: contents; }
+.lobby-create[hidden] { display: none; }
 
 .lobby-list { list-style: none; margin: 0; padding: 0; }
 

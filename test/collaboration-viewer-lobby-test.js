@@ -12,7 +12,8 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const ids = ['lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
              'lobby-title', 'lobby-new', 'lobby-refresh', 'lobby-tabs',
              'lobby-tab-sessions', 'lobby-tab-artifacts', 'lobby-tab-files',
-             'lobby-sessions', 'lobby-artifacts', 'lobby-files', 'files-upload'];
+             'lobby-sessions', 'lobby-artifacts', 'lobby-files', 'files-upload',
+             'lobby-store-create'];
 
 function build({writable = true, owner = false} = {}) {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
@@ -260,10 +261,15 @@ function openButton(nodes, index) {
   // session list, uploads to the files.
   assert.equal(nodes['lobby-new'].hidden, true);
   assert.equal(nodes['files-upload'].hidden, false);
+  assert.equal(nodes['lobby-store-create'].hidden, true);
+  nodes['lobby-tab-artifacts'].dispatch('click');
+  assert.equal(nodes['lobby-store-create'].hidden, false);
+  assert.equal(nodes['files-upload'].hidden, true);
+  nodes['lobby-tab-files'].dispatch('click');
   // Refresh and a return to the foreground reload the tab on screen.
   nodes['lobby-refresh'].dispatch('click');
   document.listeners.visibilitychange.forEach(f => f());
-  assert.deepEqual(filesCalls.slice(1), [['refresh'], ['refresh']]);
+  assert.deepEqual(filesCalls.slice(2), [['refresh'], ['refresh']]);
   assert.deepEqual(sent, []);
   nodes['lobby-tab-sessions'].dispatch('click');
   assert.equal(nodes['lobby-files'].hidden, true);
