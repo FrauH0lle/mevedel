@@ -113,9 +113,10 @@ state with `:deleted' and the deleting `:actor'."
 (defun mevedel-shared-editing-list (workspace)
   "Return WORKSPACE's shared items as plists of `:id', `:kind' and `:title'.
 Only their metadata is read: an item's state can run to megabytes, and
-the prompt's resource roster lists items on every request."
+the prompt's resource roster lists items on every request.  Unreadable
+metadata leaves its artifact out rather than failing every request."
   (cl-loop for id in (mevedel-artifact-store-ids workspace)
-           for meta = (mevedel-artifact-store-meta workspace id)
+           for meta = (ignore-errors (mevedel-artifact-store-meta workspace id))
            when (mevedel-artifact-store-item-p meta)
            collect (list :id id :kind (symbol-name (plist-get meta :kind))
                          :title (plist-get meta :title))))

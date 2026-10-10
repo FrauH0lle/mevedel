@@ -281,6 +281,13 @@
       (mevedel-artifact-store-create-meta workspace (car spec) (nth 2 spec) (cadr spec) "Plan"))
     (should (equal '((:id "board" :kind "whiteboard" :title "Plan"))
                    (mevedel-shared-editing-list workspace)))
+    ;; Unreadable metadata leaves its artifact out, not the listing.
+    (make-directory (mevedel-artifact-store-artifact-directory workspace "bad") t)
+    (write-region "(:kind" nil (file-name-concat (mevedel-artifact-store-artifact-directory
+                                                  workspace "bad")
+                                                 "meta.el")
+                  nil 'silent)
+    (should (equal '("board") (mevedel-shared-editing-ids workspace)))
     (should (equal '("board") (mevedel-shared-editing-ids workspace)))
     (should (mevedel-shared-editing-present-p workspace "board"))
     (should-not (mevedel-shared-editing-present-p workspace "page"))))
