@@ -5,10 +5,10 @@
 ;; Browser guests comment on parts of HTML artifacts in the workspace
 ;; artifact store.  The viewer reports what was picked; the host rebuilds that
 ;; anchor from bounded fields and keeps the threads in the artifact's
-;; `comments.json'.  A message to the assistant goes to the session that owns
-;; its thread: written in a chat's room, that chat; written from the lobby,
-;; the artifact's dedicated session; a reply follows the session that
-;; answered the thread, or the dedicated one when that session is gone.
+;; `comments.json'.  A message to the assistant written in a chat's room goes
+;; to that chat, whose links speak for it alone; from the lobby, a reply
+;; follows the session that answered the thread, else the artifact's
+;; dedicated session.
 ;; Artifact conversations are shared-item conversations whose item identity
 ;; is "artifact:ID", so a room lists them as discussions and the request
 ;; context isolates them the same way.
@@ -315,16 +315,14 @@ A retried send then succeeds without queueing the message twice."
 
 (defun mevedel-collaboration--artifact-answering-buffer (room id thread-session)
   "Return the data buffer of the session that answers about artifact ID.
-THREAD-SESSION is the session already answering the thread, or nil.  A
-thread keeps its session; a new message goes to ROOM's own session, or,
-in the lobby or when THREAD-SESSION is gone, to the artifact's dedicated
-session."
-  (let ((own (plist-get room :session))
-        (workspace (mevedel-collaboration--room-workspace room)))
+A room answers in its own session only: its links speak for that session,
+never another.  The lobby, which may open any session, keeps a thread
+with THREAD-SESSION, the session answering it, or else uses the
+artifact's dedicated session."
+  (let ((workspace (mevedel-collaboration--room-workspace room)))
     (condition-case nil
         (cond
-         ((and own (or (null thread-session)
-                       (equal thread-session (mevedel-session-session-id own))))
+         ((plist-get room :session)
           (mevedel-collaboration--room-data-buffer room))
          ((and thread-session
                (mevedel-artifact-store-session-buffer workspace thread-session)))

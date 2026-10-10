@@ -64,10 +64,10 @@ the artifact as its conversation, and exempt from expiry while the artifact
 exists. Deleting the artifact closes and deletes it, unless a turn is running
 there; one that cannot be deleted yet stays as an ordinary session.
 
-**Comment routing** follows where the comment is written, then sticks to its
-thread: written in a chat's room, to that chat; written from the lobby, to the
-dedicated session; replies, to the session that answered the thread, shown as
-"answered in", or the dedicated session when that one is gone.
+**Comment routing** follows where the comment is written: in a chat's room, to
+that chat, whose links speak for it alone; from the lobby, to the session
+that answered the thread, shown as "answered in", or else the dedicated
+session.
 
 **Access.** View links list and open artifacts and list versions. Full and
 owner links also edit, comment, restore, attach, duplicate, delete, create
@@ -165,3 +165,9 @@ push out every earlier version, including the state before the turn.
   outside mevedel also made deleting the copy delete the original's
   conversation. The session now records its artifact too, and only a pair
   that agrees counts.
+- **Replies from another room.** A reply first followed the session that
+  answered its thread from any room. Since comments reach every room, a full
+  link to one chat could then prompt -- and resume -- any session that had
+  ever answered a thread, under that session's permission mode, which ADR
+  0099's one-room-per-session links do not allow. A room now answers in its
+  own session; only the lobby, which may open any session, follows threads.
