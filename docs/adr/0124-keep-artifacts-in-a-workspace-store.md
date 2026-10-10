@@ -38,8 +38,9 @@ Across Emacs instances an item lease, with the session lease's generation
 records, target clock, heartbeat and expiry, decides who commits; each write
 proves it in the same target program. Another Emacs sees the item read-only
 and asks the holder to hand it over, which happens once the holder's queue for
-it is idle; a lease whose holder stopped renewing is taken over after
-confirmation, which a browser request cannot give. A version is recorded when
+it is idle and the item has had no edit there for 10 seconds; a lease whose
+holder stopped renewing is taken over only by the artifacts cockpit's
+takeover command, after confirmation, never by an edit. A version is recorded when
 a turn that edited the item settles, and on **Save version**; restoring one is
 an ordinary, revertible edit, so the Yjs lineage and concurrent editors
 survive.
@@ -148,6 +149,21 @@ push out every earlier version, including the state before the turn.
   (`versions`: "Up to roughly 20 most-recently-published versions").
 
 ## Decision history
+
+- **Taking over an expired item lease.** At first an edit that met an
+  expired foreign lease asked for confirmation when its caller could have
+  asked. The question ran from the editing queue's timer, so it blocked
+  every item of the workspace until answered, and a browser request, which
+  cannot ask, was refused with "needs a decision in Emacs" that no Emacs
+  command could make. The queue now never asks; the cockpit's `T` makes
+  that decision.
+- **Hand-over while editing.** At first the holder handed an item over
+  whenever its queue was empty at the renewal tick. Saves arrive every
+  300 ms while someone draws, so the queue is empty most of the time: a
+  person drawing lost the lease within one renewal of another Emacs's
+  request, and two Emacs instances editing at once passed it back and
+  forth. The holder now also waits until the item has had no edit for
+  10 seconds.
 
 - **Deleting with an open conversation.** At first, deleting an artifact was
   refused while its dedicated session was open in Emacs or could not be

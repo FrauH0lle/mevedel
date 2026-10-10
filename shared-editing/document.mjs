@@ -202,6 +202,24 @@ export function seedEmptyText(doc) {
   };
   seed(doc.getXmlFragment('document'));
 }
+/* Make DOC's document SOURCE's, block by block: blocks unchanged in both,
+   kept in order, keep their Yjs items, so comment anchors and concurrent
+   cursors in them survive; the rest are deleted and copied from SOURCE. */
+export function restoreDocument(doc, source) {
+  const root = doc.getXmlFragment('document'), from = source.getXmlFragment('document');
+  const current = documentJSON(doc).content || [], target = documentJSON(source).content || [];
+  const at = new Map(current.map((n, i) => [n.attrs?.id, i]));
+  // ponytail: greedy in-order match, not a longest common subsequence; a
+  // reordered block is copied again instead of kept.
+  const kept = new Set();
+  let last = -1;
+  target.forEach((n, i) => {
+    const j = at.get(n.attrs?.id);
+    if (j > last && equalityDeep(current[j], n)) { kept.add(j); last = j; target[i] = null; }
+  });
+  for (let j = current.length - 1; j >= 0; j--) if (!kept.has(j)) root.delete(j, 1);
+  target.forEach((n, i) => { if (n) root.insert(i, [from.get(i).clone()]); });
+}
 export function patchDocument(doc, changes) {
   if (!Array.isArray(changes) || !changes.length || changes.length > 200)
     throw new Error('Expected 1 to 200 changes');

@@ -381,10 +381,11 @@
                     (mevedel-resource-execute
                      (mevedel-resource-prepare operation address context)))))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-shared-editing-ids) (lambda (_) '("board")))
+        (cl-letf (((symbol-function 'mevedel-shared-editing-present-p)
+                   (lambda (_ id) (equal id "board")))
                   ((symbol-function 'mevedel-shared-editing-list)
-                   (lambda (_) (list (list :id "board" :kind "whiteboard" :title "Plan" :revision 4)))))
-          (should (equal "shared://board\twhiteboard \"Plan\" · revision 4\nshared://library\tWhiteboard element libraries for SharedEdit insert"
+                   (lambda (_) (list (list :id "board" :kind "whiteboard" :title "Plan")))))
+          (should (equal "shared://board\twhiteboard \"Plan\"\nshared://library\tWhiteboard element libraries for SharedEdit insert"
                          (plist-get (funcall execute 'read "shared://") :result)))
           (should (equal '("board" "elements" "api")
                          (plist-get (funcall execute 'read "shared://board/elements/api") :shared-view)))

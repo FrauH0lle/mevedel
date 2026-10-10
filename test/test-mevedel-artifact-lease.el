@@ -4,11 +4,13 @@
 
 ;; Tests item leases between two simulated clients: acquisition, read-only
 ;; refusal with a hand-over request, renewal and hand-over, idle release,
-;; confirmed takeover after expiry, and fenced writes.
+;; confirmed takeover after expiry, fenced writes, and the target programs
+;; each step costs.
 
 ;;; Code:
 
 (require 'mevedel-artifact-lease)
+(require 'mevedel-shared-editing)
 (require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
@@ -25,8 +27,7 @@
   `(let* ((root (file-name-as-directory (make-temp-file "mevedel-artifact-lease-" t)))
           (workspace (mevedel-workspace--create :type 'file :id "w" :root root :name "w"))
           (mevedel-session-durability--client-id (make-string 64 ?a))
-          (mevedel-artifact-lease--held (make-hash-table :test #'equal))
-          (mevedel-artifact-lease-busy-function nil))
+          (mevedel-artifact-lease--held (make-hash-table :test #'equal)))
      (unwind-protect (progn ,@body)
        (maphash (lambda (_directory held)
                   (when (timerp (plist-get held :timer))
@@ -45,20 +46,28 @@
                     (cancel-timer (plist-get held :timer))))
                 mevedel-artifact-lease--held))))
 
+(defmacro mevedel-artifact-lease-test--counting (count &rest body)
+  "Run BODY, setting COUNT to the number of target programs it ran."
+  (declare (indent 1) (debug t))
+  `(let ((run (symbol-function 'mevedel-session-control-fs-run-program)))
+     (setq ,count 0)
+     (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                (lambda (&rest args) (cl-incf ,count) (apply run args))))
+       ,@body)))
+
 (mevedel-deftest mevedel-artifact-lease-acquire ()
   ,test
   (test)
   :doc "lets one client edit and asks the holder to hand over for another"
   (mevedel-artifact-lease-test--with-workspace
-    (should (eq 'available (mevedel-artifact-lease-status workspace "board")))
     (mevedel-artifact-lease-acquire workspace "board")
-    (should (eq 'owned (mevedel-artifact-lease-status workspace "board")))
+    (should (mevedel-artifact-lease-held-p workspace "board"))
     (should (mevedel-artifact-lease-ensure workspace "board"))
     (should (string-prefix-p (expand-file-name ".mevedel/leases/artifacts/board" root)
                              (mevedel-artifact-lease-directory workspace "board")))
     (mevedel-artifact-lease-test--as-other
-      (should (eq 'foreign (mevedel-artifact-lease-status workspace "board")))
       (should-error (mevedel-artifact-lease-acquire workspace "board"))
+      (should-not (mevedel-artifact-lease-held-p workspace "board"))
       (should (file-exists-p (file-name-concat
                               (mevedel-artifact-lease-directory workspace "board")
                               "request.el")))))
@@ -70,41 +79,86 @@
       (mevedel-artifact-lease-test--as-other
         (ignore-errors (mevedel-artifact-lease-acquire workspace "board")))
       ;; Busy items are not handed over.
-      (let ((mevedel-artifact-lease-busy-function (lambda (&rest _) t)))
+      (plist-put (gethash directory mevedel-artifact-lease--held) :touched 0)
+      (cl-letf (((symbol-function 'mevedel-shared-editing-item-busy-p) (lambda (&rest _) t)))
         (mevedel-artifact-lease--renew directory))
-      (should (eq 'owned (mevedel-artifact-lease-status workspace "board")))
+      (should (gethash directory mevedel-artifact-lease--held))
+      ;; Nor are items edited moments ago, though the queue is empty.
+      (plist-put (gethash directory mevedel-artifact-lease--held) :touched (float-time))
+      (mevedel-artifact-lease--renew directory)
+      (should (gethash directory mevedel-artifact-lease--held))
+      (plist-put (gethash directory mevedel-artifact-lease--held) :touched 0)
       (let (messages)
         (mevedel-test--with-captured-messages messages
           (mevedel-artifact-lease--renew directory))
         (should (string-match-p "handed board over" messages)))
       (should-not (gethash directory mevedel-artifact-lease--held))
       ;; Reserved for the requester; nobody else may claim it meanwhile.
-      (should (eq 'foreign (mevedel-artifact-lease-status workspace "board")))
+      (should-error (mevedel-artifact-lease-acquire workspace "board"))
       (mevedel-artifact-lease-test--as-other
-        (should (eq 'available (mevedel-artifact-lease-status workspace "board")))
         (mevedel-artifact-lease-acquire workspace "board")
-        (should (eq 'owned (mevedel-artifact-lease-status workspace "board"))))
+        (should (mevedel-artifact-lease-held-p workspace "board")))
       ;; The answered request does not linger to hand a later holder's
       ;; item away.
       (should-not (file-exists-p (file-name-concat directory "request.el")))))
 
-  :doc "takes over an expired foreign lease only after confirmation"
+  :doc "takes over an expired foreign lease only when asked to and confirmed"
   (mevedel-artifact-lease-test--with-workspace
-    (let ((directory (mevedel-artifact-lease-directory workspace "board")))
+    (mevedel-artifact-lease-acquire workspace "board")
+    (cl-letf (((symbol-function 'mevedel-artifact-lease--now)
+               (lambda (_directory) 1e12)))
+      (mevedel-artifact-lease-test--as-other
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) (error "Asked"))))
+          (should (string-match-p
+                   "decision in Emacs.*artifacts cockpit"
+                   (cadr (should-error (mevedel-artifact-lease-acquire workspace "board")
+                                       :type 'user-error)))))
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) nil)))
+          (should-error (mevedel-artifact-lease-acquire workspace "board" t)
+                        :type 'user-error))
+        (should-not (mevedel-artifact-lease-held-p workspace "board"))
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) t)))
+          (mevedel-artifact-lease-acquire workspace "board" t))
+        (should (mevedel-artifact-lease-held-p workspace "board")))))
+
+  :doc "costs few target programs: one observation feeds the claim"
+  (mevedel-artifact-lease-test--with-workspace
+    (let (count)
+      (make-directory (file-name-concat root ".mevedel/leases/artifacts") t)
+      ;; New item: observe, create the directory, observe, claim, settle.
+      (mevedel-artifact-lease-test--counting count
+        (mevedel-artifact-lease-acquire workspace "board"))
+      (should (<= count 5))
+      (mevedel-artifact-lease-release workspace "board")
+      ;; Released item: observe, read the records, claim, settle.
+      (mevedel-artifact-lease-test--counting count
+        (mevedel-artifact-lease-acquire workspace "board"))
+      (should (<= count 4)))))
+
+(mevedel-deftest mevedel-artifact-lease-ensure ()
+  ,test
+  (test)
+  :doc "reuses a recently renewed lease without reading the target clock"
+  (mevedel-artifact-lease-test--with-workspace
+    (let ((directory (mevedel-artifact-lease-directory workspace "board"))
+          count)
       (mevedel-artifact-lease-acquire workspace "board")
+      (mevedel-artifact-lease-test--counting count
+        (should (mevedel-artifact-lease-ensure workspace "board")))
+      (should (= 0 count))
+      ;; Past the renewal margin, the target clock decides.
+      (plist-put (gethash directory mevedel-artifact-lease--held) :renewed 0)
+      (mevedel-artifact-lease-test--counting count
+        (should (mevedel-artifact-lease-ensure workspace "board")))
+      (should (= 1 count))
       (cl-letf (((symbol-function 'mevedel-artifact-lease--now)
                  (lambda (_directory) 1e12)))
-        (mevedel-artifact-lease-test--as-other
-          (should (eq 'expired (mevedel-artifact-lease-status workspace "board")))
-          (let ((inhibit-interaction t))
-            (should-error (mevedel-artifact-lease-acquire workspace "board")
-                          :type 'inhibited-interaction))
-          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) nil)))
-            (should-error (mevedel-artifact-lease-acquire workspace "board")
-                          :type 'user-error))
-          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) t)))
-            (mevedel-artifact-lease-acquire workspace "board"))
-          (should (gethash directory mevedel-artifact-lease--held)))))))
+        ;; Expired: reclaimed, being this client's own.
+        (should (mevedel-artifact-lease-ensure workspace "board"))
+        (should (> (plist-get (plist-get (gethash directory mevedel-artifact-lease--held)
+                                         :record)
+                              :generation)
+                   1))))))
 
 (mevedel-deftest mevedel-artifact-lease-write ()
   ,test
@@ -121,7 +175,7 @@
                  (lambda (_directory) 1e12))
                 ((symbol-function 'y-or-n-p) (lambda (_prompt) t)))
         (mevedel-artifact-lease-test--as-other
-          (mevedel-artifact-lease-acquire workspace "board")))
+          (mevedel-artifact-lease-acquire workspace "board" t)))
       (should-error (mevedel-artifact-lease-write workspace "board" path "two"))
       (should (equal "one" (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
 
@@ -143,10 +197,13 @@
       (plist-put (gethash directory mevedel-artifact-lease--held) :touched 0)
       (mevedel-artifact-lease--renew directory)
       (should-not (gethash directory mevedel-artifact-lease--held))
-      (should (eq 'available (mevedel-artifact-lease-status workspace "board")))
+      ;; Released without a reservation: another client edits at once.
+      (mevedel-artifact-lease-test--as-other
+        (mevedel-artifact-lease-acquire workspace "board")
+        (mevedel-artifact-lease-release-all))
       (mevedel-artifact-lease-acquire workspace "board")
       (mevedel-artifact-lease-release-all)
-      (should (eq 'available (mevedel-artifact-lease-status workspace "board")))
+      (should-not (gethash directory mevedel-artifact-lease--held))
       (mevedel-artifact-lease-forget-item workspace "board")
       (should-not (file-exists-p directory)))))
 

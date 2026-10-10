@@ -101,10 +101,10 @@
 (autoload 'mevedel-skills-scan "mevedel-skills-core")
 
 ;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (workspace))
 (declare-function mevedel-shared-editing-list "mevedel-shared-editing" (workspace))
-(autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
+(declare-function mevedel-shared-editing-present-p "mevedel-shared-editing" (workspace id))
 (autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-present-p "mevedel-shared-editing")
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
@@ -1058,8 +1058,8 @@ Item addresses need an existing item; listings and libraries always resolve."
   (or (null components)
       (equal (car components) "library")
       (and session
-           (member (car components)
-                   (mevedel-shared-editing-ids (mevedel-session-workspace session)))
+           (mevedel-shared-editing-present-p (mevedel-session-workspace session)
+                                             (car components))
            t)))
 
 (defun mevedel-resource--shared-list-result (session)
@@ -1071,9 +1071,9 @@ Items attached to SESSION are marked."
     (concat
      (if items
          (mapconcat (lambda (item)
-                      (format "shared://%s\t%s %S · revision %s%s"
+                      (format "shared://%s\t%s %S%s"
                               (plist-get item :id) (plist-get item :kind)
-                              (plist-get item :title) (plist-get item :revision)
+                              (plist-get item :title)
                               (if (member (plist-get item :id) attached)
                                   " · attached" "")))
                     items "\n")
