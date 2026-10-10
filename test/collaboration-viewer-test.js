@@ -450,6 +450,9 @@ async function testEditingAvailability() {
     }});
   await api.welcome();
   assert.match(node('editing-status').textContent,/Install Node/);
+  // The room lists only the items attached to its session.
+  assert.equal(node('editing-items').children.length,0);
+  api.attachedItems(['doc']);
   assert.equal(node('editing-items').children.length,1);
   assert.equal(node('editing-items').children[0].disabled,true);
   assert.equal(creates[0].disabled,true);
@@ -506,6 +509,7 @@ async function testEditingDeletion() {
   // change to the list is signalled so discussion tabs can follow it.
   let catalogChanges = 0;
   const api = create(() => catalogChanges++);
+  api.attachedItems(['board', 'doc']);
   assert.equal(api.present('board'), null);
   await api.welcome();
   assert.equal(catalogChanges, 1);
