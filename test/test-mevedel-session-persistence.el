@@ -1324,8 +1324,7 @@
                     (make-string 64 ?a))
                    (mevedel-session-durability--disclosed-targets
                     (make-hash-table :test #'equal))
-                   (artifact-dir
-                    (mevedel-session-artifacts-artifacts-dir session-dir))
+                   (artifact-dir (file-name-concat session-dir "artifacts"))
                    (artifact
                     (file-name-concat artifact-dir "nested" "mockup.html"))
                    (stale (file-name-concat artifact-dir "stale.txt")))
@@ -1375,12 +1374,14 @@
                 (should-not
                  (string-match-p "Poisoned fixed" (buffer-string)))
                 (should (mevedel-session-publication mevedel--session)))
+              ;; An old published artifact entry stays readable by its
+              ;; logical path, and Resume no longer rewrites the folder.
               (should
                (equal "Published artifact\n"
-                      (with-temp-buffer
-                        (insert-file-contents-literally artifact)
-                        (buffer-string))))
-              (should-not (file-exists-p stale)))))
+                      (mevedel-session-artifacts-read-artifact
+                       (buffer-local-value 'mevedel--session restored)
+                       "artifacts/nested/mockup.html" t)))
+              (should (file-exists-p stale)))))
       (mevedel-test--with-local-shell-tramp (list host)
         (test-mevedel-session-persistence--release-and-kill
          restored

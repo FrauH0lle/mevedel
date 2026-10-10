@@ -1738,58 +1738,6 @@ cannot leave stale request configuration behind."
   "Return the instruction snapshot directory under SAVE-PATH."
   (file-name-concat save-path "instructions"))
 
-(defun mevedel-session-artifacts-artifacts-dir (save-path)
-  "Return the session artifacts directory under SAVE-PATH.
-Files the model writes here -- mockups, prototypes, documents -- are
-listed by the artifacts cockpit.  A settled ApplyPatch projects each
-selected destination in this directory into a live collaboration room;
-deleting a file unpublishes it from the cockpit and marks any existing
-conversation card missing."
-  (file-name-concat save-path "artifacts"))
-
-(defun mevedel-session-artifacts-materialize-published-artifacts
-    (session destination-save-path)
-  "Replace DESTINATION-SAVE-PATH's artifact folder from SESSION's publication.
-All committed bytes are verified and staged before the existing folder is
-removed.  The immutable publication therefore remains recoverable if staging
-fails, and absent manifest entries remove stale fixed-cache files."
-  (let* ((publication
-          (or (mevedel-session-publication session)
-              (setf (mevedel-session-publication session)
-                    (mevedel-session-publication-read
-                     (mevedel-session-save-path session)))
-              (error "Session publication is unavailable")))
-         (destination
-          (mevedel-session-artifacts-artifacts-dir destination-save-path))
-         (staging
-          (file-name-as-directory
-           (make-temp-file
-            (expand-file-name ".mevedel-artifacts-" destination-save-path)
-            t))))
-    (unwind-protect
-        (progn
-          (dolist (entry (plist-get publication :artifacts))
-            (let ((logical (car entry)))
-              (when (string-prefix-p "artifacts/" logical)
-                (let ((path
-                       (file-name-concat
-                        staging (substring logical (length "artifacts/"))))
-                      (content
-                       (mevedel-session-artifacts-read-artifact
-                        session logical t)))
-                  (make-directory (file-name-directory path) t)
-                  (let ((coding-system-for-write 'no-conversion))
-                    (write-region content nil path nil 'silent))))))
-          (cond
-           ((file-symlink-p destination) (delete-file destination))
-           ((file-directory-p destination) (delete-directory destination t))
-           ((file-exists-p destination) (delete-file destination)))
-          (rename-file (directory-file-name staging)
-                       (directory-file-name destination))
-          (setq staging nil))
-      (when (and staging (file-directory-p staging))
-        (delete-directory staging t)))))
-
 (defun mevedel-session-artifacts-instructions-current-path (save-path)
   "Return the current instruction snapshot path under SAVE-PATH."
   (file-name-concat
@@ -1935,50 +1883,6 @@ behavior.  Return the publication outcome, or PATH after a direct write."
         (insert content)
         (mevedel-session-persistence-write-current-buffer-atomically path))
       path)))
-
-(defun mevedel-session-artifacts-delete-files (session paths)
-  "Delete SESSION's artifact-folder files PATHS and commit their removal.
-Every path must lie in SESSION's artifacts folder; ones that neither exist
-nor are published are skipped.  A portable session commits the tombstones
-with a fresh sidecar at once, so Resume, Save As and Fork cannot bring a
-file back before the next full save.  Return the removed paths."
-  (let* ((save-path (or (mevedel-session-save-path session)
-                        (error "Session has no persistence path")))
-         (directory (file-name-as-directory
-                     (mevedel-session-artifacts-artifacts-dir save-path)))
-         (portable (mevedel-session-codec-portable-authority-p session))
-         (paths
-          (cl-remove-if-not
-           (lambda (path)
-             (or (file-exists-p path)
-                 (and portable
-                      (mevedel-session-artifacts-artifact-present-p
-                       session (file-relative-name path save-path) t))))
-           (mapcar (lambda (path)
-                     (let ((path (expand-file-name path)))
-                       (unless (file-in-directory-p path directory)
-                         (error "Not a session artifact: %s" path))
-                       path))
-                   paths))))
-    (when paths
-      (if (not portable)
-          (dolist (path paths) (delete-file path))
-        (let ((buffer (mevedel-session-root-buffer session)))
-          (unless (buffer-live-p buffer)
-            (error "Deleting a published artifact needs the live session"))
-          (mevedel-session-durability-with-transaction
-            (mevedel-session-artifacts-assert-mutation-authority session buffer)
-            ;; The folder is mirrored on every save, so the fixed file goes
-            ;; first: a later save then republishes the removal, not the file.
-            (dolist (path paths)
-              (when (file-exists-p path) (delete-file path)))
-            (mevedel-session-publication-publish
-             session
-             (append (mapcar (lambda (path) (list :path path :delete t)) paths)
-                     (list (mevedel-session-artifacts--sidecar-artifact
-                            session buffer)))
-             t)))))
-    paths))
 
 (defun mevedel-session-artifacts--sidecar-publication-artifact
     (session root-buffer)
@@ -2144,37 +2048,6 @@ continues to wait for the root turn's completed-turn publication boundary."
                 (mevedel-session-artifacts-printed-value
                (mevedel--serialize-instructions workspace-root nil)))))))))
 
-(defun mevedel-session-artifacts--published-artifact-files (session)
-  "Return current artifact-folder files and required deletion tombstones.
-Regular non-symlink files are captured recursively with literal bytes.  For a
-portable session, a committed artifact-folder entry that is now absent gets a
-tombstone so manifest overlay cannot resurrect it during Resume, Save As, or
-Fork."
-  (let* ((save-path (mevedel-session-save-path session))
-         (directory (mevedel-session-artifacts-artifacts-dir save-path))
-         (publication (mevedel-session-publication session))
-         current-logicals artifacts)
-    (when (file-directory-p directory)
-      (dolist (path (directory-files-recursively directory "." nil nil nil))
-        (when (and (file-regular-p path) (not (file-symlink-p path)))
-          (let ((logical (file-relative-name path save-path)))
-            (push logical current-logicals)
-            (push (list :path path
-                        :content
-                        (with-temp-buffer
-                          (set-buffer-multibyte nil)
-                          (let ((coding-system-for-read 'no-conversion))
-                            (insert-file-contents-literally path))
-                          (buffer-string)))
-                  artifacts)))))
-    (dolist (entry (plist-get publication :artifacts))
-      (let ((logical (car entry)))
-        (when (and (string-prefix-p "artifacts/" logical)
-                   (not (member logical current-logicals)))
-          (push (list :path (file-name-concat save-path logical) :delete t)
-                artifacts))))
-    (nreverse artifacts)))
-
 (defun mevedel-session-artifacts--sidecar-artifact (session buffer)
   "Return SESSION's sidecar publication artifact derived from BUFFER.
 
@@ -2259,8 +2132,7 @@ calling this serializer."
              (nreverse mevedel-session-artifacts--critical-artifacts)
              (mevedel-session-artifacts--obsolete-snapshot-artifacts session)
              (mevedel-session-artifacts--instruction-artifacts
-              session buffer)
-             (mevedel-session-artifacts--published-artifact-files session)))
+              session buffer)))
            ;; Compare payloads once.  The same selection decides whether a
            ;; save is needed and supplies its publication; hashing a changed
            ;; transcript again here only duplicates encoding and allocation.
@@ -2441,11 +2313,11 @@ debounced tick, which dominated a profiled multi-agent session's
 allocation and produced a visible segment write every few seconds.
 
 A portable session publishes the sidecar as a one-artifact commit: the
-manifest overlay keeps every other committed entry, so the segment,
-instruction, and artifact-folder entries are neither read nor rewritten.
+manifest overlay keeps every other committed entry, so the segment and
+instruction entries are neither read nor rewritten.
 The full save was kept for portable sessions on the assumption that its
 byte comparison made an unchanged save free; it did not, because the
-segment copy, artifact-folder read, and instruction serialization run
+segment copy and instruction serialization run
 before the comparison and the registry a persist is about differs from
 the committed one by construction.  Before the first full snapshot has
 committed a sidecar there is nothing to overlay, so the save is skipped

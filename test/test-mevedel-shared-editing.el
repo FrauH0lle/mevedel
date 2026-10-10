@@ -16,6 +16,33 @@
                            "mevedel-session-test-support"))
 (require 'mevedel-shared-editing)
 
+(require 'mevedel-artifact-store)
+
+(defmacro mevedel-shared-editing-test--with-workspace (&rest body)
+  "Run BODY with WORKSPACE in a temp ROOT, its own runtimes and leases."
+  (declare (indent 0) (debug t))
+  `(let* ((root (file-name-as-directory (make-temp-file "mevedel-editing-" t)))
+          (workspace (mevedel-workspace--create :type 'file :id "w" :root root :name "w"))
+          (mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+          (mevedel-artifact-lease--held (make-hash-table :test #'equal))
+          (mevedel-session-durability--client-id (make-string 64 ?a)))
+     (unwind-protect (progn ,@body)
+       (mevedel-shared-editing-stop)
+       (maphash (lambda (_directory held)
+                  (when (timerp (plist-get held :timer))
+                    (cancel-timer (plist-get held :timer))))
+                mevedel-artifact-lease--held)
+       (delete-directory root t))))
+
+(defun mevedel-shared-editing-test--call (workspace args)
+  "Run ARGS for WORKSPACE through the queue and return the reply."
+  (let (reply)
+    (mevedel-shared-editing-call workspace args (lambda (value) (setq reply value)))
+    (let ((deadline (+ (float-time) 10)))
+      (while (and (not reply) (< (float-time) deadline))
+        (accept-process-output nil 0.05)))
+    reply))
+
 (mevedel-deftest mevedel-shared-editing--send
   (:doc "Large helper requests use small UTF-8 writes without changing JSON framing")
   (let* ((args (list :title (concat (make-string 1020 ?x) "λ 🌱")
@@ -32,16 +59,15 @@
 
 (mevedel-deftest mevedel-shared-editing--process
   (:doc "Helper replies frame fragmented Unicode, multiple lines, and bound unfinished bytes")
-  (let ((buffer (generate-new-buffer " *editing-framing*")) replies)
+  (let ((runtime (list :active (list :requestId 1 :callback #'ignore)))
+        replies)
     (unwind-protect
-        (with-current-buffer buffer
-          (setq-local mevedel-shared-editing--runtime
-                      (list :active (list :requestId 1 :callback #'ignore)))
-          (let* ((process (mevedel-shared-editing--process buffer))
+        (progn
+          (let* ((process (mevedel-shared-editing--process runtime))
                  (filter (process-filter process))
                  (line "{\"requestId\":1,\"result\":{\"title\":\"λ 🌱\"}}\n"))
             (cl-letf (((symbol-function 'mevedel-shared-editing--accept)
-                       (lambda (_buffer _job reply) (push reply replies))))
+                       (lambda (_runtime _job reply) (push reply replies))))
               (funcall filter process (substring line 0 12))
               (should-not replies)
               (funcall filter process (concat (substring line 12) line))
@@ -54,70 +80,71 @@
             (process-put process :partial-bytes (1- (* 64 1024 1024)))
             (funcall filter process "λ")
             (should-not (process-live-p process))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer (mevedel-shared-editing-stop))
-        (kill-buffer buffer)))))
+      (when-let* ((process (plist-get runtime :process)))
+        (delete-process process)))))
 
 (mevedel-deftest mevedel-shared-editing-call
-		 ()
+  ()
   ,test (test)
-  :doc "Commits a board through the host helper and reopens durable state"
-		 (let* ((directory (make-temp-file "mevedel-editing-" t))
-			(session (mevedel-session--create :save-path directory
-							  :authority-mode 'pid-lock))
-			(buffer (generate-new-buffer " *editing-test*")))
-		   (unwind-protect
-		       (with-current-buffer buffer
-			 (setq-local mevedel--session session)
-			 (setf (mevedel-session-root-buffer session) buffer)
-			 (let (reply)
-			   (mevedel-shared-editing-call
-			    session '(:action "create" :id "board1" :kind "whiteboard"
-					      :title "Architecture" :actor "Alice" :opId "one")
-			    (lambda (result) (setq reply result)))
-			   (let ((deadline (+ (float-time) 10)))
-			     (while (and (not reply) (< (float-time) deadline))
-			       (accept-process-output nil 0.05)))
-			   (should-not (plist-get reply :error))
-			   (should (= 1 (plist-get (plist-get reply :result) :revision)))
-			   (should (equal "Architecture"
-					  (plist-get (car (mevedel-shared-editing-list session))
-						     :title)))
-			   (mevedel-shared-editing-stop)
-			   (setq reply nil)
-			   (mevedel-shared-editing-call
-			    session '(:action "read" :id "board1")
-			    (lambda (result) (setq reply result)))
-			   (let ((deadline (+ (float-time) 10)))
-			     (while (and (not reply) (< (float-time) deadline))
-			       (accept-process-output nil 0.05)))
-			   (should (equal "Architecture"
-					  (plist-get (plist-get reply :result) :title)))))
-		     (when (buffer-live-p buffer)
-		       (with-current-buffer buffer (mevedel-shared-editing-stop))
-		       (kill-buffer buffer))
-		     (delete-directory directory t)))
+  :doc "Commits a board into the store under its lease and reopens it"
+  (mevedel-shared-editing-test--with-workspace
+    (let ((reply (mevedel-shared-editing-test--call
+                  workspace '(:action "create" :id "board1" :kind "whiteboard"
+                              :title "Architecture" :actor "Alice" :opId "one"))))
+      (should-not (plist-get reply :error))
+      (should (= 1 (plist-get (plist-get reply :result) :revision)))
+      (should (file-exists-p (file-name-concat root ".mevedel/artifacts/board1/state.json")))
+      (should (equal '(:kind whiteboard :title "Architecture" :file "state.json")
+                     (cl-subseq (mevedel-artifact-store-meta workspace "board1") 0 6)))
+      (should (eq 'owned (mevedel-artifact-lease-status workspace "board1")))
+      (should (equal '("board1") (mevedel-shared-editing-ids workspace)))
+      (should (equal "Architecture"
+                     (plist-get (car (mevedel-shared-editing-list workspace)) :title)))
+      (mevedel-shared-editing-stop)
+      (should (equal "Architecture"
+                     (plist-get (plist-get (mevedel-shared-editing-test--call
+                                            workspace '(:action "read" :id "board1"))
+                                           :result)
+                                :title)))
+      ;; A rename reaches the store's metadata.
+      (should-not (plist-get (mevedel-shared-editing-test--call
+                              workspace '(:action "rename" :id "board1" :title "Later"
+                                          :actor "Alice" :opId "two"))
+                             :error))
+      (should (equal "Later" (plist-get (mevedel-artifact-store-meta workspace "board1")
+                                        :title)))))
+
+  :doc "Another Emacs's item is read-only here"
+  (mevedel-shared-editing-test--with-workspace
+    (should-not (plist-get (mevedel-shared-editing-test--call
+                            workspace '(:action "create" :id "board1" :kind "whiteboard"
+                                        :title "Plan" :actor "Alice" :opId "one"))
+                           :error))
+    (let ((mevedel-session-durability--client-id (make-string 64 ?b))
+          (mevedel-artifact-lease--held (make-hash-table :test #'equal)))
+      (should (string-match-p "being edited in Emacs"
+                              (plist-get (mevedel-shared-editing-test--call
+                                          workspace '(:action "rename" :id "board1"
+                                                      :title "Theirs" :actor "Bob"
+                                                      :opId "two"))
+                                         :error)))
+      ;; Reading needs no lease.
+      (should (equal "Plan" (plist-get (plist-get (mevedel-shared-editing-test--call
+                                                   workspace '(:action "read" :id "board1"))
+                                                  :result)
+                                       :title)))))
+
   :doc "Availability is optional, read-only, and recovers after runtime and resource repair"
-  (let* ((directory (make-temp-file "mevedel-editing-status-" t))
-         (resources mevedel-shared-editing--directory)
-         (node mevedel-shared-editing-node-program)
-         (session (mevedel-session--create))
-         (buffer (generate-new-buffer " *editing-status-test*")))
-    (unwind-protect
-        (with-current-buffer buffer
-          (setq-local mevedel--session session)
-          (setf (mevedel-session-root-buffer session) buffer)
-          (insert "> Host draft\nsecond line")
-          (setq buffer-read-only t)
+  (mevedel-shared-editing-test--with-workspace
+    (let* ((directory (make-temp-file "mevedel-editing-status-" t))
+           (resources mevedel-shared-editing--directory)
+           (node mevedel-shared-editing-node-program))
+      (unwind-protect
           (cl-labels ((call (action)
-                       (let (reply)
-                         (mevedel-shared-editing-call
-                          session (list :action action) (lambda (value) (setq reply value)))
-                         (let ((deadline (+ (float-time) 10)))
-                           (while (and (not reply) (< (float-time) deadline))
-                             (accept-process-output nil 0.05)))
-                         (should reply)
-                         reply)))
+                        (let ((reply (mevedel-shared-editing-test--call
+                                      workspace (list :action action))))
+                          (should reply)
+                          reply)))
             (let ((mevedel-shared-editing-node-program
                    (file-name-concat directory "missing-node")))
               (should (string-match-p "Install Node" (plist-get (call "status") :error)))
@@ -139,44 +166,30 @@
               (should (plist-get (call "status") :error)))
             (let ((mevedel-shared-editing-node-program node))
               (should (eq t (plist-get (plist-get (call "status") :result) :available))))
-            (should-not (mevedel-session-save-path session))
-            (should (equal (buffer-string) "> Host draft\nsecond line"))
+            (should-not (file-exists-p (mevedel-artifact-store-directory workspace)))
             (should (equal (sort (directory-files directory nil "^[^.]") #'string<)
-                           '("ComicShanns.ttf" "Excalifont.ttf" "Nunito.ttf" "font.ttf" "host.bundle.mjs" "resvg.wasm")))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer (mevedel-shared-editing-stop))
-        (kill-buffer buffer))
-      (delete-directory directory t))))
+                           '("ComicShanns.ttf" "Excalifont.ttf" "Nunito.ttf" "font.ttf" "host.bundle.mjs" "resvg.wasm"))))
+        (delete-directory directory t)))))
 
 (mevedel-deftest mevedel-shared-editing-stop
-		 (:doc "Killing a buffer after commit settles once and stops its private helper")
-		 (let* ((directory (make-temp-file "mevedel-editing-stop-" t))
-			(session (mevedel-session--create :save-path directory :authority-mode 'pid-lock))
-			(buffer (generate-new-buffer " *editing-stop-test*"))
-			(calls 0) reply runtime
-			(mevedel-shared-editing-change-hook
-			 (list (lambda (&rest _) (kill-buffer buffer)))))
-		   (unwind-protect
-		       (progn
-			 (with-current-buffer buffer
-			   (setq-local mevedel--session session)
-			   (setf (mevedel-session-root-buffer session) buffer)
-			   (mevedel-shared-editing-call
-			    session '(:action "create" :id "committed" :kind "whiteboard"
-					      :title "Committed" :actor "Alice" :opId "one")
-			    (lambda (result) (cl-incf calls) (setq reply result)))
-			   (setq runtime mevedel-shared-editing--runtime))
-			 (let ((deadline (+ (float-time) 10)))
-			   (while (and (not reply) (< (float-time) deadline))
-			     (accept-process-output nil 0.05)))
-			 (should (= calls 1))
-			 (should-not (plist-get reply :error))
-			 (should-not (buffer-live-p buffer))
-			 (should-not (process-live-p (plist-get runtime :process)))
-			 (should (= 1 (plist-get (car (mevedel-shared-editing-list session)) :revision))))
-		     (when runtime (mevedel-shared-editing-stop runtime))
-		     (when (buffer-live-p buffer) (kill-buffer buffer))
-		     (delete-directory directory t))))
+  (:doc "Stopping during a commit settles it once and then stops the helper")
+  (mevedel-shared-editing-test--with-workspace
+    (let* ((calls 0) reply runtime
+           (mevedel-shared-editing-change-hook
+            (list (lambda (&rest _) (mevedel-shared-editing-stop runtime)))))
+      (setq runtime (mevedel-shared-editing--runtime workspace))
+      (mevedel-shared-editing-call
+       workspace '(:action "create" :id "committed" :kind "whiteboard"
+                   :title "Committed" :actor "Alice" :opId "one")
+       (lambda (result) (cl-incf calls) (setq reply result)))
+      (let ((deadline (+ (float-time) 10)))
+        (while (and (not reply) (< (float-time) deadline))
+          (accept-process-output nil 0.05)))
+      (should (= calls 1))
+      (should-not (plist-get reply :error))
+      (should-not (process-live-p (plist-get runtime :process)))
+      (should-not (mevedel-shared-editing--live-p runtime))
+      (should (= 1 (plist-get (car (mevedel-shared-editing-list workspace)) :revision))))))
 
 (mevedel-deftest mevedel-shared-editing--parse
   (:doc "Preserves empty mark attributes, arrays, nulls and false through exact patch reads")
@@ -195,64 +208,69 @@
     (should (equal (plist-get (json-parse-string envelope :object-type 'plist) :text) text))
     (should (equal value (mevedel-shared-editing--parse text)))))
 
-(mevedel-deftest mevedel-shared-editing-commit-file
-  (:doc "A fresh portable session's first shared write publishes its live segment" :quiet t)
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-shared-commit-" t)))
-         (workspace (test-mevedel-session-persistence--make-workspace root))
-         (session (mevedel-session-create "main" workspace))
-         (buf (generate-new-buffer " *test-shared-commit*")))
-    (unwind-protect
-        (with-current-buffer buf
-          (org-mode)
-          (setq-local mevedel--session session)
-          (mevedel-shared-editing-commit-file
-           session "artifacts/shared-editing/board.json" "{}")
-          ;; Resume opens the live segment from the publication.
-          (should (mevedel-session-artifacts-artifact-present-p
-                   session "segment-0001.chat.org" t))
-          (should (equal "{}" (mevedel-session-artifacts-read-artifact
-                               session "artifacts/shared-editing/board.json" t))))
-      (test-mevedel-session-persistence--release-and-kill buf session)
-      (delete-directory root t)
-      (mevedel-workspace-clear-registry))))
-
 (mevedel-deftest mevedel-shared-editing--delete
-  (:doc "Deleting through the editing queue commits the removal and names who deleted it" :quiet t)
-  (let* ((root (file-name-as-directory (make-temp-file "mevedel-shared-delete-" t)))
-         (workspace (test-mevedel-session-persistence--make-workspace root))
-         (session (mevedel-session-create "main" workspace))
-         (buf (generate-new-buffer " *test-shared-delete*"))
-         (logical "artifacts/shared-editing/board.json")
-         observed)
-    (unwind-protect
-        (with-current-buffer buf
-          (org-mode)
-          (setq-local mevedel--session session)
-          (mevedel-shared-editing-commit-file
-           session logical "{\"kind\":\"whiteboard\",\"title\":\"Board\",\"revision\":1}")
-          (let ((mevedel-shared-editing-change-hook
-                 (list (lambda (_session state _result) (push state observed))))
-                (call (lambda (args)
-                        (let (reply)
-                          (mevedel-shared-editing-call session args (lambda (value) (setq reply value)))
-                          (let ((deadline (+ (float-time) 5)))
-                            (while (and (not reply) (< (float-time) deadline))
-                              (accept-process-output nil 0.02)))
-                          reply))))
-            (should (equal '(:id "board" :deleted t)
-                           (plist-get (funcall call '(:action "delete" :id "board" :actor "Guest: Ann"))
-                                      :result)))
-            (should-not (mevedel-session-artifacts-artifact-present-p session logical t))
-            (should (equal '(:id "board" :deleted t :actor "Guest: Ann") (car observed)))
-            (should-not (mevedel-shared-editing-list session))
-            (should (equal "This item no longer exists"
-                           (plist-get (funcall call '(:action "delete" :id "board")) :error)))))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf (mevedel-shared-editing-stop)))
-      (test-mevedel-session-persistence--release-and-kill buf session)
-      (delete-directory root t)
-      (mevedel-workspace-clear-registry))))
+  (:doc "Deleting through the editing queue removes the artifact and names who deleted it")
+  (mevedel-shared-editing-test--with-workspace
+    (let (observed)
+      (mevedel-shared-editing-test--call
+       workspace '(:action "create" :id "board" :kind "whiteboard" :title "Board"
+                   :actor "Alice" :opId "one"))
+      (let ((mevedel-shared-editing-change-hook
+             (list (lambda (_workspace state _result) (push state observed)))))
+        (should (equal '(:id "board" :deleted t)
+                       (plist-get (mevedel-shared-editing-test--call
+                                   workspace '(:action "delete" :id "board" :actor "Guest: Ann"))
+                                  :result)))
+        (should-not (file-exists-p (mevedel-artifact-store-artifact-directory workspace "board")))
+        (should-not (file-exists-p (mevedel-artifact-lease-directory workspace "board")))
+        (should (equal '(:id "board" :deleted t :actor "Guest: Ann") (car observed)))
+        (should-not (mevedel-shared-editing-list workspace))
+        (should (equal "This item no longer exists"
+                       (plist-get (mevedel-shared-editing-test--call
+                                   workspace '(:action "delete" :id "board"))
+                                  :error)))))))
+
+(mevedel-deftest mevedel-shared-editing-save-version
+  (:doc "Keeps versions without receipts or history, and restores one as an edit")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (should (= 1 (mevedel-shared-editing-save-version workspace "board" "s1")))
+    (let ((version (mevedel-shared-editing--parse
+                    (with-temp-buffer
+                      (insert-file-contents
+                       (mevedel-artifact-store-version-path workspace "board" 1))
+                      (buffer-string)))))
+      (should (plist-get version :crdt))
+      (should-not (plist-member version :receipts))
+      (should-not (plist-member version :transactions)))
+    (mevedel-shared-editing-test--call
+     workspace '(:action "rename" :id "board" :title "Second" :actor "Alice" :opId "two"))
+    (let (reply)
+      (mevedel-shared-editing-restore workspace "board" 1 "Host"
+                                      (lambda (value) (setq reply value)))
+      (let ((deadline (+ (float-time) 10)))
+        (while (and (not reply) (< (float-time) deadline))
+          (accept-process-output nil 0.05)))
+      (should-not (plist-get reply :error)))
+    (let ((state (mevedel-shared-editing--read workspace "board")))
+      (should (equal "First" (plist-get state :title)))
+      (should (= 3 (plist-get state :revision))))))
+
+(mevedel-deftest mevedel-shared-editing-duplicate
+  (:doc "Copies an item into an independent one under its own lease")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "Plan"
+                 :actor "Alice" :opId "one"))
+    (should (equal "copy" (mevedel-artifact-store-duplicate workspace "board" "copy")))
+    (should (equal "copy" (plist-get (mevedel-shared-editing--read workspace "copy") :id)))
+    (should (equal '(:kind whiteboard :title "Plan")
+                   (cl-subseq (mevedel-artifact-store-meta workspace "copy") 0 4)))
+    (should (= 1 (length (mevedel-artifact-store-versions workspace "copy"))))
+    (should-error (mevedel-shared-editing-duplicate workspace "board" "copy"))
+    (should-error (mevedel-shared-editing-duplicate workspace "board" "../x"))))
 
 (provide 'test-mevedel-shared-editing)
 ;;; test-mevedel-shared-editing.el ends here

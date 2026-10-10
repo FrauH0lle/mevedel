@@ -1,7 +1,10 @@
 # Shared whiteboard and document editing
 
-The room's **Shared work** section separates creation and import controls from its list
-of named whiteboards and documents. Full and
+Whiteboards and documents live in the workspace
+[artifact store](view.md#artifact-store), so every session and room of the
+project sees the same ones. The room's **Shared work** section separates
+creation and import controls from its list of the project's named whiteboards
+and documents; creating one attaches it to the room's session. Full and
 owner links can create, rename, import, edit and delete them concurrently. View
 links can observe and download. Opening an item affects that browser only;
 other participants get a followable entry. Each editor opens in its own
@@ -18,7 +21,9 @@ From Emacs, `o` on an item's row in the artifacts cockpit, or clicking a
 the default browser with the session's full-control link. The editor exists
 only in a room, so for a session that is not shared this first asks, with
 `/collab`'s disclosure, to start sharing it; the room then stays up until
-`/collab stop`.
+`/collab stop`. The cockpit opened outside a session uses the room of the
+item's own conversation, its dedicated session, and the lobby's **Artifacts**
+tab does the same: a whiteboard or document opens in its editor there.
 
 Documents use a continuous paper surface, serif body text, and grouped **Text**,
 **Lists**, and **Insert** menus. Room and editor controls share cool and warm
@@ -312,11 +317,11 @@ editing tools are discoverable through ToolSearch/ToolCall to implementation
 and worker roles. Their summaries name whiteboards and documents, and
 ToolSearch's `shared` key separates them from artifacts, so a requested
 whiteboard finds `SharedCreate`. The prompt's resource roster lists
-`shared://` once the session has an item.
+`shared://` once the project has an item.
 
 | Address | Read returns |
 | --- | --- |
-| `shared://` | the session's items with kind, title and revision, and `shared://library` |
+| `shared://` | the project's items with kind, title and revision, marking those attached to the session, and `shared://library` |
 | `shared://ID` | a header with kind, title, revision and the related addresses, then one line per element in drawing order or per top-level block in document order |
 | `shared://ID/elements/ELEMENT` | one element or block in full, with each stroke point on its own line |
 | `shared://ID/view.png` | the board rendered, long edge at most 2048 px |
@@ -336,8 +341,11 @@ image data. Text pages through Read's ordinary `offset` and `limit` and its
 the text views: an item's overview, comments or history, or every item's
 overview under bare `shared://`. Images go through Read's ordinary media
 delivery, so models without image support get its explicit refusal. Glob and
-ApplyPatch do not accept `shared://`. Views are computed by the session's
+ApplyPatch do not accept `shared://`. Views are computed by the workspace's
 editing host from committed state, without a browser.
+
+Creating or editing an item attaches it to the model's session. When a turn
+that edited items settles, each of them gets a version in the store.
 
 `SharedCreate` creates a named item and returns its address. `SharedEdit`
 applies patches, inserts library items, renames, sets a board's background,
@@ -434,7 +442,7 @@ authored text visible and collapse the snapshot under **Shared context** by
 default. Expand it to inspect the full sent context and attachment links; the
 summary names the item, scope, and revision. This affects display only, not what
 the model receives. Prompts edited on the host remain fully visible.
-Comments are session annotations: native, document and board exports contain the
+Comments are item annotations: native, document and board exports contain the
 content, not the comments or conversation. A fresh import starts without those
 annotations.
 
@@ -549,18 +557,40 @@ typing, posting comments, and synchronization never start model turns automatica
 
 ## Durability and recovery
 
-Emacs serializes operations per session, validates candidates in the helper,
-checks continuing authority, and commits before acknowledging Saved on host.
-Project sessions use the existing execution-target lease and immutable
-publication transaction. File sessions use the existing session directory.
-Canonical files live under `artifacts/shared-editing/`; embedded images travel
-with their item's state. Ordinary read-only artifact addresses gain no new
-mutation capability.
+An item is `<workspace>/.mevedel/artifacts/ID/state.json`, with `meta.el`
+naming its kind and title, and `versions/`. Emacs serializes operations per
+workspace in one queue, which every room and session of this Emacs shares,
+validates candidates in the helper, checks continuing authority, and commits
+before acknowledging Saved on host. Embedded images travel with their item's
+state. Ordinary read-only artifact addresses gain no new mutation capability.
 
-Resume, Save As, and Fork preserve accepted content and embedded assets.
-Forks are independent. Chat Rewind preserves current shared items. Closing a
-browser or ending the share leaves the host original intact. A later share
-uses fresh credentials, following [ADR 0114](adr/0114-tie-collaboration-room-lifetime-to-host-share.md).
+Across Emacs instances, an item lease decides who may commit
+(`mevedel-artifact-lease.el`). It lives outside the store, under
+`.mevedel/leases/artifacts/ID/`, so the store stays safe to commit. It uses
+the session lease's generation records, target clock and expiry
+(`mevedel-session-lease-seconds`): the first edit in an Emacs acquires it,
+a timer renews it, and every state write proves it in the same target
+program, so an Emacs that lost the lease cannot overwrite its successor.
+After `mevedel-artifact-lease-idle-seconds` without edits, or when Emacs
+exits, the lease is released. Another Emacs that tries to edit a held item
+gets a read-only refusal and asks the holder to hand it over; the holder
+releases it to that Emacs at its next renewal once its queue for the item is
+idle. A lease whose holder stopped renewing is taken over after confirmation;
+a browser or lobby request, which cannot ask, is refused with the usual
+"needs a decision in Emacs" notice. Reading needs no lease.
+
+Versions follow the store's caps. A version keeps the item's content, title
+and comments but not its receipts or contribution history. One is recorded
+when a model turn that edited the item settles, and on **Save version** (the
+cockpit's `s`, or the store list in a room or the lobby). Restoring a version
+is one ordinary, attributed edit through the queue: lineage, comments and
+history stay, concurrent editors receive it as an update, and the restore can
+itself be reverted.
+
+Sessions only attach to items, so Resume, Save As, Fork and Rewind neither
+copy nor roll them back. Closing a browser or ending the share leaves the host
+original intact. A later share uses fresh credentials, following
+[ADR 0114](adr/0114-tie-collaboration-room-lifetime-to-host-share.md).
 
 The viewer retains pending changes in browser storage, scoped to room and
 item. Reauthentication in the same logical share merges them. Disconnected,
@@ -569,8 +599,8 @@ copy download. A recovery copy is explicitly named and represents that
 browser's content, including unsynchronized changes. It is not a host save.
 Storage quota errors ask the user to download before closing. Retry save
 rereads committed state and retries operation identities without duplicating
-content. A host publication failure uses the existing publication recovery
-commands before retrying browser saves.
+content. A host storage failure leaves the item unchanged until a retried save
+succeeds.
 After a reload, locally retained items remain available as **local recovery**
 entries even when their share or host item is gone. They open read-only for
 recovery download until the host supplies valid current content and authority.
@@ -581,9 +611,9 @@ recovery download until the host supplies valid current content and authority.
 in the Emacs artifacts cockpit, deletes an item for everyone: its content,
 embedded images, comments and contribution history. There is no undo; the
 browser's confirmation offers **Download a copy**, which can be imported
-again. The deletion runs in the session's editing queue, so it lands after
-any save in progress, and a project session commits it at once, so Resume,
-Save As and Fork do not bring the item back. An editor showing the item in
+again. The deletion runs in the workspace's editing queue, so it lands after
+any save in progress, and removes the item's whole artifact: versions, its
+lease and its dedicated session. An editor showing the item in
 another browser closes and names who deleted it; a later save to it fails
 with "This item no longer exists". A browser keeps its local draft of a
 deleted item only while it holds edits that never reached the host, listed

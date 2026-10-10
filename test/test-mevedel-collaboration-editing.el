@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-artifact)
 (require 'mevedel-collaboration-editing)
 
 (mevedel-deftest mevedel-collaboration-editing--browser-value
@@ -62,7 +63,11 @@
 (mevedel-deftest mevedel-collaboration-editing-handle
 		 (:doc "Incomplete transfers clean up and authority is checked after assembly and before commit")
 		 (let* ((directory (make-temp-file "mevedel-editing-transfer-" t))
-			(session (mevedel-session--create :save-path directory :authority-mode 'pid-lock))
+			(workspace (mevedel-workspace--create :type 'file :id "w" :root directory :name "w"))
+			(session (mevedel-session--create :save-path directory :authority-mode 'pid-lock
+							  :workspace workspace))
+			(mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+			(mevedel-artifact-lease--held (make-hash-table :test #'equal))
 			(buffer (generate-new-buffer " *editing-transfer-test*"))
 			(guests (make-hash-table :test #'eql))
 			(guest (list :name "Alice" :writable t))
@@ -101,25 +106,25 @@
 			     (plist-put guest :writable nil)
 			     (chunk 8 (substring data 8))
 			     (should (string-match-p "does not permit" (last-error)))
-			     (should-not (mevedel-shared-editing-list session))
+			     (should-not (mevedel-shared-editing-list workspace))
 			     (plist-put guest :writable t)
 			     (chunk 0 data)
 			     (plist-put guest :writable nil)
 			     (let ((deadline (+ (float-time) 10)))
-			       (while (and (or (plist-get mevedel-shared-editing--runtime :queue)
-					       (plist-get mevedel-shared-editing--runtime :active))
+			       (while (and (or (plist-get (mevedel-shared-editing--runtime workspace) :queue)
+					       (plist-get (mevedel-shared-editing--runtime workspace) :active))
 					   (< (float-time) deadline))
 				 (accept-process-output nil 0.05)))
-			     (should-not (mevedel-shared-editing-list session))
+			     (should-not (mevedel-shared-editing-list workspace))
 			     (plist-put guest :writable t)
 			     (chunk 0 (substring data 0 8))
 			     (let ((timer (plist-get (plist-get guest :editing-transfer) :timer)))
 			       (mevedel-collaboration-editing-depart room 1)
 			       (should-not (memq timer timer-list))
 			       (should-not (plist-get guest :editing-transfer))))))
-		     (when (buffer-live-p buffer)
-		       (with-current-buffer buffer (mevedel-shared-editing-stop))
-		       (kill-buffer buffer))
+		     (mevedel-shared-editing-stop)
+		     (mevedel-artifact-lease-release-all)
+		     (when (buffer-live-p buffer) (kill-buffer buffer))
 		     (delete-directory directory t))))
 
 (mevedel-deftest mevedel-collaboration-editing--presence
@@ -300,7 +305,8 @@
   :doc "Guest requests forward only closed keys, including a board area, with host attribution"
   (let* ((guests (make-hash-table :test #'eql))
          (guest (list :name "Alice" :writable t))
-         (session 'session)
+         (session (mevedel-session--create
+                   :workspace (mevedel-workspace--create :type 'file :id "w" :root "/tmp/")))
          (room (list :session session :guests guests))
          (mevedel-collaboration--rooms (mevedel-test-room-registry room))
          requests)
@@ -308,7 +314,7 @@
     (cl-letf (((symbol-function 'mevedel-collaboration--room-for-session) (lambda (_) room))
               ((symbol-function 'mevedel-collaboration--guest) (lambda (_room _peer) guest))
               ((symbol-function 'mevedel-shared-editing-call)
-               (lambda (_session request &rest _) (push request requests))))
+               (lambda (_workspace request &rest _) (push request requests))))
       (mevedel-collaboration-editing--dispatch
        room 1 guest 7 '(:action "comment" :id "board" :opId "op" :text "Here" :selection ["a"]
                                 :region [0 0 40 30] :expected (:scope "selection")
@@ -343,17 +349,20 @@
           (should-error (mevedel-collaboration-editing--dispatch
                          room 2 viewer 10 '(:action "delete" :id "board")))))))
 
-  :doc "A deleted item reaches every guest, and its viewers leave it"
+  :doc "A deleted item reaches every guest of the workspace's rooms, and its viewers leave it"
   (let* ((guests (make-hash-table :test #'eql))
          (room (list :session 'session :guests guests))
+         (lobby (list :workspace 'workspace :guests (make-hash-table :test #'eql)))
          sent)
     (puthash 1 (list :name "Alice" :editing-item "board") guests)
     (puthash 2 (list :name "Bob" :editing-item "notes") guests)
-    (cl-letf (((symbol-function 'mevedel-collaboration--room-for-session) (lambda (_) room))
+    (puthash 3 (list :name "Lobby guest") (plist-get lobby :guests))
+    (cl-letf (((symbol-function 'mevedel-collaboration--workspace-rooms)
+               (lambda (workspace) (should (eq workspace 'workspace)) (list room lobby)))
               ((symbol-function 'mevedel-collaboration-editing--send)
                (lambda (_room peer req-id value) (push (list peer req-id value) sent))))
       (mevedel-collaboration-editing--changed
-       'session '(:id "board" :deleted t :actor "Guest: Ann") nil))
+       'workspace '(:id "board" :deleted t :actor "Guest: Ann") nil))
     (should (equal '((1 "event" (:event "deleted" :id "board" :actor "Ann"))
                      (2 "event" (:event "deleted" :id "board" :actor "Ann")))
                    (sort sent (lambda (a b) (< (car a) (car b))))))

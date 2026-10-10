@@ -116,7 +116,6 @@
 (declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication))
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
-(declare-function mevedel-session-artifacts-materialize-published-artifacts "mevedel-session-artifacts" (session destination-save-path))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding))
 (declare-function mevedel-session-artifacts-reconcile-relocation "mevedel-session-artifacts" (session saved-workspace-plist))
@@ -1764,10 +1763,7 @@ mentions-shown reset to empty hash tables on load."
                                              (plist-get current :head)))
                            (user-error
                             "Session state changed while acquiring its lease; retry restore"))
-                         (setf (mevedel-session-publication session) current)
-                         (unless session-override
-                           (mevedel-session-artifacts-materialize-published-artifacts
-                            session session-dir)))))
+                         (setf (mevedel-session-publication session) current))))
                   (unless
                       (equal
                        sidecar

@@ -23,8 +23,14 @@
       (make-temp-file (file-name-concat remote "shared-editing-") t)
     editing-test-root))
 (defvar editing-test-buffer (get-buffer-create " *shared editing acceptance*"))
-(defvar editing-test-successor nil)
 (defvar editing-test-node mevedel-shared-editing-node-program)
+(defun editing-test-store-modes (mode)
+  "Set the artifact store and each of its item directories to MODE."
+  (let ((store (mevedel-artifact-store-directory
+                (mevedel-session-workspace editing-test-session))))
+    (when (file-directory-p store)
+      (dolist (directory (cons store (directory-files store t "\\`[^.]")))
+        (when (file-directory-p directory) (set-file-modes directory mode))))))
 (defvar editing-test-session
   (mevedel-session-create
    "editing" (mevedel-workspace--create :type 'project :root editing-test-workspace-root)
@@ -81,16 +87,16 @@
                   (mevedel-collaboration--room-for-session editing-test-session) 'test)
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
                 ("FenceHost"
-                 (let ((lease (copy-tree (mevedel-session-lease editing-test-session)))
-                       (path (mevedel-session-save-path editing-test-session)))
-                   (mevedel-session-durability-lease-release path editing-test-session)
-                   (setq editing-test-successor (copy-mevedel-session editing-test-session))
-                   (let ((mevedel-session-durability--client-id (make-string 64 ?f)))
-                     (unless (mevedel-session-durability-lease-acquire
-                              path "*successor*" editing-test-successor)
-                       (error "Successor could not acquire the released lease")))
-                   ;; Model a paused former host waking with its old epoch.
-                   (setf (mevedel-session-lease editing-test-session) lease))
+                 ;; Model a paused former host waking after another Emacs
+                 ;; took its items over: its remembered leases are stale.
+                 (let ((workspace (mevedel-session-workspace editing-test-session))
+                       (mevedel-session-durability--client-id (make-string 64 ?f)))
+                   (dolist (id (mevedel-shared-editing-ids workspace))
+                     (let ((directory (mevedel-artifact-lease-directory workspace id)))
+                       (unless (mevedel-session-durability--claim-next
+                                directory (mevedel-session-durability--lease-head directory)
+                                "*successor*")
+                         (error "Successor could not claim %s" id)))))
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
                 ("RuntimeAvailable"
                  (setq mevedel-shared-editing-node-program
@@ -100,7 +106,7 @@
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
                 ("ImportShared"
                  (mevedel-shared-editing-call
-                  editing-test-session
+                  (mevedel-session-workspace editing-test-session)
                   (append (list :action "import" :format "excalidraw" :opId "import" :actor "Guest: Test"
                                 :id (substring (secure-hash 'sha256 (format "%s" (random t))) 0 32))
                           (plist-get command :args))
@@ -119,10 +125,11 @@
                        (write-region (mevedel-shared-editing--json
                                       (list :status "success"
                                             :result (mevedel-shared-editing--json
-                                                     (vconcat (mevedel-shared-editing-list editing-test-session)))))
+                                                     (vconcat (mevedel-shared-editing-list
+                                                               (mevedel-session-workspace editing-test-session))))))
                                      nil reply-file nil 'silent)
                      (mevedel-shared-editing-call
-                      editing-test-session (list :action "read" :id id)
+                      (mevedel-session-workspace editing-test-session) (list :action "read" :id id)
                       (lambda (reply)
                         (write-region (mevedel-shared-editing--json
                                        (if (plist-get reply :error) (list :status "error" :result (plist-get reply :error))
@@ -133,12 +140,8 @@
                  (mevedel-shared-editing-stop)
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
                 ("StorageWritable"
-                 (set-file-modes
-                  (file-name-concat (mevedel-session-save-path editing-test-session) ".publications")
+                 (editing-test-store-modes
                   (if (eq (plist-get (plist-get command :args) :writable) t) #o700 #o500))
-                 (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
-                ("RetryPublication"
-                 (mevedel-session-publication-retry editing-test-session)
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
                 ("InspectTest"
                  (write-region
@@ -163,14 +166,11 @@
             (error
              (write-region (mevedel-shared-editing--json (list :error (error-message-string err))) nil
                            (file-name-concat editing-test-root "reply.json") nil 'silent))))))))
-(with-current-buffer editing-test-buffer (mevedel-shared-editing-stop))
+(mevedel-shared-editing-stop)
+(mevedel-artifact-lease-release-all)
 (mevedel-collaboration--stop-for-emacs)
-(when editing-test-successor
-  (let ((mevedel-session-durability--client-id (make-string 64 ?f)))
-    (mevedel-session-durability-lease-release
-     (mevedel-session-save-path editing-test-successor) editing-test-successor)))
+(editing-test-store-modes #o700)
 (when (mevedel-session-save-path editing-test-session)
-  (set-file-modes (file-name-concat (mevedel-session-save-path editing-test-session) ".publications") #o700)
   (mevedel-session-persistence-lock-release
    (mevedel-session-save-path editing-test-session) editing-test-session))
 (when (file-remote-p editing-test-workspace-root)

@@ -517,6 +517,7 @@
                   (plist-get fixture :parent-path) "local" "notes.md")))
             (make-directory (file-name-directory parent-local) t)
             (write-region "parent local\n" nil parent-local nil 'silent))
+          ;; Artifacts live in the workspace store; a fork copies none.
           (let ((artifact
                  (file-name-concat (plist-get fixture :parent-path)
                                    "artifacts" "nested" "mockup.html")))
@@ -550,11 +551,7 @@
           (should (file-exists-p
                    (mevedel-session-artifacts-instructions-current-path
                     staging-path)))
-          (should
-           (equal "local artifact"
-                  (mevedel-session-artifacts--file-text
-                   (file-name-concat staging-path "artifacts" "nested"
-                                     "mockup.html"))))
+          (should-not (file-exists-p (file-name-concat staging-path "artifacts")))
           ;; Mutation authority belongs to `--publish-fork' and must already
           ;; exist before this staging helper starts target writes.
           (should-not
@@ -720,10 +717,9 @@
              (equal "published agent transcript"
                     (mevedel-session-artifacts--file-text
                      (expand-file-name agent-relative staging-path))))
-            (should
-             (equal "published artifact"
-                    (mevedel-session-artifacts--file-text
-                     (expand-file-name artifact-relative staging-path))))
+            ;; An old session's published artifact entry stays with it.
+            (should-not (file-exists-p
+                         (expand-file-name artifact-relative staging-path)))
             (mevedel-session-persistence-lock-release staging-path child)
             (setq child nil)))
       (when child

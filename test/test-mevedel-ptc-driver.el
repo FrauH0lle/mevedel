@@ -282,7 +282,7 @@ With RAW-P, retain the full pipeline result including hidden render data."
                   (accept-process-output nil 0.01)))
               (should (eq (plist-get reply :status) 'success))
               (should (plist-get reply :media))))
-          (let* ((state (mevedel-shared-editing--read session id))
+          (let* ((state (mevedel-shared-editing--read (mevedel-session-workspace session) id))
                  (revision (plist-get state :revision)))
             (should (= revision 3)))
           ;; A model's redraw: deletions by hash with null, then shapes with
@@ -308,7 +308,7 @@ With RAW-P, retain the full pipeline result including hidden render data."
               (while (and (not reply) (< (float-time) deadline))
                 (accept-process-output nil 0.01)))
             (should (equal 'success (plist-get reply :status)))
-            (should (= 4 (plist-get (mevedel-shared-editing--read session id) :revision))))
+            (should (= 4 (plist-get (mevedel-shared-editing--read (mevedel-session-workspace session) id) :revision))))
           ;; Malformed objects say what an object is, and name JSON when written.
           (dolist (case '(("[{\"id\":\"v\",\"after\":null}]" . "not JSON {...} with commas: {")
                           ("[(:id \"v\" :after)]" . "not this value: (:id \"v\" :after)")))

@@ -2,14 +2,18 @@
 
 ;;; Commentary:
 
-;; The model reads shared items through `shared://' addresses with Read and
-;; Grep, served here from the session's editing host, and changes them with
-;; SharedCreate and SharedEdit inside the ordinary tool permission pipeline.
-;; Each change names its target by the content hash the model read, and uses
-;; the same host commit queue as human edits, including without a browser.
+;; The model reads the workspace's shared items through `shared://' addresses
+;; with Read and Grep, served here from the workspace editing host, and
+;; changes them with SharedCreate and SharedEdit inside the ordinary tool
+;; permission pipeline.  Each change names its target by the content hash the
+;; model read, and uses the same host commit queue as human edits, including
+;; without a browser.  An edit attaches the item to the session, and a turn
+;; that edited an item leaves a version of it when it settles.
 
 ;;; Code:
 
+(eval-when-compile (require 'cl-lib))
+(require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (autoload 'mevedel-shared-editing--json "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
@@ -29,7 +33,13 @@
 ;; `mevedel-resource'
 (declare-function mevedel-resource-encode-component "mevedel-resource" (component))
 
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-attach
+                  "mevedel-artifact-store" (session id &optional buffer))
+(autoload 'mevedel-artifact-store-attach "mevedel-artifact-store")
+
 ;; `mevedel-structs'
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 (defun mevedel-tool-editing--restore-nulls (value)
@@ -55,6 +65,11 @@ encode these as vectors so the host does not mistake them for objects."
       result))
    (t value)))
 
+(defun mevedel-tool-editing--workspace ()
+  "Return the current session's workspace, or signal."
+  (unless mevedel--session (error "No active session"))
+  (mevedel-session-workspace mevedel--session))
+
 (defun mevedel-tool-editing--call (callback args)
   "Run validated editing ARGS and deliver a pipeline result to CALLBACK."
   (unless mevedel--session (error "No active session"))
@@ -67,8 +82,11 @@ encode these as vectors so the host does not mistake them for objects."
   (when (equal (plist-get args :action) "create")
     (setq args (plist-put args :id (secure-hash 'sha256 (format "%s%s" (current-time) (random t))))))
   (setq args (mevedel-tool-editing--restore-nulls args))
-  (mevedel-shared-editing-call
-   mevedel--session args
+  (let ((session mevedel--session)
+        (workspace (mevedel-tool-editing--workspace))
+        (request (bound-and-true-p mevedel--current-request)))
+   (mevedel-shared-editing-call
+   workspace args
    (lambda (reply)
      (if-let* ((error-text (plist-get reply :error)))
          (funcall callback (list :result
@@ -81,7 +99,13 @@ encode these as vectors so the host does not mistake them for objects."
        ;; The model sees what it changed, not the browsers' full state.
        (let* ((result (plist-get reply :result))
               (model (plist-get result :model))
-              (png (plist-get result :png)))
+              (png (plist-get result :png))
+              (id (plist-get model :id)))
+         (when (stringp id)
+           (mevedel-artifact-store-attach session id)
+           (when request
+             (cl-pushnew (cons workspace id) (mevedel-request-edited-items request)
+                         :test #'equal)))
          (funcall callback
                   (append (list :result (mevedel-shared-editing--json model))
                           (when png
@@ -89,7 +113,7 @@ encode these as vectors so the host does not mistake them for objects."
                                   (list (list :path (format "shared://%s/view.png"
                                                             (plist-get model :id))
                                               :kind 'image :mime "image/png" :data png)))))))))
-   mevedel-pipeline--handler-active-p mevedel-pipeline--handler-commit))
+   mevedel-pipeline--handler-active-p mevedel-pipeline--handler-commit)))
 
 (defun mevedel-tool-editing--library-args (rest)
   "Return the host request for `shared://library' components REST."
@@ -111,7 +135,7 @@ encode these as vectors so the host does not mistake them for objects."
                               libraries)))))
 
 (defun mevedel-tool-editing-view (components callback)
-  "Fetch the current session's `shared://' view named by COMPONENTS.
+  "Fetch the current workspace's `shared://' view named by COMPONENTS.
 COMPONENTS are the decoded address components after `shared://'.  Call
 CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
 \(:error MESSAGE)."
@@ -128,9 +152,8 @@ CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
                (`(,id "images" ,image)
                 (list :action "view" :id id :part "image" :image image))
                (_ (error "Unknown shared:// address")))))
-        (unless mevedel--session (error "No active session"))
         (mevedel-shared-editing-call
-         mevedel--session args
+         (mevedel-tool-editing--workspace) args
          (lambda (reply)
            (funcall callback
                     (if-let* ((message (plist-get reply :error)))
@@ -166,7 +189,7 @@ CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
   (mevedel-define-tool
    :name "SharedCreate" :handler #'mevedel-tool-editing--create
    :summary "Start a whiteboard or document that people and agents edit together."
-   :description "Open a new named collaborative whiteboard or document in this session, readable at the shared:// address the result names. It appears under the room's Shared work. All full/owner participants and agents can edit concurrently."
+   :description "Open a new named collaborative whiteboard or document in the project's artifact store, readable at the shared:// address the result names, and attach it to this session. It appears under Shared work in every room of the project. All full/owner participants and agents can edit concurrently."
    :args ((kind string :required "Editor kind." :enum ["whiteboard" "document"])
           (title string :required "Item title."))
    :async-p t :groups (edit))

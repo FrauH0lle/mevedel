@@ -455,7 +455,7 @@
   ()
   ,test
   (test)
-  :doc "excludes session bookkeeping, keeps artifacts and ordinary files"
+  :doc "excludes everything in session directories, keeps the store and ordinary files"
   (let* ((root (make-temp-file "mevedel-excl-" t))
          (sessions (file-name-concat root ".mevedel" "sessions"))
          (own (file-name-concat sessions "main-2026-09-02T14-03-19ca"))
@@ -478,10 +478,10 @@
           (dolist (path (list (file-name-concat own "telemetry-log.el")
                               (file-name-concat own "segment-0001.chat.org")
                               (file-name-concat own "file-history" "abc")
+                              (file-name-concat own "artifacts" "page.html")
                               (file-name-concat sibling "telemetry-log.el")))
             (should (mevedel-session-file-cache-excluded-p session path)))
-          (dolist (path (list (file-name-concat own "artifacts" "page.html")
-                              (file-name-concat sibling "artifacts" "a.html")
+          (dolist (path (list (file-name-concat root ".mevedel" "artifacts" "a" "index.html")
                               (file-name-concat neighbour "telemetry-log.el")
                               (file-name-concat root ".mevedel"
                                                 "permissions.el")

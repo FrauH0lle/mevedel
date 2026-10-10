@@ -12,11 +12,19 @@
 (require 'mevedel-shared-library)
 (require 'mevedel-transcript-audit)
 
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-attach
+                  "mevedel-artifact-store" (session id &optional buffer))
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--guest "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--guest-text "mevedel-collaboration" (value))
 (declare-function mevedel-collaboration--room-data-buffer "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--room-for-session "mevedel-collaboration" (session))
+
+;; `mevedel-collaboration-artifact'
+(declare-function mevedel-collaboration--workspace-rooms
+                  "mevedel-collaboration-artifact" (workspace))
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--guest-directive-id "mevedel-collaboration-guest" (room frame))
@@ -34,6 +42,9 @@
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs" (data-buffer prompt &rest keys))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 (defun mevedel-collaboration-editing--browser-value (value)
   "Project VALUE for an editor without duplicating content and image snapshots.
@@ -83,12 +94,13 @@ IDs, while exact before/after snapshots stay on the host for reversion."
                :data (substring encoded offset end)))
         (setq offset end)))))
 
-(defun mevedel-collaboration-editing--changed (session state result)
-  "Publish SESSION's committed STATE and RESULT to its current guests.
+(defun mevedel-collaboration-editing--changed (workspace state result)
+  "Publish WORKSPACE's committed STATE and RESULT to the guests of its rooms.
 A deleted item reaches every guest as a `deleted' event naming who
 deleted it; a guest viewing it is no longer in it."
-  (when-let* ((room (mevedel-collaboration--room-for-session session)))
-    (maphash
+  (dolist (room (mevedel-collaboration--workspace-rooms workspace))
+    (when (plist-get room :session)
+     (maphash
      (lambda (peer guest)
        (if (plist-get state :deleted)
            (progn
@@ -107,7 +119,7 @@ deleted it; a guest viewing it is no longer in it."
                   (list :update (plist-get result :update)
                         :comments (plist-get result :comments)
                         :transactions (plist-get state :transactions)))))))
-     (plist-get room :guests))))
+     (plist-get room :guests)))))
 
 (defun mevedel-collaboration-editing--presence (room peer guest args)
   "Forward PEER's ephemeral ARGS to others viewing the same item in ROOM."
@@ -230,7 +242,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
          (session (plist-get room :session))
          (buffer (mevedel-collaboration--room-data-buffer room))
          receipt)
-    (mevedel-shared-editing--logical id)
+    (mevedel-shared-editing--valid-id id)
     (dolist (entry (mevedel-session-pending-follow-ups session))
       (when (equal id (plist-get (plist-get entry :shared-question) :questionId))
         (setq receipt (list :queued t :entryId (plist-get entry :id)
@@ -342,7 +354,7 @@ retracted or never-delivered queue entry can be explicitly submitted again."
         (cl-return-from mevedel-collaboration-editing--dispatch
           (mevedel-collaboration-editing--send room peer req-id (list :result receipt)))))
     (when (equal action "read")
-      (mevedel-shared-editing--logical (plist-get args :id))
+      (mevedel-shared-editing--valid-id (plist-get args :id))
       (mevedel-collaboration-editing-depart room peer)
       (plist-put guest :editing-item (plist-get args :id)))
     ;; Closed keys prevent guests providing host state or attribution.
@@ -356,11 +368,17 @@ retracted or never-delivered queue entry can be explicitly submitted again."
         (when (plist-member args key)
           (setq request (plist-put request key (plist-get args key)))))
       (mevedel-shared-editing-call
-       session request
+       (mevedel-session-workspace session) request
        (lambda (reply)
          (when (funcall authorize)
            (condition-case err
                (progn
+                 ;; Editing an item from a chat's room attaches it to that chat.
+                 (unless (or read-only (member action '("ask" "delete"))
+                             (plist-get reply :error))
+                   (when-let* ((id (or (plist-get (plist-get reply :result) :id)
+                                       (plist-get args :id))))
+                     (mevedel-artifact-store-attach session id)))
                  (when (and (equal action "read") (not (plist-get reply :error)))
                    (setq reply
                          (list :result

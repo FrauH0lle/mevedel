@@ -189,6 +189,8 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-cockpit-surface-selected)
                    (lambda (&optional _) item))
+                  ((symbol-function 'mevedel-cockpit-surface-context)
+                   (lambda (&optional _) nil))
                   ((symbol-function 'mevedel-cockpit-surface-refresh)
                    (lambda (&optional _) nil))
                   ((symbol-function 'browse-url-of-file)
@@ -232,6 +234,30 @@
                    (lambda (buffer) (setq shown buffer))))
           (mevedel-artifacts-list-conversation)))
       (should (equal "buffer-a" shown)))))
+
+(mevedel-deftest mevedel-artifacts-list-save-version (:quiet t)
+  ,test
+  (test)
+  :doc "saves a whiteboard's version and refuses file artifacts"
+  (mevedel-artifacts-list-test--with-store
+    (mevedel-artifacts-list-test--artifact session store "page" "index.html" "x")
+    (make-directory (file-name-concat store "board") t)
+    (write-region "{}" nil (file-name-concat store "board" "state.json") nil 'silent)
+    (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+    (let (saved)
+      (with-current-buffer (mevedel-artifacts-list-open
+                            (mevedel-artifacts-list-test--context session view data))
+        (cl-letf (((symbol-function 'mevedel-shared-editing-save-version)
+                   (lambda (_workspace id session-id) (push (list id session-id) saved) 2)))
+          (mevedel-cockpit-goto-id "board")
+          (should (equal "board" (plist-get (mevedel-cockpit-surface-selected) :item)))
+          (mevedel-artifacts-list-save-version)
+          (should (equal (list (list "board" (mevedel-session-session-id session))) saved))
+          (mevedel-cockpit-goto-id "page")
+          (should-error (mevedel-artifacts-list-save-version) :type 'user-error)
+          ;; A whiteboard has no file to visit.
+          (mevedel-cockpit-goto-id "board")
+          (should-error (mevedel-artifacts-list-visit) :type 'user-error))))))
 
 (mevedel-deftest mevedel-artifacts-list-delete (:quiet t)
   ,test

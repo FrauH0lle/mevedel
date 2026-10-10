@@ -4,10 +4,9 @@
 
 ;; Tabulated browser for the workspace artifact store, usable from a session
 ;; or from any project buffer (`mevedel-artifacts').  It lists, opens,
-;; versions, duplicates and deletes store artifacts and attaches them to the
-;; current session; live collaboration rooms of the workspace learn of each
-;; change.  In a session it also lists the session's shared whiteboards and
-;; documents.
+;; versions, duplicates and deletes store artifacts -- files, whiteboards and
+;; documents -- and attaches them to the current session; live collaboration
+;; rooms of the workspace learn of each change.
 
 ;;; Code:
 
@@ -45,6 +44,7 @@
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-version-path "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
+(defvar mevedel-artifact-store-item-kinds)
 
 ;; `mevedel-chat'
 (declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
@@ -99,17 +99,15 @@
 
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-call "mevedel-shared-editing"
-                  (session args callback &optional authorize commit))
-(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (session))
-(declare-function mevedel-shared-editing-list "mevedel-shared-editing" (session))
+                  (workspace args callback &optional authorize commit))
+(declare-function mevedel-shared-editing-save-version
+                  "mevedel-shared-editing" (workspace id &optional session-id))
 (autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
-(autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
-(autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-attached-artifacts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
@@ -133,21 +131,6 @@
        (or context (mevedel-cockpit-surface-context)))
       (user-error "No mevedel workspace here")))
 
-(defun mevedel-artifacts-list--items (session)
-  "Return SESSION's shared whiteboards and documents as artifact rows."
-  (when (and session (mevedel-session-save-path session))
-    (mapcar (lambda (item)
-              (list :name (format "%s · %s"
-                                  (if (equal (plist-get item :kind) "whiteboard")
-                                      "Whiteboard" "Document")
-                                  (plist-get item :title))
-                    :item (plist-get item :id)
-                    :row (concat "item:" (plist-get item :id))
-                    :kind (plist-get item :kind)
-                    :title (plist-get item :title)
-                    :attached t))
-            (mevedel-shared-editing-list session))))
-
 (defun mevedel-artifacts-list--store-rows (workspace session)
   "Return WORKSPACE's store artifacts as rows, marking SESSION's attached."
   (let ((attached (and session (mevedel-session-attached-artifacts session))))
@@ -155,47 +138,43 @@
               (append (list :name (plist-get row :id)
                             :row (plist-get row :id)
                             :attached (and (member (plist-get row :id) attached) t))
+                      ;; A whiteboard or document is edited live, not as a file.
+                      (when (memq (plist-get row :kind) mevedel-artifact-store-item-kinds)
+                        (list :item (plist-get row :id)))
                       row))
             (mevedel-artifact-store-list workspace))))
 
 (defun mevedel-artifacts-list-count (session)
-  "Return (ATTACHED . IN-PROJECT) artifact counts for SESSION, best effort.
-Shared whiteboards and documents count as attached and in the project."
+  "Return (ATTACHED . IN-PROJECT) artifact counts for SESSION, best effort."
   (or (ignore-errors
         ;; Ids only: reading every artifact's state is not a count.
-        (let ((ids (mevedel-artifact-store-ids (mevedel-session-workspace session)))
-              (items (if (mevedel-session-save-path session)
-                         (length (mevedel-shared-editing-ids session))
-                       0)))
-          (cons (+ items (cl-count-if (lambda (id) (member id ids))
-                                      (mevedel-session-attached-artifacts session)))
-                (+ items (length ids)))))
+        (let ((ids (mevedel-artifact-store-ids (mevedel-session-workspace session))))
+          (cons (cl-count-if (lambda (id) (member id ids))
+                             (mevedel-session-attached-artifacts session))
+                (length ids))))
       (cons 0 0)))
 
 (defun mevedel-artifacts-list--collect (context)
-  "Collect artifact rows for CONTEXT: shared items, then store artifacts."
+  "Collect artifact rows for CONTEXT's workspace store."
   (let ((session (mevedel-cockpit-context-session context)))
     (cl-remove-if-not
      (lambda (row) (or (not mevedel-artifacts-list--attached-only)
                        (plist-get row :attached)))
-     (append (mevedel-artifacts-list--items session)
-             (mevedel-artifacts-list--store-rows
-              (mevedel-artifacts-list--workspace context) session)))))
+     (mevedel-artifacts-list--store-rows
+      (mevedel-artifacts-list--workspace context) session))))
 
 (defun mevedel-artifacts-list--entry (item _context)
   "Return tabulated row for artifact ITEM."
-  (let ((file-p (not (plist-get item :item))))
-    (list
-     (plist-get item :row)
-     (vector
-      (plist-get item :name)
-      (format "%s" (or (plist-get item :kind) ""))
-      (if (plist-get item :attached) "✓" "")
-      (if file-p (number-to-string (plist-get item :versions)) "")
-      (cond ((not file-p) "")
-            ((plist-get item :missing) "missing")
-            (t (format-time-string "%Y-%m-%d %H:%M" (plist-get item :modified))))
-      (if file-p (file-size-human-readable (or (plist-get item :size) 0)) "")))))
+  (list
+   (plist-get item :row)
+   (vector
+    (plist-get item :name)
+    (format "%s" (or (plist-get item :kind) ""))
+    (if (plist-get item :attached) "✓" "")
+    (number-to-string (plist-get item :versions))
+    (if (plist-get item :missing) "missing"
+      (format-time-string "%Y-%m-%d %H:%M" (plist-get item :modified)))
+    (file-size-human-readable (or (plist-get item :size) 0)))))
 
 (defun mevedel-artifacts-list--header (items context)
   "Return cockpit header for artifact ITEMS and CONTEXT."
@@ -211,49 +190,39 @@ Shared whiteboards and documents count as attached and in the project."
 
 (defun mevedel-artifacts-list--details (item _context)
   "Return the information report for artifact ITEM."
-  (if (plist-get item :item)
-      (list :title (if (equal (plist-get item :kind) "whiteboard") "Whiteboard" "Document")
-            :subtitle (plist-get item :title)
-            :identity (plist-get item :item)
-            :sections
-            (list (list :id 'item :title "Shared item"
-                        :body (mevedel-report-fields
-                               (list "Title" (plist-get item :title))
-                               (list "Id" (plist-get item :item))))))
-    (list :title "Artifact" :subtitle (plist-get item :id)
-          :identity (plist-get item :id)
-          :sections
-          (list
-           (list :id 'artifact :title "Artifact"
-                 :body (mevedel-report-fields
-                        (list "Id" (plist-get item :id))
-                        (list "Title" (plist-get item :title))
-                        (list "Kind" (format "%s" (plist-get item :kind)))
-                        (list "Attached" (if (plist-get item :attached) "yes" "no"))
-                        (list "Versions" (number-to-string (plist-get item :versions)))
-                        (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
-                        (list "Modified"
-                              (if (plist-get item :missing)
-                                  "file missing"
-                                (format-time-string "%Y-%m-%d %H:%M:%S"
-                                                    (plist-get item :modified))))))
-           (list :id 'location :title "Location"
-                 :body (mevedel-report-fields (list "Path" (plist-get item :path))))))))
+  (list :title "Artifact" :subtitle (plist-get item :id)
+        :identity (plist-get item :id)
+        :sections
+        (list
+         (list :id 'artifact :title "Artifact"
+               :body (mevedel-report-fields
+                      (list "Id" (plist-get item :id))
+                      (list "Title" (plist-get item :title))
+                      (list "Kind" (format "%s" (plist-get item :kind)))
+                      (list "Attached" (if (plist-get item :attached) "yes" "no"))
+                      (list "Versions" (number-to-string (plist-get item :versions)))
+                      (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
+                      (list "Modified"
+                            (if (plist-get item :missing)
+                                "file missing"
+                              (format-time-string "%Y-%m-%d %H:%M:%S"
+                                                  (plist-get item :modified))))))
+         (list :id 'location :title "Location"
+               :body (mevedel-report-fields (list "Path" (plist-get item :path)))))))
 
 (defun mevedel-artifacts-list--selected-artifact ()
   "Return the selected store artifact row."
-  (let ((item (mevedel-cockpit-surface-selected)))
-    (when (plist-get item :item)
-      (user-error "Whiteboards and documents are not in the artifact store yet"))
-    item))
+  (mevedel-cockpit-surface-selected))
 
 (defun mevedel-artifacts-list--selected-path ()
   "Return the selected artifact's still-existing path."
-  (let ((path (plist-get (mevedel-artifacts-list--selected-artifact) :path)))
-    (unless (and path (file-exists-p path))
+  (let ((item (mevedel-artifacts-list--selected-artifact)))
+    (when (plist-get item :item)
+      (user-error "Whiteboards and documents open in their editor; use o"))
+    (unless (and (plist-get item :path) (file-exists-p (plist-get item :path)))
       (mevedel-cockpit-surface-refresh)
       (user-error "Artifact file no longer exists"))
-    path))
+    (plist-get item :path)))
 
 (defun mevedel-artifacts-list--browse (path)
   "Show artifact file PATH: in a browser, or in Emacs when it is remote.
@@ -269,14 +238,18 @@ The local browser cannot read a remote target's filesystem."
 
 (defun mevedel-artifacts-list-open-browser ()
   "Open the selected artifact in a web browser.
-A whiteboard or document opens in the session's room, which is started
-after confirmation when the session is not shared."
+A whiteboard or document opens in its editor in the session's room, which
+is started after confirmation when the session is not shared.  Without a
+session it opens in the room of the item's own conversation."
   (interactive)
-  (if-let* ((id (plist-get (mevedel-cockpit-surface-selected) :item)))
-      (mevedel-collaboration-open-shared-item
-       (mevedel-cockpit-context-data-buffer (mevedel-cockpit-surface-context))
-       id)
-    (mevedel-artifacts-list--browse (mevedel-artifacts-list--selected-path))))
+  (let ((context (mevedel-cockpit-surface-context)))
+    (if-let* ((id (plist-get (mevedel-cockpit-surface-selected) :item)))
+        (mevedel-collaboration-open-shared-item
+         (or (mevedel-cockpit-context-data-buffer context)
+             (mevedel-artifact-store-conversation
+              (mevedel-artifacts-list--workspace context) id))
+         id)
+      (mevedel-artifacts-list--browse (mevedel-artifacts-list--selected-path)))))
 
 (defun mevedel-artifacts-list-visit ()
   "Visit the selected artifact file in Emacs."
@@ -321,18 +294,36 @@ Restoring copies the version over the artifact as a new version."
          (n (cdr (assoc (completing-read (format "Version of %s: " id)
                                          choices nil t)
                         choices))))
-    (pcase (car (read-multiple-choice
-                 (format "Version %d" n)
-                 '((?v "view" "Open this version")
-                   (?r "restore" "Restore it as the newest version"))))
+    (pcase (if (plist-get (mevedel-artifacts-list--selected-artifact) :item)
+               ;; A whiteboard's or document's version opens only by restoring.
+               (and (y-or-n-p (format "Restore version %d of %s? " n id)) ?r)
+             (car (read-multiple-choice
+                   (format "Version %d" n)
+                   '((?v "view" "Open this version")
+                     (?r "restore" "Restore it as the newest version")))))
       (?v (mevedel-artifacts-list--browse
            (mevedel-artifact-store-version-path workspace id n)))
       (?r (let ((new (mevedel-artifact-store-restore-version
                       workspace id n
                       (and session (mevedel-session-session-id session)))))
-            (mevedel-artifacts-list--changed workspace id)
-            (message "mevedel: %s restored from version %d as version %d"
-                     id n new))))))
+            (if (not new)
+                (message "mevedel: restoring %s to version %d" id n)
+              (mevedel-artifacts-list--changed workspace id)
+              (message "mevedel: %s restored from version %d as version %d"
+                       id n new)))))))
+
+(defun mevedel-artifacts-list-save-version ()
+  "Save the selected whiteboard or document as a new version."
+  (interactive)
+  (let* ((context (mevedel-cockpit-surface-context))
+         (workspace (mevedel-artifacts-list--workspace context))
+         (session (mevedel-cockpit-context-session context))
+         (id (or (plist-get (mevedel-artifacts-list--selected-artifact) :item)
+                 (user-error "File artifacts keep a version of every saved change")))
+         (n (mevedel-shared-editing-save-version
+             workspace id (and session (mevedel-session-session-id session)))))
+    (mevedel-artifacts-list--changed workspace id)
+    (message "mevedel: saved %s as version %d" id n)))
 
 (defun mevedel-artifacts-list-duplicate ()
   "Copy the selected artifact into a new, independent artifact."
@@ -363,7 +354,7 @@ A whiteboard or document is deleted as a shared item, after any save in
 progress, together with its comments and history."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
-         (session (mevedel-cockpit-context-session context))
+         (workspace (mevedel-artifacts-list--workspace context))
          (item (mevedel-cockpit-surface-selected))
          (id (plist-get item :item)))
     (if id
@@ -371,22 +362,21 @@ progress, together with its comments and history."
                                    (plist-get item :name)))
           (let ((buffer (current-buffer)))
             (mevedel-shared-editing-call
-             session (list :action "delete" :id id :actor "Host")
+             workspace (list :action "delete" :id id :actor "Host")
              (lambda (reply)
                (if-let* ((failure (plist-get reply :error)))
                    (message "mevedel: %s was not deleted: %s" (plist-get item :name) failure)
                  (when (buffer-live-p buffer)
                    (with-current-buffer buffer (mevedel-cockpit-surface-refresh)))
                  (message "mevedel: %s deleted" (plist-get item :name)))))))
-      (let ((workspace (mevedel-artifacts-list--workspace context)))
-        (when (yes-or-no-p (format "Delete artifact %s with its versions? "
-                                   (plist-get item :id)))
-          (mevedel-collaboration-delete-artifact
-           workspace
-           (file-relative-name (plist-get item :path)
-                               (mevedel-artifact-store-directory workspace)))
-          (mevedel-cockpit-surface-refresh)
-          (message "mevedel: artifact %s deleted" (plist-get item :id)))))))
+      (when (yes-or-no-p (format "Delete artifact %s with its versions? "
+                                 (plist-get item :id)))
+        (mevedel-collaboration-delete-artifact
+         workspace
+         (file-relative-name (plist-get item :path)
+                             (mevedel-artifact-store-directory workspace)))
+        (mevedel-cockpit-surface-refresh)
+        (message "mevedel: artifact %s deleted" (plist-get item :id))))))
 
 (defun mevedel-artifacts-list-quit ()
   "Quit the artifacts cockpit."
@@ -424,6 +414,8 @@ progress, together with its comments and history."
             mevedel-artifacts-list-duplicate)
            ("c" "Open the selected artifact's own conversation"
             mevedel-artifacts-list-conversation)
+           ("s" "Save the selected whiteboard or document as a version"
+            mevedel-artifacts-list-save-version)
            ("d" "Delete (and unpublish) the selected artifact"
             mevedel-artifacts-list-delete)))
   "Cockpit surface spec for the artifact store.")

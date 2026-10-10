@@ -450,6 +450,38 @@
 (mevedel-deftest mevedel-sandbox--protected-candidates ()
   ,test
   (test)
+  :doc "expands the artifact store's bookkeeping at each root without walking"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-sandbox-store-" t)))
+         (store (file-name-concat root ".mevedel" "artifacts" "board"))
+         (deep (file-name-concat root "sub" ".mevedel" "artifacts" "x"))
+         walked
+         (mevedel-protected-paths
+          '(("**/.mevedel/artifacts/*/state.json" . read-only)
+            ("**/.mevedel/artifacts/*/versions/**" . read-only)
+            ("**/.mevedel/leases/**" . read-only))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat store "versions") t)
+          (make-directory deep t)
+          (make-directory (file-name-concat root ".mevedel" "leases") t)
+          (write-region "{}" nil (file-name-concat store "state.json") nil 'silent)
+          (write-region "x" nil (file-name-concat store "index.html") nil 'silent)
+          (let ((candidates
+                 (cl-letf (((symbol-function 'directory-files-recursively)
+                            (lambda (&rest _) (setq walked t) nil)))
+                   (mevedel-sandbox--protected-candidates root (list root)))))
+            (should-not walked)
+            (should (equal (sort (mapcar (lambda (item)
+                                           (file-relative-name (plist-get item :path) root))
+                                         candidates)
+                                 #'string<)
+                           '(".mevedel/artifacts/board/state.json"
+                             ".mevedel/artifacts/board/versions"
+                             ".mevedel/leases")))
+            (should (cl-every (lambda (item) (eq 'read-only (plist-get item :mode)))
+                              candidates))))
+      (delete-directory root t)))
+
   :doc "protected glob expansion:
 `mevedel-sandbox--protected-candidates' finds concrete and missing roots"
   (let* ((root (make-temp-file "mevedel-sandbox-candidates-" t))

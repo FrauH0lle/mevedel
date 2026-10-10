@@ -262,7 +262,9 @@ during a redraw."
             (plist-get (mevedel-resource-parse-address address) :canonical)
           (error (user-error "%s" (error-message-string err)))))
   (cond
-   ((string-match "\\`shared://\\([0-9a-f]+\\)\\(?:/\\|\\'\\)" address)
+   ;; Browser-made item ids are UUIDs; `shared://library' is no item.
+   ((and (string-match "\\`shared://\\([a-zA-Z0-9_-]+\\)\\(?:/\\|\\'\\)" address)
+         (not (equal (match-string 1 address) "library")))
     (mevedel-collaboration-open-shared-item
      (bound-and-true-p mevedel--data-buffer) (match-string 1 address)))
    ((string-match "\\`\\(?:agent\\|history\\)://\\(root/[^#]+\\)" address)

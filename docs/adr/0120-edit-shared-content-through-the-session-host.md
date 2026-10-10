@@ -19,14 +19,16 @@ agent transactions, and generate exports. Packaged resvg WASM and a font
 render matching board PNGs with no guest browser. The helper has a private
 stdin/stdout protocol and owns no session files or public listener.
 
-Emacs owns a serialized operation queue per session. It rechecks authority
-before committing candidate state through existing session storage. Project
-sessions use their target-side lease and immutable publication transaction;
-the browser receives a saved acknowledgment only after commit. A tool's
-irreversible commit and result delivery defer cancellation settlement so a
-committed edit cannot be reported as rolled back. Existing artifact
-materialization carries editable state and embedded assets through session
-lifecycle operations.
+Items live in the workspace artifact store
+([ADR 0124](0124-keep-artifacts-in-a-workspace-store.md)), not in a session.
+Emacs owns one serialized operation queue per workspace, shared by every room
+and session of that Emacs. It rechecks authority before committing candidate
+state to the item's `state.json`; across Emacs instances an item lease, with
+the session lease's lifecycle, fences each write. The browser receives a saved
+acknowledgment only after commit. A tool's irreversible commit and result
+delivery defer cancellation settlement so a committed edit cannot be reported
+as rolled back. Sessions only attach to items, so session lifecycle operations
+neither copy nor roll them back.
 
 Full and owner bearers may create, import, rename, edit, comment, ask, and point through
 typed room actions. View bearers may read and export. Model tools use the
@@ -435,7 +437,20 @@ Deletion is final: a trash would add a second lifecycle state that listing,
 Fork, Save As, Rewind, publication and the model would all have to honor, so
 the confirmation offers a downloadable copy for re-import instead. The model
 gets no delete action; removing work stays a human decision. Item deletion
-runs in the editing queue so it cannot overtake a save in progress, and one
-artifact-folder deletion helper commits a project session's tombstone at
-once, which also fixed the cockpit's deletions only becoming durable at the
-next full save.
+runs in the editing queue so it cannot overtake a save in progress, and
+removes the item's whole store artifact with its versions, lease and dedicated
+session.
+
+### Decision history: from session storage to the workspace store
+
+Items were first stored per session under `artifacts/shared-editing/`, with
+one queue per session buffer, and carried by the session's lease, immutable
+publication, Fork and Save As. That made an item unreachable from any other
+session or the lobby, gave two rooms editing it two queues, and let a deleted
+session take it along. ADR 0124 moved items into the workspace store: the
+queue moved from the session buffer to the workspace, and the session lease's
+fencing role passed to a per-item lease built on the same generation records.
+Extracting a lease core shared with sessions was examined and rejected: the
+session functions bind publication, unsettled-mutation, release-pending and
+transfer state into about 610 race-critical lines, while the item lease needs
+only acquire, renew, release and a fenced write on the existing primitives.

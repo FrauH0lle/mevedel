@@ -39,12 +39,11 @@ there was a queue entry or provider review to drain.
 Public abort uses the same terminal cancellation boundary while preserving the
 request reservation and file snapshots until pending durable settlement finishes.
 
-Shared whiteboards and documents also commit bounded editing batches between
-model turns. Their canonical state and embedded assets live below
-`artifacts/shared-editing/`, through the same target-side authority and
-publication contract. Resume, Save As, and Fork carry them; Rewind preserves
-current accepted content. Ending a browser share revokes access without
-deleting it. See [shared editing](shared-editing.md) for pending browser drafts,
+Artifacts, whiteboards and documents live in the workspace
+[artifact store](view.md#artifact-store), not in a session. A session persists
+only the ids of the artifacts attached to it, so Resume, Save As, Fork and
+Rewind neither copy nor roll them back. See
+[shared editing](shared-editing.md) for item leases, pending browser drafts,
 operation retries, and native exports.
 
 Conversation compaction has its own doc in
@@ -245,9 +244,6 @@ Layout:
   local/                              ; lazy session-owned shared resources
     plans/current.md                 ; mutable Plan draft/proposal
     plans/accepted-*.md              ; immutable accepted plans
-  artifacts/shared-editing/          ; whiteboard, document and artifact
-                                     ; comment state (artifact files live
-                                     ; in the workspace artifact store)
   tool-results/                      ; retained oversized tool output and media
   agents/                            ; logical agent transcripts; physical
                                      ; numbered compaction recovery archives
@@ -873,15 +869,10 @@ bytes available; cleanup failure is diagnostic and retried on a later save.
 Snapshot contents remain raw and owner-only. Readers resolve the names in the
 checkpoint index; saving does not rewrite existing archived history.
 
-The free-form `artifacts/` subtree is included recursively as literal regular
-files in every portable save candidate. Its absent committed entries are
-explicit `:delete t` tombstones: ordinary omission still means unchanged, while
-a tombstone removes that logical from the overlaid manifest at the same marker
-commit. Symlinks are not publication inputs. This makes the immutable manifest,
-not a remote fixed cache, authority for artifact bytes after Resume, Save As,
-and Fork. After an owned cold Resume fences and revalidates the publication
-head, it replaces the fixed `artifacts/` subtree from verified manifest bytes;
-a read-only inspector never performs that reconciliation.
+A session published before the artifact store may still carry `artifacts/...`
+logical entries. Saves no longer include or tombstone them, so the manifest
+overlay keeps them readable through the ordinary logical reader until the
+[artifact migration](#moving-artifacts-into-the-store) moves them.
 
 Retained idle agents remain registry entries until their first conversation access;
 resume eagerly hydrates only active abandoned turns needed for partial-response
@@ -1313,7 +1304,7 @@ consumption debounce into one sidecar-only registry save
 `mevedel-session-artifacts-save-agent-registry`): the sidecar carries the
 agent registry the persist is about, and the transcript segment is committed
 at settlement, so the observational path never saves the segment, scans
-snapshots, or rereads the artifact folder.  A portable session publishes the
+or scans snapshots.  A portable session publishes the
 sidecar alone as a one-artifact commit and the manifest overlay keeps every
 other committed entry; a portable session whose sidecar is not yet committed
 skips the save until the next critical commit.  A synchronous acknowledged
@@ -1344,9 +1335,8 @@ with its `.lease/` and `.publications/` control state while the bounded lease is
 reserved.  The child's save path changes immediately and restore retains that
 same generation; it is never released and reacquired at a discoverable path.
 The replacement manifest contains the selected transcript, accepted-plan
-evidence, retained agent transcripts, file-history artifacts, and the current
-`artifacts/` subtree resolved from the Source's committed manifest, never its
-fixed caches.
+evidence, retained agent transcripts, file-history artifacts, and any other
+logical entries of the Source's committed manifest, never its fixed caches.
 
 Portable project Rewind does not rename or exchange the session directory.  It
 materializes only logical committed artifacts, excludes `.lease/` and
@@ -1719,8 +1709,6 @@ File-workspace sessions stage and swap a session directory with a rollback
 tree.  Portable project sessions leave the directory and control state in
 place and commit one complete replacement manifest through the owned lease
 head.
-The current free-form `artifacts/` folder is preserved unchanged: it is durable
-session content like `local/`, not a turn-indexed snapshot.
 The impact lists the discarded prompt suffix in order, including ordinary chat
 and complete directive turns, alongside restored files and every known gap.
 External working-tree changes to captured files are overwritten. Git HEAD and
@@ -1893,9 +1881,9 @@ copied into independent child state rather than shared, but managed
 unrelated evidence are discarded, and only an accepted artifact that is valid
 at the fork point is preserved. Only dropped-file grants referenced by the transferred
 draft move to Child.
-The Source's current free-form `artifacts/` subtree is copied into independent
-child state. Portable forks materialize its committed immutable bytes; PID-lock
-forks copy the physical folder.
+A fork carries the Source's attached artifact ids, not artifact bytes: both
+sessions work on the same store artifacts. **Duplicate** in the artifacts
+cockpit or the browser's store list makes an independent copy.
 
 Conversation and Worktree children receive independent session IDs and initially
 use those IDs as display names. Each child's first new authored prompt generates

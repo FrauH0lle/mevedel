@@ -986,7 +986,6 @@ test(
         2,
       );
       await agent('StorageWritable', { writable: true });
-      await agent('RetryPublication');
       await frame(ownerPage)
         .locator('#menu')
         .evaluate((e) => (e.open = true));

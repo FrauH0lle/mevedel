@@ -386,3 +386,37 @@ test('a board keeps its canvas background through edits, history, export and imp
     update: Buffer.from(Y.encodeStateAsUpdate(notes)).toString('base64') }), /Invalid canvas background/);
 });
 
+
+test('restoring a saved version is one revertible change that keeps history', async () => {
+  const made = await handle({ action: 'create', id: 'board1', kind: 'whiteboard', title: 'Design',
+    actor: 'Alice', opId: 'create1' });
+  const first = await handle({ action: 'patch', state: made.state, actor: 'Agent', opId: 'edit1',
+    changes: [{ id: 'one', after: rect('one', 0, 0) }] });
+  const version = first.state.crdt;
+  const second = await handle({ action: 'patch', state: first.state, actor: 'Agent', opId: 'edit2',
+    changes: [{ id: 'two', after: rect('two', 50, 0) }] });
+  const renamed = await handle({ action: 'rename', state: second.state, actor: 'Alice', opId: 'edit3',
+    title: 'Later' });
+  const restored = await handle({ action: 'restore', state: renamed.state, actor: 'Host',
+    opId: 'restore1', target: version });
+  assert.deepEqual(restored.result.content.map((e) => e.id), ['one']);
+  assert.equal(restored.result.title, 'Design');
+  assert.equal(restored.state.revision, renamed.state.revision + 1);
+  assert.equal(restored.state.transactions[0].id, 'restore1');
+  assert.ok(restored.state.transactions.some((tx) => tx.id === 'edit1'), 'history stays');
+  const reverted = await handle({ action: 'revert', state: restored.state, actor: 'Alice',
+    opId: 'undo1', transaction: 'restore1' });
+  assert.deepEqual(reverted.result.content.map((e) => e.id).sort(), ['one', 'two']);
+  assert.equal(reverted.result.title, 'Later');
+
+  const one = await handle({ action: 'import', format: 'markdown', id: 'doc1', data: '# One',
+    actor: 'Alice', opId: 'import1' });
+  const two = await handle({ action: 'import', format: 'markdown', id: 'doc2', data: '# Two\n\nMore',
+    actor: 'Alice', opId: 'import2' });
+  const replaced = await handle({ action: 'restore', state: one.state, actor: 'Host',
+    opId: 'restore2', target: two.state.crdt });
+  const markdown = await handle({ action: 'export', state: replaced.state, format: 'markdown' });
+  assert.match(markdown.result.text, /# Two[^]*More/);
+  await assert.rejects(handle({ action: 'restore', state: one.state, actor: 'Host', opId: 'restore3',
+    target: version }), /own kind/);
+});

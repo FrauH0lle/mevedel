@@ -17,6 +17,7 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration-artifact)
 (require 'mevedel-collaboration-artifact-comments)
 (require 'mevedel-pending-inputs)
@@ -109,7 +110,7 @@
 Without CONTENT the artifact's file is missing.  Return the file's path."
   (let ((path (file-name-concat (mevedel-artifact-store-directory workspace) id file)))
     (make-directory (file-name-directory path) t)
-    (mevedel-artifact-store--create-meta workspace id file)
+    (mevedel-artifact-store-create-meta workspace id file)
     (when content (write-region content nil path nil 'silent))
     path))
 
@@ -192,8 +193,8 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
     (let ((comment (car (mevedel-collaboration--artifact-comments-read workspace "schema"))))
       (should (equal (plist-get comment :text) "Hi"))
       (should (eq (plist-get comment :resolved) :json-false)))
-    ;; Items are the shared-item folder's direct entries only.
-    (should-not (mevedel-shared-editing-list session)))
+    ;; Comments are no whiteboard or document.
+    (should-not (mevedel-shared-editing-list workspace)))
   :doc "refuses a store that belongs to another artifact"
   (mevedel-test--with-artifact-comment-room
     (let ((path (file-name-concat directory ".mevedel/artifacts/schema/comments.json")))

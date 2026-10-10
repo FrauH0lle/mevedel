@@ -231,7 +231,7 @@
     (unwind-protect
         (progn
           (mevedel-artifact-store-test--write store "flow/index.html" "x")
-          (mevedel-artifact-store--create-meta workspace "flow" "index.html")
+          (mevedel-artifact-store-create-meta workspace "flow" "index.html")
           ;; Presets are defined by the package setup the test omits.
           (cl-letf (((symbol-function 'mevedel--ensure-chat-preset) #'ignore))
             (setq buffer (mevedel-artifact-store-conversation workspace "flow")))

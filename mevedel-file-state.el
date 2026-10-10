@@ -21,12 +21,8 @@
 (require 'mevedel-structs)
 
 ;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-artifacts-dir
-                  "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-sidecar-path
                   "mevedel-session-artifacts" (save-path))
-(autoload 'mevedel-session-artifacts-artifacts-dir
-  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-sidecar-path
   "mevedel-session-artifacts")
 
@@ -343,14 +339,8 @@ A session directory holds append-only logs, transcript segments, and
 sidecars that mevedel rewrites every turn.  Caching one would report
 mevedel's own writes back to the model as external edits every turn for
 the life of the session, and let a multi-megabyte telemetry log evict
-every cache entry describing real work.  The `artifacts' subtree is
-exempt: those are authored deliverables, and an outside edit to one is
-worth reporting."
-  (when-let* ((dir (mevedel-session--session-directory-for session path)))
-    (not (string-prefix-p
-          (file-name-as-directory
-           (mevedel-session-artifacts-artifacts-dir dir))
-          (expand-file-name path)))))
+every cache entry describing real work."
+  (and (mevedel-session--session-directory-for session path) t))
 
 (defun mevedel-session-record-file-access (session path kind
                                                     &optional offset limit)

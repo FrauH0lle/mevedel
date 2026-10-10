@@ -1146,7 +1146,9 @@ Artifacts live in the workspace artifact store,
 `<workspace>/.mevedel/artifacts/`, owned by `mevedel-artifact-store.el`.
 Each artifact is one directory whose name is its stable id. It holds the
 artifact file (an HTML mockup, a Markdown document, or an image the user is
-meant to open) plus host bookkeeping: `meta.el` (kind, title, primary file,
+meant to open) or, for a whiteboard or document, its `state.json` (see
+[shared editing](shared-editing.md#durability-and-recovery)), plus host
+bookkeeping: `meta.el` (kind, title, primary file,
 dedicated session), `versions/` (numbered copies and `index.el`) and
 `comments.json` (the comment threads on an HTML artifact).
 
@@ -1154,7 +1156,8 @@ dedicated session), `versions/` (numbered copies and `index.el`) and
 .mevedel/artifacts/
   ID/
     meta.el          ; kind, title, primary file, created, dedicated session
-    <name>           ; the artifact file the model writes
+    <name>           ; the artifact file the model writes, or
+    state.json       ; a whiteboard's or document's state
     versions/        ; NNNNNN.<ext> copies plus index.el
     comments.json    ; comment threads, each naming its answering session
 ```
@@ -1206,12 +1209,13 @@ the current session, version count, modification time and size; `t` toggles
 between all and attached artifacts. It opens an artifact locally (`o`, `e`),
 attaches it to the current session (`a`), views or restores a version (`v`),
 duplicates it into an independent artifact (`D`), opens its dedicated session
-(`c`), and deletes it with its versions, comments and dedicated session (`d`). In a session it also lists the session's whiteboards and
-documents, opens one in the session's room (see
-[shared editing](shared-editing.md)), and deletes it as a shared item (see
-[deleting](shared-editing.md#deleting)); their state below
-`artifacts/shared-editing/` stays session-owned. Every change reaches the
-live rooms of the workspace. Everything except opening an item works with no
+(`c`), and deletes it with its versions, comments and dedicated session (`d`).
+Whiteboards and documents are store artifacts too: `o` opens one in its editor
+in the session's room, or without a session in its dedicated session's room
+(see [shared editing](shared-editing.md)); `s` saves a version of one; `d`
+deletes it through its editing queue (see
+[deleting](shared-editing.md#deleting)). Every change reaches the live rooms
+of the workspace. Everything except opening an item works with no
 room and no relay. The session menu's Artifacts row shows how many artifacts
 are attached to the session and how many the project has.
 

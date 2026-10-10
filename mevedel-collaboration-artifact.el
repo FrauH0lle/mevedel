@@ -27,6 +27,8 @@
 (declare-function mevedel-artifact-store-duplicate
                   "mevedel-artifact-store" (workspace id new-id))
 (declare-function mevedel-artifact-store-id-p "mevedel-artifact-store" (id))
+(declare-function mevedel-artifact-store-item-p "mevedel-artifact-store" (meta))
+(defvar mevedel-artifact-store-item-kinds)
 (declare-function mevedel-artifact-store-list "mevedel-artifact-store" (workspace))
 (declare-function mevedel-artifact-store-meta "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-restore-version
@@ -40,10 +42,19 @@
 (autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-duplicate "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-id-p "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-item-p "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-list "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-meta "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-restore-version "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-versions "mevedel-artifact-store")
+
+;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
+                  (workspace args callback &optional authorize commit))
+(declare-function mevedel-shared-editing-save-version
+                  "mevedel-shared-editing" (workspace id &optional session-id))
+(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--guest
@@ -146,6 +157,7 @@ that file is gone."
                  (mevedel-artifact-store-artifact-directory workspace id) file)))
       (append (list :id (concat "artifact:" id) :store id
                     :artifact (concat id "/" file) :artifact-path path)
+              (when (mevedel-artifact-store-item-p meta) (list :item t))
               (unless (file-exists-p path) (list :missing t))))))
 
 (defun mevedel-collaboration--artifact-target (room guest id)
@@ -187,7 +199,8 @@ card in a store artifact's directory carries that artifact as `:store'."
                  (path (plist-get record :artifact-path))
                  (dir (when-let* ((workspace (mevedel-collaboration--room-workspace room)))
                         (mevedel-artifact-store-directory workspace)))
-                 (contained (and dir path
+                 ;; A whiteboard's or document's state opens in its editor.
+                 (contained (and dir path (not (plist-get record :item))
                                  (mevedel-resource-within-root-p path dir)))
                  (read
                   (and contained
@@ -258,13 +271,25 @@ every frame was written."
   "Delete WORKSPACE's store artifact NAME and update the workspace's rooms.
 NAME is the path relative to the store, as cards show it; the whole
 artifact directory it lies in goes, with metadata, versions, comments and
-its dedicated session."
-  (let ((slash (string-search "/" name)))
-    (if slash
-        (mevedel-artifact-store-delete workspace (substring name 0 slash))
+its dedicated session.  A whiteboard or document is deleted through its
+editing queue, after any save in progress, so its editors learn of it."
+  (let* ((slash (string-search "/" name))
+         (id (and slash (substring name 0 slash))))
+    (cond
+     ((null id)
       (delete-file (expand-file-name
-                    name (mevedel-artifact-store-directory workspace)))))
-  (mevedel-collaboration-notify-artifacts-changed workspace))
+                    name (mevedel-artifact-store-directory workspace)))
+      (mevedel-collaboration-notify-artifacts-changed workspace))
+     ((mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+      (mevedel-shared-editing-call
+       workspace (list :action "delete" :id id :actor "Host")
+       (lambda (reply)
+         (if (plist-get reply :error)
+             (message "mevedel: %s was not deleted: %s" id (plist-get reply :error))
+           (mevedel-collaboration-notify-artifacts-changed workspace)))))
+     (t
+      (mevedel-artifact-store-delete workspace id)
+      (mevedel-collaboration-notify-artifacts-changed workspace)))))
 
 (defun mevedel-collaboration--handle-artifact-delete (room peer frame)
   "Delete the published artifact FRAME names for writable guest PEER in ROOM.
@@ -339,6 +364,9 @@ Attachment is relative to ROOM's session; a lobby has none."
                       :modified (if (plist-get row :missing) nil
                                   (truncate (float-time (plist-get row :modified))))
                       :versions (plist-get row :versions)
+                      :item (if (memq (plist-get row :kind)
+                                      mevedel-artifact-store-item-kinds)
+                                t :json-false)
                       :missing (if (plist-get row :missing) t :json-false)
                       :attached (if (member id attached) t :json-false)
                       :conversation
@@ -359,12 +387,22 @@ Attachment is relative to ROOM's session; a lobby has none."
      (plist-get room :transport) peer
      (mevedel-collaboration--store-frame room))))
 
+(defun mevedel-collaboration-item-link (link id)
+  "Return room LINK opening shared item ID directly in its editor tab."
+  (let ((hash (string-search "#" link)))
+    (concat (substring link 0 hash) "?shared=" (url-hexify-string id)
+            (substring link hash))))
+
 (defun mevedel-collaboration--store-conversation-link (guest workspace id)
-  "Share artifact ID's dedicated session and return GUEST's link to it."
+  "Share artifact ID's dedicated session and return GUEST's link to it.
+A whiteboard or document opens straight in its editor there."
   (let* ((buffer (mevedel-artifact-store-conversation workspace id))
          (shared (mevedel-collaboration--start
-                  (buffer-local-value 'mevedel--session buffer) buffer)))
-    (mevedel-collaboration--guest-link shared guest)))
+                  (buffer-local-value 'mevedel--session buffer) buffer))
+         (link (mevedel-collaboration--guest-link shared guest)))
+    (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+        (mevedel-collaboration-item-link link id)
+      link)))
 
 (defun mevedel-collaboration--store-action (room guest frame)
   "Perform GUEST's store FRAME in ROOM and return the reply fields.
@@ -399,8 +437,16 @@ Signal an error with a message for the guest when the action is refused."
          (let ((new (mevedel-artifact-store-restore-version
                      workspace id n
                      (and session (mevedel-session-session-id session)))))
-           (mevedel-collaboration-notify-artifacts-changed workspace)
-           (list :id id :n new))))
+           ;; A whiteboard or document restores as a queued edit.
+           (when new (mevedel-collaboration-notify-artifacts-changed workspace))
+           (list :id id :n (or new :json-false)))))
+      ("save-version"
+       (unless (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+         (error "File artifacts keep a version of every saved change"))
+       (let ((n (mevedel-shared-editing-save-version
+                 workspace id (and session (mevedel-session-session-id session)))))
+         (mevedel-collaboration-notify-artifacts-changed workspace)
+         (list :id id :n n)))
       ("duplicate"
        (let ((new-id (plist-get frame :newId)))
          (unless (and (stringp new-id)

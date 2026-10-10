@@ -407,6 +407,11 @@ Resolve the `.git' pointer and its `commondir' file on PATH's target."
                              (concat target-prefix common)
                            (expand-file-name common directory)))))))))))))
 
+(defconst mevedel-sandbox--root-anchored-names '(".mevedel")
+  "Directories that exist only at a workspace root.
+Protected `**/NAME/...' patterns below them are expanded at each discovery
+root instead of walking it; native checks still match them at any depth.")
+
 (defun mevedel-sandbox--find-protected-directory (root name executable)
   "Find literal protected NAME below local ROOT with GNU find EXECUTABLE.
 Return (PATH . BLOCKED) pairs, stopping at matches and unreadable directories.
@@ -576,6 +581,17 @@ each native directory scan and returns (PATH . BLOCKED) pairs."
                 (search-literal-directory root literal-directory mode)
                 (add-candidate
                  (file-name-concat root literal-directory) mode t)))
+             ;; mevedel's own state sits at each workspace root: its
+             ;; protected descendants expand there, without a walk.
+             ((and (not absolute-pattern)
+                   (string-prefix-p "**/" root-pattern)
+                   (member (car (split-string (substring root-pattern 3) "/"))
+                           mevedel-sandbox--root-anchored-names)
+                   (not (string-search "**" (substring root-pattern 3))))
+              (dolist (root (delete-dups (copy-sequence discovery-roots)))
+                (dolist (path (file-expand-wildcards
+                               (file-name-concat root (substring root-pattern 3)) t))
+                  (add-candidate path mode directory-p))))
              (t
               (let ((search-roots (copy-sequence discovery-roots)))
                 (when absolute-pattern
