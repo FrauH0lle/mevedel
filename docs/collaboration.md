@@ -802,7 +802,10 @@ with current live-session attachments, so ordinary edits do not rescan saved
 sessions. Changes coalesce into one notification per workspace after the current
 mutation, when its transport is idle. That fanout reads the latest artifact store
 once and resolves the rooms still open, so saving does not wait for browser
-listing updates.
+listing updates. A save that changes only an item's content, not its title or
+kind, is announced up to two seconds later, together with further such saves:
+the item's viewers already have the edit, and listings only show its size and
+time.
 The host sends the listing when a guest joins a room or asks for it
 (`store-list`), and to every room and lobby of the workspace after a store
 change (`store-artifacts`): once per change however many steps it took, built
