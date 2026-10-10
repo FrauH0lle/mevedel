@@ -2248,6 +2248,10 @@ async function start(event) {
       return;
     }
     if (data.type === 'changed') {
+      // A skipped revision means this diff was computed against a state this
+      // editor lacks, such as edits another Emacs committed before handing
+      // the item over; read the whole item rather than lose them.
+      if (online && data.revision > revision + 1) resync();
       if (data.update) Y.applyUpdate(doc, bytes(data.update), remote);
       revision = Math.max(revision, data.revision);
       if (document.activeElement !== $('title')) $('title').value = doc.getMap('meta').get('title');
@@ -2339,6 +2343,20 @@ async function start(event) {
   $('delete-item').hidden = readOnly;
   $('delete-item').textContent = item.kind === 'whiteboard' ? 'Delete whiteboard…' : 'Delete document…';
   $('delete-item').onclick = () => { $('menu').open = false; port.postMessage({ type: 'delete' }); };
+  let resyncing = false;
+  async function resync() {
+    if (resyncing) return;
+    resyncing = true;
+    try {
+      const current = await request({ action: 'read' });
+      Y.applyUpdate(doc, bytes(current.crdt), remote);
+      revision = Math.max(revision, current.revision);
+    } catch (_) {
+      // Offline or refused: the next sync on reconnecting reads it again.
+    } finally {
+      resyncing = false;
+    }
+  }
   $('retry').onclick = async () => {
     try {
       const current = await request({ action: 'read' });
