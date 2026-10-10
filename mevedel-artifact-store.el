@@ -107,6 +107,31 @@ Live collaboration rooms follow the store through it.")
   (file-name-as-directory
    (file-name-concat (mevedel-workspace-state-dir workspace) "artifacts")))
 
+(defvar mevedel-artifact-store--true-directories (make-hash-table :test #'equal)
+  "Each store directory's true name, resolved once per Emacs.
+A remote resolution costs a round trip per path component.")
+
+(defun mevedel-artifact-store-relative (workspace path)
+  "Return PATH relative to WORKSPACE's artifact store, or nil outside it.
+PATH may reach the store through the workspace root as given or through
+its true name, as ApplyPatch reports paths."
+  (let ((store (expand-file-name (mevedel-artifact-store-directory workspace)))
+        (path (expand-file-name path)))
+    (if (string-prefix-p store path)
+        (substring path (length store))
+      ;; Resolved once and only when needed; an unreachable remote is
+      ;; retried next time rather than remembered.
+      (when-let* ((true (or (gethash store mevedel-artifact-store--true-directories)
+                            (when-let* ((name (ignore-errors (file-truename store))))
+                              (puthash store (file-name-as-directory name)
+                                       mevedel-artifact-store--true-directories))))
+                  ((string-prefix-p true path)))
+        (substring path (length true))))))
+
+(defun mevedel-artifact-store-bookkeeping-p (relative)
+  "Return non-nil when RELATIVE, a path inside the store, is host bookkeeping."
+  (member (cadr (split-string relative "/")) mevedel-artifact-store--bookkeeping))
+
 (defun mevedel-artifact-store-id-p (id)
   "Return non-nil when ID is a valid artifact id.
 Letters, digits, `-' and `_', at most 80 of them: the rule shared items,
@@ -410,7 +435,8 @@ otherwise the next session save carries the attachment."
     (mevedel-artifact-store--changed (mevedel-session-workspace session))))
 
 (defun mevedel-artifact-store-update-meta (workspace id &rest properties)
-  "Set PROPERTIES in the metadata of artifact ID and return it."
+  "Set PROPERTIES in the metadata of artifact ID and return it.
+A new title or conversation shows in every listing."
   (let ((meta (copy-sequence (or (mevedel-artifact-store-meta workspace id)
                                  (error "Artifact %s has no metadata" id)))))
     (while properties
@@ -419,6 +445,7 @@ otherwise the next session save carries the attachment."
      (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
                        "meta.el")
      meta)
+    (mevedel-artifact-store--changed workspace)
     meta))
 
 (defun mevedel-artifact-store-dedicated-p (workspace session-id id)
@@ -484,23 +511,18 @@ A write into a new id directory creates the artifact, and any write
 attaches SESSION.  A write of an artifact's primary file is versioned once
 REQUEST settles, so a turn's many small patches leave one version and the
 one before the turn survives; without a request it is versioned now."
-  (let ((workspace (mevedel-session-workspace session)))
-    (when-let* ((store (and workspace
-                            (expand-file-name
-                             (mevedel-artifact-store-directory workspace)))))
+  (when-let* ((workspace (mevedel-session-workspace session)))
       (dolist (change changes)
-        (let* ((path (expand-file-name (plist-get change :path)))
-               (relative (and (eq (plist-get change :action) 'write)
-                              (string-prefix-p store path)
-                              (substring path (length store))))
+        (let* ((relative (and (eq (plist-get change :action) 'write)
+                              (mevedel-artifact-store-relative
+                               workspace (plist-get change :path))))
                (slash (and relative (string-search "/" relative)))
                (id (and slash (substring relative 0 slash)))
                (file (and slash (substring relative (1+ slash)))))
           ;; ponytail: only the primary file is versioned; secondary files
           ;; (assets) change without versions.
           (when (and (mevedel-artifact-store-id-p id)
-                     (not (member (car (split-string file "/"))
-                                  mevedel-artifact-store--bookkeeping)))
+                     (not (mevedel-artifact-store-bookkeeping-p relative)))
             (let ((meta (or (mevedel-artifact-store-meta workspace id)
                             (mevedel-artifact-store-create-meta
                              workspace id file))))
@@ -511,7 +533,7 @@ one before the turn survives; without a request it is versioned now."
                                 :test #'equal)
                   (mevedel-artifact-store-record-version
                    workspace id (mevedel-session-session-id session))))
-              (mevedel-artifact-store-attach session id))))))))
+              (mevedel-artifact-store-attach session id)))))))
 
 (provide 'mevedel-artifact-store)
 ;;; mevedel-artifact-store.el ends here

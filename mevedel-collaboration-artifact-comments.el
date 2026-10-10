@@ -52,6 +52,8 @@
                   "mevedel-collaboration-artifact" (name))
 (declare-function mevedel-collaboration--artifact-target
                   "mevedel-collaboration-artifact" (room guest id))
+(declare-function mevedel-collaboration--store-read
+                  "mevedel-collaboration-artifact" (guest))
 (declare-function mevedel-collaboration--store-target
                   "mevedel-collaboration-artifact" (workspace id))
 (declare-function mevedel-collaboration--workspace-rooms
@@ -447,6 +449,8 @@ action is refused."
       (error "Only HTML artifacts take comments"))
     (unless (or (equal action "list") (plist-get guest :writable))
       (error "This link can view the artifact but not comment on it"))
+    (when (equal action "list")
+      (mevedel-collaboration--store-read guest))
     (let* ((comments (mevedel-collaboration--artifact-comments-read workspace id))
            (find (lambda (comment-id)
                    (cl-find comment-id comments :key (lambda (c) (plist-get c :id))

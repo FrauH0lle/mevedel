@@ -136,6 +136,23 @@
                                                     store "flow/logo.png" "png"))))))
         (should (equal before (mevedel-artifact-store-meta workspace "flow"))))))
 
+  :doc "follows writes reported through the workspace root's true name"
+  (let* ((real (file-name-as-directory (make-temp-file "mevedel-artifact-real-" t)))
+         (link (concat (directory-file-name real) "-link/"))
+         (workspace (mevedel-workspace--create :type 'project :id "w"
+                                               :root link :name "w"))
+         (session (mevedel-session--create :workspace workspace)))
+    (unwind-protect
+        (progn
+          (make-symbolic-link (directory-file-name real) (directory-file-name link))
+          (mevedel-artifact-store-test--note
+           session (mevedel-artifact-store-test--write
+                    (file-name-concat real ".mevedel/artifacts/") "flow/index.html" "1"))
+          (should (mevedel-artifact-store-meta workspace "flow"))
+          (should (equal '("flow") (mevedel-session-attached-artifacts session))))
+      (delete-file (directory-file-name link))
+      (delete-directory real t)))
+
   :doc "writes outside the store are ignored"
   (mevedel-artifact-store-test--with-workspace
     (let ((session (mevedel-session--create :workspace workspace))
@@ -273,7 +290,7 @@
 (mevedel-deftest mevedel-artifact-store--changed ()
   ,test
   (test)
-  :doc "announces versions, new artifacts and deletions"
+  :doc "announces versions, new artifacts, metadata changes and deletions"
   (mevedel-artifact-store-test--with-workspace
     (let* (changed
            (mevedel-artifact-store-changed-functions
@@ -282,6 +299,9 @@
        (mevedel-session--create :workspace workspace)
        (mevedel-artifact-store-test--write store "a/x.md" "1"))
       (should (>= (length changed) 2))
+      (setq changed nil)
+      (mevedel-artifact-store-update-meta workspace "a" :title "Renamed")
+      (should (equal (list workspace) changed))
       (setq changed nil)
       (mevedel-artifact-store-delete workspace "a")
       (should (equal (list workspace) changed)))))

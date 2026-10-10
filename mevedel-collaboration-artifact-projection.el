@@ -22,6 +22,12 @@
 (declare-function mevedel-artifact-store-directory
                   "mevedel-artifact-store" (workspace))
 (autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
+(declare-function mevedel-artifact-store-relative
+                  "mevedel-artifact-store" (workspace path))
+(declare-function mevedel-artifact-store-bookkeeping-p
+                  "mevedel-artifact-store" (relative))
+(autoload 'mevedel-artifact-store-relative "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-bookkeeping-p "mevedel-artifact-store")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -38,8 +44,7 @@
   "Cached (SIZE . MISSING-P) per published artifact's qualified path.
 Projection runs on every coalesced publish tick, so a remote session
 would otherwise pay one target round trip per artifact per tick.  The
-small cache is cleared whenever ApplyPatch settles or the artifact
-cockpit changes the folder.")
+small cache is cleared whenever the artifact store changes.")
 
 (defun mevedel-collaboration--artifact-stat (path)
   "Return cached (SIZE . MISSING-P) for the artifact at qualified PATH."
@@ -71,16 +76,11 @@ for the deleted path will re-project as missing."
                 (full (ignore-errors
                         (mevedel-execution-target-expand-path
                          target path (if session-target base-directory dir))))
-                (relative (and full (file-relative-name full dir)))
-                ((and relative
-                      (not (equal relative "."))
-                      (not (equal relative ".."))
-                      (not (string-prefix-p
-                            (file-name-as-directory "..") relative))
+                (relative (and full (mevedel-artifact-store-relative
+                                     (mevedel-session-workspace session) full)))
+                ((and (not (string-empty-p relative))
                       ;; Host bookkeeping is not an artifact.
-                      (not (string-match-p
-                            "\\`[^/]+/\\(?:meta\\.el\\'\\|comments\\.json\\'\\|versions/\\)"
-                            relative)))))
+                      (not (mevedel-artifact-store-bookkeeping-p relative)))))
       (let ((stat (mevedel-collaboration--artifact-stat full))
             (slash (string-search "/" relative)))
         (append (list :artifact relative :artifact-path full)

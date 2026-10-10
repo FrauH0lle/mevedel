@@ -406,7 +406,25 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
     (mevedel-collaboration--handle-store-list lobby 1 '(:t "store-list"))
     (let ((frame (mevedel-collaboration-artifact-test--reply sent 'lobby)))
       (should (equal "store-artifacts" (plist-get frame :t)))
-      (should (= 2 (length (plist-get frame :artifacts)))))))
+      (should (= 2 (length (plist-get frame :artifacts))))))
+
+  :doc "spends a guest's read budget before the host does more reading"
+  (mevedel-collaboration-artifact-test--with-store
+    (dotimes (_ 20)
+      (mevedel-collaboration--handle-store-list lobby 1 '(:t "store-list")))
+    (should (= (car mevedel-collaboration--store-read-budget) (length sent)))
+    ;; A request that needs an answer says why it got none.
+    (setq sent nil)
+    (mevedel-collaboration--handle-store-action
+     lobby 1 '(:reqId 4 :action "versions" :id "page"))
+    (should (string-match-p "Too many requests"
+                            (plist-get (mevedel-collaboration-artifact-test--reply
+                                        sent 'lobby)
+                                       :error)))
+    ;; Another guest has its own budget.
+    (setq sent nil)
+    (mevedel-collaboration--handle-store-list lobby 2 '(:t "store-list"))
+    (should (= 1 (length sent)))))
 
 (mevedel-deftest mevedel-collaboration--artifact-mime
   (:doc "maps artifact extensions case-insensitively and defaults to octet-stream")
