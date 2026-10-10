@@ -135,6 +135,8 @@ let documentSelection = null,
   commentStates = [],
   hoverShape = null;
 let recoveryWarning = '';
+// Set when changes the host committed could not be read after a skipped revision.
+let missed = false;
 let participant = 'You',
   textEditing = null,
   sceneSignature = '';
@@ -149,6 +151,10 @@ function saved() {
   if (failed) return;
   if (recoveryWarning) {
     status(recoveryWarning, true);
+    return;
+  }
+  if (missed) {
+    status('Some changes from the host could not be loaded; reopen this item', true);
     return;
   }
   status(
@@ -2251,7 +2257,7 @@ async function start(event) {
       // A skipped revision means this diff was computed against a state this
       // editor lacks, such as edits another Emacs committed before handing
       // the item over; read the whole item rather than lose them.
-      if (online && data.revision > revision + 1) resync();
+      if (online && (missed || data.revision > revision + 1)) resync();
       if (data.update) Y.applyUpdate(doc, bytes(data.update), remote);
       revision = Math.max(revision, data.revision);
       if (document.activeElement !== $('title')) $('title').value = doc.getMap('meta').get('title');
@@ -2262,6 +2268,7 @@ async function start(event) {
     if (data.type === 'sync') {
       Y.applyUpdate(doc, bytes(data.item.crdt), remote);
       revision = data.item.revision;
+      missed = false;
       readOnly = data.readOnly;
       editor?.setEditable(!readOnly);
       online = true;
@@ -2351,10 +2358,13 @@ async function start(event) {
       const current = await request({ action: 'read' });
       Y.applyUpdate(doc, bytes(current.crdt), remote);
       revision = Math.max(revision, current.revision);
+      missed = false;
     } catch (_) {
-      // Offline or refused: the next sync on reconnecting reads it again.
+      // The next change, or the sync on reconnecting, reads it again.
+      missed = true;
     } finally {
       resyncing = false;
+      saved();
     }
   }
   $('retry').onclick = async () => {
@@ -2362,6 +2372,7 @@ async function start(event) {
       const current = await request({ action: 'read' });
       Y.applyUpdate(doc, bytes(current.crdt), remote);
       revision = current.revision;
+      missed = false;
       online = true;
       failed = false;
       flush();

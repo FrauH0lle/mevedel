@@ -77,14 +77,18 @@ last edit) and `:renewed' (local time the record was last written).")
   "Return a readable name for RECORD's holder."
   (or (plist-get record :host) "another Emacs"))
 
-(defun mevedel-artifact-lease--request (directory)
-  "Ask the holder of lease DIRECTORY to hand it to this Emacs when idle."
+(defun mevedel-artifact-lease--request (directory now)
+  "Ask the holder of lease DIRECTORY to hand it to this Emacs when idle.
+NOW, the target clock, dates the request: one nobody repeated within a
+lease period is ignored, so a requester who walked away does not take
+the item from someone still editing it."
   (ignore-errors
     (mevedel-session-control-fs-write-file
      (mevedel-artifact-lease--request-path directory)
      (mevedel-session-durability--record-bytes
       (list :client-id mevedel-session-durability--client-id
-            :host (mevedel-session-durability--client-host))))))
+            :host (mevedel-session-durability--client-host)
+            :at now)))))
 
 (defun mevedel-artifact-lease--hold (workspace id directory record)
   "Remember RECORD as this Emacs's lease on WORKSPACE's ID in DIRECTORY."
@@ -141,7 +145,7 @@ confirms; otherwise this refuses, naming the cockpit command that asks."
                 (error "Invalid artifact lease: %s" directory))
                ((mevedel-artifact-lease--live-p head now)
                 (unless (mevedel-artifact-lease--own-p head)
-                  (mevedel-artifact-lease--request directory)
+                  (mevedel-artifact-lease--request directory now)
                   (error "%s is being edited in Emacs on %s; it was asked to hand it over, try again shortly"
                          id (mevedel-artifact-lease--holder head)))
                 ;; Our own record from before a restart of this lease's
@@ -155,11 +159,14 @@ confirms; otherwise this refuses, naming the cockpit command that asks."
                                 now))
                     (error "%s is being handed to another Emacs" id)))
                 (funcall claim))
-               ((or (mevedel-artifact-lease--own-p head)
-                    (and ask
-                         (y-or-n-p (format "Take over editing %s from %s, whose lease expired? "
-                                           id (mevedel-artifact-lease--holder head)))))
-                (funcall claim))
+               ((mevedel-artifact-lease--own-p head) (funcall claim))
+               ((and ask
+                     (y-or-n-p (format "Take over editing %s from %s, whose lease expired? "
+                                       id (mevedel-artifact-lease--holder head))))
+                ;; The answer can take longer than the observation stays
+                ;; true: the claim observes the clock and records again.
+                (mevedel-session-durability--claim-next
+                 directory head (mevedel-artifact-lease--label id)))
                (ask (user-error "%s stays with %s" id (mevedel-artifact-lease--holder head)))
                (t (user-error "This needs a decision in Emacs on the host first: %s's editor on %s stopped renewing; take it over with T in the artifacts cockpit"
                               id (mevedel-artifact-lease--holder head))))))
@@ -188,11 +195,12 @@ does with ASK."
         (plist-put held :touched (float-time))
       (mevedel-artifact-lease-acquire workspace id ask))))
 
-(defun mevedel-artifact-lease-held-p (workspace id)
-  "Return non-nil while this Emacs holds WORKSPACE's item ID."
-  (and (gethash (mevedel-artifact-lease-directory workspace id)
-                mevedel-artifact-lease--held)
-       t))
+(defun mevedel-artifact-lease-held (workspace id)
+  "Return the generation of this Emacs's lease on WORKSPACE's item ID, or nil.
+A lease released and acquired again has a new generation."
+  (when-let* ((held (gethash (mevedel-artifact-lease-directory workspace id)
+                             mevedel-artifact-lease--held)))
+    (plist-get (plist-get held :record) :generation)))
 
 (defun mevedel-artifact-lease-write (workspace id path content)
   "Write CONTENT to PATH while this Emacs still holds item ID's lease.
@@ -242,7 +250,17 @@ TO, a client id, reserves the item for that client for one lease period."
                                (> (- (float-time) (plist-get held :touched))
                                   mevedel-artifact-lease--hand-over-quiet-seconds)
                                (mevedel-session-durability--read-plist
-                                (mevedel-artifact-lease--request-path directory)))))
+                                (mevedel-artifact-lease--request-path directory))))
+                 (request
+                  ;; Compared with the target time of the last renewal.
+                  (if (and request (numberp (plist-get request :at))
+                           (> (+ (plist-get request :at) mevedel-session-lease-seconds)
+                              (plist-get (plist-get held :record) :renewed-at)))
+                      request
+                    (when request
+                      (ignore-errors (mevedel-session-control-fs-delete-file
+                                      (mevedel-artifact-lease--request-path directory))))
+                    nil)))
             (cond
              ((and request (stringp (plist-get request :client-id))
                    (not (equal (plist-get request :client-id)

@@ -208,15 +208,29 @@ export function seedEmptyText(doc) {
 export function restoreDocument(doc, source) {
   const root = doc.getXmlFragment('document'), from = source.getXmlFragment('document');
   const current = documentJSON(doc).content || [], target = documentJSON(source).content || [];
-  const at = new Map(current.map((n, i) => [n.attrs?.id, i]));
-  // ponytail: greedy in-order match, not a longest common subsequence; a
-  // reordered block is copied again instead of kept.
-  const kept = new Set();
-  let last = -1;
-  target.forEach((n, i) => {
-    const j = at.get(n.attrs?.id);
-    if (j > last && equalityDeep(current[j], n)) { kept.add(j); last = j; target[i] = null; }
+  const at = new Map(target.map((n, i) => [n.attrs?.id, i]));
+  // Block ids are unique, so each current block matches at most one target
+  // block; the most blocks kept in order is the longest increasing run of
+  // their target positions.
+  const pairs = current.flatMap((n, j) => {
+    const i = at.get(n.attrs?.id);
+    return i !== undefined && equalityDeep(n, target[i]) ? [[j, i]] : [];
   });
+  const tails = [], previous = [];
+  pairs.forEach(([, i], k) => {
+    let low = 0, high = tails.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (pairs[tails[middle]][1] < i) low = middle + 1; else high = middle;
+    }
+    previous[k] = low ? tails[low - 1] : -1;
+    tails[low] = k;
+  });
+  const kept = new Set();
+  for (let k = tails.at(-1) ?? -1; k >= 0; k = previous[k]) {
+    kept.add(pairs[k][0]);
+    target[pairs[k][1]] = null;
+  }
   for (let j = current.length - 1; j >= 0; j--) if (!kept.has(j)) root.delete(j, 1);
   target.forEach((n, i) => { if (n) root.insert(i, [from.get(i).clone()]); });
 }
