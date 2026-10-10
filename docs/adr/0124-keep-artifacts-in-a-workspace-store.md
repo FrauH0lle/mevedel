@@ -20,8 +20,10 @@ the explicit way to get an independent copy. Deleting a session leaves its
 artifacts.
 
 **Attaching.** A session is attached when its model creates or edits the
-artifact, when a comment from its room reaches it, or when the user adds it
-(cockpit `a`, the room's **Attach**).
+artifact, when someone in its room creates or edits a whiteboard or document,
+when a comment reaches it (from its room, or as the dedicated session), when
+it duplicates the artifact, or when the user adds it (cockpit `a`, the room's
+**Attach**).
 
 **HTML, Markdown and images** change in discrete model writes with ApplyPatch.
 ApplyPatch matches its hunks against current content, so a write planned on an
@@ -118,7 +120,7 @@ not by the Bash sandbox.
 
 - Session persistence carries no artifact bytes: the `artifacts/` subtree left
   portable publications, Fork staging, Resume and Save As. A session published
-  before keeps its old `artifacts/...` entries readable by logical path.
+  before keeps its old `artifacts/...` manifest entries as unused bytes.
 - A room exposes artifacts by store identity, not only through its own
   transcript records: any link to the workspace can open any artifact. This
   deliberately widens ADR 0099's "published record is the authority".

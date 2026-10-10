@@ -871,8 +871,9 @@ checkpoint index; saving does not rewrite existing archived history.
 
 A session published before the artifact store may still carry `artifacts/...`
 logical entries. Saves no longer include or tombstone them, so the manifest
-overlay keeps them readable through the ordinary logical reader until the
-[artifact migration](#moving-artifacts-into-the-store) moves them.
+overlay carries them along, but nothing reads them: the
+[artifact migration](#moving-artifacts-into-the-store) moves their content
+into the store and leaves the entries as unused bytes.
 
 Retained idle agents remain registry entries until their first conversation access;
 resume eagerly hydrates only active abandoned turns needed for partial-response
