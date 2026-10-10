@@ -238,7 +238,7 @@
                             workspace '(:action "create" :id "board" :kind "whiteboard"
                                         :title "Plan" :actor "Alice" :opId "one"))
                            :error))
-    (should (mevedel-shared-editing--present-p workspace "board"))
+    (should (mevedel-shared-editing-present-p workspace "board"))
     ;; Any other directory is taken.
     (make-directory (mevedel-artifact-store-artifact-directory workspace "page") t)
     (should (string-match-p "already exists"
@@ -265,7 +265,25 @@
       (should-not (plist-get reply :error))
       (should-not (process-live-p (plist-get runtime :process)))
       (should-not (mevedel-shared-editing--live-p runtime))
-      (should (= 1 (plist-get (car (mevedel-shared-editing-list workspace)) :revision))))))
+      (should (= 1 (plist-get (mevedel-shared-editing--read workspace "committed")
+                              :revision))))))
+
+(mevedel-deftest mevedel-shared-editing-list
+  (:doc "Lists whiteboards and documents from their metadata, never their state")
+  (mevedel-shared-editing-test--with-workspace
+    (dolist (spec '(("board" whiteboard "state.json") ("page" html "index.html")))
+      (make-directory (mevedel-artifact-store-artifact-directory workspace (car spec)) t)
+      (write-region "not json" nil
+                    (file-name-concat (mevedel-artifact-store-artifact-directory
+                                       workspace (car spec))
+                                      (nth 2 spec))
+                    nil 'silent)
+      (mevedel-artifact-store-create-meta workspace (car spec) (nth 2 spec) (cadr spec) "Plan"))
+    (should (equal '((:id "board" :kind "whiteboard" :title "Plan"))
+                   (mevedel-shared-editing-list workspace)))
+    (should (equal '("board") (mevedel-shared-editing-ids workspace)))
+    (should (mevedel-shared-editing-present-p workspace "board"))
+    (should-not (mevedel-shared-editing-present-p workspace "page"))))
 
 (mevedel-deftest mevedel-shared-editing--parse
   (:doc "Preserves empty mark attributes, arrays, nulls and false through exact patch reads")

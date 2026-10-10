@@ -321,7 +321,7 @@ whiteboard finds `SharedCreate`. The prompt's resource roster lists
 
 | Address | Read returns |
 | --- | --- |
-| `shared://` | the project's items with kind, title and revision, marking those attached to the session, and `shared://library` |
+| `shared://` | the project's items with kind and title, marking those attached to the session, and `shared://library` |
 | `shared://ID` | a header with kind, title, revision and the related addresses, then one line per element in drawing order or per top-level block in document order |
 | `shared://ID/elements/ELEMENT` | one element or block in full, with each stroke point on its own line |
 | `shared://ID/view.png` | the board rendered, long edge at most 2048 px |

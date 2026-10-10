@@ -183,7 +183,7 @@
                                                (list :id "api-label" :after
                                                      (list :type "text" :x 0 :y 0 :width 0 :height 0
                                                            :text "Billing API" :containerId "api")))))
-      (should (string-search (format "%s\twhiteboard \"Plan\" · revision 2" address)
+      (should (string-search (format "%s\twhiteboard \"Plan\"" address)
                              (text (run "Read" '(:file_path "shared://")))))
       (let* ((overview (text (run "Read" (list :file_path address))))
              (hash (and (string-match "\\([0-9a-f]\\{12\\}\\) {\"id\":\"api\"" overview)

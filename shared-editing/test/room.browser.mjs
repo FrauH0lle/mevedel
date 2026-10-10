@@ -963,7 +963,7 @@ test(
         JSON.parse((await agent('ReadShared', { id: transferred.id })).result).content,
         large.elements.map(compactElement),
       );
-      const priorRevision = transferred.revision;
+      const priorRevision = JSON.parse((await agent('ReadShared', { id: transferred.id })).result).revision;
       await agent('StorageWritable', { writable: false });
       await rectangle(ownerPage, 150, 160);
       await until(
