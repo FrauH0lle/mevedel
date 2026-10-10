@@ -1870,6 +1870,7 @@ mentions-shown reset to empty hash tables on load."
         :created-at (plist-get sidecar :created-at)
         :updated-at (plist-get sidecar :updated-at)
         :current-segment (plist-get sidecar :current-segment)
+        :attached-artifacts (plist-get sidecar :attached-artifacts)
         :total-turn-count (plist-get sidecar :total-turn-count)
         :first-user-message (plist-get sidecar :first-user-message)
         :latest-user-message (plist-get sidecar :latest-user-message)

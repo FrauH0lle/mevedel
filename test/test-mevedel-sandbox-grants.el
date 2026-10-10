@@ -269,6 +269,11 @@ exact-grant preparation refuses when the target cannot inspect descriptors"
 (mevedel-deftest mevedel-sandbox--mount-plan ()
   ,test
   (test)
+  :doc "required state roots never silently skip a vanished mount source"
+  (should (equal '("--ro-bind" "/w/.state" "/w/.state")
+                 (plist-get (mevedel-sandbox--mount-plan
+                             '((:path "/w/.state" :mode read-only :directory-p t :required t)) nil)
+                            :arguments)))
   :doc "read-only restrictions:
 `mevedel-sandbox--mount-plan' binds with the try variant unless the path has a write grant"
   (should

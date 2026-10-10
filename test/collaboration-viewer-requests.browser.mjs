@@ -85,3 +85,39 @@ test('a pending interaction rises above every open panel', async () => {
     await browser.close();
   }
 });
+
+test('store refresh keeps the open artifact menu actionable', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await page.addScriptTag({content: await readFile(
+      resolve(root, 'relay/viewer/viewer-store.js'), 'utf8')});
+    await page.evaluate(() => {
+      window.storeSent = [];
+      window.storeRows = {artifacts: [{id: 'page', title: 'Page', kind: 'html',
+        artifact: 'page/index.html', versions: 1, modified: 1, attached: true}]};
+      window.mevedelTranscriptRenderer = {formatBytes: bytes => `${bytes} B`};
+      window.storeView = window.mevedelStoreView.create({
+        send: frame => window.storeSent.push(frame),
+        el: (tag, className, text) => {
+          const node = document.createElement(tag);
+          node.className = className || '';
+          node.textContent = text || '';
+          return node;
+        },
+        list: document.getElementById('store-list'),
+        empty: document.getElementById('store-empty'),
+        state: {writable: true}, room: true, open() {}, notice() {},
+      });
+      window.storeView.show(window.storeRows);
+      document.getElementById('store-sheet').showModal();
+      // Reproduce a refresh in the gap before the browser's toggle task.
+      document.querySelector('.store-menu').showPopover();
+      window.storeView.show(window.storeRows);
+    });
+    await page.locator('.store-menu:popover-open').getByRole('button', {name: 'Conversation', exact: true}).click();
+    assert.equal(await page.evaluate(() => window.storeSent.at(-1).action), 'conversation');
+  } finally {
+    await browser.close();
+  }
+});

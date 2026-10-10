@@ -1456,6 +1456,53 @@
       (dolist (buffer (list first second view agent other transient))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(mevedel-deftest mevedel--workspace-chat-sessions
+  (:doc "ordinary chat selection excludes artifact conversations but retains their direct context")
+  (let* ((root (make-temp-file "mevedel-chat-artifact-" t))
+         (workspace (mevedel-workspace--create :type 'project :id "chat-artifact" :root root))
+         (dedicated (generate-new-buffer " *dedicated-chat*"))
+         (ordinary (generate-new-buffer " *ordinary-chat*")))
+    (unwind-protect
+        (progn
+          (require 'mevedel-artifact-store)
+          (make-directory (mevedel-artifact-store-artifact-directory workspace "a") t)
+          (mevedel-artifact-store-create-meta workspace "a" "a.md")
+          (mevedel-artifact-store-update-meta workspace "a" :dedicated-session "dedicated")
+          (with-current-buffer dedicated
+            (setq-local mevedel--session
+                        (mevedel-session--create :session-id "dedicated" :name "Artifact"
+                                                 :workspace workspace :working-directory root)))
+          (with-temp-buffer
+            (should (= 1 (length (mevedel--workspace-sessions workspace))))
+            (should-not (mevedel--workspace-chat-sessions workspace))
+            (should-not (mevedel--active-chat-buffer workspace))
+            ;; A lone dedicated conversation must not absorb M-x mevedel.
+            (let (created displayed)
+              (cl-letf (((symbol-function 'mevedel--chat-buffer)
+                         (lambda (&rest _) (setq created t) ordinary))
+                        ((symbol-function 'mevedel--display-chat-buffer)
+                         (lambda (buffer) (setq displayed buffer))))
+                (mevedel--start-chat workspace root nil))
+              (should created)
+              (should (eq ordinary displayed))))
+          (with-current-buffer dedicated
+            (should (eq dedicated (mevedel--active-chat-buffer workspace))))
+          (with-current-buffer ordinary
+            (setq-local mevedel--session
+                        (mevedel-session--create :session-id "ordinary" :name "Chat"
+                                                 :workspace workspace :working-directory root)))
+          (should (equal (list (cons "Chat" ordinary))
+                         (mevedel--workspace-chat-sessions workspace)))
+          (let (choices)
+            (cl-letf (((symbol-function 'mevedel--pick-session)
+                       (lambda (sessions _) (setq choices sessions) ordinary))
+                      ((symbol-function 'mevedel--display-chat-buffer) #'ignore))
+              (mevedel--start-chat workspace root t))
+            (should (equal (list (cons "Chat" ordinary)) choices))))
+      (kill-buffer dedicated)
+      (kill-buffer ordinary)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel--ensure-chat-preset
   ()
   ,test

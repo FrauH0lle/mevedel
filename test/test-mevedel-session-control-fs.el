@@ -558,6 +558,60 @@
   ,test
   (test)
 
+  :doc "inline writes and mode changes never follow a replaced temporary pathname"
+  (let* ((root (make-temp-file "mevedel-control-temp-race-" t))
+         (outside (make-temp-file "mevedel-control-temp-victim-" t))
+         (victim (file-name-concat outside "victim"))
+         (target (file-name-concat root "target"))
+         (mevedel-session-control-fs--stage-local nil))
+    (unwind-protect
+        (dolist (verb '(write write-mode))
+          (dolist (after-proof '(nil t))
+            (write-region "innocent" nil victim nil 'silent)
+            (set-file-modes victim #o644)
+            (when (file-exists-p target) (delete-file target))
+            (let* ((needle (if after-proof
+                               "      exec 8>/proc/self/fd/8 || exit 66\n"
+                             "      trap 'rm -f -- \"$temporary\"' EXIT\n"))
+                   (mevedel-session-control-fs--program-script
+                    (string-replace
+                     needle
+                     (concat needle "      rm -- \"$temporary\"; ln -s -- "
+                             (shell-quote-argument victim) " \"$temporary\"\n")
+                     mevedel-session-control-fs--program-script))
+                   (result (car (mevedel-session-control-fs-run-program
+                                 (list (list :op verb :path target
+                                             :content (if (eq verb 'write-mode) "700\nforged" "forged")))))))
+              (should (eq (if after-proof 'ok 'failed) (plist-get result :status)))
+              (should (equal "innocent" (with-temp-buffer
+                                          (insert-file-contents victim) (buffer-string))))
+              (should (= #o644 (file-modes victim))))))
+      (delete-directory root t)
+      (delete-directory outside t)))
+
+  :doc "directory modes apply through pinned descriptors and refuse symlink targets"
+  (let* ((root (make-temp-file "mevedel-control-directory-mode-" t))
+         (child (file-name-concat root "child"))
+         (link (file-name-concat root "link"))
+         (outside (make-temp-file "mevedel-control-directory-victim-" t)))
+    (unwind-protect
+        (progn
+          (make-directory child)
+          (set-file-modes outside #o755)
+          (make-symbolic-link outside link)
+          (mevedel-session-control-fs-program-value
+           (car (mevedel-session-control-fs-run-program
+                 (list (list :op 'directory-mode :path child :content "555")))))
+          (should (= #o555 (file-modes child)))
+          (should-error
+           (mevedel-session-control-fs-program-value
+            (car (mevedel-session-control-fs-run-program
+                  (list (list :op 'directory-mode :path link :content "700"))))))
+          (should (= #o755 (file-modes outside))))
+      (set-file-modes child #o755)
+      (delete-directory root t)
+      (delete-directory outside t)))
+
   :doc "batches independent binary reads in one archive without per-file encoding processes"
   (let* ((root (make-temp-file "mevedel-control-fs-bulk-" t))
          (bin (file-name-concat root "bin"))

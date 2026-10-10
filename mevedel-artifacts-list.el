@@ -30,7 +30,7 @@
 (declare-function mevedel-artifact-store-list
                   "mevedel-artifact-store" (workspace))
 (declare-function mevedel-artifact-store-restore-version
-                  "mevedel-artifact-store" (workspace id n &optional session-id))
+                  "mevedel-artifact-store" (workspace id n &optional session-id callback))
 (declare-function mevedel-artifact-store-version-path
                   "mevedel-artifact-store" (workspace id n))
 (declare-function mevedel-artifact-store-versions
@@ -280,7 +280,8 @@ session it opens in the room of the item's own conversation."
   "View or restore a version of the selected artifact.
 Restoring copies the version over the artifact as a new version."
   (interactive)
-  (let* ((context (mevedel-cockpit-surface-context))
+  (let* ((buffer (current-buffer))
+         (context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
          (id (plist-get (mevedel-artifacts-list--selected-artifact) :id))
@@ -304,14 +305,18 @@ Restoring copies the version over the artifact as a new version."
                      (?r "restore" "Restore it as the newest version")))))
       (?v (mevedel-artifacts-list--browse
            (mevedel-artifact-store-version-path workspace id n)))
-      (?r (let ((new (mevedel-artifact-store-restore-version
-                      workspace id n
-                      (and session (mevedel-session-session-id session)))))
-            (if (not new)
-                (message "mevedel: restoring %s to version %d" id n)
-              (mevedel-artifacts-list--changed workspace id)
-              (message "mevedel: %s restored from version %d as version %d"
-                       id n new)))))))
+      (?r (mevedel-artifact-store-restore-version
+           workspace id n
+           (and session (mevedel-session-session-id session))
+           (lambda (reply)
+             (if (plist-get reply :error)
+                 (message "mevedel: %s was not restored: %s"
+                          id (plist-get reply :error))
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (mevedel-artifacts-list--changed workspace id)))
+               (message "mevedel: %s restored from version %d as version %d"
+                        id n (plist-get reply :n)))))))))
 
 (defun mevedel-artifacts-list-save-version ()
   "Save the selected whiteboard or document as a new version."
@@ -363,8 +368,7 @@ progress, together with its comments and history."
                                name))
       (mevedel-collaboration-delete-artifact
        workspace
-       (file-relative-name (plist-get item :path)
-                           (mevedel-artifact-store-directory workspace))
+       (file-name-concat (plist-get item :id) (plist-get item :file))
        (lambda (failure)
          (if failure
              (message "mevedel: %s was not deleted: %s" name failure)

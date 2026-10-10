@@ -139,6 +139,11 @@ message({source: frame.contentWindow,
 const answeredCard = nodes['artifact-body'].children.find(
   child => child.className === 'artifact-comment-card');
 assert.match(textOf(answeredCard), /answered in Design chat/);
+controller.storedComments({artifact: 'page', comments: [
+  {id: 'c9', actor: 'Bob', text: 'Elsewhere', anchor,
+   resolved: false, replies: [], session: 's3', sessionName: 'Artifact chat'}]});
+assert.match(textOf(answeredCard), /answered in Artifact chat/,
+             'an open thread follows a changed answering session');
 
 const find = (node, text) => node.textContent === text ? node
   : node.children.map(child => typeof child === 'string' ? null : find(child, text)).find(Boolean);

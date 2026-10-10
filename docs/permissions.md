@@ -219,10 +219,18 @@ never broaden the child sandbox.
 
 `mevedel-protected-paths` is an alist from glob to `read-only` or
 `inaccessible`. The default `.git` glob is read-only, and so is the
-[artifact store](view.md#artifact-store)'s bookkeeping -- each artifact's
-`meta.el`, `state.json`, `comments.json` and `versions/` -- and
+[artifact store](view.md#artifact-store)'s bookkeeping under
+`.mevedel/artifacts/.state/` -- metadata, shared item state, comments and versions -- and
 `.mevedel/leases/`, so a model write cannot bypass an item's lease, versions
-and validation; the artifact files themselves stay writable. The default SSH,
+and validation. These directory boundaries cover future artifact ids and missing
+bookkeeping files too. Authored files under `.mevedel/artifacts/ID/` stay writable,
+including file creation and atomic replacement. Before a confined launch, missing
+protected state directories and their parents are created; only the protected
+leaf is mounted read-only. These directories and their parents remain after
+execution, since removing an empty directory could detach another running
+sandbox's protection and allow it to recreate that path as writable. If a prepared state
+directory disappears before launch, confinement refuses to start the command.
+The default SSH,
 GnuPG, AWS, Azure, Google Cloud, and Kubernetes credential globs are
 inaccessible. On
 a trailing `/**`, policy covers both the directory and its descendants. On a

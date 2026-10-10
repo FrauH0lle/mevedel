@@ -30,11 +30,15 @@
 (defvar editing-test-buffer (get-buffer-create " *shared editing acceptance*"))
 (defvar editing-test-node mevedel-shared-editing-node-program)
 (defun editing-test-store-modes (mode)
-  "Set the artifact store and each of its item directories to MODE."
-  (let ((store (mevedel-artifact-store-directory
-                (mevedel-session-workspace editing-test-session))))
+  "Set authored and protected artifact storage directories to MODE."
+  (let* ((workspace (mevedel-session-workspace editing-test-session))
+         (store (mevedel-artifact-store-directory workspace)))
     (when (file-directory-p store)
-      (dolist (directory (cons store (directory-files store t "\\`[^.]")))
+      (dolist (directory
+               (append (list store (file-name-concat store ".state"))
+                       (cl-loop for id in (mevedel-artifact-store-ids workspace)
+                                append (list (mevedel-artifact-store-artifact-directory workspace id)
+                                             (mevedel-artifact-store-bookkeeping-directory workspace id)))))
         (when (file-directory-p directory) (set-file-modes directory mode))))))
 (defvar editing-test-session
   (mevedel-session-create
@@ -98,9 +102,9 @@
                        (mevedel-session-durability--client-id (make-string 64 ?f)))
                    (dolist (id (mevedel-shared-editing-ids workspace))
                      (let ((directory (mevedel-artifact-lease-directory workspace id)))
-                       (unless (mevedel-session-durability--claim-next
+                       (unless (mevedel-artifact-lease--claim
                                 directory (mevedel-session-durability--lease-head directory)
-                                "*successor*")
+                                id)
                          (error "Successor could not claim %s" id)))))
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
                 ("RuntimeAvailable"

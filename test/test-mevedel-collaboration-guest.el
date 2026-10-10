@@ -211,7 +211,11 @@
                      :records nil
                      :ui-requests (make-hash-table :test #'eql)))
          sent)
-    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+    ;; This admission fixture has no session or workspace.  Store projection
+    ;; is exercised with real workspaces in the artifact-store tests.
+    (cl-letf (((symbol-function 'mevedel-collaboration--store-frame)
+               (lambda (_room) '(:t "store-artifacts" :artifacts [])))
+              ((symbol-function 'mevedel-collaboration--transport-send)
                (lambda (_transport peer frame)
                  (push (cons peer frame) sent)
                  t)))

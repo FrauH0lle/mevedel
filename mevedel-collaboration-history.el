@@ -9,11 +9,13 @@
 (require 'cl-lib)
 (require 'json)
 (require 'mevedel-structs)
+(require 'mevedel-transport)
 (require 'mevedel-collaboration-projection)
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--broadcast "mevedel-collaboration" (room frame))
 (declare-function mevedel-collaboration--guest "mevedel-collaboration" (room peer))
+(declare-function mevedel-collaboration--room-for-session "mevedel-collaboration" (session))
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--snapshot-chunks "mevedel-collaboration-guest" (records &optional overhead))
@@ -95,7 +97,7 @@ Cache immutable segment metadata, never a second transcript store."
              (chunks (or (mevedel-collaboration--snapshot-chunks records overhead) (list nil))))
         (cl-loop for rest on chunks do
                  (let ((frame (append meta (list :records (vconcat (car rest))
-                                                :final (if (cdr rest) :json-false t)))))
+                                                 :final (if (cdr rest) :json-false t)))))
                    (if peer
                        (mevedel-collaboration--transport-send (plist-get room :transport) peer frame)
                      (mevedel-collaboration--broadcast room frame))))))
@@ -121,25 +123,39 @@ Cache immutable segment metadata, never a second transcript store."
          transport peer (append meta '(:error "Please wait a moment, then retry."))))
        (t
         (plist-put guest :last-history-fetch (float-time))
-        (condition-case nil
-            (let* ((records (mevedel-collaboration--history-records room number))
-                   (overhead (string-bytes (json-encode (append meta '(:records [] :final :json-false)))))
-                   (chunks (or (mevedel-collaboration--snapshot-chunks records overhead) (list nil))))
-              ;; A successful retry can recover metadata from an archive that
-              ;; was unavailable when this room first built its index.
-              (let ((archives (plist-get room :history-archives)))
-                (setf (alist-get number archives)
-                      (mevedel-collaboration--history-catalog-records records))
-                (plist-put room :history-archives archives))
-              (mevedel-collaboration--publish-history room)
-              (cl-loop for rest on chunks do
-                       (mevedel-collaboration--transport-send
-                        transport peer
-                        (append meta (list :records (vconcat (car rest))
-                                           :final (if (cdr rest) :json-false t))))))
-          (error
-           (mevedel-collaboration--transport-send
-            transport peer (append meta '(:error "This archived segment could not be read. Retry when the host is available."))))))))))
+        (let ((fetch
+               (lambda ()
+		 (condition-case nil
+		     (let* ((records (mevedel-collaboration--history-records room number))
+			    (overhead (string-bytes (json-encode (append meta '(:records [] :final :json-false)))))
+			    (chunks (or (mevedel-collaboration--snapshot-chunks records overhead) (list nil))))
+		       ;; A successful retry can recover metadata from an archive that
+		       ;; was unavailable when this room first built its index.
+		       (let ((archives (plist-get room :history-archives)))
+			 (setf (alist-get number archives)
+			       (mevedel-collaboration--history-catalog-records records))
+			 (plist-put room :history-archives archives))
+		       (mevedel-collaboration--publish-history room)
+		       (cl-loop for rest on chunks do
+				(mevedel-collaboration--transport-send
+				 transport peer
+				 (append meta (list :records (vconcat (car rest))
+						    :final (if (cdr rest) :json-false t))))))
+		   (error
+		    (mevedel-collaboration--transport-send
+		     transport peer (append meta '(:error "This archived segment could not be read. Retry when the host is available."))))))))
+          ;; Websocket filters can arrive while another remote read owns
+          ;; TRAMP's connection.  Keep the rate limit at admission and recheck
+          ;; the room and guest before the deferred disclosure.
+          (let ((path (mevedel-session-save-path session)))
+            (if (mevedel-transport-busy-p path)
+                (mevedel-transport-run-when-idle
+                 (list 'collaboration-history (plist-get room :room-id) peer req-id) path
+                 (lambda ()
+                   (when (and (eq room (mevedel-collaboration--room-for-session session))
+                              (eq guest (mevedel-collaboration--guest room peer)))
+                     (funcall fetch))))
+              (funcall fetch)))))))))
 
 (provide 'mevedel-collaboration-history)
 ;;; mevedel-collaboration-history.el ends here

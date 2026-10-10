@@ -34,7 +34,7 @@
                   "mevedel-collaboration" (room))
 
 ;; `mevedel-artifact-store'
-(declare-function mevedel-artifact-store-artifact-directory
+(declare-function mevedel-artifact-store-bookkeeping-directory
                   "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-attach
                   "mevedel-artifact-store" (session id &optional buffer))
@@ -42,7 +42,7 @@
                   "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-session-buffer
                   "mevedel-artifact-store" (workspace session-id))
-(autoload 'mevedel-artifact-store-artifact-directory "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-bookkeeping-directory "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-attach "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-conversation "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-session-buffer "mevedel-artifact-store")
@@ -245,7 +245,7 @@ the excerpts are what the guest's browser rendered for the target."
 
 (defun mevedel-collaboration--artifact-comments-file (workspace id)
   "Return the comment file of WORKSPACE's store artifact ID."
-  (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
+  (file-name-concat (mevedel-artifact-store-bookkeeping-directory workspace id)
                     "comments.json"))
 
 (defun mevedel-collaboration--artifact-comments-read (workspace id)

@@ -452,12 +452,11 @@
   (test)
   :doc "expands the artifact store's bookkeeping at each root without walking"
   (let* ((root (file-name-as-directory (make-temp-file "mevedel-sandbox-store-" t)))
-         (store (file-name-concat root ".mevedel" "artifacts" "board"))
+         (store (file-name-concat root ".mevedel" "artifacts" ".state" "board"))
          (deep (file-name-concat root "sub" ".mevedel" "artifacts" "x"))
          walked
          (mevedel-protected-paths
-          '(("**/.mevedel/artifacts/*/state.json" . read-only)
-            ("**/.mevedel/artifacts/*/versions/**" . read-only)
+          '(("**/.mevedel/artifacts/.state/**" . read-only)
             ("**/.mevedel/leases/**" . read-only))))
     (unwind-protect
         (progn
@@ -475,11 +474,22 @@
                                            (file-relative-name (plist-get item :path) root))
                                          candidates)
                                  #'string<)
-                           '(".mevedel/artifacts/board/state.json"
-                             ".mevedel/artifacts/board/versions"
+                           '(".mevedel/artifacts/.state"
                              ".mevedel/leases")))
             (should (cl-every (lambda (item) (eq 'read-only (plist-get item :mode)))
                               candidates))))
+      (delete-directory root t)))
+
+  :doc "retains missing literal state roots without walking the workspace"
+  (let* ((root (make-temp-file "mevedel-sandbox-missing-state-" t))
+         (mevedel-protected-paths '(("**/.mevedel/artifacts/.state/**" . read-only)
+                                   ("**/.mevedel/leases/**" . read-only))))
+    (unwind-protect
+        (let ((candidates (mevedel-sandbox--protected-candidates root (list root))))
+          (should (= 2 (length candidates)))
+          (dolist (candidate candidates)
+            (should (plist-get candidate :create-parents))
+            (should-not (file-exists-p (plist-get candidate :path)))))
       (delete-directory root t)))
 
   :doc "protected glob expansion:
@@ -725,7 +735,43 @@ a disabled transport cleans immediately instead of dropping work"
             (should-not (cl-find protected (plist-get restrictions :restrictions)
                                  :key (lambda (restriction) (plist-get restriction :path))
                                  :test #'equal))))
-      (delete-directory parent t))))
+      (delete-directory parent t)))
+  :doc "missing state roots mount only the protected leaf and retain permanent parents"
+  (let* ((root (make-temp-file "mevedel-sandbox-state-roots-" t))
+         (state (file-name-concat root ".mevedel/artifacts/.state"))
+         (mevedel-protected-paths '(("**/.mevedel/artifacts/.state/**" . read-only)))
+         preparation)
+    (unwind-protect
+        (progn
+          (setq preparation (mevedel-sandbox--protected-restrictions root (list root)))
+          (should (file-directory-p state))
+          (should (equal (mapcar (lambda (entry) (plist-get entry :path))
+                                (plist-get preparation :restrictions))
+                         (list state)))
+          (should-not (plist-get preparation :cleanup-paths))
+          (mevedel-sandbox-cleanup preparation)
+          (should (file-directory-p state)))
+      (mevedel-sandbox-cleanup preparation)
+      (delete-directory root t)))
+  :doc "failed state-root creation retains permanent ancestors for the next launch"
+  (let* ((root (make-temp-file "mevedel-sandbox-state-failure-" t))
+         (state (file-name-concat root ".mevedel/artifacts/.state"))
+         (mevedel-protected-paths '(("**/.mevedel/artifacts/.state/**" . read-only)))
+         (mkdir (symbol-function 'make-directory)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'make-directory)
+                     (lambda (directory &optional parents)
+                       (if (equal directory state)
+                           (error "Injected directory creation failure")
+                         (funcall mkdir directory parents)))))
+            (should-error (mevedel-sandbox--protected-restrictions root (list root))
+                          :type 'mevedel-sandbox-policy-error))
+          (should (file-directory-p (file-name-concat root ".mevedel/artifacts")))
+          (let ((preparation (mevedel-sandbox--protected-restrictions root (list root))))
+            (should (file-directory-p state))
+            (should-not (plist-get preparation :cleanup-paths))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-sandbox--unrestricted-facts ()
   ,test
@@ -1647,6 +1693,104 @@ a broad read grant keeps an inaccessible descendant masked"
                 (should (equal (cdr pair) (buffer-string))))))
         (mevedel-sandbox-cleanup prepared)
         (delete-directory parent t))))
+  :doc "real concurrent launches retain state protection after the creator cleans up"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (unless (plist-get (mevedel-sandbox-probe) :available)
+      (ert-skip "Bubblewrap unavailable"))
+    (let* ((root (make-temp-file "mevedel-sandbox-concurrent-state-" t))
+           (state (file-name-concat root ".mevedel/artifacts/.state"))
+           (ready (file-name-concat root "ready"))
+           (mevedel-protected-paths '(("**/.mevedel/artifacts/.state/**" . read-only)))
+           first second process)
+      (unwind-protect
+          (progn
+            (setq first (mevedel-sandbox-prepare '("true") root (list root))
+                  second
+                  (mevedel-sandbox-prepare
+                   '("sh" "-c" "set -e; touch ready; while [ ! -f go ]; do sleep 0.01; done; mkdir -p .mevedel/artifacts/.state; if (printf forged >.mevedel/artifacts/.state/forged) 2>/dev/null; then exit 1; fi; printf authored >.mevedel/artifacts/new.html")
+                   root (list root)))
+            (with-temp-buffer
+              (setq process (make-process :name "mevedel-concurrent-state-test"
+                                          :buffer (current-buffer)
+                                          :command (plist-get second :command)
+                                          :sentinel #'ignore))
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (not (file-exists-p ready))
+                            (process-live-p process) (< (float-time) deadline))
+                  (accept-process-output process 0.01)))
+              (should (file-exists-p ready))
+              (mevedel-sandbox-cleanup first)
+              (write-region "go" nil (file-name-concat root "go") nil 'silent)
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (process-live-p process) (< (float-time) deadline))
+                  (accept-process-output process 0.01)))
+              (should (eq 'exit (process-status process)))
+              (should (zerop (process-exit-status process))))
+            (should (file-directory-p state))
+            (should-not (file-exists-p (file-name-concat state "forged")))
+            (should (file-exists-p (file-name-concat root ".mevedel/artifacts/new.html"))))
+        (when (and process (process-live-p process)) (delete-process process))
+        (mevedel-sandbox-cleanup first)
+        (mevedel-sandbox-cleanup second)
+        (delete-directory root t))))
+  :doc "real state protection refuses launch if its prepared directory disappears"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (unless (plist-get (mevedel-sandbox-probe) :available)
+      (ert-skip "Bubblewrap unavailable"))
+    (let* ((root (make-temp-file "mevedel-sandbox-vanished-state-" t))
+           (mevedel-protected-paths '(("**/.mevedel/artifacts/.state/**" . read-only)))
+           prepared)
+      (unwind-protect
+          (progn
+            (setq prepared (mevedel-sandbox-prepare '("touch" "launched") root (list root)))
+            (delete-directory (file-name-concat root ".mevedel/artifacts/.state"))
+            (with-temp-buffer
+              (should-not (zerop (apply #'call-process (car (plist-get prepared :command))
+                                       nil (current-buffer) nil (cdr (plist-get prepared :command))))))
+            (should-not (file-exists-p (file-name-concat root "launched"))))
+        (mevedel-sandbox-cleanup prepared)
+        (delete-directory root t))))
+  :doc "real state protection permits authored creation and atomic replacement before store use"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (unless (plist-get (mevedel-sandbox-probe) :available)
+      (ert-skip "Bubblewrap unavailable"))
+    (dolist (existing '(nil t))
+      (let* ((root (make-temp-file "mevedel-sandbox-state-real-" t))
+             (store (file-name-concat root ".mevedel/artifacts"))
+             (state (file-name-concat store ".state"))
+             (mevedel-protected-paths
+              '(("**/.mevedel/artifacts/.state/**" . read-only)
+                ("**/.mevedel/leases/**" . read-only)))
+             prepared)
+        (unwind-protect
+            (progn
+              (when existing
+                (make-directory (file-name-concat state "old") t)
+                (write-region "metadata" nil (file-name-concat state "old/meta.el") nil 'silent))
+              (setq prepared
+                    (mevedel-sandbox-prepare
+                     '("sh" "-c" "set -e; cd .mevedel/artifacts; mkdir new; printf original >new/index.html; printf replacement >new/tmp; mv new/tmp new/index.html; printf asset >new/style.css; if (printf forged >.state/old/meta.el) 2>/dev/null; then exit 1; fi; if mkdir .state/new 2>/dev/null; then exit 2; fi; if touch ../leases/forged 2>/dev/null; then exit 3; fi")
+                     root (list root)))
+              (should (eq 'confined (plist-get prepared :state)))
+              (with-temp-buffer
+                (should (zerop (apply #'call-process (car (plist-get prepared :command))
+                                      nil (current-buffer) nil (cdr (plist-get prepared :command))))))
+              (should (equal "replacement"
+                             (with-temp-buffer
+                               (insert-file-contents (file-name-concat store "new/index.html"))
+                               (buffer-string))))
+              (should (file-exists-p (file-name-concat store "new/style.css")))
+              (should-not (file-exists-p (file-name-concat state "new")))
+              (when existing
+                (should (equal "metadata"
+                               (with-temp-buffer
+                                 (insert-file-contents (file-name-concat state "old/meta.el"))
+                                 (buffer-string))))))
+          (mevedel-sandbox-cleanup prepared)
+          (delete-directory root t)))))
   :doc "real protected paths:
 `mevedel-sandbox-prepare' keeps Git readable, hides credentials, and guards missing roots"
   (let ((mevedel-sandbox-mode 'required)

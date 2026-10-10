@@ -224,5 +224,28 @@ controller.render([]);
 assert.equal(nodes['artifacts-box'].hidden, true);
 assert.deepEqual(summary, {key: 'artifacts', text: ''});
 
+// A historical snapshot previews normally but cannot comment, delete, or start a chat.
+controller.open({id: 'artifact:page', store: 'page', artifact: 'page/index.html', version: 1});
+assert.deepEqual({...sent.at(-1)}, {t: 'artifact-get', reqId: 8, id: 'artifact:page', version: 1});
+controller.handle({reqId: 8, mime: 'text/html', size: 3,
+                   data: Buffer.from('old').toString('base64'), final: true});
+assert.equal(nodes['artifact-body'].children[0].tagName, 'iframe');
+assert.equal(nodes['artifact-delete'].hidden, true);
+assert.equal(nodes['artifact-ask'].hidden, true);
+assert.match(textOf(nodes['artifact-title']), /Version 1/);
+controller.close();
+
+// Rapid version changes have distinct requests, and only the active failure settles.
+controller.open({id: 'artifact:page', artifact: 'page/index.html', version: 1});
+controller.open({id: 'artifact:page', artifact: 'page/index.html', version: 2});
+assert.deepEqual(sent.slice(-2).map(frame => [frame.reqId, frame.version]), [[9, 1], [10, 2]]);
+controller.handle({reqId: 9, error: 'Old request failed'});
+assert.equal(textOf(nodes['artifact-body']), 'Loading…');
+controller.handle({reqId: 10, error: 'Please wait a moment'});
+assert.equal(textOf(nodes['artifact-body']), 'Please wait a moment');
+controller.handle({reqId: 10, mime: 'text/html', data: Buffer.from('late').toString('base64'), final: true});
+assert.equal(textOf(nodes['artifact-body']), 'Please wait a moment');
+controller.close();
+
 console.log('viewer artifact passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
