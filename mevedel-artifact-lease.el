@@ -38,11 +38,11 @@ Another Emacs can then edit the item without a hand-over."
 
 (defconst mevedel-artifact-lease--hand-over-quiet-seconds 10
   "Seconds without an edit before a held item is handed to a requester.
-An editor saves pending changes every 300 ms, so a person drawing or typing
-touches the item well within this; one who paused this long has most
-likely stopped.  Without it, an empty queue at the renewal tick counted as
-idle, and two Emacs instances editing at once passed the lease back and
-forth every renewal.")
+An editor sends each edit as soon as its previous save is answered, so
+a person drawing or typing touches the item well within this; one who
+paused this long has most likely stopped.  Without it, an empty queue at
+the renewal tick counted as idle, and two Emacs instances editing at once
+passed the lease back and forth every renewal.")
 
 (defvar mevedel-artifact-lease--held (make-hash-table :test #'equal)
   "Leases this Emacs holds, by lease directory.

@@ -623,6 +623,12 @@ copy nor roll them back. Closing a browser or ending the share leaves the host
 original intact. A later share uses fresh credentials, following
 [ADR 0114](adr/0114-tie-collaboration-room-lifetime-to-host-share.md).
 
+An editor sends a local edit as soon as no save of its own is awaiting the
+host's reply. Edits made while one is in flight join a single follow-up
+operation, sent when the reply arrives. Consecutive sends start at least 50 ms
+apart, so a slider or color-picker drag against a fast host does not commit,
+and spend an operation receipt on, every frame.
+
 The viewer retains pending changes in browser storage, scoped to room and
 item. Reauthentication in the same logical share merges them. Disconnected,
 rejected, or storage-failed edits remain visibly pending and have a Recovery

@@ -58,6 +58,8 @@ let port,
   updates = [],
   bufferedId = null,
   inflight = false,
+  lastSave = -Infinity,
+  saveTimer = null,
   initialized = false;
 let tool = 'select',
   /* Whether drawing tools stay active after each new shape. */
@@ -190,7 +192,20 @@ function draft() {
     },
   });
 }
+/* Least time between the starts of consecutive saves. One save in flight
+   already coalesces edits while the host is slower than this; the floor only
+   stops a fast host from committing every frame of a slider, color-picker or
+   key-repeat drag, each with its own revision and receipt. */
+const SAVE_FLOOR = 50;
 function flush() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  const wait = lastSave + SAVE_FLOOR - performance.now();
+  if (wait > 0) {
+    saveTimer = setTimeout(flush, wait);
+    saved();
+    return;
+  }
   // Keep accumulating while an earlier operation awaits acknowledgement.
   // Its identity must stay stable for retries; unsent edits can share one save.
   if (updates.length && !pending.length) {
@@ -205,6 +220,7 @@ function flush() {
 async function pump() {
   if (!online || failed || inflight || readOnly || !pending.length) return;
   inflight = true;
+  lastSave = performance.now();
   const next = pending[0];
   try {
     const result = await request({ action: 'update', ...next });
@@ -2183,7 +2199,7 @@ async function saveBeforeQuestion() {
   if (!online) throw new Error('Disconnected. Your question draft is kept; reconnect before sending.');
   flush();
   const deadline = performance.now() + 10000;
-  while (online && !failed && (pending.length || inflight) && performance.now() < deadline)
+  while (online && !failed && (pending.length || inflight || updates.length) && performance.now() < deadline)
     await new Promise(resolve => setTimeout(resolve, 50));
   if (!online || failed || pending.length || inflight || updates.length)
     throw new Error('Edits are not saved. Your question draft is kept; retry the save first.');
@@ -2317,6 +2333,8 @@ async function start(event) {
     updates.push(update);
     draft();
     saved();
+    // Send once the current task's edits are in, or after the save in flight.
+    saveTimer ??= setTimeout(flush);
   });
   if (item.kind === 'whiteboard') board();
   else documentEditor();
@@ -2473,7 +2491,6 @@ async function start(event) {
     }
   });
   history(item.transactions);
-  setInterval(flush, 300);
   setInterval(() => {
     if (pointing && online && performance.now() - lastPresence > 1500)
       presence(pointing.point, pointing.mode);
