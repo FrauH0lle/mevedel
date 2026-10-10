@@ -175,8 +175,8 @@ push out every earlier version, including the state before the turn.
   unsettled mutations, its writes replace it whole, and each is fenced. The
   next edit now takes an expired lease over.
 - **Hand-over while editing.** At first the holder handed an item over
-  whenever its queue was empty at the renewal tick. Saves arrive every
-  300 ms while someone draws, so the queue is empty most of the time: a
+  whenever its queue was empty at the renewal tick. Saves arrive
+  one at a time while someone draws, so the queue is empty most of the time: a
   person drawing lost the lease within one renewal of another Emacs's
   request, and two Emacs instances editing at once passed it back and
   forth. The holder now also waits until the item has had no edit for
