@@ -589,6 +589,43 @@
       (delete-directory root t)
       (delete-directory outside t)))
 
+  :doc "inline writes reject an outside descriptor even when its temporary name matches"
+  (let* ((root (make-temp-file "mevedel-control-alias-race-" t))
+         (outside (make-temp-file "mevedel-control-alias-victim-" t))
+         (victim (file-name-concat outside "victim"))
+         (target (file-name-concat root "target"))
+         (mevedel-session-control-fs--stage-local nil))
+    (unwind-protect
+        (dolist (verb '(write write-mode))
+          (write-region "innocent" nil victim nil 'silent)
+          (set-file-modes victim #o644)
+          (let* ((needle "      exec 8<\"$temporary\" || exit 66\n")
+                 (mevedel-session-control-fs--program-script
+                  (string-replace
+                   needle
+                   (concat
+                    "      rm -- \"$temporary\"; ln -s -- "
+                    (shell-quote-argument victim) " \"$temporary\"\n"
+                    needle
+                    ;; The name now matches the opened inode without being a
+                    ;; symlink, but the descriptor was opened outside ROOT.
+                    "      rm -- \"$temporary\"; ln -- "
+                    (shell-quote-argument victim) " \"$temporary\"\n")
+                   mevedel-session-control-fs--program-script))
+                 (result
+                  (car (mevedel-session-control-fs-run-program
+                        (list (list :op verb :path target
+                                    :content (if (eq verb 'write-mode)
+                                                 "700\nforged" "forged")))))))
+            (should (eq 'failed (plist-get result :status)))
+            (should (equal "innocent" (with-temp-buffer
+                                        (insert-file-contents victim)
+                                        (buffer-string))))
+            (should (= #o644 (file-modes victim)))
+            (should-not (file-exists-p target))))
+      (delete-directory root t)
+      (delete-directory outside t)))
+
   :doc "directory modes apply through pinned descriptors and refuse symlink targets"
   (let* ((root (make-temp-file "mevedel-control-directory-mode-" t))
          (child (file-name-concat root "child"))
@@ -1604,9 +1641,7 @@
                   (list (list :op 'write :path path :content "replacement")
                         (list :op 'create :path later :content "unreachable")))))
             (should (eq 'failed (plist-get (car results) :status)))
-            ;; Diagnostics are text: their NUL bytes are dropped.
-            (should (equal (string-replace "\0" "" forged)
-                           (plist-get (car results) :diagnostic)))
+            (should (equal forged (plist-get (car results) :diagnostic)))
             (should (eq 'skipped (plist-get (cadr results) :status)))
             (should-not (file-exists-p later))
             (should (equal "original" (mevedel-session-control-fs-read-file path))))
