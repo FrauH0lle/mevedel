@@ -243,7 +243,8 @@ in it.  A record too large to travel in a frame of its own is dropped:
 emitting a frame the relay must refuse costs the host connection, and the
 relay collects the room with it, so one oversized record would end the
 session for every guest.  OVERHEAD is the encoded bytes the carrying
-frame costs before its records; it defaults to the snapshot frame's."
+frame costs before its records; it defaults to the snapshot frame's.
+No records still make one empty chunk: a receiver waits for a final one."
   (let* ((overhead (or overhead
                        (mevedel-collaboration--snapshot-frame-overhead)))
          (limit mevedel-collaboration--max-frame-json-bytes)
@@ -259,7 +260,7 @@ frame costs before its records; it defaults to the snapshot frame's."
             (setq current nil size 0))
           (push json current)
           (setq size (+ size bytes (if (cdr current) 1 0))))))
-    (when current
+    (when (or current (null chunks))
       (push (nreverse current) chunks))
     (nreverse chunks)))
 
@@ -400,11 +401,11 @@ its own workspace's rooms; the key reveals no path."
          (guest (mevedel-collaboration--guest room peer))
          (records (plist-get room :records))
          ;; Guests joining while the records are unchanged share their
-         ;; encoding: each publish stores a new list.
-         (chunks (if (eq records (car (plist-get room :snapshot-chunks)))
-                     (cdr (plist-get room :snapshot-chunks))
-                   (let ((chunks (or (mevedel-collaboration--snapshot-chunks records)
-                                     (list nil))))
+         ;; encoding; each publish drops it.
+         (cached (plist-get room :snapshot-chunks))
+         (chunks (if (and cached (eq records (car cached)))
+                     (cdr cached)
+                   (let ((chunks (mevedel-collaboration--snapshot-chunks records)))
                      (plist-put room :snapshot-chunks (cons records chunks))
                      chunks))))
     (mevedel-collaboration--transport-send

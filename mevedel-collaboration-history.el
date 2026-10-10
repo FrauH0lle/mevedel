@@ -95,7 +95,7 @@ Cache immutable segment metadata, never a second transcript store."
     (when (or peer (not (equal index (plist-get room :history-index))))
       (unless peer (plist-put room :history-index index))
       (let* ((overhead (string-bytes (json-encode (append meta '(:records [] :final :json-false)))))
-             (chunks (or (mevedel-collaboration--snapshot-chunks records overhead) (list nil))))
+             (chunks (mevedel-collaboration--snapshot-chunks records overhead)))
         (cl-loop for rest on chunks do
                  (let ((frame (mevedel-collaboration--records-frame
                                meta (car rest) (null (cdr rest)))))
@@ -129,7 +129,7 @@ Cache immutable segment metadata, never a second transcript store."
 		 (condition-case nil
 		     (let* ((records (mevedel-collaboration--history-records room number))
 			    (overhead (string-bytes (json-encode (append meta '(:records [] :final :json-false)))))
-			    (chunks (or (mevedel-collaboration--snapshot-chunks records overhead) (list nil))))
+			    (chunks (mevedel-collaboration--snapshot-chunks records overhead)))
 		       ;; A successful retry can recover metadata from an archive that
 		       ;; was unavailable when this room first built its index.
 		       (let ((archives (plist-get room :history-archives)))
