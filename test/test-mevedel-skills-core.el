@@ -2512,7 +2512,48 @@ paths:
           (mevedel-skills--watch-callback
            (list descriptor 'stopped (concat dir "alpha")))
           (should-not (gethash buf mevedel-skills--dirty-buffers)))
-      (kill-buffer buf))))
+      (kill-buffer buf)))
+
+  :doc "the ancestor watched for a missing root rescans only on its path"
+  ;; Regression: every turn writes beside `.mevedel/skills/' and in the
+  ;; workspace root, and each write rescanned the skills before the next
+  ;; provider request.
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-skills-watch-" t)))
+         (mevedel-skill-dirs '(".mevedel/skills/" ".agents/skills/"))
+         (mevedel-skills-check-for-modifications '(watch-files))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-watch-ancestor*"))
+         (state (file-name-concat root ".mevedel/"))
+         (dirs nil))
+    (unwind-protect
+        (progn
+          (make-directory state)
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (setq dirs (mevedel-skills--collect-roots root nil ws))
+          (should (member state dirs))
+          (should (member root dirs))
+          (cl-flet ((event (dir &rest files)
+                      (remhash buf mevedel-skills--dirty-buffers)
+                      (puthash dir 'descriptor mevedel-skills--watchers)
+                      (puthash dir (list buf) mevedel-skills--dir-buffers)
+                      (mevedel-skills--watch-callback
+                       (append (list 'descriptor 'changed) files))
+                      (remhash dir mevedel-skills--watchers)
+                      (remhash dir mevedel-skills--dir-buffers)
+                      (gethash buf mevedel-skills--dirty-buffers)))
+            (should-not (event state (file-name-concat state "input-history.el")))
+            (should-not (event root (file-name-concat root "mevedel-publication-x")))
+            (should (event state (file-name-concat state "skills")))
+            (should (event root (file-name-concat root ".agents")))
+            (should (event state (file-name-concat state "tmp")
+                           (file-name-concat state "skills")))
+            ;; Inside a skill directory every change still counts.
+            (should (event (file-name-concat state "skills/")
+                           (file-name-concat state "skills/notes.txt")))))
+      (kill-buffer buf)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills--stat-recheck
   (:before-each (mevedel-skills-test--reset-watchers)

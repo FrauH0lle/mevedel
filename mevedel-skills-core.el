@@ -1477,19 +1477,49 @@ returns directories that have at least one consumer."
 
 ;;;; watch-files strategy
 
+(defun mevedel-skills--watch-event-relevant-p (buffer dir files)
+  "Return non-nil when FILES changing in watched DIR can change BUFFER's skills.
+Any change inside a skill directory counts.  A configured root that does
+not exist yet is watched through its nearest existing ancestor, where
+mevedel and other programs write unrelated files; there only an entry on
+the path to a configured root counts."
+  (let* ((session (buffer-local-value 'mevedel--session buffer))
+         (workspace (and session (mevedel-session-workspace session)))
+         (workspace-root (and workspace (mevedel-workspace-root workspace)))
+         (roots (delq nil (mapcar (lambda (raw)
+                                    (car (mevedel-skills--resolve-dir
+                                          raw workspace-root)))
+                                  mevedel-skill-dirs))))
+    (or (not (cl-some (lambda (root)
+                        (and (string-prefix-p dir root) (not (equal dir root))))
+                      roots))
+        (cl-some (lambda (root) (string-prefix-p root dir)) roots)
+        (cl-some (lambda (file)
+                   (let ((path (file-name-as-directory (expand-file-name file))))
+                     (cl-some (lambda (root) (string-prefix-p path root)) roots)))
+                 files))))
+
 (defun mevedel-skills--watch-callback (event)
-  "Mark the firing directory dirty for every consumer.
+  "Mark the firing directory's consumers dirty when EVENT concerns skills.
 EVENT is `(DESCRIPTOR ACTION FILE [FILE2])'.  Filtering on action is
 deliberately permissive: a `created'/`changed'/`deleted'/`renamed'/
-`attribute-changed' event under a watched directory always triggers
+`attribute-changed' event under a skill directory always triggers
 a rescan, which discovers new leaves, dropped leaves, and edited
-SKILL.md files in one walk.  The `stopped' action is ignored."
+SKILL.md files in one walk.  An event in the ancestor watched for a
+missing root counts only on the path to that root, see
+`mevedel-skills--watch-event-relevant-p'.  The `stopped' action is
+ignored."
   (let ((descriptor (nth 0 event))
-        (action (nth 1 event)))
+        (action (nth 1 event))
+        (files (nthcdr 2 event)))
     (unless (eq action 'stopped)
       (maphash (lambda (dir desc)
                  (when (equal desc descriptor)
-                   (mevedel-skills--mark-dir-dirty dir)))
+                   (dolist (buffer (gethash dir mevedel-skills--dir-buffers))
+                     (when (and (buffer-live-p buffer)
+                                (mevedel-skills--watch-event-relevant-p
+                                 buffer dir files))
+                       (mevedel-skills--mark-buffer-dirty buffer)))))
                mevedel-skills--watchers))))
 
 (cl-defun mevedel-skills--ensure-watcher (dir &optional target)
