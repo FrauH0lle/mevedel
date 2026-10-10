@@ -47,9 +47,10 @@ forth every renewal.")
 (defvar mevedel-artifact-lease--held (make-hash-table :test #'equal)
   "Leases this Emacs holds, by lease directory.
 Each value is a plist with `:workspace', `:id', `:record', `:bytes' (the
-record's bytes on the target), `:timer', `:touched' (local time of the
-last edit), `:renewed' (local time the record was last written) and
-`:writing' while a fenced target program is in progress.")
+record's bytes on the target), `:holding' (a token new with each held
+generation), `:timer', `:touched' (local time of the last edit),
+`:renewed' (local time the record was last written) and `:writing'
+while a fenced target program is in progress.")
 
 (defun mevedel-artifact-lease-directory (workspace id)
   "Return the lease directory of WORKSPACE's store item ID."
@@ -103,6 +104,9 @@ the item from someone still editing it."
                                            mevedel-session-lease-renewal-seconds
                                            #'mevedel-artifact-lease--renew directory)))
       (puthash directory held mevedel-artifact-lease--held))
+    (unless (eql (plist-get (plist-get held :record) :generation)
+                 (plist-get record :generation))
+      (plist-put held :holding (list (plist-get record :generation))))
     (plist-put held :record record)
     (plist-put held :bytes (mevedel-session-durability--record-bytes record))
     (plist-put held :renewed (float-time))
@@ -219,11 +223,13 @@ does."
       (mevedel-artifact-lease-acquire workspace id))))
 
 (defun mevedel-artifact-lease-held (workspace id)
-  "Return the generation of this Emacs's lease on WORKSPACE's item ID, or nil.
-A lease released and acquired again has a new generation."
+  "Return a token for this Emacs's lease on WORKSPACE's item ID, or nil.
+The token is `eq' only to itself: a lease lost, released or deleted with
+its item and then acquired again yields a new one, even where the
+generation number repeats."
   (when-let* ((held (gethash (mevedel-artifact-lease-directory workspace id)
                              mevedel-artifact-lease--held)))
-    (plist-get (plist-get held :record) :generation)))
+    (plist-get held :holding)))
 
 (defun mevedel-artifact-lease-run (workspace id operations)
   "Run target OPERATIONS while this Emacs owns WORKSPACE's item ID.
