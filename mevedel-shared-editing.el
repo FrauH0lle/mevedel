@@ -154,17 +154,22 @@ A new item gets its store metadata; a renamed one updates its title."
 (defun mevedel-shared-editing-save-version (workspace id &optional session-id)
   "Record WORKSPACE's shared item ID as a new version and return its number.
 SESSION-ID names the session that edited it, if any.  The state this
-Emacs last committed serves while it still holds the item, so a large
-item's history is not read back."
-  (mevedel-artifact-store-record-version
-   workspace id session-id
-   (mevedel-shared-editing--json
-    (or (and (mevedel-artifact-lease-held-p workspace id)
-             (when-let* ((runtime (gethash (mevedel-workspace-root workspace)
-                                           mevedel-shared-editing--runtimes)))
-               (gethash id (plist-get runtime :committed))))
+Emacs last committed serves while it still holds the item under the lease
+generation it committed with, so a large item's history is not read back.
+Once the lease was released, another Emacs may have edited the item."
+  (let* ((runtime (gethash (mevedel-workspace-root workspace)
+                           mevedel-shared-editing--runtimes))
+         (committed (and runtime (gethash id (plist-get runtime :committed))))
+         (generation (mevedel-artifact-lease-held workspace id)))
+    (mevedel-artifact-store-record-version
+     workspace id session-id
+     (mevedel-shared-editing--json
+      (if (and committed generation (eql generation (car committed)))
+          (cdr committed)
+        ;; A stale entry is dropped with its content.
+        (when committed (remhash id (plist-get runtime :committed)))
         (mevedel-shared-editing--version-state
-         (mevedel-shared-editing--read workspace id))))))
+         (mevedel-shared-editing--read workspace id)))))))
 
 (defun mevedel-shared-editing-save-version-later (workspace id &optional session-id)
   "Record WORKSPACE's shared item ID as a version through its editing queue.
@@ -223,7 +228,8 @@ The copy starts with the source's content and one version."
   (let ((key (mevedel-workspace-root workspace)))
     (or (gethash key mevedel-shared-editing--runtimes)
         (puthash key (list :workspace workspace :queue nil :sequence 0
-                           ;; Item id -> its last committed version state.
+                           ;; Item id -> (LEASE-GENERATION . VERSION-STATE) of its
+                           ;; last commit.
                            :committed (make-hash-table :test #'equal))
                  mevedel-shared-editing--runtimes))))
 
@@ -312,7 +318,9 @@ A held item lease is neither released nor handed over while it does."
                          (let ((workspace (plist-get runtime :workspace)))
                            (mevedel-shared-editing--commit workspace state)
                            (puthash (plist-get state :id)
-                                    (mevedel-shared-editing--version-state state)
+                                    (cons (mevedel-artifact-lease-held
+                                           workspace (plist-get state :id))
+                                          (mevedel-shared-editing--version-state state))
                                     (plist-get runtime :committed))
                            (mevedel-shared-editing--notify
                             workspace state (plist-get reply :result))))
@@ -442,7 +450,7 @@ characters so UTF-8 encoding never splits a character between writes."
                 ;; back into being.  A held lease means it still exists: a
                 ;; deletion needs the lease too.
                 (when (and mutation (not (member action '("create" "import")))
-                           (not (mevedel-artifact-lease-held-p
+                           (not (mevedel-artifact-lease-held
                                  workspace (mevedel-shared-editing--valid-id id)))
                            (not (mevedel-shared-editing-present-p workspace id)))
                   (error "This item no longer exists"))

@@ -188,11 +188,12 @@ does with ASK."
         (plist-put held :touched (float-time))
       (mevedel-artifact-lease-acquire workspace id ask))))
 
-(defun mevedel-artifact-lease-held-p (workspace id)
-  "Return non-nil while this Emacs holds WORKSPACE's item ID."
-  (and (gethash (mevedel-artifact-lease-directory workspace id)
-                mevedel-artifact-lease--held)
-       t))
+(defun mevedel-artifact-lease-held (workspace id)
+  "Return the generation of this Emacs's lease on WORKSPACE's item ID, or nil.
+A lease released and acquired again has a new generation."
+  (when-let* ((held (gethash (mevedel-artifact-lease-directory workspace id)
+                             mevedel-artifact-lease--held)))
+    (plist-get (plist-get held :record) :generation)))
 
 (defun mevedel-artifact-lease-write (workspace id path content)
   "Write CONTENT to PATH while this Emacs still holds item ID's lease.
