@@ -756,6 +756,9 @@ Created at request start, cleared in the termination handler."
   active-work-pause-started-at ; wall-clock time when the current pause began
   (active-work-pause-duration 0) ; accumulated completed pause seconds
   origin            ; canonical requesting agent path
+  ;; Request a skill preparation request took the buffer's slot from; the
+  ;; preparation puts it back when it settles.
+  displaced
   ;; Exact read-only accepted-plan authority derived for an active Goal turn.
   goal-plan-read-path
   ;; Rules accumulated by an owning skill die with the request struct.

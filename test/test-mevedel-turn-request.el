@@ -769,6 +769,24 @@
         (mevedel-request-end))
       (should (equal (list ws) offered))))
 
+  :doc "a teardown step that signals still clears the request"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (mevedel-request-begin session)
+      (cl-letf (((symbol-function 'mevedel-request-cancel)
+                 (lambda (&rest _) (error "Cancel failed"))))
+        (should-error (mevedel-request-end)))
+      (should-not mevedel--current-request)
+      (mevedel-request-begin session)
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence-schedule-cleanup)
+                 (lambda (_workspace) (error "Sweep failed"))))
+        (should-error (mevedel-request-end)))
+      (should-not mevedel--current-request)
+      (should (eq 'idle (mevedel-session-agent-root-activity session)))))
+
   :doc "an agent turn end offers no expiry sweep"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
