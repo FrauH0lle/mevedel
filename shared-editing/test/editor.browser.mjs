@@ -184,6 +184,22 @@ test('editor interaction regressions', async (t) => {
       assert.equal(stored.content.find(s=>s.containerId==='ellipse').text,'abcde');
       await page.close();
     });
+    await t.test('a completed save leaves no timer that erases a later validation error', async () => {
+      const {page,frame}=await open({clock:true});
+      await page.clock.pauseAt(Date.now()+1000);
+      await frame.locator('[data-shape="ellipse"]').dblclick();
+      await frame.locator('#shape-text').fill('Saved');
+      await page.clock.runFor(1);
+      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      await frame.locator('#image-upload').setInputFiles({
+        name:'bad.svg',mimeType:'image/svg+xml',buffer:Buffer.from('<svg/>'),
+      });
+      const message='Use a PNG, JPEG, or WebP image up to 4 MB';
+      await frame.locator('#saved').getByText(message,{exact:true}).waitFor();
+      await page.clock.runFor(100);
+      assert.equal(await frame.locator('#saved').innerText(),message);
+      await page.close();
+    });
     await t.test('save failure remains visible above a recovery-storage warning', async () => {
       const {page,frame}=await open({kind:'document'});
       await page.evaluate(()=>{

@@ -228,7 +228,10 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
                      (car mevedel-collaboration--observed))))))
 
 (mevedel-deftest mevedel-collaboration--reuse-record-ids
-  (:doc "keeps ids along each kind's ordered stream")
+  ()
+  ,test
+  (test)
+  :doc "keeps ids along each kind's ordered stream"
   (let* ((old (list (list :id "a1" :kind "assistant")
                     (list :id "pending" :kind "tool" :pending t)
                     (list :id "t1" :kind "tool")))
@@ -237,6 +240,15 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
                     (list :id "y" :kind (copy-sequence "tool"))
                     (list :id "z" :kind "user"))))
     (should (equal '("a1" "fixed" "t1" "z")
+                   (mapcar (lambda (record) (plist-get record :id))
+                           (mevedel-collaboration--reuse-record-ids old new)))))
+
+  :doc "fixed tool identities cannot be reused by subsequent anonymous tools"
+  (let* ((old (list (list :id "fixed" :kind "tool" :identity-fixed t)
+                    (list :id "anonymous" :kind "tool")))
+         (new (list (list :id "fixed" :kind "tool" :identity-fixed t)
+                    (list :id "changed" :kind "tool"))))
+    (should (equal '("fixed" "anonymous")
                    (mapcar (lambda (record) (plist-get record :id))
                            (mevedel-collaboration--reuse-record-ids old new))))))
 

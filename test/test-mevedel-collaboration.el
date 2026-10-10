@@ -476,6 +476,14 @@
           (should (equal "completed" (plist-get entry :status)))
           (should (equal "" (plist-get entry :result)))
           (should-not (plist-get room :pending-tools))
+          ;; Without a native tool-use id, later projections must keep the
+          ;; adopted pending id after its pending entry has been removed.
+          (setq canonical
+                (list (list :id "canonical" :kind "tool" :revision 0
+                            :name "Bash" :status "completed"
+                            :summary "Bash" :result "" :truncated nil)))
+          (mevedel-collaboration--publish room)
+          (should (equal id (plist-get (car (plist-get room :records)) :id)))
           (should-not invalidated)
           ;; ApplyPatch can settle several target-native paths, so the small
           ;; qualified-path stat cache is cleared wholesale.
@@ -483,6 +491,30 @@
            '(:name "ApplyPatch" :args (:patch "patch")
              :result ""))
           (should invalidated))))))
+
+(mevedel-deftest mevedel-collaboration--post-tool/before-insertion
+  (:doc "settlement broadcasts before gptel inserts the canonical tool result")
+  (with-temp-buffer
+    (let* ((room (list :data-buffer (current-buffer)
+                       :tool-call-occurrences (make-hash-table :test #'equal)
+                       :guests (make-hash-table :test #'eql)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           sent)
+      (cl-letf (((symbol-function 'mevedel-collaboration--broadcast)
+                 (lambda (_room frame)
+                   (when (equal "record" (plist-get frame :t))
+                     (push (plist-get frame :record) sent)))))
+        (mevedel-collaboration--pre-tool
+         '(:name "Bash" :args (:command "true")))
+        (should (equal "running" (cdr (assoc "status" (car sent)))))
+        (mevedel-collaboration--post-tool
+         '(:name "Bash" :args (:command "true") :result "done"))
+        (should (= 2 (length sent)))
+        (should (equal "completed" (cdr (assoc "status" (car sent)))))
+        (should (equal "done" (cdr (assoc "result" (car sent)))))
+        (should (= 2 (cdr (assoc "revision" (car sent)))))
+        (should (equal (cdr (assoc "id" (car sent)))
+                       (cdr (assoc "id" (cadr sent)))))))))
 
 (mevedel-deftest mevedel-collaboration--pre-tool-poll
   (:doc "does not publish a transient pending card for an empty-input poll")
@@ -534,6 +566,28 @@
         (let ((records (mevedel-collaboration--project-records room)))
           (should (= 1 (length records)))
           (should (equal "running" (plist-get (car records) :status))))))))
+
+(mevedel-deftest mevedel-collaboration--project-records/order
+  (:doc "pending rows retain their baselines and order among canonical records")
+  (let* ((canonical (cl-loop for index below 1000
+                             collect (list :id (format "answer-%d" index)
+                                           :kind "assistant")))
+         (pending (cl-loop for baseline in '(0 0 500 1000)
+                           for index from 1
+                           collect (list :id (format "pending-%d" index)
+                                         :kind "tool" :status "running"
+                                         :baseline-record-count baseline)))
+         (room (list :data-buffer 'data :pending-tools pending)))
+    (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
+               (lambda (&rest _) canonical)))
+      (let ((records (mevedel-collaboration--project-records room)))
+        (should (equal canonical
+                       (cl-remove-if (lambda (record)
+                                       (equal "tool" (plist-get record :kind)))
+                                     records)))
+        (should (equal '("pending-1" "pending-2" "pending-3" "pending-4")
+                       (mapcar (lambda (index) (plist-get (nth index records) :id))
+                               '(0 1 502 1003))))))))
 
 (mevedel-deftest mevedel-collaboration--project-records-hidden-poll
   (:doc "a settled direct poll removes its pending card only after its hidden canonical row lands")
@@ -603,6 +657,29 @@
                              (cdr (assoc "revision"
                                          (plist-get (cdr entry) :record))))
                            sent)))))
+
+(mevedel-deftest mevedel-collaboration--publish/repeated
+  (:doc "unchanged publishes preserve the revision for the next change and joins")
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert (propertize "First" 'gptel 'response))
+    (let ((room (list :data-buffer (current-buffer)
+                      :guests (make-hash-table :test #'eql)))
+          sent)
+      (cl-letf (((symbol-function 'mevedel-collaboration--broadcast)
+                 (lambda (_room frame)
+                   (when (equal "record" (plist-get frame :t))
+                     (push (plist-get frame :record) sent)))))
+        (mevedel-collaboration--publish room)
+        (should (= 1 (plist-get (car (plist-get room :records)) :revision)))
+        (mevedel-collaboration--publish room)
+        (should (= 1 (length sent)))
+        (should (= 1 (plist-get (car (plist-get room :records)) :revision)))
+        (insert (propertize " second" 'gptel 'response))
+        (mevedel-collaboration--publish room)
+        (should (= 2 (length sent)))
+        (should (= 2 (cdr (assoc "revision" (car sent)))))
+        (should (equal "First second" (cdr (assoc "text" (car sent)))))))))
 
 (mevedel-deftest mevedel-collaboration--attribute-guest-prompts
   (:doc "attributes each guest record to the nearest preceding user turn")
