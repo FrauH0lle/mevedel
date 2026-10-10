@@ -228,9 +228,9 @@ before the operation ran."
    ;; before reopening it for output; payload writes and chmod never follow
    ;; the mutable temporary pathname.
    "      exec 8<\"$temporary\" || exit 66\n"
-   ;; The same inode under a name that is no symlink: what was opened is
-   ;; the temporary itself, not something it pointed at.
-   "      [[ ! -L $temporary && /proc/self/fd/8 -ef $temporary ]] || exit 70\n"
+   ;; Inode equality cannot prove where the descriptor was opened: a link
+   ;; to an outside file can replace the temporary between open and proof.
+   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
    "      exec 8>/proc/self/fd/8 || exit 66\n"
    "      if test \"$op\" = write-mode; then\n"
    "        (set -o pipefail; decode_payload | {\n"
@@ -500,15 +500,13 @@ before the operation ran."
    "  while read_operation; do emit; done\n"
    "fi\n"
    "}\n"
-   ;; Operation frames bypass the diagnostic capture through descriptor 3.
-   ;; Stderr is captured directly, which avoids a temporary file, and only
-   ;; encoded when there is any: a program that succeeded quietly costs no
-   ;; encoder process.  Diagnostics are text; a NUL byte in them is dropped.
+   ;; Operation frames bypass the diagnostic pipe through descriptor 3.
+   ;; Encode before command substitution, since shell variables drop NULs.
+   ;; This preserves arbitrary target diagnostics without a temporary file.
    "exec 3>&1\n"
    "set -o pipefail\n"
    "program_status=0\n"
-   "diagnostics=$(run_program \"$@\" 2>&1 1>&3) || program_status=$?\n"
-   "if test -n \"$diagnostics\"; then diagnostics=$(printf '%s' \"$diagnostics\" | base64 -w0); fi\n"
+   "diagnostics=$(run_program \"$@\" 2>&1 1>&3 | base64 -w0) || program_status=$?\n"
    "printf 'diagnostic 0\\0%s\\0' \"$diagnostics\"\n"
    "exit \"$program_status\"\n")
   "Target-side script running a whole program of pinned control operations.

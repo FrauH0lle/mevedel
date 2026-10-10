@@ -1186,10 +1186,11 @@ are refreshed to match the freshly scanned skill set."
          (dirs (mevedel-skills--collect-roots root skills ws)))
     (setf (mevedel-session-skills session) skills)
     (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (setq-local mevedel-skills--watch-roots (mevedel-skills--resolved-roots root)))
       (mevedel-skills--register-buffer
-       buffer dirs (mevedel-session-execution-target session)))
+       buffer dirs (mevedel-session-execution-target session)
+       (append (mevedel-skills--resolved-roots root)
+               (mapcar #'file-name-as-directory
+                       (mevedel-skills--plugin-skill-dirs ws)))))
     (mevedel-skills--refresh-mtime-cache skills buffer)
     (remhash buffer mevedel-skills--dirty-buffers)
     session))
@@ -1389,14 +1390,17 @@ nil.  Plugin roots are resolved from plugins enabled in WORKSPACE."
       (maphash (lambda (k _v) (push k result)) dirs)
       result)))
 
-(defun mevedel-skills--register-buffer (buffer dirs &optional target)
+(defun mevedel-skills--register-buffer (buffer dirs &optional target roots)
   "Register BUFFER as a consumer of every directory in DIRS.
 Drops BUFFER's prior registrations to keep the registry consistent
 when the resolved directory set changes (e.g. a leaf directory was
 deleted), then installs watchers on the new set when `watch-files' is
 active.  TARGET supplies cached remote notification capabilities.
+ROOTS are the resolved discovery roots used to filter ancestor events.
 Removes now-orphan watchers."
   (mevedel-skills--unregister-buffer buffer)
+  (with-current-buffer buffer
+    (setq mevedel-skills--watch-roots roots))
   (dolist (dir dirs)
     (let ((entry (gethash dir mevedel-skills--dir-buffers)))
       (puthash dir (cons buffer entry) mevedel-skills--dir-buffers)))
@@ -1481,9 +1485,10 @@ returns directories that have at least one consumer."
 ;;;; watch-files strategy
 
 (defvar-local mevedel-skills--watch-roots nil
-  "Configured skill roots this buffer's watchers serve, resolved at install.
-Resolving them in a file-notification callback would touch a remote
-workspace from inside a process filter.")
+  "Skill roots this buffer's watchers serve, resolved at installation.
+Configured and plugin roots both count.  Resolving them in a
+file-notification callback would touch a remote workspace from inside a
+process filter.")
 (put 'mevedel-skills--watch-roots 'permanent-local t)
 
 (defun mevedel-skills--resolved-roots (workspace-root)
@@ -1503,7 +1508,7 @@ the path to a configured root counts."
                       roots))
         (cl-some (lambda (root) (string-prefix-p root dir)) roots)
         (cl-some (lambda (file)
-                   (let ((path (file-name-as-directory (expand-file-name file))))
+                   (let ((path (file-name-as-directory (expand-file-name file dir))))
                      (cl-some (lambda (root) (string-prefix-p path root)) roots)))
                  files))))
 

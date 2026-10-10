@@ -248,7 +248,11 @@ mevedel reports the limitation once per target capability state and leaves
 save-triggered checks plus `M-x mevedel-skills-rescan` available.  After
 installing a notifier, refresh target readiness and rescan to install the
 watcher.  `stat-when-checking` remains an explicit opt-in because it adds one
-remote stat per known skill at each pull check.
+remote stat per known skill at each pull check. Notification filtering uses
+resolved roots cached at installation, including enabled plugin roots; it does
+not recheck filesystem containment on each event. A watched ancestor of a
+missing root ignores unrelated entries, while every change within a discovery
+root still invalidates its consumers.
 
 ## Local Slash Commands
 

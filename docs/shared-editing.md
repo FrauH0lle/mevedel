@@ -572,7 +572,7 @@ continuing such a batch fails, the batch commits on its own. A batch commits
 only while none of its edits was cancelled or lost its authority and this
 Emacs still holds the item's lease as it did when the batch began; otherwise
 every edit in it is reported unsaved, since each was computed from the one
-before. Under several
+before. Batched edits count toward the queue's limits. Under several
 writers the commit, one fenced target program, otherwise made edits wait for
 each other's commits. Embedded images travel with their item's
 state. Ordinary read-only artifact addresses gain no new mutation capability.

@@ -27,12 +27,18 @@
 
 ;; `gptel-request'
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
+(autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-plan-read-only
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-require-path
                   "mevedel-agents" (invocation))
+(declare-function mevedel-agent-invocation-runtime-pending-response
+                  "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-collaboration'
@@ -261,7 +267,19 @@
 (defun mevedel-busy-p ()
   "Return non-nil while any buffer in this Emacs runs or settles a turn.
 For callers outside mevedel, such as a host deciding when to restart."
-  (and (cl-some #'mevedel-turn-busy-p (buffer-list)) t))
+  (and (cl-some
+        (lambda (buffer)
+          (with-current-buffer buffer
+            (or (mevedel-turn-busy-p buffer)
+                (and mevedel--agent-invocation
+                     (mevedel-agent-invocation-runtime-pending-response
+                      mevedel--agent-invocation))
+                (and mevedel--session
+                     (or (mevedel-session-agent-reservations mevedel--session)
+                         (and (mevedel-session-agent-registry mevedel--session)
+                              (mevedel-agent-control-active-turn-p mevedel--session)))))))
+        (buffer-list))
+       t))
 
 (defun mevedel-request-state-label (&optional buffer)
   "Return BUFFER's compact request state label."
@@ -523,6 +541,11 @@ is returned here."
           (setq mevedel--current-request nil)
           (unwind-protect
               (progn
+                ;; Versioning can dispatch a new request, whose activity wins.
+                (when (equal (mevedel-request-origin request) "/root")
+                  (setf (mevedel-session-agent-root-activity
+                         (mevedel-request-session request))
+                        'idle))
                 ;; A turn that edited store artifacts leaves one version of each.
                 (pcase-dolist (`(,workspace . ,id) (mevedel-request-edited-artifacts request))
                   (condition-case err
@@ -532,9 +555,6 @@ is returned here."
                     (error (message "mevedel: no version of %s was saved: %s"
                                     id (error-message-string err)))))
                 (when (equal (mevedel-request-origin request) "/root")
-                  (setf (mevedel-session-agent-root-activity
-                         (mevedel-request-session request))
-                        'idle)
                   ;; A long-running Emacs must keep expiring old sessions.
                   (mevedel-session-persistence-schedule-cleanup
                    (mevedel-session-workspace (mevedel-request-session request)))))
@@ -936,17 +956,19 @@ A step returning `mevedel-turn-pending' stays at the front and calls
           (with-current-buffer buffer (remove-hook 'kill-buffer-hook #'teardown t)))
         (mevedel--turn-release fsm))
       (teardown ()
-        (mevedel-transport-cancel-pending (list 'turn-settlement request-id))
-        (cancel))
+        (unwind-protect
+            (mevedel-transport-cancel-pending (list 'turn-settlement request-id))
+          (cancel)))
       (cancel ()
         (unless finished
           (setq finished t)
-          (cancel-checkpoint)
           (unwind-protect
-              (when (mevedel--turn-current-p fsm)
-                (if on-cancel (funcall on-cancel)
-                  (mevedel--run-turn-steps fsm '(mevedel--turn-restore-permission-mode
-                                                 mevedel--turn-end-request))))
+              (progn
+                (cancel-checkpoint)
+                (when (mevedel--turn-current-p fsm)
+                  (if on-cancel (funcall on-cancel)
+                    (mevedel--run-turn-steps fsm '(mevedel--turn-restore-permission-mode
+                                                   mevedel--turn-end-request)))))
             (setf (mevedel-engine-info fsm)
                   (plist-put (mevedel-engine-info fsm) :mevedel-turn-settled nil))
             (release))))

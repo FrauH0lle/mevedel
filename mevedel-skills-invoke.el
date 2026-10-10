@@ -756,6 +756,13 @@ ROOTS is a list of plists containing :skill, :arguments, :role, and
   (dolist (item added list)
     (setq list (cl-remove item list :test #'eq :count 1 :from-end t))))
 
+(defmacro mevedel-skills--in-buffer (buffer &rest body)
+  "Run BODY in BUFFER while it is live, else in the current buffer."
+  (declare (indent 1) (debug t))
+  `(if (buffer-live-p ,buffer)
+       (with-current-buffer ,buffer ,@body)
+     (progn ,@body)))
+
 (defun mevedel-skills--preparation-settler
     (session rules hooks callback)
   "Scope preparation's commands and return its settlement closure.
@@ -792,7 +799,7 @@ its outcome exactly once."
             (unless settled
               (setq settled t)
               (adjust #'mevedel-skills--without-added)
-              (funcall callback outcome))))
+              (mevedel-skills--in-buffer origin-buffer (funcall callback outcome)))))
       (let ((invocation-local-p (local-variable-p 'mevedel--agent-invocation))
             (request (mevedel-request--create
                       :session session
@@ -808,13 +815,14 @@ its outcome exactly once."
             (setq settled t)
             (when (buffer-live-p origin-buffer)
               (with-current-buffer origin-buffer
-                ;; A request admitted after this one was torn down keeps the slot.
-                (when (eq mevedel--current-request request)
-                  (setq-local mevedel--current-request nil))
-                (if invocation-local-p
-                    (setq-local mevedel--agent-invocation invocation)
-                  (kill-local-variable 'mevedel--agent-invocation))))
-            (funcall callback outcome)))))))
+                ;; A request admitted after this one was torn down keeps the
+                ;; slot, and its agent invocation.
+                (when (memq mevedel--current-request (list request nil))
+                  (setq-local mevedel--current-request nil)
+                  (if invocation-local-p
+                      (setq-local mevedel--agent-invocation invocation)
+                    (kill-local-variable 'mevedel--agent-invocation)))))
+            (mevedel-skills--in-buffer origin-buffer (funcall callback outcome))))))))
 
 (defun mevedel-skills--preparation-success-outcome
     (metadata original expanded decision)

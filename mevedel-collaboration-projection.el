@@ -187,9 +187,14 @@ The canonical transcript parser exposes no stable hook identity for a growing
 response.  Matching the ordered role streams lets a replacement retain its
 room-local ID without using a numeric buffer position or a guessed tool-call
 key."
-  (let ((by-kind (make-hash-table :test #'equal)))
+  (let ((by-kind (make-hash-table :test #'equal))
+        (fixed (make-hash-table :test #'equal)))
+    (dolist (record new)
+      (when (plist-get record :identity-fixed)
+        (puthash (plist-get record :id) t fixed)))
     (dolist (record (reverse old))
-      (unless (plist-get record :pending)
+      (unless (or (plist-get record :pending)
+                  (gethash (plist-get record :id) fixed))
         (push record (gethash (plist-get record :kind) by-kind))))
     (mapcar
      (lambda (record)
@@ -1355,9 +1360,9 @@ completion instead of seeing a duplicate tool card."
             (push (cons baseline (list entry)) pending-at))))
       (dotimes (index (1+ length))
         (dolist (entry (cdr (assq index pending-at)))
-          (push entry output))
+          (push (copy-sequence entry) output))
         (when (< index length)
-          (push (nth index canonical) output)))
+          (push (pop canonical) output)))
       (nreverse output))))
 
 
