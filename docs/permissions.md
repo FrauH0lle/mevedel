@@ -244,10 +244,15 @@ Managed Bash and one-shot helpers run native scans asynchronously under their
 execution owner. Cancellation, owner teardown or changed launch authority prevents
 the pending command from starting. Results are never reused across launches.
 A failed or truncated native scan refuses preparation; it does not discard missing protection.
-Patterns below `**/.mevedel/`, mevedel's own state directory, which exists only
-at a workspace root, are expanded at each discovery root without a walk; a
-`.mevedel` nested deeper in a root is covered by native tool checks, which match
-at any depth, but not by the Bash sandbox.
+A pattern below `**/.mevedel/`, mevedel's own state directory, which exists
+only at a workspace root, protects in the Bash sandbox the whole directory its
+literal part names, at each discovery root and without a walk:
+`**/.mevedel/artifacts/*/meta.el` protects all of `.mevedel/artifacts`. That is
+one mount however many artifacts there are, it covers entries created later,
+and the directory is created when missing. Native tool checks match the
+pattern itself, at any depth, so ApplyPatch can still write an artifact's own
+files; Bash cannot write in the store at all. A `.mevedel` nested deeper in a
+root is covered by native tool checks only.
 Other patterns and targets retain the Lisp walker. Canonical target checks and
 final confinement validation remain unchanged.
 
