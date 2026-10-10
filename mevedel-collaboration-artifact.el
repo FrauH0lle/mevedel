@@ -1,10 +1,13 @@
-;;; mevedel-collaboration-artifact.el --- browser artifact transfer -*- lexical-binding: t; -*-
+;;; mevedel-collaboration-artifact.el --- the artifact store in the browser -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
-;; Resolves published artifact record ids and sends their bytes to browser
-;; guests on demand.  Filesystem paths never cross the wire, and the path is
-;; re-authorized against the canonical artifact root before each read.
+;; The workspace artifact store as browser guests see it.  Resolves
+;; published cards and `artifact:ID' ids and sends artifact bytes on demand;
+;; filesystem paths never cross the wire, and each read is re-authorized
+;; against the store.  Lists the store to every room and the lobby, once per
+;; change, and performs guests' store actions -- versions, restore, attach,
+;; duplicate, conversation and delete -- within their link's tier.
 
 ;;; Code:
 
@@ -78,8 +81,6 @@
 (defvar mevedel-collaboration-needs-host-message)
 
 ;; `mevedel-collaboration-artifact-projection'
-(declare-function mevedel-collaboration--artifacts-dir
-                  "mevedel-collaboration-artifact-projection" (session))
 (declare-function mevedel-collaboration--artifact-stat-invalidate
                   "mevedel-collaboration-artifact-projection" ())
 

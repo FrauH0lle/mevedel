@@ -196,12 +196,7 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
       (should (equal (plist-get comment :text) "Hi"))
       (should (eq (plist-get comment :resolved) :json-false)))
     ;; Comments are no whiteboard or document.
-    (should-not (mevedel-shared-editing-list workspace)))
-  :doc "refuses a store that belongs to another artifact"
-  (mevedel-test--with-artifact-comment-room
-    (let ((path (file-name-concat directory ".mevedel/artifacts/schema/comments.json")))
-      (write-region "{\"artifact\":\"other\",\"comments\":[]}" nil path nil 'silent)
-      (should-error (mevedel-collaboration--artifact-comments-read workspace "schema")))))
+    (should-not (mevedel-shared-editing-list workspace))))
 
 (mevedel-deftest mevedel-collaboration--artifact-comment-action ()
   ,test

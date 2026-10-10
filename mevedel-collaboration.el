@@ -31,9 +31,8 @@
 (defvar gptel-post-tool-call-functions)
 (defvar gptel-pre-tool-call-functions)
 
-;; `browse-url', `url-util'
+;; `browse-url'
 (declare-function browse-url "browse-url" (url &rest args))
-(declare-function url-hexify-string "url-util" (string &optional allowed-chars))
 
 ;; `mevedel-chat'
 (defvar mevedel-session-end-hook)
