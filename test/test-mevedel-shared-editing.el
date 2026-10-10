@@ -471,6 +471,75 @@
                                             workspace '(:action "read" :id "board"))
                                            :error)))))))
 
+(mevedel-deftest mevedel-shared-editing--defer ()
+  ,test
+  (test)
+  :doc "queued edits of one item commit once and are announced in order"
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let ((commits 0) (commit (symbol-function 'mevedel-shared-editing--commit))
+          announced replies)
+      (cl-letf (((symbol-function 'mevedel-shared-editing--commit)
+                 (lambda (&rest args) (cl-incf commits) (apply commit args))))
+        (let ((mevedel-shared-editing-change-hook
+               (list (lambda (_workspace state _result)
+                       (push (list (plist-get state :title) commits) announced)))))
+          (dolist (title '("A" "B" "C"))
+            (mevedel-shared-editing-call
+             workspace (list :action "rename" :id "board" :title title
+                             :actor "Alice" :opId title)
+             (lambda (reply) (push reply replies))))
+          (mevedel-test--await 10 "edits settle" (= 3 (length replies)))))
+      (should (= 1 commits))
+      (should-not (cl-some (lambda (reply) (plist-get reply :error)) replies))
+      ;; Announced after the commit, each with its own state.
+      (should (equal '(("A" 1) ("B" 1) ("C" 1)) (reverse announced)))
+      (should (equal "C" (plist-get (mevedel-shared-editing--read workspace "board") :title)))
+      (should (equal "C" (plist-get (mevedel-artifact-store-meta workspace "board") :title)))))
+
+  :doc "a continuing edit that fails leaves the batch committed on its own"
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let (replies)
+      (mevedel-shared-editing-call
+       workspace '(:action "rename" :id "board" :title "Kept" :actor "Alice" :opId "a")
+       (lambda (reply) (push (cons "a" reply) replies)))
+      (mevedel-shared-editing-call
+       workspace '(:action "rename" :id "board" :title "Refused" :actor "Alice" :opId "b")
+       (lambda (reply) (push (cons "b" reply) replies))
+       (lambda () (equal "Refused" "never")))
+      (mevedel-test--await 10 "edits settle" (= 2 (length replies)))
+      (should-not (plist-get (cdr (assoc "a" replies)) :error))
+      (should (plist-get (cdr (assoc "b" replies)) :error))
+      (should (equal "Kept" (plist-get (mevedel-shared-editing--read workspace "board") :title)))))
+
+  :doc "stopping with a batch pending reports its edits unsaved"
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let ((runtime (mevedel-shared-editing--runtime workspace)) replies)
+      (cl-letf (((symbol-function 'mevedel-shared-editing--drain)
+                 (let ((drain (symbol-function 'mevedel-shared-editing--drain)))
+                   (lambda (runtime)
+                     ;; Stop as soon as an edit waits in a batch.
+                     (if (plist-get runtime :batch)
+                         (mevedel-shared-editing-stop runtime)
+                       (funcall drain runtime))))))
+        (dolist (title '("A" "B"))
+          (mevedel-shared-editing-call
+           workspace (list :action "rename" :id "board" :title title
+                           :actor "Alice" :opId title)
+           (lambda (reply) (push reply replies))))
+        (mevedel-test--await 10 "edits settle" (= 2 (length replies))))
+      (should (cl-every (lambda (reply) (plist-get reply :error)) replies))
+      (should-not (plist-get runtime :batch))
+      (should (equal "First" (plist-get (mevedel-shared-editing--read workspace "board") :title))))))
+
 (mevedel-deftest mevedel-shared-editing--commit-directory
   (:doc "an authored directory replaced by a file cannot partially commit a new state")
   (mevedel-shared-editing-test--with-workspace
