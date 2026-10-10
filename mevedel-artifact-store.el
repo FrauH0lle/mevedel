@@ -43,9 +43,12 @@
                   "mevedel-shared-editing" (workspace id n actor callback))
 (declare-function mevedel-shared-editing-save-version
                   "mevedel-shared-editing" (workspace id &optional session-id))
+(declare-function mevedel-shared-editing-save-version-later
+                  "mevedel-shared-editing" (workspace id &optional session-id))
 (autoload 'mevedel-shared-editing-duplicate "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-restore "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-save-version-later "mevedel-shared-editing")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-save "mevedel-session-artifacts"
@@ -259,10 +262,12 @@ reduced copy of its state.  Return the version number."
 
 (defun mevedel-artifact-store-save-version (workspace id &optional session-id)
   "Record artifact ID's current state as a new version and return its number.
-A whiteboard or document records its reduced state; a file artifact, its
-primary file.  SESSION-ID names the session whose work it is."
+A file artifact records its primary file.  A whiteboard or document
+records its reduced state through its editing queue, after any save in
+progress; that returns nil.  SESSION-ID names the session whose work it is."
   (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
-      (mevedel-shared-editing-save-version workspace id session-id)
+      (progn (mevedel-shared-editing-save-version-later workspace id session-id)
+             nil)
     (mevedel-artifact-store-record-version workspace id session-id)))
 
 (defun mevedel-artifact-store-restore-version

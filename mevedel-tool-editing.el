@@ -103,7 +103,10 @@ encode these as vectors so the host does not mistake them for objects."
               (id (plist-get model :id)))
          (when (stringp id)
            (mevedel-artifact-store-attach session id)
-           (when request
+           ;; A no-op edit makes no version: it would push a real one out.
+           ;; Creating records no contribution but makes the item.
+           (when (and request (or (plist-get result :transaction)
+                                  (equal (plist-get args :action) "create")))
              (cl-pushnew (cons workspace id) (mevedel-request-edited-artifacts request)
                          :test #'equal)))
          (funcall callback

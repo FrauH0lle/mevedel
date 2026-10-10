@@ -350,7 +350,36 @@
       (should-not (plist-get reply :error)))
     (let ((state (mevedel-shared-editing--read workspace "board")))
       (should (equal "First" (plist-get state :title)))
-      (should (= 3 (plist-get state :revision))))))
+      (should (= 3 (plist-get state :revision))))
+    ;; The state just committed serves while this Emacs holds the item;
+    ;; without the lease, only the store does.
+    (cl-letf (((symbol-function 'mevedel-shared-editing--read)
+               (lambda (&rest _) (error "Read"))))
+      (should (= 2 (mevedel-shared-editing-save-version workspace "board")))
+      (mevedel-artifact-lease-release workspace "board")
+      (should-error (mevedel-shared-editing-save-version workspace "board")))
+    (should (equal "First"
+                   (plist-get (mevedel-shared-editing--parse
+                               (with-temp-buffer
+                                 (insert-file-contents
+                                  (mevedel-artifact-store-version-path workspace "board" 2))
+                                 (buffer-string)))
+                              :title)))))
+
+(mevedel-deftest mevedel-shared-editing-save-version-later
+  (:doc "Versions an item after the saves queued before it")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one")
+     #'ignore)
+    (mevedel-shared-editing-save-version-later workspace "board" "s1")
+    (let ((deadline (+ (float-time) 10)))
+      (while (and (not (mevedel-artifact-store-versions workspace "board"))
+                  (< (float-time) deadline))
+        (accept-process-output nil 0.05)))
+    (should (equal "s1" (plist-get (car (mevedel-artifact-store-versions workspace "board"))
+                                   :session)))))
 
 (mevedel-deftest mevedel-shared-editing-duplicate
   (:doc "Copies an item into an independent one under its own lease")
