@@ -126,12 +126,12 @@ unsettled mutation rather than claiming to repair it."
                              (and (eq 'active (plist-get latest :status))
                                   (< (plist-get latest :expires-at) (float-time)))))))
       (error "Close the session and release its portable lease first"))
-    (when latest
-      (let ((head (plist-get latest :publication-head)))
-        (unless (and (stringp head)
-                     (mevedel-session-publication-valid-head-p head)
-                     (file-regular-p (file-name-concat directory head)))
-          (error "Missing or invalid published session head"))))
+    ;; No head is a session closed before it ever published.
+    (when-let* ((head (plist-get latest :publication-head)))
+      (unless (and (stringp head)
+                   (mevedel-session-publication-valid-head-p head)
+                   (file-regular-p (file-name-concat directory head)))
+        (error "Missing or invalid published session head")))
     (mapcar (lambda (file) (cons (file-name-nondirectory file)
                                (mevedel-migrate-session--hash file))) files)))
 
@@ -211,8 +211,8 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
           (let ((sidecar (file-name-concat destination "session.meta.el")))
             (when (file-regular-p sidecar) (puthash sidecar 'fixed sidecars)))
           (when (zerop (hash-table-count sidecars)) (error "No session metadata found"))
-          (let ((head (and lease (file-name-concat
-                                  destination (mevedel-migrate-session--head lease source))))
+          (let ((head (when-let* ((relative (mevedel-migrate-session--head lease source)))
+                        (file-name-concat destination relative)))
                 dropped)
             (maphash
              (lambda (file owners)
