@@ -80,21 +80,45 @@ Callers access this lexical path only through pinned control operations."
   (and (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
        (file-exists-p (mevedel-shared-editing--state-path workspace id))))
 
-(defun mevedel-shared-editing--read (workspace id)
-  "Read committed shared item ID of WORKSPACE in one target-pinned batch."
+(defun mevedel-shared-editing--read-item (workspace id)
+  "Read committed shared item ID of WORKSPACE in one target-pinned batch.
+Return (META-BYTES . STATE): the metadata's bytes, which a commit verifies
+before replacing them, and the parsed state."
   (let* ((state-path (mevedel-shared-editing--state-path workspace id))
          (results (mevedel-session-control-fs-run-program
-                   (list (list :op 'read :path (file-name-concat
-                                               (file-name-directory state-path) "meta.el"))
-                         (list :op 'read :path state-path)))))
-    (when (cl-some (lambda (result) (eq 'absent (plist-get result :status))) results)
-      (error "This item no longer exists"))
+                   (list (list :op 'read :coding 'no-conversion
+                               :path (file-name-concat
+                                      (file-name-directory state-path) "meta.el"))
+                         (list :op 'read :path state-path))))
+         (bytes (progn
+                  (when (cl-some (lambda (result) (eq 'absent (plist-get result :status)))
+                                 results)
+                    (error "This item no longer exists"))
+                  (mevedel-session-control-fs-program-value (car results)))))
     (unless (mevedel-artifact-store-item-p
              (mevedel-artifact-store--validate-meta
-              (read (mevedel-session-control-fs-program-value (car results))) state-path))
+              (read (decode-coding-string bytes 'utf-8-unix)) state-path))
       (error "This item no longer exists"))
-    (mevedel-shared-editing--parse
-     (mevedel-session-control-fs-program-value (cadr results)))))
+    (cons bytes (mevedel-shared-editing--parse
+                 (mevedel-session-control-fs-program-value (cadr results))))))
+
+(defun mevedel-shared-editing--read (workspace id)
+  "Read committed shared item ID of WORKSPACE."
+  (cdr (mevedel-shared-editing--read-item workspace id)))
+
+(defun mevedel-shared-editing--committed (runtime id)
+  "Return RUNTIME's last commit of item ID as (META-BYTES . STATE), or nil.
+It is the item's state while this Emacs still holds the item as it did
+at that commit, since the lease fences every state write.
+Other metadata writers are not fenced, so a commit verifies META-BYTES.
+A stale entry is dropped."
+  (let ((table (plist-get runtime :committed)))
+    (when-let* ((entry (gethash id table)))
+      (if (eq (car entry)
+              (mevedel-artifact-lease-held (plist-get runtime :workspace) id))
+          (cdr entry)
+        (remhash id table)
+        nil))))
 
 (defun mevedel-shared-editing--notify (workspace state result)
   "Tell `mevedel-shared-editing-change-hook' about WORKSPACE's STATE and RESULT."
@@ -152,17 +176,21 @@ item out rather than failing every request."
                               :revision (plist-get meta :revision)) catalog))))
           (error nil))))))
 
-(defun mevedel-shared-editing--commit (workspace state)
+(defun mevedel-shared-editing--commit (workspace state &optional meta-bytes)
   "Durably commit candidate STATE of WORKSPACE under this Emacs's item lease.
-Metadata records the committed kind, title and revision."
+Metadata records the committed kind, title and revision.  META-BYTES, the
+metadata as last read, saves reading it again; when it is no longer
+current the commit reads it and retries.  Return the metadata's bytes."
   (let* ((id (plist-get state :id))
          (directory (file-name-directory (mevedel-shared-editing--state-path workspace id)))
          (authored (file-name-concat (mevedel-artifact-store-directory workspace) id))
          (meta-path (file-name-concat directory "meta.el"))
-         (metadata (car (mevedel-session-control-fs-run-program
-                         (list (list :op 'read :path meta-path :coding 'no-conversion)))))
-         (bytes (unless (eq 'absent (plist-get metadata :status))
-                  (mevedel-session-control-fs-program-value metadata)))
+         (bytes (or meta-bytes
+                    (let ((metadata (car (mevedel-session-control-fs-run-program
+                                          (list (list :op 'read :path meta-path
+                                                      :coding 'no-conversion))))))
+                      (unless (eq 'absent (plist-get metadata :status))
+                        (mevedel-session-control-fs-program-value metadata)))))
          (meta (and bytes (car (read-from-string (decode-coding-string bytes 'utf-8-unix)))))
          (kind (intern (plist-get state :kind)))
          (changed (or (not (equal (plist-get meta :title) (plist-get state :title)))
@@ -177,11 +205,11 @@ Metadata records the committed kind, title and revision."
                   :title (plist-get state :title)))
       (setq meta (plist-put meta :kind kind)
             meta (plist-put meta :revision (plist-get state :revision))))
-    (let* ((metadata-write
-            (when changed
-              (list :op 'write :path meta-path
-                    :content (let ((print-length nil) (print-level nil))
-                               (prin1-to-string meta)))))
+    (let* ((written (when changed
+                      (encode-coding-string
+                       (let ((print-length nil) (print-level nil)) (prin1-to-string meta))
+                       'utf-8-unix)))
+           (metadata-write (when changed (list :op 'write :path meta-path :content written)))
            (results
             (mevedel-artifact-lease-run
              workspace id
@@ -197,11 +225,15 @@ Metadata records the committed kind, title and revision."
                           :content (encode-coding-string (mevedel-shared-editing--json state)
                                                          'utf-8-unix)))
               (when (and changed bytes) (list metadata-write))))))
-      (unless (memq (plist-get (car results) :status) '(ok conflict))
-        (mevedel-session-control-fs-program-value (car results)))
-      (dolist (result (cdr results))
-        (mevedel-session-control-fs-program-value result)))
-    (mevedel-artifact-store--changed workspace)))
+      (if (and meta-bytes changed (eq 'mismatch (plist-get (nth 2 results) :status)))
+          ;; Metadata changed since it was read; nothing was written.
+          (mevedel-shared-editing--commit workspace state)
+        (unless (memq (plist-get (car results) :status) '(ok conflict))
+          (mevedel-session-control-fs-program-value (car results)))
+        (dolist (result (cdr results))
+          (mevedel-session-control-fs-program-value result))
+        (mevedel-artifact-store--changed workspace)
+        (or written bytes)))))
 
 (defun mevedel-shared-editing--version-state (state)
   "Return STATE as a version keeps it: without receipts and history."
@@ -213,22 +245,17 @@ Metadata records the committed kind, title and revision."
 (defun mevedel-shared-editing-save-version (workspace id &optional session-id)
   "Record WORKSPACE's shared item ID as a new version and return its number.
 SESSION-ID names the session that edited it, if any.  The state this
-Emacs last committed serves while it still holds the item under the lease
-generation it committed with, so a large item's history is not read back.
+Emacs last committed serves while it still holds the item as it did then,
+so a large item's history is not read back.
 Once the lease was released, another Emacs may have edited the item."
-  (let* ((runtime (gethash (mevedel-workspace-root workspace)
-                           mevedel-shared-editing--runtimes))
-         (committed (and runtime (gethash id (plist-get runtime :committed))))
-         (generation (mevedel-artifact-lease-held workspace id)))
+  (let ((runtime (gethash (mevedel-workspace-root workspace)
+                         mevedel-shared-editing--runtimes)))
     (mevedel-artifact-store-record-version
      workspace id session-id
      (mevedel-shared-editing--json
-      (if (and committed generation (eql generation (car committed)))
-          (cdr committed)
-        ;; A stale entry is dropped with its content.
-        (when committed (remhash id (plist-get runtime :committed)))
-        (mevedel-shared-editing--version-state
-         (mevedel-shared-editing--read workspace id)))))))
+      (mevedel-shared-editing--version-state
+       (or (cdr (and runtime (mevedel-shared-editing--committed runtime id)))
+           (mevedel-shared-editing--read workspace id)))))))
 
 (defun mevedel-shared-editing-save-version-later (workspace id &optional session-id)
   "Record WORKSPACE's shared item ID as a version through its editing queue.
@@ -289,8 +316,8 @@ The copy starts with the source's content and one version."
   (let ((key (mevedel-workspace-root workspace)))
     (or (gethash key mevedel-shared-editing--runtimes)
         (puthash key (list :workspace workspace :queue nil :sequence 0
-                           ;; Item id -> (LEASE-GENERATION . VERSION-STATE) of its
-                           ;; last commit.
+                           ;; Item id -> (LEASE-HOLDING META-BYTES . STATE) of
+                           ;; its last commit.
                            :committed (make-hash-table :test #'equal))
                  mevedel-shared-editing--runtimes))))
 
@@ -378,12 +405,14 @@ A held item lease is neither released nor handed over while it does."
                  (unwind-protect
                      (progn
                        (when-let* ((state (plist-get reply :state)))
-                         (let ((workspace (plist-get runtime :workspace)))
-                           (mevedel-shared-editing--commit workspace state)
-                           (puthash (plist-get state :id)
-                                    (cons (mevedel-artifact-lease-held
-                                           workspace (plist-get state :id))
-                                          (mevedel-shared-editing--version-state state))
+                         (let* ((workspace (plist-get runtime :workspace))
+                                (id (plist-get state :id))
+                                (bytes (mevedel-shared-editing--commit
+                                        workspace state
+                                        (and (equal id (plist-get (plist-get job :args) :id))
+                                             (car (plist-get job :committed))))))
+                           (puthash id (cons (mevedel-artifact-lease-held workspace id)
+                                             (cons bytes state))
                                     (plist-get runtime :committed))
                            (mevedel-shared-editing--notify
                             workspace state (plist-get reply :result))))
@@ -519,10 +548,13 @@ characters so UTF-8 encoding never splits a character between writes."
                   (error "This item no longer exists"))
                 ;; Another Emacs editing the item leaves it read-only here.
                 (when mutation
-                  ;; Until this job commits, the disk is the only truth.
-                  (remhash id (plist-get runtime :committed))
                   (mevedel-artifact-lease-ensure
-                   workspace (mevedel-shared-editing--valid-id id)))
+                   workspace (mevedel-shared-editing--valid-id id))
+                  ;; Until this job commits, the disk is the only truth; the
+                  ;; commit it starts from travels with the job.
+                  (unless (member action '("create" "import"))
+                    (plist-put job :committed (mevedel-shared-editing--committed runtime id)))
+                  (remhash id (plist-get runtime :committed)))
                 (funcall current)
                 (cond
                  ((equal action "list")
@@ -552,7 +584,11 @@ characters so UTF-8 encoding never splits a character between writes."
                                   (mevedel-session-control-fs-read-file
                                    (mevedel-artifact-store-version-path
                                     workspace id (plist-get args :version)))))
-                             (mevedel-shared-editing--read workspace id)))))
+                             (let ((item (or (plist-get job :committed)
+                                             (mevedel-shared-editing--committed runtime id)
+                                             (mevedel-shared-editing--read-item workspace id))))
+                               (plist-put job :committed item)
+                               (cdr item))))))
                   (when (member action '("create" "import"))
                     ;; Metadata naming the item without its state is a create
                     ;; that was interrupted; any other directory is taken.

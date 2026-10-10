@@ -595,7 +595,11 @@ over by the next edit, from Emacs or a browser, and Emacs says so. Each write
 replaces the whole item under the lease, so a late write from the old holder
 fails instead of overwriting.
 While the lease is held and was renewed within the last minute, an edit does
-not read the target clock again. Reading needs no lease. An open editor that
+not read the target clock again. While this Emacs still holds the lease it
+last committed under, an edit starts from that commit instead of reading the
+item back: the lease fences every state write, so one fenced target program
+per edit remains. Metadata has other writers, so the commit verifies it and,
+when it changed meanwhile, rereads it and retries once. Reading needs no lease. An open editor that
 receives a change skipping a revision, as after a hand-over between two Emacs
 instances, rereads the whole item instead of applying only that change. If
 that read fails, the editor says so and reads again with the next change.

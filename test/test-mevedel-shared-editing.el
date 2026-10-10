@@ -422,17 +422,54 @@
      workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
                  :actor "Alice" :opId "one"))
     (let ((run (symbol-function 'mevedel-artifact-lease-run))
-          (rename '(:action "rename" :id "board" :title "Later" :actor "Alice" :opId "two")))
+          (rename '(:action "rename" :id "board" :title "Later" :actor "Alice" :opId "two"))
+          (edits 0))
+      ;; Metadata changing before every write: the retry from a fresh read
+      ;; fails too, and nothing is written.
       (cl-letf (((symbol-function 'mevedel-artifact-lease-run)
                  (lambda (owner id operations)
-                   (mevedel-artifact-store-update-meta owner id :dedicated-session "conversation")
+                   (mevedel-artifact-store-update-meta
+                    owner id :dedicated-session (format "conversation-%d" (cl-incf edits)))
                    (funcall run owner id operations))))
         (should (plist-get (mevedel-shared-editing-test--call workspace rename) :error)))
+      (should (= 2 edits))
       (should (equal "First" (plist-get (mevedel-shared-editing--read workspace "board") :title)))
-      (should-not (plist-get (mevedel-shared-editing-test--call workspace rename) :error))
-      (should (equal "conversation"
+      ;; Metadata changed once since this Emacs committed: the commit rereads
+      ;; it and keeps the concurrent change.
+      (cl-letf (((symbol-function 'mevedel-artifact-lease-run)
+                 (lambda (owner id operations)
+                   (when (= 2 edits)
+                     (mevedel-artifact-store-update-meta
+                      owner id :dedicated-session (format "conversation-%d" (cl-incf edits))))
+                   (funcall run owner id operations))))
+        (should-not (plist-get (mevedel-shared-editing-test--call workspace rename) :error)))
+      (should (equal "conversation-3"
                      (plist-get (mevedel-artifact-store-meta workspace "board") :dedicated-session)))
       (should (equal "Later" (plist-get (mevedel-artifact-store-meta workspace "board") :title))))))
+
+(mevedel-deftest mevedel-shared-editing--committed
+  (:doc "An edit under the lease of the last commit reads nothing; a new holding reads the disk")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let ((programs 0)
+          (run (symbol-function 'mevedel-session-control-fs-run-program)))
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                 (lambda (&rest args) (cl-incf programs) (apply run args))))
+        (should-not (plist-get (mevedel-shared-editing-test--call
+                                workspace '(:action "rename" :id "board" :title "Second"
+                                            :actor "Alice" :opId "two"))
+                               :error))
+        ;; The fenced write only.
+        (should (= 1 programs))
+        ;; Another Emacs changes the item after this one lost the lease.
+        (mevedel-artifact-lease--forget (mevedel-artifact-lease-directory workspace "board"))
+        (delete-file (mevedel-shared-editing--state-path workspace "board"))
+        (should (string-match-p "no longer exists"
+                                (plist-get (mevedel-shared-editing-test--call
+                                            workspace '(:action "read" :id "board"))
+                                           :error)))))))
 
 (mevedel-deftest mevedel-shared-editing--commit-directory
   (:doc "an authored directory replaced by a file cannot partially commit a new state")
