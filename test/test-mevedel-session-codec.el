@@ -549,6 +549,15 @@
     (should (eq plist
                 (mevedel-session-codec-validate-current-sidecar
                  plist))))
+  :doc "validates the artifact store fields"
+  (dolist (bad '((:attached-artifacts "board") (:attached-artifacts (board))
+                 (:dedicated-artifact board) (:dedicated-artifact ("board"))))
+    (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+      (should-error (mevedel-session-codec-validate-current-sidecar
+                     (plist-put plist (car bad) (cadr bad))))))
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar
+                '(:attached-artifacts ("board") :dedicated-artifact "board"))))
+    (should (eq plist (mevedel-session-codec-validate-current-sidecar plist))))
   :doc "rejects a current-version sidecar with a missing required key"
   (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
     (cl-remf plist :working-directory)
