@@ -39,8 +39,10 @@ records, target clock, heartbeat and expiry, decides who commits; each write
 proves it in the same target program. Another Emacs sees the item read-only
 and asks the holder to hand it over, which happens once the holder's queue for
 it is idle and the item has had no edit there for 10 seconds; a lease whose
-holder stopped renewing is taken over only by the artifacts cockpit's
-takeover command, after confirmation, never by an edit. A version is recorded when
+holder stopped renewing, such as a suspended laptop's, is taken over by the
+next edit. Writes replace the whole item and each is fenced by the lease, so
+a late write from the old holder fails instead of overwriting, and its
+browsers reload the item. A version is recorded when
 a turn that edited the item settles, and on **Save version**; restoring one is
 an ordinary, revertible edit, so the Yjs lineage and concurrent editors
 survive.
@@ -72,7 +74,11 @@ session.
 
 **Access.** View links list and open artifacts and list versions. Full and
 owner links also edit, comment, restore, attach, duplicate, delete, create
-whiteboards and documents, and open an artifact's conversation. The lobby
+whiteboards and documents, and open an artifact's conversation, which they
+start on first use. ADR 0099 lets a full link start a new session only with
+an owner's or Emacs's approval; an artifact's conversation is no new chat of
+the user's but part of working on that artifact, which a full link may do in
+full, so it needs no approval. It starts like any new session. The lobby
 shows the store in an **Artifacts** tab, visible to view links unlike
 **Files**. `shared://` lists every whiteboard and document of the workspace and
 marks those attached to the session.
@@ -155,8 +161,12 @@ push out every earlier version, including the state before the turn.
   asked. The question ran from the editing queue's timer, so it blocked
   every item of the workspace until answered, and a browser request, which
   cannot ask, was refused with "needs a decision in Emacs" that no Emacs
-  command could make. The queue now never asks; the cockpit's `T` makes
-  that decision.
+  command could make. A cockpit command then made that decision, but a
+  suspended laptop -- the everyday two-machine setup -- still blocked every
+  desktop edit of its boards, model edits included, until someone used it.
+  Confirmation protects nothing here: unlike a session, an item has no
+  unsettled mutations, its writes replace it whole, and each is fenced. The
+  next edit now takes an expired lease over.
 - **Hand-over while editing.** At first the holder handed an item over
   whenever its queue was empty at the renewal tick. Saves arrive every
   300 ms while someone draws, so the queue is empty most of the time: a

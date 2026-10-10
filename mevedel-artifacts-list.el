@@ -16,10 +16,6 @@
   (require 'cl-lib)
   (require 'tabulated-list))
 
-;; `mevedel-artifact-lease'
-(declare-function mevedel-artifact-lease-ensure
-                  "mevedel-artifact-lease" (workspace id &optional ask))
-
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-attach
                   "mevedel-artifact-store" (session id &optional buffer))
@@ -311,19 +307,6 @@ Restoring copies the version over the artifact as a new version."
     (mevedel-cockpit-surface-refresh id)
     (message "mevedel: saved %s as version %d" id n)))
 
-(defun mevedel-artifacts-list-take-over ()
-  "Edit the selected whiteboard or document in this Emacs from now on.
-Another Emacs editing it is asked to hand it over once idle; one that
-stopped renewing its lease is taken over after confirmation."
-  (interactive)
-  (let ((workspace (mevedel-artifacts-list--workspace))
-        (id (or (plist-get (mevedel-cockpit-surface-selected) :item)
-                (user-error "Only whiteboards and documents are taken over"))))
-    ;; The lease's renewal asks the editing queue whether the item is busy.
-    (require 'mevedel-shared-editing)
-    (mevedel-artifact-lease-ensure workspace id t)
-    (message "mevedel: %s is edited in this Emacs" id)))
-
 (defun mevedel-artifacts-list-duplicate ()
   "Copy the selected artifact into a new, independent artifact."
   (interactive)
@@ -406,8 +389,6 @@ progress, together with its comments and history."
             mevedel-artifacts-list-conversation)
            ("s" "Save the selected whiteboard or document as a version"
             mevedel-artifacts-list-save-version)
-           ("T" "Take over editing the selected whiteboard or document"
-            mevedel-artifacts-list-take-over)
            ("d" "Delete the selected artifact"
             mevedel-artifacts-list-delete)))
   "Cockpit surface spec for the artifact store.")

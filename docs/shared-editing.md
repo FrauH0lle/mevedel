@@ -579,11 +579,10 @@ releases it to that Emacs at its next renewal once its queue for the item is
 idle and nobody has edited the item there for 10 seconds, so a person still
 drawing keeps it. A request that is not repeated within one lease period
 lapses, so a requester who walked away does not take the item later. A
-lease whose holder stopped renewing is never taken over by an edit: the
-editing queue serves every item of the workspace and must not wait on a
-question, so every edit, from Emacs or a browser, is refused with
-"needs a decision in Emacs". `T` on the item's row in the artifacts cockpit
-takes it over after confirmation, or asks a live holder to hand it over.
+lease whose holder stopped renewing, such as a suspended laptop's, is taken
+over by the next edit, from Emacs or a browser, and Emacs says so. Each write
+replaces the whole item under the lease, so a late write from the old holder
+fails instead of overwriting.
 While the lease is held and was renewed within the last minute, an edit does
 not read the target clock again. Reading needs no lease. An open editor that
 receives a change skipping a revision, as after a hand-over between two Emacs
