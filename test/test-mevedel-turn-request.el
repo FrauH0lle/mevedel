@@ -97,6 +97,18 @@
                 mevedel--current-request t)
     (should (mevedel-turn-busy-p))))
 
+(mevedel-deftest mevedel-busy-p ()
+  ,test
+  (test)
+  :doc "answers for every buffer in this Emacs"
+  (with-temp-buffer
+    (should-not (mevedel-busy-p))
+    (setq-local mevedel--turn-settlements-pending '(settlement))
+    (with-temp-buffer
+      (should (eq t (mevedel-busy-p))))
+    (setq-local mevedel--turn-settlements-pending nil)
+    (should-not (mevedel-busy-p))))
+
 (mevedel-deftest mevedel-request-state-label ()
   ,test
   (test)

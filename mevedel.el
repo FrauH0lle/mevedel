@@ -146,6 +146,9 @@
 (autoload 'mevedel-view-zone-next "mevedel-view-zone" nil t)
 (autoload 'mevedel-view-zone-previous "mevedel-view-zone" nil t)
 
+;; A host asks this before restarting its Emacs.
+(autoload 'mevedel-busy-p "mevedel-turn")
+
 ;; Integration callbacks load their owners at the corresponding lifecycle.
 (autoload 'mevedel--active-chat-buffer "mevedel-chat")
 (autoload 'mevedel--attach-directive-skills "mevedel-directive-request")
