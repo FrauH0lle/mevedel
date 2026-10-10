@@ -96,30 +96,34 @@ IDs, while exact before/after snapshots stay on the host for reversion."
 
 (defun mevedel-collaboration-editing--changed (workspace state result)
   "Publish WORKSPACE's committed STATE and RESULT to the guests of its rooms.
+Each room gets one broadcast: guests not viewing the item use only its
+listing fields.  The update is included only while someone views it.
 A deleted item reaches every guest as a `deleted' event naming who
 deleted it; a guest viewing it is no longer in it."
-  (dolist (room (mevedel-collaboration--workspace-rooms workspace))
-    (when (plist-get room :session)
-     (maphash
-     (lambda (peer guest)
-       (if (plist-get state :deleted)
-           (progn
-             (when (equal (plist-get guest :editing-item) (plist-get state :id))
-               (plist-put guest :editing-item nil))
-             (mevedel-collaboration-editing--send
-              room peer "event"
-              (list :event "deleted" :id (plist-get state :id)
-                    :actor (string-remove-prefix "Guest: " (or (plist-get state :actor) "")))))
-       (mevedel-collaboration-editing--send
-        room peer "event"
-        (append (list :event "changed" :id (plist-get state :id)
-                      :kind (plist-get state :kind) :title (plist-get state :title)
-                      :revision (plist-get state :revision))
-                (when (equal (plist-get guest :editing-item) (plist-get state :id))
-                  (list :update (plist-get result :update)
-                        :comments (plist-get result :comments)
-                        :transactions (plist-get state :transactions)))))))
-     (plist-get room :guests)))))
+  (let ((id (plist-get state :id)))
+    (dolist (room (mevedel-collaboration--workspace-rooms workspace))
+      (when-let* (((plist-get room :session))
+                  (guests (plist-get room :guests))
+                  ((> (hash-table-count guests) 0)))
+        (let (viewed)
+          (maphash (lambda (_peer guest)
+                     (when (equal (plist-get guest :editing-item) id)
+                       (setq viewed t)
+                       (when (plist-get state :deleted)
+                         (plist-put guest :editing-item nil))))
+                   guests)
+          (mevedel-collaboration-editing--send
+           room 0 "event"
+           (if (plist-get state :deleted)
+               (list :event "deleted" :id id
+                     :actor (string-remove-prefix "Guest: " (or (plist-get state :actor) "")))
+             (append (list :event "changed" :id id
+                           :kind (plist-get state :kind) :title (plist-get state :title)
+                           :revision (plist-get state :revision))
+                     (when viewed
+                       (list :update (plist-get result :update)
+                             :comments (plist-get result :comments)
+                             :transactions (plist-get state :transactions)))))))))))
 
 (defun mevedel-collaboration-editing--presence (room peer guest args)
   "Forward PEER's ephemeral ARGS to others viewing the same item in ROOM."

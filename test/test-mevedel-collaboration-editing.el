@@ -363,11 +363,35 @@
                (lambda (_room peer req-id value) (push (list peer req-id value) sent))))
       (mevedel-collaboration-editing--changed
        'workspace '(:id "board" :deleted t :actor "Guest: Ann") nil))
-    (should (equal '((1 "event" (:event "deleted" :id "board" :actor "Ann"))
-                     (2 "event" (:event "deleted" :id "board" :actor "Ann")))
-                   (sort sent (lambda (a b) (< (car a) (car b))))))
+    (should (equal '((0 "event" (:event "deleted" :id "board" :actor "Ann"))) sent))
     (should-not (plist-get (gethash 1 guests) :editing-item))
     (should (equal "notes" (plist-get (gethash 2 guests) :editing-item))))
+
+  :doc "A change is one broadcast per room, carrying the update only while someone views the item"
+  (let* ((guests (make-hash-table :test #'eql))
+         (room (list :session 'session :guests guests))
+         (empty (list :session 'other :guests (make-hash-table :test #'eql)))
+         (state '(:id "board" :kind "whiteboard" :title "Board" :revision 4 :transactions [t]))
+         sent)
+    (puthash 1 (list :name "Alice" :editing-item "notes") guests)
+    (puthash 2 (list :name "Bob") guests)
+    (cl-letf (((symbol-function 'mevedel-collaboration--workspace-rooms)
+               (lambda (_workspace) (list room empty)))
+              ((symbol-function 'mevedel-collaboration-editing--send)
+               (lambda (sent-room peer req-id value)
+                 (should (eq sent-room room))
+                 (push (list peer req-id value) sent))))
+      (mevedel-collaboration-editing--changed 'workspace state '(:update "u" :comments []))
+      (should (equal '((0 "event" (:event "changed" :id "board" :kind "whiteboard"
+                                  :title "Board" :revision 4)))
+                     sent))
+      (setq sent nil)
+      (plist-put (gethash 2 guests) :editing-item "board")
+      (mevedel-collaboration-editing--changed 'workspace state '(:update "u" :comments []))
+      (should (equal '((0 "event" (:event "changed" :id "board" :kind "whiteboard"
+                                  :title "Board" :revision 4
+                                  :update "u" :comments [] :transactions [t])))
+                     sent))))
 
   :doc "Library requests reach the host's library only for writable links"
   (let* ((directory (make-temp-file "mevedel-editing-library-" t))
