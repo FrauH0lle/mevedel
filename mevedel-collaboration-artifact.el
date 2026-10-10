@@ -14,6 +14,7 @@
 (require 'json)
 
 ;; `mevedel-artifact-store'
+(defvar mevedel-artifact-store-changed-functions)
 (declare-function mevedel-artifact-store-artifact-directory
                   "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-attach
@@ -284,12 +285,9 @@ editing queue, after any save in progress, so its editors learn of it."
       (mevedel-shared-editing-call
        workspace (list :action "delete" :id id :actor "Host")
        (lambda (reply)
-         (if (plist-get reply :error)
-             (message "mevedel: %s was not deleted: %s" id (plist-get reply :error))
-           (mevedel-collaboration-notify-artifacts-changed workspace)))))
-     (t
-      (mevedel-artifact-store-delete workspace id)
-      (mevedel-collaboration-notify-artifacts-changed workspace)))))
+         (when (plist-get reply :error)
+           (message "mevedel: %s was not deleted: %s" id (plist-get reply :error))))))
+     (t (mevedel-artifact-store-delete workspace id)))))
 
 (defun mevedel-collaboration--handle-artifact-delete (room peer frame)
   "Delete the published artifact FRAME names for writable guest PEER in ROOM.
@@ -358,8 +356,9 @@ Attachment is relative to ROOM's session; a lobby has none."
                 (list :id id
                       :title (plist-get row :title)
                       :kind (symbol-name (plist-get row :kind))
-                      :artifact (concat id "/" (file-name-nondirectory
-                                                (plist-get row :path)))
+                      :artifact (concat id "/" (plist-get
+                                                (mevedel-artifact-store-meta workspace id)
+                                                :file))
                       :size (plist-get row :size)
                       :modified (if (plist-get row :missing) nil
                                   (truncate (float-time (plist-get row :modified))))
@@ -429,7 +428,6 @@ Signal an error with a message for the guest when the action is refused."
        (unless session (error "Open a session to attach artifacts to it"))
        (mevedel-artifact-store-attach
         session id (mevedel-collaboration--room-data-buffer room))
-       (mevedel-collaboration-notify-artifacts-changed workspace)
        (list :id id))
       ("restore"
        (let ((n (plist-get frame :n)))
@@ -438,14 +436,12 @@ Signal an error with a message for the guest when the action is refused."
                      workspace id n
                      (and session (mevedel-session-session-id session)))))
            ;; A whiteboard or document restores as a queued edit.
-           (when new (mevedel-collaboration-notify-artifacts-changed workspace))
            (list :id id :n (or new :json-false)))))
       ("save-version"
        (unless (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
          (error "File artifacts keep a version of every saved change"))
        (let ((n (mevedel-shared-editing-save-version
                  workspace id (and session (mevedel-session-session-id session)))))
-         (mevedel-collaboration-notify-artifacts-changed workspace)
          (list :id id :n n)))
       ("duplicate"
        (let ((new-id (plist-get frame :newId)))
@@ -456,7 +452,6 @@ Signal an error with a message for the guest when the action is refused."
          (when session
            (mevedel-artifact-store-attach
             session new-id (mevedel-collaboration--room-data-buffer room)))
-         (mevedel-collaboration-notify-artifacts-changed workspace)
          (list :id new-id)))
       ("conversation"
        (condition-case nil
@@ -479,6 +474,9 @@ Signal an error with a message for the guest when the action is refused."
                            (mevedel-collaboration--store-action room guest frame))
                  (error (list :ok :json-false
                               :error (error-message-string err)))))))))
+
+(add-hook 'mevedel-artifact-store-changed-functions
+          #'mevedel-collaboration-notify-artifacts-changed)
 
 (provide 'mevedel-collaboration-artifact)
 ;;; mevedel-collaboration-artifact.el ends here

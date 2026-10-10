@@ -112,14 +112,25 @@ SESSION-ID called NAME.  Return the store id."
 
 (defun mevedel-migrate-artifacts--move-item (workspace session-id logical state)
   "Move legacy whiteboard or document STATE from LOGICAL into WORKSPACE's store.
-Its id stays the item's own.  Return the store id."
+Its id stays the item's own, unless a fork's copy of the item diverged from
+the one already moved.  Return the store id."
   (let ((id (plist-get state :id))
         (origin (cons session-id logical)))
+    (mevedel-shared-editing--valid-id id)
     (or (mevedel-migrate-artifacts--existing workspace origin)
+        ;; A fork copied its parent's items under the same id: the same
+        ;; state is the same item, a diverged one becomes its own.
+        (and (mevedel-shared-editing--present-p workspace id)
+             (equal (mevedel-shared-editing--json state)
+                    (mevedel-shared-editing--json
+                     (mevedel-shared-editing--read workspace id)))
+             id)
         (progn
-          (mevedel-shared-editing--valid-id id)
           (when (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
-            (error "Store already holds an artifact %s from elsewhere" id))
+            (let ((n 1) (base id))
+              (while (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
+                (setq id (format "%s-%d" base (cl-incf n))))
+              (setq state (plist-put (copy-sequence state) :id id))))
           (mevedel-migrate-artifacts--write
            (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
                              "state.json")

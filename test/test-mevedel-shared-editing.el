@@ -171,6 +171,51 @@
                            '("ComicShanns.ttf" "Excalifont.ttf" "Nunito.ttf" "font.ttf" "host.bundle.mjs" "resvg.wasm"))))
         (delete-directory directory t)))))
 
+(mevedel-deftest mevedel-shared-editing--drain
+  ()
+  ,test (test)
+  :doc "A takeover asks only when the caller could; refusing settles the job"
+  (mevedel-shared-editing-test--with-workspace
+    (cl-letf (((symbol-function 'mevedel-artifact-lease-ensure)
+               (lambda (&rest _) (y-or-n-p "Take over? "))))
+      (let ((inhibit-interaction t) reply)
+        (mevedel-shared-editing-call
+         workspace '(:action "rename" :id "board" :title "X" :actor "Guest" :opId "a")
+         (lambda (value) (setq reply value)))
+        (let ((inhibit-interaction nil)
+              (deadline (+ (float-time) 5)))
+          (while (and (not reply) (< (float-time) deadline))
+            (accept-process-output nil 0.02)))
+        (should (string-match-p "decision in Emacs" (plist-get reply :error)))))
+    ;; A quit at the question settles the job and leaves the queue working.
+    (cl-letf (((symbol-function 'mevedel-artifact-lease-ensure)
+               (lambda (&rest _) (signal 'quit nil))))
+      (should (equal "Editing operation cancelled"
+                     (plist-get (mevedel-shared-editing-test--call
+                                 workspace '(:action "rename" :id "board" :title "X"
+                                             :actor "Alice" :opId "b"))
+                                :error))))
+    (should-not (plist-get (mevedel-shared-editing--runtime workspace) :active))
+    (should (equal [] (plist-get (mevedel-shared-editing-test--call workspace '(:action "list"))
+                                 :result))))
+
+  :doc "An interrupted create, its metadata written but not its state, retries"
+  (mevedel-shared-editing-test--with-workspace
+    (make-directory (mevedel-artifact-store-artifact-directory workspace "board") t)
+    (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+    (should-not (plist-get (mevedel-shared-editing-test--call
+                            workspace '(:action "create" :id "board" :kind "whiteboard"
+                                        :title "Plan" :actor "Alice" :opId "one"))
+                           :error))
+    (should (mevedel-shared-editing--present-p workspace "board"))
+    ;; Any other directory is taken.
+    (make-directory (mevedel-artifact-store-artifact-directory workspace "page") t)
+    (should (string-match-p "already exists"
+                            (plist-get (mevedel-shared-editing-test--call
+                                        workspace '(:action "create" :id "page" :kind "document"
+                                                    :title "P" :actor "Alice" :opId "two"))
+                                       :error)))))
+
 (mevedel-deftest mevedel-shared-editing-stop
   (:doc "Stopping during a commit settles it once and then stops the helper")
   (mevedel-shared-editing-test--with-workspace

@@ -232,8 +232,9 @@ The local browser cannot read a remote target's filesystem."
     (browse-url-of-file path)))
 
 (defun mevedel-artifacts-list--changed (workspace &optional selected)
-  "Tell WORKSPACE's rooms about a store change and refresh, keeping SELECTED."
-  (mevedel-collaboration-notify-artifacts-changed workspace)
+  "Refresh after a change to WORKSPACE's store, keeping SELECTED.
+The store itself tells the workspace's rooms."
+  (ignore workspace)
   (mevedel-cockpit-surface-refresh selected))
 
 (defun mevedel-artifacts-list-open-browser ()

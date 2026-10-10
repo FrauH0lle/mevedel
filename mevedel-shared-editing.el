@@ -137,17 +137,17 @@ A new item gets its store metadata; a renamed one updates its title."
          (directory (mevedel-artifact-store-artifact-directory workspace id))
          (meta (mevedel-artifact-store-meta workspace id)))
     (make-directory directory t)
-    (mevedel-artifact-lease-write
-     workspace id (mevedel-shared-editing--state-path workspace id)
-     (encode-coding-string (mevedel-shared-editing--json state) 'utf-8-unix))
-    (cond
-     ((null meta)
+    ;; Metadata first: an interrupted create then retries as one.
+    (unless meta
       (mevedel-artifact-store-create-meta
        workspace id "state.json" (intern (plist-get state :kind))
        (plist-get state :title)))
-     ((not (equal (plist-get meta :title) (plist-get state :title)))
+    (mevedel-artifact-lease-write
+     workspace id (mevedel-shared-editing--state-path workspace id)
+     (encode-coding-string (mevedel-shared-editing--json state) 'utf-8-unix))
+    (when (and meta (not (equal (plist-get meta :title) (plist-get state :title))))
       (mevedel-artifact-store-update-meta
-       workspace id :title (plist-get state :title))))))
+       workspace id :title (plist-get state :title)))))
 
 (defun mevedel-shared-editing--version-content (state)
   "Return STATE as a version keeps it: without receipts and history."
@@ -411,10 +411,15 @@ characters so UTF-8 encoding never splits a character between writes."
               (when-let* ((authorize (plist-get job :authorize)))
                 (unless (mevedel-shared-editing--in-job job (funcall authorize))
                   (error "Editing authority ended")))
-              ;; Another Emacs editing the item leaves it read-only here.
+              ;; Another Emacs editing the item leaves it read-only here.  A
+              ;; takeover asks only when the caller could have asked.
               (when mutation
-                (mevedel-artifact-lease-ensure
-                 workspace (mevedel-shared-editing--valid-id id)))
+                (condition-case nil
+                    (let ((inhibit-interaction (plist-get job :inhibit-interaction)))
+                      (mevedel-artifact-lease-ensure
+                       workspace (mevedel-shared-editing--valid-id id)))
+                  (inhibited-interaction
+                   (error "This needs a decision in Emacs on the host first"))))
               (cond
                ((equal action "list")
                 (mevedel-shared-editing--finish
@@ -428,9 +433,13 @@ characters so UTF-8 encoding never splits a character between writes."
                   (setq args (plist-put args :state
                                         (mevedel-shared-editing--read workspace id))))
                 (when (member action '("create" "import"))
-                  (when (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
-                    (unless (mevedel-shared-editing--present-p workspace id)
-                      (error "Artifact %s already exists" id))
+                  ;; Metadata naming the item without its state is a create
+                  ;; that was interrupted; any other directory is taken.
+                  (when (and (file-exists-p (mevedel-artifact-store-artifact-directory workspace id))
+                             (not (mevedel-artifact-store-item-p
+                                   (mevedel-artifact-store-meta workspace id))))
+                    (error "Artifact %s already exists" id))
+                  (when (mevedel-shared-editing--present-p workspace id)
                     (let ((existing (mevedel-shared-editing--read workspace id)))
                       (unless (and (stringp (plist-get args :opId))
                                    (plist-member (plist-get existing :receipts)
@@ -446,8 +455,12 @@ characters so UTF-8 encoding never splits a character between writes."
                 (plist-put runtime :timeout
                            (run-at-time
                             30 nil (lambda () (mevedel-shared-editing-stop runtime)))))))
-          (error (mevedel-shared-editing--finish
-                  runtime job (list :error (error-message-string err)))))))))
+          ;; A quit at a takeover question must settle the job too, or the
+          ;; workspace queue would wait for it forever.
+          ((error quit)
+           (mevedel-shared-editing--finish
+            runtime job (list :error (if (eq (car err) 'quit) "Editing operation cancelled"
+                                       (error-message-string err))))))))))
 
 ;;;###autoload
 (defun mevedel-shared-editing-call (workspace args callback &optional authorize commit)
@@ -467,7 +480,10 @@ session makes them; CALLBACK runs in the buffer current now."
                             sum (or (plist-get job :bytes) 0)))
            (sequence (1+ (plist-get runtime :sequence)))
            (job (list :args args :callback callback :buffer (current-buffer)
-                      :authorize authorize :commit commit :requestId sequence :bytes bytes)))
+                      :authorize authorize :commit commit :requestId sequence :bytes bytes
+                      ;; The queue runs from timers, after the caller's
+                      ;; binding is gone.
+                      :inhibit-interaction inhibit-interaction)))
       (when (> (+ bytes queued) (* 32 1024 1024))
         (error "Shared editing queue is full; wait for pending saves"))
       (plist-put runtime :sequence sequence)

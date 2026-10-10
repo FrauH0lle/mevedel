@@ -250,6 +250,7 @@ running lobby touches no real state."
                         (mevedel-collaboration-lobby-test--session "s1")))
           (cl-letf (((symbol-function 'mevedel--workspace-sessions)
                      (lambda (_workspace) `(("one" . ,live))))
+                    ((symbol-function 'mevedel-artifact-store-dedicated-ids) #'ignore)
                     ((symbol-function
                       'mevedel-session-persistence-list-sessions)
                      (lambda (_workspace &optional _cached)
@@ -346,6 +347,7 @@ running lobby touches no real state."
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport peer frame)
                        (push (cons peer frame) sent) t))
+                    ((symbol-function 'mevedel-artifact-store-dedicated-ids) #'ignore)
                     ((symbol-function 'mevedel--workspace-sessions)
                      (lambda (_workspace) `(("draw" . ,live))))
                     ((symbol-function

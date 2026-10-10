@@ -83,7 +83,10 @@
       (mevedel-artifact-lease-test--as-other
         (should (eq 'available (mevedel-artifact-lease-status workspace "board")))
         (mevedel-artifact-lease-acquire workspace "board")
-        (should (eq 'owned (mevedel-artifact-lease-status workspace "board"))))))
+        (should (eq 'owned (mevedel-artifact-lease-status workspace "board"))))
+      ;; The answered request does not linger to hand a later holder's
+      ;; item away.
+      (should-not (file-exists-p (file-name-concat directory "request.el")))))
 
   :doc "takes over an expired foreign lease only after confirmation"
   (mevedel-artifact-lease-test--with-workspace

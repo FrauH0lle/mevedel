@@ -176,6 +176,9 @@ one is taken over after confirmation, which `inhibit-interaction' refuses."
                               (mevedel-artifact-lease--holder head))))))
         (unless record
           (error "Another Emacs claimed %s at the same time; try again" id))
+        ;; A request left by an earlier holder's requester is answered now.
+        (ignore-errors (mevedel-session-control-fs-delete-file
+                        (mevedel-artifact-lease--request-path directory)))
         (mevedel-artifact-lease--hold workspace id directory record)))))
 
 (defun mevedel-artifact-lease-ensure (workspace id)
