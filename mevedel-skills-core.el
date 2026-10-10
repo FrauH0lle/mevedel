@@ -1484,6 +1484,7 @@ returns directories that have at least one consumer."
   "Configured skill roots this buffer's watchers serve, resolved at install.
 Resolving them in a file-notification callback would touch a remote
 workspace from inside a process filter.")
+(put 'mevedel-skills--watch-roots 'permanent-local t)
 
 (defun mevedel-skills--resolved-roots (workspace-root)
   "Return `mevedel-skill-dirs' resolved against WORKSPACE-ROOT."
