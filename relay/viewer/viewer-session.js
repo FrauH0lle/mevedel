@@ -319,7 +319,7 @@
       roomCount = rooms.length;
       if (roomsButton) {
         roomsButton.hidden = rooms.length === 0;
-        roomsButton.textContent = `Rooms ${rooms.length}`;
+        roomsButton.replaceChildren('Rooms ', el('span', 'dock-count', String(rooms.length)));
       }
       reportRoom();
       if (!roomsList) return;

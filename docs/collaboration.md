@@ -794,8 +794,9 @@ the lobby receive the store's new listing.
 
 ### The artifact store in the browser
 
-A room's dock has a **Project artifacts** button, which opens a sheet, and
-the lobby an **Artifacts** tab, both listing the workspace's
+A room's dock ends with rows for **New session**, **Project artifacts**, which
+opens a sheet, and **Rooms** with its count; the lobby has an **Artifacts**
+tab with its create buttons beside Refresh. Both listings show the workspace's
 [artifact store](view.md#artifact-store) newest first, one line each: name,
 kind, size, version count, age of the last change, and in a room whether the
 artifact is attached to the room's session; the id shows on hovering the name.

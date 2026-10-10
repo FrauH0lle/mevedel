@@ -114,8 +114,13 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 #agents-done-list { margin:0 0 10px; }
 #tasks-list .task { border:0; padding:8px 0; font-size:13px; }
 #agents .dock-chip,.done-row { background:none; border:0; padding:8px 0; font-size:13px; }
-#session-box .dock-actions { justify-content:flex-start; flex-wrap:wrap; gap:6px; border-top:1px solid var(--line)!important; padding-top:18px!important; }
-.dock-actions .btn { padding:6px 9px; font-size:13px; background:transparent; }
+/* The room-wide actions read as rows, like the section headings above them. */
+#session-box .dock-actions { flex-direction:column; flex-wrap:nowrap; gap:0; border-top:1px solid var(--line)!important; padding-top:12px!important; }
+#session-box .dock-actions .btn { display:flex; align-items:baseline; gap:6px; width:100%; padding:8px 0; border:0; border-radius:0; background:none; color:var(--ink); font-size:14px; font-weight:600; text-align:left; }
+#session-box .dock-actions .btn:hover { filter:none; color:var(--accent); }
+#session-box .dock-actions .btn::after { content:'›'; margin-left:auto; color:var(--muted); font-weight:400; }
+#session-box #new-session-button::after { content:'＋'; }
+.dock-count { font-size:12px; font-weight:400; color:var(--muted); }
 .skill-search { display:grid; gap:6px; font-size:12px; color:var(--muted); margin-bottom:10px; }
 .skill-search input { font-size:14px; min-width:0; width:100%; background:var(--surface); color:var(--ink); border:1px solid var(--line); padding:8px; border-radius:3px; }
 #skill-chips { padding:0; gap:5px; }
