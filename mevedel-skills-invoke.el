@@ -159,6 +159,8 @@
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-begin "mevedel-turn"
                   (session &optional directive-uuid))
+(declare-function mevedel-turn-resume-displaced "mevedel-turn" (buffer))
+(autoload 'mevedel-turn-resume-displaced "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -755,7 +757,9 @@ ROOTS is a list of plists containing :skill, :arguments, :role, and
     (session rules hooks callback)
   "Install a temporary preparation request and return its settlement closure.
 The returned function restores the previous request and calls CALLBACK with
-its outcome exactly once."
+its outcome exactly once.  A request admitted after the preparation request
+was torn down keeps the slot.  A turn whose settlement waited for the
+restore resumes it after CALLBACK."
   (let ((origin-buffer (current-buffer))
         (origin (mevedel-current-origin))
         ;; Preparation runs `!' commands through the tool pipeline; it must
@@ -771,22 +775,26 @@ its outcome exactly once."
     (setq-local mevedel--current-request
                 (mevedel-request--create
                  :session session
+                 :displaced previous-request
                  :origin origin
                  :file-snapshots (make-hash-table :test #'equal)
                  :skill-permission-rules rules
                  :hook-rules hooks
                  :plan-read-only (and plan-read-only t)))
     (setq-local mevedel--agent-invocation nil)
-    (lambda (outcome)
-      (unless settled
-        (setq settled t)
-        (when (buffer-live-p origin-buffer)
-          (with-current-buffer origin-buffer
-            (setq-local mevedel--current-request previous-request)
-            (if invocation-local-p
-                (setq-local mevedel--agent-invocation previous-invocation)
-              (kill-local-variable 'mevedel--agent-invocation))))
-        (funcall callback outcome)))))
+    (let ((request mevedel--current-request))
+      (lambda (outcome)
+        (unless settled
+          (setq settled t)
+          (when (buffer-live-p origin-buffer)
+            (with-current-buffer origin-buffer
+              (when (memq mevedel--current-request (list request nil))
+                (setq-local mevedel--current-request previous-request))
+              (if invocation-local-p
+                  (setq-local mevedel--agent-invocation previous-invocation)
+                (kill-local-variable 'mevedel--agent-invocation))))
+          (unwind-protect (funcall callback outcome)
+            (mevedel-turn-resume-displaced origin-buffer)))))))
 
 (defun mevedel-skills--preparation-success-outcome
     (metadata original expanded decision)

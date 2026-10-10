@@ -373,6 +373,110 @@
           (should (= 1 (mevedel-session-turn-count session))))
       (kill-buffer chat-buf))))
 
+(mevedel-deftest mevedel--turn-displaced-p ()
+  ,test
+  (test)
+  :doc "a preparation request displaces the turn it took the slot from"
+  (with-temp-buffer
+    (let* ((turn (mevedel-request--create :id "turn"))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer (current-buffer) :mevedel-request-id "turn"))))
+      (setq-local mevedel--current-request turn)
+      (should-not (mevedel--turn-displaced-p fsm))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :displaced turn))
+      (should (mevedel--turn-displaced-p fsm))
+      ;; Preparations nest.
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :displaced mevedel--current-request))
+      (should (mevedel--turn-displaced-p fsm))))
+
+  :doc "an admitted replacement, an empty slot or no identity is not displacement"
+  (with-temp-buffer
+    (let ((fsm (gptel-make-fsm
+                :info (list :buffer (current-buffer) :mevedel-request-id "turn"))))
+      (setq-local mevedel--current-request (mevedel-request--create :id "newer"))
+      (should-not (mevedel--turn-displaced-p fsm))
+      (setq-local mevedel--current-request nil)
+      (should-not (mevedel--turn-displaced-p fsm))
+      (setq-local mevedel--current-request 'request)
+      (should-not (mevedel--turn-displaced-p fsm))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create
+                   :displaced (mevedel-request--create :id "turn")))
+      (should-not (mevedel--turn-displaced-p
+                   (gptel-make-fsm :info (list :buffer (current-buffer))))))))
+
+(mevedel-deftest mevedel-turn-resume-displaced ()
+  ,test
+  (test)
+  :doc "a displaced terminal transition settles once its request returns"
+  (with-temp-buffer
+    (let* ((turn (mevedel-request--create :id "turn"))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer (current-buffer) :mevedel-request-id "turn")))
+           settled)
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :displaced turn))
+      (cl-letf (((symbol-function 'mevedel--turn-commit) #'ignore)
+                ((symbol-function 'mevedel--defer-turn-steps)
+                 (lambda (_machine steps &optional _on-cancel)
+                   (push (length steps) settled))))
+        (mevedel--fail-turn fsm 'aborted)
+        (should-not settled)
+        ;; Still displaced: the continuation parks again.
+        (mevedel-turn-resume-displaced (current-buffer))
+        (should-not settled)
+        (should mevedel--turn-displaced-settlements)
+        (setq-local mevedel--current-request turn)
+        (mevedel-turn-resume-displaced (current-buffer))
+        (should (= 1 (length settled)))
+        (should-not mevedel--turn-displaced-settlements)
+        (mevedel-turn-resume-displaced (current-buffer))
+        (should (= 1 (length settled))))))
+
+  :doc "a failing continuation does not strand the others"
+  (with-temp-buffer
+    (let (ran diagnostics)
+      (setq-local mevedel--turn-displaced-settlements
+                  (list (lambda () (error "Boom"))
+                        (lambda () (setq ran t))))
+      (mevedel-test--with-captured-diagnostics diagnostics
+        (mevedel-turn-resume-displaced (current-buffer)))
+      (should ran)
+      (should (string-match-p "Boom" diagnostics)))))
+
+(mevedel-deftest mevedel--defer-turn-steps-displaced
+  (:vars ((mevedel-transport--enabled-p t)))
+  ,test
+  (test)
+  :doc "a settlement chain waits while preparation holds the slot"
+  (let ((buffer (generate-new-buffer " *mevedel-turn-displaced-chain*"))
+        (turn (mevedel-request--create :id "turn"))
+        events)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--current-request turn)
+          (let ((fsm (gptel-make-fsm
+                      :info (list :buffer buffer :mevedel-request-id "turn"))))
+            (mevedel--defer-turn-steps
+             fsm
+             (list (lambda (_machine)
+                     (push 'first events)
+                     (setq-local mevedel--current-request
+                                 (mevedel-request--create :displaced turn)))
+                   (lambda (_machine)
+                     (push (list 'second mevedel--current-request) events))))
+            (should (equal '(first) events))
+            (should (mevedel-turn-busy-p buffer))
+            (setq-local mevedel--current-request turn)
+            (mevedel-turn-resume-displaced buffer)
+            (with-timeout (2 (ert-fail "Displaced chain did not resume"))
+              (while mevedel--turn-settlements-pending
+                (accept-process-output nil 0.01)))
+            (should (equal (list (list 'second turn) 'first) events))))
+      (kill-buffer buffer))))
+
 (mevedel-deftest mevedel--turn-lost-p ()
   ,test
   (test)
