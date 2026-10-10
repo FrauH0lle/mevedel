@@ -183,6 +183,17 @@ The following changes belong to ADR 0099 unless another ID is named.
   storage prevents reload from choosing an older notification-enabled room.
   The original browser manual supplied no separate dates for these corrections.
 
+- **Retained projection, 2026-10-10:** every publish reprojected the whole
+  transcript. At 1,001 records that took 62 ms on a desktop and 360-500 ms on
+  the deployed host, so a streaming session kept Emacs about 80% busy: in the
+  same daemon whiteboard edits rose from 221 to 373 ms p50, cursor presence
+  reached 414 ms p95, and a join's snapshot took 3.1 s. Rooms now retain
+  per-segment records, reused only while their source text, properties,
+  context and recorded live lookups are unchanged; a streamed update projects
+  1,001 records in 12 ms instead of 63 ms on the desktop, with the same result.
+  The whole-transcript segment scan remains because a later closing control
+  can reclassify earlier text, so coalesced publishes are also paced by their
+  measured cost.
 - **Combined skill selection, 2026-09-20:** the single armed chip and automatic
   menu dismissal prevented composing several skills on one message. The menu
   now stays open, selected skills travel as an explicit name array, and the

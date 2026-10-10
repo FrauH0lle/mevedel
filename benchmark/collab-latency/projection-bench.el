@@ -2,11 +2,14 @@
 
 ;;; Commentary:
 
-;; Every room publish re-projects the whole transcript, diffs each record
+;; A room publish projects the transcript into records, diffs each record
 ;; against the previous publication and JSON-encodes the changed ones.
 ;; This times that work for synthetic transcripts of growing length, each
 ;; turn a prompt, a streamed response and three tool blocks, after one
 ;; more streamed sentence -- the steady state while a reply streams.
+;; `full' projects without retained state, as a room's first publish does;
+;; `retained' projects with the room's per-segment cache, as every later
+;; publish does, and must return the same records.
 ;;
 ;;   emacs -Q --batch -L SOURCE -L DEPS... -l projection-bench.el
 
@@ -38,15 +41,26 @@
         (push (* 1000 (- (float-time) start)) times)))
     (nth 2 (sort times #'<))))
 
+(defun projection-bench--stream ()
+  "Append one streamed sentence to the current transcript."
+  (goto-char (point-max))
+  (insert (propertize "Another streamed sentence.\n" 'gptel 'response)))
+
 (dolist (turns '(10 50 100 200 400))
   (with-temp-buffer
     (mevedel--transcript-org-mode)
     (dotimes (index turns) (projection-bench--turn index))
-    (let* ((old (mevedel-collaboration--canonical-records (current-buffer)))
-           (_ (progn (goto-char (point-max))
-                     (insert (propertize "Another streamed sentence.\n" 'gptel 'response))))
-           (project (projection-bench--time
-                     (lambda () (mevedel-collaboration--canonical-records (current-buffer)))))
+    (let* ((cache (mevedel-collaboration--projection-cache-create))
+           (old (mevedel-collaboration--canonical-records
+                 (current-buffer) nil nil cache))
+           (_ (projection-bench--stream))
+           (full (projection-bench--time
+                  (lambda () (mevedel-collaboration--canonical-records (current-buffer)))))
+           (retained (projection-bench--time
+                      (lambda ()
+                        (projection-bench--stream)
+                        (mevedel-collaboration--canonical-records
+                         (current-buffer) nil nil cache))))
            (new (mevedel-collaboration--canonical-records (current-buffer)))
            (diff (projection-bench--time
                   (lambda ()
@@ -58,7 +72,10 @@
                         (unless (equal (gethash (plist-get record :id) by-id) record)
                           (setq changed (1+ changed))))
                       changed)))))
-      (princ (format "turns=%4d chars=%8d records=%5d project=%7.1fms diff=%6.1fms\n"
-                     turns (buffer-size) (length new) project diff)))))
+      (unless (equal new (mevedel-collaboration--canonical-records
+                          (current-buffer) nil nil cache))
+        (error "Retained projection differs from a full projection"))
+      (princ (format "turns=%4d chars=%8d records=%5d full=%7.1fms retained=%6.1fms diff=%5.1fms\n"
+                     turns (buffer-size) (length new) full retained diff)))))
 
 ;;; projection-bench.el ends here
