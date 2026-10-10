@@ -1,0 +1,3234 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/memory/">
+      
+      
+        <link rel="prev" href="../sessions/">
+      
+      
+        <link rel="next" href="../permissions/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Memory and journal - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#persistent-memory" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Memory and journal
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#memory-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#topic-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topic Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#save-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save Policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-inclusion-and-delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt inclusion and delivery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#staleness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Staleness
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#on-demand-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        On-demand review
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#journal-and-consolidation-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Journal and consolidation overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review-evidence-and-proposal-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review evidence and proposal format
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Review evidence and proposal format">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#investigation-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Investigation tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-limits-and-settlement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request limits and settlement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#selecting-and-accepting-a-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Selecting and accepting a review
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Selecting and accepting a review">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pass-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pass ownership
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#automatic-review-and-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic review and application
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposal-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposal decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposal decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checked-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checked application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovery-and-reversal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery and reversal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-cockpit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory cockpit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#journal-discovery-and-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Journal discovery and context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-notes-and-completed-turn-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working notes and completed-turn capture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Working notes and completed-turn capture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#digest-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Digest generation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#abandoned-checkpoint-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Abandoned checkpoint recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#journal-jobs-and-inspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Journal jobs and inspection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#journal-recall-and-retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Journal recall and retention
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-note-snapshot-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working-note snapshot limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#memory-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#topic-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topic Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#save-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save Policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-inclusion-and-delivery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt inclusion and delivery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#staleness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Staleness
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#on-demand-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        On-demand review
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#journal-and-consolidation-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Journal and consolidation overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review-evidence-and-proposal-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review evidence and proposal format
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Review evidence and proposal format">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#investigation-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Investigation tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-limits-and-settlement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request limits and settlement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#selecting-and-accepting-a-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Selecting and accepting a review
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Selecting and accepting a review">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pass-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pass ownership
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#automatic-review-and-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic review and application
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposal-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposal decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposal decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checked-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checked application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovery-and-reversal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery and reversal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-cockpit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory cockpit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#journal-discovery-and-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Journal discovery and context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-notes-and-completed-turn-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working notes and completed-turn capture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Working notes and completed-turn capture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#digest-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Digest generation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#abandoned-checkpoint-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Abandoned checkpoint recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#journal-jobs-and-inspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Journal jobs and inspection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#journal-recall-and-retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Journal recall and retention
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-note-snapshot-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working-note snapshot limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/memory.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="persistent-memory">Persistent Memory<a class="headerlink" href="#persistent-memory" title="Permanent link">&para;</a></h1>
+<p>mevedel reads persistent memory from configured <code>.mevedel/memory/</code> and
+<code>.agents/memory/</code> roots, both workspace-local and user-global. Memory is
+model-writable and persists across conversations, but it is
+selective by default: optional saves should preserve durable context useful to
+future work. Explicit user requests to save, forget, or ignore memory take
+precedence over package preferences about what is worth retaining.</p>
+<p>Curated topics hold reusable knowledge; journal digests hold dated evidence
+supporting that knowledge. Use <code>/remember</code> to review memory and journal evidence, then
+inspect the proposed changes in the <a href="#memory-cockpit">memory cockpit</a>.
+The <code>$learn</code> skill supports explicitly requested write-back during a conversation.</p>
+<h2 id="memory-flow">Memory flow<a class="headerlink" href="#memory-flow" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TD
+    A[Context worth retaining] --&gt; B{Explicit save request?}
+    B -- Yes --&gt; C[Honor the requested scope]
+    B -- No --&gt; D{Useful durable context?}
+    D -- No --&gt; E[No save needed]
+    D -- Yes --&gt; C
+    C --&gt; M[Read the memory manual]
+    M --&gt; F[Create or update topic file and index]
+    F --&gt; G[Discover through future memory context]
+    G --&gt; H[Verify drift-prone claims before relying on them]</code></pre>
+<h2 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>.agents/memory/
+  MEMORY.md             ; delivered index
+  user-style.md         ; topic file
+  issue-tracker.md      ; topic file
+  external-systems.md   ; topic file
+</code></pre></div>
+<p><code>MEMORY.md</code> is an index, not a body store. It is the only memory file
+included in normal conversation context. Each configured root may
+have its own <code>MEMORY.md</code>; the first 200 lines of every present index are
+loaded in configured order and prefixed with the root label plus a
+generated HTML comment describing the index file's last modification
+date:</p>
+<div class="highlight"><pre><span></span><code>&lt;!-- Last updated: 2026-05-08 --&gt;
+<span class="k">-</span><span class="w"> </span>[<span class="nt">User style</span>](<span class="na">user-style.md</span>) - communication preferences for this user
+<span class="k">-</span><span class="w"> </span>[<span class="nt">Issue tracker</span>](<span class="na">issue-tracker.md</span>) - where integration bugs are tracked
+</code></pre></div>
+<p>Topic files hold the actual durable memories. <code>MEMORY.md</code> entries should
+stay short, usually one line under about 150 characters:</p>
+<div class="highlight"><pre><span></span><code><span class="k">-</span><span class="w"> </span>[<span class="nt">Title</span>](<span class="na">file.md</span>) - one-line relevance hook
+</code></pre></div>
+<h2 id="topic-files">Topic Files<a class="headerlink" href="#topic-files" title="Permanent link">&para;</a></h2>
+<p>Each topic file uses YAML frontmatter:</p>
+<div class="highlight"><pre><span></span><code>---
+name: User style
+description: Communication and review preferences for this user
+<span class="gu">type: feedback</span>
+<span class="gu">---</span>
+
+Prefer terse completion responses after code edits.
+
+<span class="gs">**Why:**</span> the diff and tests already show most routine details.
+<span class="gs">**How to apply:**</span> summarize material outcomes, risks, and verification
+instead of replaying every edit.
+</code></pre></div>
+<p>Supported <code>type</code> values:</p>
+<ul>
+<li><code>user</code>: stable details about the user's role, goals, expertise, or
+  durable preferences.</li>
+<li><code>feedback</code>: reusable guidance about how mevedel should approach work,
+  including corrections and explicitly confirmed non-obvious approaches.</li>
+<li><code>project</code>: enduring context or motivation not otherwise recoverable from
+  code, Git history, project instructions, or maintained documentation.</li>
+<li><code>reference</code>: otherwise undiscoverable pointers to authoritative information
+  in trackers, documentation, or external systems, with their purpose.</li>
+</ul>
+<p>Feedback and project memories should preserve enough context to be
+actionable later. Prefer a direct rule or fact followed by <code>**Why:**</code>
+and <code>**How to apply:**</code>.</p>
+<h2 id="save-policy">Save Policy<a class="headerlink" href="#save-policy" title="Permanent link">&para;</a></h2>
+<p>Ordinary saving is optional. Keep reusable knowledge in the categories above
+when it will help a future task. No entry and no memory change are successful
+outcomes. Do not treat an empty index as a task to fill, or infer a lasting
+preference from silence or an ambiguous one-time reaction.</p>
+<p>Tasks, blockers, deadlines, progress, and decisions belong in the project tracker
+or maintained documentation. Conversation state and continuation details belong
+in session context and compaction. Avoid speculative conclusions and duplication
+of code, Git history, project instructions, or maintained documentation.
+Debugging fix recipes normally stay with the code and commit; a distinct reusable
+lesson may qualify, but the activity itself does not. A reference points to the
+authoritative source instead of copying its changing contents. These defaults do
+not veto an explicit request to preserve a particular fact. Avoid retaining
+secrets or unnecessary personal information; keep the scope the user asked for.</p>
+<p>Saving is a three-step operation:</p>
+<ol>
+<li>Choose the correct memory root.</li>
+<li>Create or update a topic file under that root.</li>
+<li>Add or update the one-line pointer in that root's <code>MEMORY.md</code>.</li>
+</ol>
+<p>Update existing memories in place. For new memories, use global memory
+for cross-project user preferences or broad feedback, and local memory
+for project-specific feedback, project context, or local references.
+Prefer <code>.agents/memory/</code> for portable memories that other agent tools
+can share. Use <code>.mevedel/memory/</code> for mevedel-specific behavior or
+schema. Record known dates absolutely so relative wording does not drift.</p>
+<p>When the user asks to remember something, save it within their selected scope
+using the topic/index format. When they ask to forget, remove the relevant topic
+content and pointer, preserving unrelated information. Do not invent an approval
+gate solely because the requested fact is more ordinary than the default policy
+would choose to save. A separately requested report-only review retains its
+actual approval boundary.</p>
+<h2 id="prompt-inclusion-and-delivery">Prompt inclusion and delivery<a class="headerlink" href="#prompt-inclusion-and-delivery" title="Permanent link">&para;</a></h2>
+<p>The stable <code>memory-policy</code> owns relevance, authority, and freshness. The short
+<code>memory-save-policy</code> requires reading this manual before any memory mutation,
+including model-initiated saves. The manual owns format, routing, index updates,
+and forget semantics; Read retrieves it as <code>mevedel://memory.md</code>.</p>
+<p>Main and worker receive current configured roots and index contents as retained
+context updates. Changed or removed indexes replace earlier observations for
+current decisions without rewriting prior messages. Other role profiles receive
+only the memory components they select. Stateless buddy prompts include their
+current memory snapshot directly.</p>
+<h2 id="staleness">Staleness<a class="headerlink" href="#staleness" title="Permanent link">&para;</a></h2>
+<p>Memory is context, not proof. A memory that names a function, file,
+command, flag, or external resource records what was believed when the
+memory was written. Before recommending or acting on such a memory, the
+model should cheaply verify it against current files, docs, git, or the
+external system.</p>
+<p>If the user says to ignore memory or not use memory, the model should
+proceed as if <code>MEMORY.md</code> were empty. It should not apply remembered
+facts, cite them, compare against them, or mention them.</p>
+<h2 id="on-demand-review">On-demand review<a class="headerlink" href="#on-demand-review" title="Permanent link">&para;</a></h2>
+<p><code>/remember [focus]</code> and <code>M-x mevedel-remember</code> run bounded consolidation over
+eligible digests, captured memory, and applicable instructions. In <code>manual</code> and <code>propose</code> modes, resulting proposals wait in the memory cockpit
+for accept/reject decisions; inspection alone edits no curated files. <code>propose</code>
+is the default. The bundled <code>$learn</code> skill provides a separate, explicitly
+requested workflow for writing durable session findings to instructions or memory.</p>
+<h2 id="model-selection">Model selection<a class="headerlink" href="#model-selection" title="Permanent link">&para;</a></h2>
+<p>Journal generation and memory consolidation have independent <code>journal</code> and
+<code>memory</code> workloads, both defaulting to the <code>balanced</code> tier. They use the ordinary
+<code>mevedel-model-workloads</code> and preset <code>:model-workloads</code> configuration:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="nv">mevedel-define-preset</span><span class="w"> </span><span class="nv">my-preset</span>
+<span class="w">  </span><span class="nb">:parents</span><span class="w"> </span><span class="p">(</span><span class="nv">mevedel-implement</span><span class="p">)</span>
+<span class="w">  </span><span class="nb">:model-workloads</span><span class="w"> </span><span class="p">((</span><span class="nv">journal</span><span class="w"> </span><span class="nb">:tier</span><span class="w"> </span><span class="nv">balanced</span><span class="p">)</span>
+<span class="w">                    </span><span class="p">(</span><span class="nv">memory</span><span class="w"> </span><span class="nb">:tier</span><span class="w"> </span><span class="nv">balanced</span><span class="p">)))</span>
+</code></pre></div>
+<p>These workloads are independent of <code>summarization</code> (compaction and handoff)
+and <code>buddy</code> (edit reviews and guidance). Configure either workload with the
+ordinary model policy to select a provider, model, and reasoning effort.</p>
+<p>Journal capture freezes the originating root buffer's policy. Changing that
+entry affects new captures; already captured jobs retain their frozen policy.
+Consolidation resolves <code>memory</code> in the caller's current buffer. Automatic review
+runs from an idle callback without restoring an originating session preset;
+configure its workload globally when a consistent background policy is needed.</p>
+<h2 id="journal-and-consolidation-overview">Journal and consolidation overview<a class="headerlink" href="#journal-and-consolidation-overview" title="Permanent link">&para;</a></h2>
+<p>Journal storage is separate from curated memory. The internal
+<code>mevedel-journal-store</code> module publishes immutable workspace digests and
+completed-review and proposal-decision records, and
+<code>mevedel-journal-claim</code> provides bounded work ownership and recoverable
+outcomes. Completed-turn capture and sealing are connected to session
+lifecycle. Capture reads each turn from its committed segment; a turn whose
+indexed bounds lie outside those bytes appears in the evidence as unavailable
+and is covered with the rest, instead of failing the checkpoint. A session
+damaged by an earlier rotation bug otherwise failed every later capture. Background generation and accepted-result recovery run from
+lifecycle opportunities; completed, saved root turns, session opening and idle
+maintenance recover abandoned checkpoints.
+Public entries live in <code>.mevedel/journal/</code>; private bookkeeping and recovery
+evidence live in <code>.mevedel/state/journal/</code>.
+Public-entry discovery batches fresh expiry-marker checks and bounded reads in
+groups of 16. Completed-turn coverage uses the same bounded read batching;
+malformed coverage fails closed. These observations are not cached across calls.
+<code>memory://journal/</code> supports ordinary Read, Glob, and Grep over validated published
+records, with cached composer completion and request-time roster availability.
+The main conversation receives a bounded recent-digest map as retained context.
+Consolidation runs on demand through <code>/remember</code> or automatically in <code>propose</code> and <code>auto</code> modes;
+the memory cockpit supports inspection, decisions, and recovery. See
+<a href="../adr/0117-publish-journal-results-from-fenced-outcomes/">ADR 0117</a> for the
+storage contract and the workflows below for the user surface.</p>
+<h2 id="review-evidence-and-proposal-format">Review evidence and proposal format<a class="headerlink" href="#review-evidence-and-proposal-format" title="Permanent link">&para;</a></h2>
+<p>The consolidation output contract is implemented in
+<code>mevedel-memory-proposal-parse</code>. It validates the complete reply against captured
+root IDs, admitted files, complete filename observations for creation, and
+admitted digest IDs before returning any proposals. The fixed ordered sections
+are Promote, Update, Merge, Remove, Instructions, and No action. Proposal fences
+contain JSON-valued header lines, a <code>---</code> separator, and Markdown replacement
+content. The header is a sequence of <code>key: value</code> lines, not a JSON object;
+only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
+invalidate the entire reply. Instruction targets must be exact captured
+applicable files. Direct MEMORY.md proposals are rejected because application
+owns index consistency. This parser performs no reads or writes and does not
+establish current authority, freshness, or factual correctness. The request uses
+this parser at terminal settlement before accepting proposals into the durable
+review and decision lifecycle exposed by the memory cockpit.</p>
+<p><code>mevedel-memory-scope-capture</code> supplies the parser's root and file allowlist.
+It reads complete topic, index, and root instruction files without changing
+them: at most 32 KiB per file and 96 KiB total, with a 256-entry inventory per
+memory root. A review admits at most sixteen configured memory roots; exceeding
+that count refuses capture. Omitted files remain known existing names; an incomplete inventory
+cannot authorize creation. Symlinked files and symlinked parents cannot supply
+before-state or new proposal targets. The captured index is reserved for the
+application transaction, rather than offered as a direct model-editable topic.</p>
+<p>Each root retains its original physical path, target identity,
+and local host/user identity where applicable. Later configuration changes do
+not rebind these IDs. Inspection checks original authority; a different local
+client or a retargeted root makes it unavailable. Freshness checks compare
+literal captured bytes and expected absence with current target reads, including
+indexes and merge inputs selected by the caller. These read-only checks do not
+acquire write ownership or commit files; the application coordinator must hold
+the required ownership across checking and mutation.</p>
+<p>The captured source boundary accepts relative paths only within the original
+workspace target. It excludes VCS metadata, <code>.mevedel</code> state, symlinks, and all
+configured memory roots, including roots omitted because their index was
+unavailable. Omitting a memory root does not make its contents available through
+a source-file fallback.</p>
+<p><code>mevedel-memory-reference-check</code> inspects backticked references in the admitted
+topic snapshots, returning at most 200 distinct topic/token observations with
+dates. Its current check is workspace-relative <strong>path existence</strong>, including
+references with line-number suffixes. A found path does not verify a lesson or
+the referenced line. Commands, flags, external references, ambiguous identifiers,
+and paths outside the source boundary remain <code>unknown</code>. Oversized references,
+unavailable topics, and the count limit produce explicit omissions. Topics
+without candidates receive no certification. These rows can be stored in the
+immutable review record and are supplied to the consolidation request.</p>
+<h3 id="investigation-tools">Investigation tools<a class="headerlink" href="#investigation-tools" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-memory-investigation</code> supplies request-local gptel Read, Glob, and Grep
+tools. Each call names <code>workspace</code>, <code>journal</code>, or an admitted root ID, plus a
+relative path. This is a scoped tool argument, not another resource-address
+family. Memory and journal reads use captured evidence; source Read uses the
+ordinary text reader over a pinned UTF-8 snapshot capped at 512 KiB, including
+range support within that snapshot. Oversized files are refused before the
+reader can scan a long line or a large offset. No tool definitions are added to gptel's global tool registry.</p>
+<p>Searches reuse ordinary Glob/Grep over private admitted copies. Source search
+examines at most 256 entries, copies at most 2 MiB, and omits files larger than
+512 KiB. Omitted, unavailable, and excluded source paths produce a partial-search
+notice. Narrowing the subtree or reading a named source file supports further
+investigation. Results use relative filenames and omit private copy paths.
+Each result is capped at 8 KiB of UTF-8; a request may return at most 64 KiB
+across 64 calls. The module constants <code>mevedel-memory-investigation--max-calls</code>
+and <code>mevedel-memory-investigation--max-bytes</code> supply these aggregate limits to
+both enforcement and the review prompt. Exceeding either limit retires the investigation and
+reports failure to its request owner. Stopping cancels active search helpers,
+removes their copies, and suppresses late delivery. The owner still supplies
+the overall deadline and generation check.
+Search completion restores the caller's working directory before delivering
+the result, including synchronous empty results. A provider follow-up never
+inherits a deleted investigation snapshot as its working directory.</p>
+<h3 id="request-limits-and-settlement">Request limits and settlement<a class="headerlink" href="#request-limits-and-settlement" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-memory-review-request</code> combines that scope, reference pre-check, and
+investigation in a sessionless request using the <code>memory</code> workload (default
+tier <code>balanced</code>). It admits a prefix of at most 20 complete candidate digests and
+reports omissions. The
+initial prepared provider payload, including tools and roles, must fit both
+32,000 estimated tokens and the model's usable context with output reserve.
+Indexes, instructions, and topics are supplied as complete documents when they
+fit; other captured documents remain available through Read. An empty digest
+set requires an explicit memory-only request. Focus and recent rejection text
+are each bounded to 8 KiB.</p>
+<p>The request has a 180-second deadline. Its cumulative output budgets default to
+64,000 tokens (<code>mevedel-memory-review-max-tokens</code>) and 256 KiB
+(<code>mevedel-memory-review-max-bytes</code>). Both settings must be positive integers and
+are captured at request start. Reasoning, intermediate replies, and tool-call
+arguments share these budgets with the final reply. Both the client token
+estimate and available provider-reported output usage must fit the token budget;
+the estimate is not the provider's tokenizer and charges non-ASCII text
+conservatively. Tool results have the separate investigation limits above.
+The client charges tool calls at TOOL using a normalized JSON encoding of
+their executable names and parsed arguments, not their raw wire spelling.
+Claude Code charges each MCP call before invoking the same investigation tools.
+Whitespace and escape spelling in argument JSON are not preserved in that
+charge, and in-flight argument fragments have not yet been charged. The byte
+counter is therefore an accounted-output size, not a bound on raw transport
+traffic. Provider-reported usage, when available, supplies the separate token
+guard; the deadline still bounds an interrupted argument stream.</p>
+<p>The final proposal reply alone must fit the parser's independent <strong>32 KiB</strong>
+limit, checked at terminal completion; reasoning and earlier rounds do not consume
+that allowance. Increasing the cumulative budgets does not increase the amount
+of proposal text that may be accepted.</p>
+<p>Supported provider output limits are clamped to the smaller of the workload's
+per-response limit and the remaining cumulative token budget, subtracting the
+larger of estimated and reported output usage. Either depleted cumulative budget
+refuses another round. Providers without that control retain client-side limits, not a server
+billing ceiling. Every follow-up rechecks the prepared payload against usable
+context. The initial input admission limit remains 32,000 estimated tokens.</p>
+<p>The initial consolidation prompt renders the frozen output, investigation,
+proposal, and deadline limits. It asks the model to reserve room for its final
+proposals or No action response, and to use focused evidence checks rather than
+exhaustive validation. After completed tool results, before a follow-up's context
+check and dispatch, the request may inject a budget reminder through native
+gptel prompt APIs or Claude's post-tool-batch hook. Reminders fire at 75% and 90% of any cumulative output,
+investigation-call, tool-result-byte, or elapsed-time allowance, at most twice;
+a jump across both thresholds emits only the highest stage. They report the
+remaining allowances. The last stage asks the model to stop tools and return
+the final review, with No action valid for unresolved claims. They cannot
+interrupt a response already in progress and do not replace the hard guards.
+This sessionless request creates no session-backed reminder queue or transcript.</p>
+<p>Review callback results and live usage snapshots include accumulated
+<code>:output-bytes</code>, <code>:output-estimated-tokens</code>, and the current round's reply size
+(<code>:result-bytes</code>), separately from provider-reported usage. The breakdown
+<code>:reasoning-bytes</code>, <code>:reply-bytes</code>, and <code>:tool-call-bytes</code> measures cumulative
+reasoning, replies across all response rounds, and the normalized tool-call
+charge. Thus <code>:reply-bytes</code> can exceed <code>:result-bytes</code>; only the latter is the
+final proposal size at DONE. <code>:tool-call-count</code> records admitted investigation
+calls, including calls that return errors, but not calls refused after exhaustion.
+<code>:rounds</code> counts completed HTTP rounds for gptel. For Claude Code it counts
+completed native tool batches plus final prompt completion; hidden provider
+retries are not counted. Neither count depends on provider token metadata.
+Output guard failures
+include <code>:budget-kind</code> (<code>output-bytes</code>, <code>output-estimated-tokens</code>, <code>output-tokens</code>,
+or <code>proposal-bytes</code>) and the numeric <code>:output-limit</code>; the error message also names
+the guard and its measured usage. The pass result and terminal workspace
+telemetry retain these counters, including on cancellation and publication
+failure, without retaining generated text. A streaming abort can occur before
+the provider reports the interrupted round's usage.
+Read tools execute within their captured authority without interactive gptel
+confirmation; unavailable tool names fail the review. Only terminal model-turn
+completion validates the final proposal response (gptel DONE or successful ACP
+prompt completion). An intermediate response or tool batch does not finish the
+tool loop or consume coverage.</p>
+<p>When <code>memory</code> resolves to Claude Code, an isolated ACP conversation receives
+only the request's Read/Glob/Grep tools through private MCP. Captured roots,
+search cancellation, call and result limits stay in the existing investigation
+owner; it acquires no root-session permission authority. Initial admission
+estimates the explicit system, input and tool definitions. At native batch
+boundaries, the client checks the initial estimate plus accumulated visible
+output, tool results and budget reminders against usable context. This is a
+conservative estimate, not inspection of Claude's exact payload or compaction.
+Client output checks run during streaming and before tools; batch boundaries
+refuse further model work after exhaustion. Available final-turn usage is
+charged once. This path currently has no server per-response token ceiling and
+cannot enforce exact provider token spending between batches.</p>
+<p>While running, its read-only buffer displays admitted evidence, model output,
+and tool results. Closing it or invoking the returned cancel function retires
+the request, stops active searches, and suppresses late results. The validated
+callback includes the exact validated reply, admitted digests, and cumulative
+provider usage. It does not publish proposals or coverage. Connecting the
+request to pass selection, storage, and cancellation is handled by
+<code>mevedel-memory-pass-start</code>.</p>
+<h2 id="selecting-and-accepting-a-review">Selecting and accepting a review<a class="headerlink" href="#selecting-and-accepting-a-review" title="Permanent link">&para;</a></h2>
+<p><code>mevedel-memory-pass-select</code> supplies candidate selection from a fresh journal
+observation. General passes select uncovered digests; focused passes can reuse
+covered ones. Selection returns at most twenty, oldest first with digest ID as
+the tie breaker, and reports the eligible backlog beyond that batch. Later
+arrivals do not enter an already captured observation.</p>
+<p>Published digests describe completed, immutable work and are eligible even while
+their source session remains open or another client holds that session. Selection
+needs no source-session authority: it changes neither session state nor review
+coverage. The coordinator still acquires journal/consolidation ownership and pins
+freshly validated evidence before a review starts.</p>
+<p><code>mevedel-memory-store</code> supplies private prepared and accepted pass storage. The
+caller holds the 180-second consolidation claim. Preparation acquires journal
+mutation ownership, recovers accepted expiry, checks that selected entries still
+match their public source bytes, and then pins them. This order prevents a pass
+from reviving evidence already committed for expiry. The prepared record retains
+the original scope, complete digest bodies, source fingerprints, and focus.
+Focus must fit the public record's 4 KiB bound before inference begins.</p>
+<p>Private records live in <code>.mevedel/state/journal/passes/&lt;pass-id&gt;/prepared.el</code> and <code>accepted.el</code>.
+They use bounded durable Lisp data, preserving literal byte strings in captured
+before-state; each record is limited to 4 MiB. Reading disables evaluation and
+circular-reader syntax. Evidence pins live under
+<code>.mevedel/state/journal/evidence-pins/&lt;digest-id&gt;/&lt;pass-id&gt;.pin</code> and bind to the prepared record's
+hash. These records are internal storage, outside <code>memory://journal/</code>; displaying their
+memory bodies still requires the original scope's authority checks.</p>
+<p>Acceptance validates the reply again against the prepared scope and exact
+admitted digest subset. Each proposal retains its affected topics, merge inputs,
+index, or instruction before-state. Its identity includes the pass, original
+target and client, proposed change, and before-state. The accepted bundle is
+written before its hash competes in the pass claim's immutable outcome election.
+Changed private bundles cannot be replayed as accepted results.</p>
+<p>Publication reads that accepted bundle under fresh journal mutation ownership
+and publishes the immutable review record. Only this public record advances
+general coverage. Replaying publication is idempotent, including after the
+original request is gone. Pending proposals retain admitted digest pins;
+omitted digests and a no-action pass release their pins after publication.
+Failed, cancelled, or expired passes can release only their own pins, after
+their unsuccessful outcome has been recorded. None of these storage operations
+applies proposals to curated files. Decisions, application, and expiry use the
+separate checked operations described below.</p>
+<h3 id="pass-ownership">Pass ownership<a class="headerlink" href="#pass-ownership" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-memory-pass-start</code> coordinates one 180-second workspace claim. Before
+selecting evidence, it recovers accepted older pass publications and releases
+pins belonging to fenced unsuccessful attempts. Selection runs under journal
+mutation ownership after accepted expiry recovery. Preparation rechecks the
+selected entries when pinning them; a change between those operations fails
+without consuming coverage. Each request checks current target ownership, and
+the coordinator's timer includes selection and preparation in its deadline.</p>
+<p>For local Linux workspaces whose configured memory roots are also local,
+publication recovery, evidence selection, automatic admission, scope capture,
+immutable preparation and rejection-history reading run in a short-lived batch
+Emacs child. The editor supplies the resolved memory roots, instruction paths,
+automatic thresholds and original client identity; the child does not rediscover
+user configuration. The claim deadline covers admission as well as preparation.
+An automatic opportunity that is not due settles its state as <code>:skipped</code>, updates
+the next-opportunity observation, and starts neither inference nor a completion
+callback. Scope reads transfer in bounded batches of eight while
+each admitted file still obeys the remaining total byte budget. The editor
+rechecks the claim before starting the configured review from the originating
+buffer. Cancellation stops preparation, fences the pass, and ignores late
+replies. Remote roots retain target-native preparation in the editor.</p>
+<p>Local accepted-result storage and review publication also run in the child.
+Only immutable review inputs cross that boundary; automatic proposal application
+and its original-target checks stay in the editor. The pass remains running
+until publication returns. Cancellation fences an unaccepted reply; an already
+accepted outcome retains its bundle and pins for publication recovery. Provider
+usage and errors remain visible through the ordinary pass callback.</p>
+<p>The returned state is available through <code>mevedel-memory-pass-running</code>. Its
+<code>:request</code> is populated after preparation and contains the read-only review
+buffer; the pass remains registered while its result is being published.
+<code>mevedel-memory-pass-cancel</code>, or closing
+that buffer, retires only this client's attempt. Failure and expired callbacks
+cannot publish fresh results or change a successor's claim or pins. Success
+returns the immutable public review, usage, and remaining frozen backlog count;
+arrivals after selection remain eligible. There is no recursive backlog drain.
+Explicit callers may allow an empty batch for current-memory review. The proposal
+cockpit and <code>/remember [focus]</code> command are available. Workspace telemetry records
+pass starts and terminal outcomes, usage received so far, published proposal and
+coverage counts, and remaining backlog without private content.</p>
+<h3 id="automatic-review-and-application">Automatic review and application<a class="headerlink" href="#automatic-review-and-application" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-memory-consolidation-mode</code> supports <code>manual</code>, <code>propose</code> (the default),
+and <code>auto</code>. Manual runs only on request. Propose schedules a read-only review at
+eligible completed, durably saved root turns, digest publication, session
+opening and idle maintenance (see <a href="#digest-generation">Digest generation</a>), and
+leaves its proposals for approval. Auto uses the same review and applies fresh
+memory and instruction proposals, including changes to <code>AGENTS.md</code>, through the
+ordinary checked decision path without prior review. The mode is frozen at pass
+admission.</p>
+<p>The automatic gate checks mode, then elapsed time since the last successful
+general review, then the eligible unreviewed digest count. The settings
+<code>mevedel-memory-consolidation-min-hours</code> and
+<code>mevedel-memory-consolidation-min-digests</code> default to 24 hours and five digests.
+Both automatic and general on-demand completion move the clock; focused reviews
+do not. Retired review metadata preserves that clock after history expiry.
+A smaller backlog becomes eligible one day before its oldest digest reaches the
+configured ordinary-recall age limit (13 days under the default). Disabled expiry
+keeps the count threshold; the elapsed-time gate still applies in either case.
+This creates review opportunities for sparse workspaces and completed work from
+long-running sessions. <code>/remember</code> bypasses timing and count thresholds.</p>
+<p>Turn completion checks cached timing and settings without target I/O. Queued
+turns coalesce, and filesystem work waits for idle transport. A failed count
+check is cached for ten minutes; a recent successful general review postpones
+the next check until its interval ends. The coordinator acquires target
+ownership and recovers accepted publications before rechecking the gate, so
+another client's completion cannot be missed merely because the initial
+observation was stale. Journaling can be disabled while existing digests remain
+eligible for consolidation. Exit cancels queued and active review work.</p>
+<p>Auto applies proposals sequentially with fresh workspace and original-root
+ownership for each application. Unrelated index edits are preserved across
+reviews and manual changes. Changed topic files or affected index entries remain
+stale; cancelled application holds the remaining proposals. Completion reports
+the number of distinct files confirmed written by that run, counting a shared index once and
+excluding idempotently returned decisions from another call. A successful
+review can still leave held, stale, unavailable, or recovery-required proposals.
+Neither syntactic validation nor the updated-file count establishes that the
+new memory is correct.</p>
+<h2 id="proposal-decisions">Proposal decisions<a class="headerlink" href="#proposal-decisions" title="Permanent link">&para;</a></h2>
+<p><code>mevedel-memory-decision-reject</code> records a rejection without editing memory or
+rewriting the completed review. It acquires workspace ownership and checks the
+proposal's original target authority. A repeated rejection returns the same
+terminal decision, including its original reason. The reason is optional and
+limited to 4 KiB. Private <code>.mevedel/state/journal/decisions/&lt;decision-id&gt;.el</code> records retain the
+claim, exact public metadata, and optional write-intent identity. Their hash is accepted before publication,
+so a later client can recover a rejection after the owner stops.</p>
+<p>Public <code>kind: decision</code> records contain decision, pass, proposal, and workspace
+identities, date, status, reason, and a private-state hash. Their body is derived
+from metadata and includes no private topic or proposed replacement. Decision
+status is verified against immutable acceptance evidence; public text alone
+cannot decide a pending proposal or release its evidence. When every proposal
+in a pass is terminal, publication releases that pass's digest pins. Review
+and decision records remain retained while evidence or unresolved work needs
+them, then expire together under the resolution-based history window.</p>
+<p>Before a later request, the coordinator recovers accepted decisions and includes
+bounded recent rejection evidence: the original suggestion and reason, under
+the original memory-root authority. It admits at most twenty whole records
+within 8 KiB and reports omitted or unavailable records. This can help the model
+recognize reworded suggestions; it is untrusted evidence and does not guarantee
+semantic suppression. Rejection, application, and reversal APIs are implemented
+through the proposal cockpit as well as their internal APIs.</p>
+<h3 id="checked-application">Checked application<a class="headerlink" href="#checked-application" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-memory-apply-changes</code> prepares complete topic/index or instruction
+changes from accepted before-state without writing them. Topic frontmatter is
+generated from the validated name, description, and type. Index updates escape
+labels and filenames, retain unrelated lines, and reject duplicate or invalid
+destinations, including two encoded names for the same file. Instructions
+append to their captured file. Every emitted change retains expected original
+bytes or absence and exact proposed bytes for the shared patch transaction.
+Generated files must fit the memory reader's 32-KiB per-file bound, including
+index growth, so a change cannot exclude its root from the next review.</p>
+<p>The patch transaction checks supplied before-state before any write and
+again before writing each path. It restores only its own expected after-state;
+intervening disk and unsaved buffer edits survive a failure. A caller can fence
+all writes and rollback through a target mutation callback in addition to
+client-side ownership checks. Interrupted buffer
+synchronization rolls back before propagating a quit.</p>
+<p><code>mevedel-memory-decision-apply</code> acquires the workspace claim and an independent
+claim at the original target root. Topic and instruction files must still match
+their captured state. For <code>MEMORY.md</code>, only entries for the proposal's topic and
+merge sources must match, including entry absence. Unrelated entries, prose, and
+entry ordering may change. The shared index parser rejects duplicate destinations,
+invalid paths, and unsupported link syntax. A missing index has no entries.
+After these checks, application uses the complete current index snapshot and
+preserves its unrelated content and permissions. Exact file checks still protect
+the interval between preparation and writing, including unchanged dependencies.
+Full before/after states live in private
+<code>.mevedel/state/journal/writes/&lt;intent-id&gt;.el</code> records. Standard <code>.mevedel/memory/</code>
+roots keep a hash-only marker in the sibling <code>state/memory-write/pending/</code> before
+curated writes. Other memory and instruction roots use
+<code>ROOT/.mevedel/state/memory-write/root/pending/</code>. Coordination belongs to the
+original target, independently of the calling workspace. An unresolved
+marker blocks other workspaces at that root even after the original claim
+expires. Coordination files are excluded from consolidation memory and source
+scopes; inventory does not descend into their directory.</p>
+<p>Curated mutations and target-claim settlement take the same target-side <code>flock</code>
+on the pinned claims directory. Each mutation checks the unsettled claim,
+filesystem-clock deadline, expected bytes and mode under that lock; replacement
+mode is set on the temporary before rename. A delayed old writer either finishes
+before takeover or fails its guard afterward. The same mechanism protects
+rollback and marker retirement. This requires Linux <code>flock</code> on the storage
+host; acquisition waits at most 20 seconds and process death releases the lock.</p>
+<p>Application accepts an immutable decision before retiring the marker. Status
+ordering uses accepted claim generations, so retries in the same second still
+produce an unambiguous latest result. Entry-level index checks work independently
+of review identity and retained write history. The original pass stays immutable;
+only the transaction's working copy receives the checked current index snapshot.
+Conflicting entries or topic files produce a stale decision naming the conflict.</p>
+<h3 id="recovery-and-reversal">Recovery and reversal<a class="headerlink" href="#recovery-and-reversal" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-memory-decision-recover-write</code> reconciles exact retained states without
+repeating application: complete writes become applied, untouched attempts become
+unavailable, and mixed or intervening changes remain recovery-required with their
+marker intact. Its explicit rollback option restores a pending attempt through
+the patch engine only when every dependency matches recorded before or after
+state. Foreign or unsaved edits prevent rollback.</p>
+<p><code>mevedel-memory-decision-reverse</code> reverses a resolved application only while all
+affected files match its exact after-state. It persists a separate reverse intent
+linked to the original intent identity and hash, then uses the same patch and
+decision path. Successful reversal adds an immutable <code>reversed</code> decision; the
+original application remains inspectable. Reversed proposals remain terminal,
+so repeating accept, reject, or reverse cannot silently reapply them. A new
+review is needed for a new proposal.</p>
+<p>Reversal can also be interrupted: completed reverse writes become <code>reversed</code>
+when reconciled, untouched attempts leave the proposal <code>applied</code>, and partial
+attempts remain recovery-required. Explicitly rolling back a partial reversal
+restores the previously applied state. Reversal retains exact whole-file checks:
+an earlier proposal cannot be reversed through a later proposal's index edits;
+reverse those later changes first, or leave the current files intact.</p>
+<p><code>mevedel-memory-decision-recover-pending</code> discovers retained write records and
+reconciles their independently marked attempts without inference or file
+reapplication. It first recovers settled publications under successor workspace
+ownership. Unmarked intents are not classified as applications, even if an
+external edit happens to match their proposed bytes. Unreadable or unavailable
+records stay inspectable. Completed, durably saved root turns schedule this
+recovery independently of journaling being enabled. Repeated opportunities
+coalesce and wait for idle transport. On local Linux workspaces, accepted
+publication recovery runs in a batch child under the workspace claim. The editor
+then inspects one retained write per event-loop callback and reconciles marked
+attempts against current target authority and live buffers; unsaved edits cannot
+be classified by the child. Each record is read afresh. Cancellation stops the
+remaining checks, and the original deadline also bounds this inspection phase.
+Root-turn automatic consolidation is offered after recovery finishes, so it does
+not race that recovery claim. A queued offer refused by a busy claim does not
+consume the scheduling cooldown; a fresh admission observation still does.
+Consolidation still recovers under its own claim
+before selecting evidence; the intervening live-write phase releases ownership.
+A live workspace owner leaves recovery for a later opportunity. The session
+chooser and conversation setup do not start this recovery or cleanup; opening a
+session only queues journal processing and a consolidation offer. Exit cancels queued
+recovery, fences this client's active claims and stops its children. A 180-second
+deadline bounds scheduled recovery, and late replies cannot continue it. Remote
+workspaces and explicit synchronous recovery retain the target-native path.
+Recovery neither requests a model nor repeats or rolls back memory writes.</p>
+<h2 id="memory-cockpit">Memory cockpit<a class="headerlink" href="#memory-cockpit" title="Permanent link">&para;</a></h2>
+<p><code>M-x mevedel-memory-list-open</code>, or <strong>Memory</strong> (<code>l</code>) in the session cockpit, opens
+the memory table with <strong>Candidates</strong>, <strong>Memories</strong>, and <strong>History</strong> views.
+Switch with the clickable header or <code>1</code>, <code>2</code>, and <code>3</code>. Opening starts with
+Candidates when proposals need attention, otherwise Memories. Refresh retains
+the selected view and row where possible. Resolved candidates move to History.
+Rows show action, type, title, status, and exact target/origin. A candidate's
+status reflects the same read-only freshness check acceptance runs: a recorded
+<code>stale</code> decision that would now apply reads <code>ready</code>, and a pending or stale
+candidate whose targets changed since capture reads <code>superseded</code> (only <code>r</code>
+resolves it). Refresh reads the public journal once and authenticates each
+decision once. The header shows
+workspace, pending/recovery counts, history retention, and this client's running pass. Opening attempts checked recovery; a busy owner does
+not prevent read-only inspection or lose its claim. Refresh preserves the active
+session composer draft. Another client's unavailable memory root remains visible,
+but inspecting private body/diff evidence or applying there requires its original
+authority.</p>
+<p>Memories inventories actual topic files in configured roots, including manual
+and unindexed topics, with frontmatter title/type and indexed/unindexed status.
+Indexes and internal coordination files are excluded. <code>RET</code> inspects the full
+stored body, <code>o</code> opens the actual file, and <code>d</code> asks for confirmation naming the
+exact topic. Deletion freshly captures the topic and index, then uses the same
+checked transaction as proposal application. Its producer is <code>user</code>; it runs no
+model and fabricates no model response. A concurrent edit prevents application.
+The deletion appears in History, where <code>u</code> can restore its exact before-state
+while that history remains and the current files still match. Unrelated topics
+are untouched. History also includes completed reviews with no candidates;
+details show the retention deadline or unresolved dependency.</p>
+<p>The main cockpit's Memory row shows pending/stale proposals, interrupted-write
+recovery, and unavailable-record counts separately. Opening and rendering the
+main cockpit use cached observations without reading journal or memory files.
+The row says <code>not checked</code> before an observation exists and marks observations
+older than ten seconds as <code>cached</code>. Open the Memory table or refresh it to
+collect current evidence. Counts are disposable UI state and never authorize
+an application or override its freshness checks.</p>
+<p><code>RET</code>/<code>i</code> shows the complete proposed body, retained before/after diff, decision
+reason, retained digest bodies with their original addresses, and dated reference
+checks. A section index opens the proposed body initially; decision status stays
+visible while navigating. Each changed file and retained evidence entry has its
+own destination. <code>n</code>/<code>p</code> switch sections; <code>g</code> refreshes the same proposal; <code>q</code>
+closes both panes and returns to the table. Narrow windows stack the index above
+the reader. Evidence inspection still works if a public digest is unavailable.
+Pending diffs include unrelated current index edits when freshness checks pass.
+If they fail, inspection retains the captured diff and shows the current conflict
+or unavailable-state reason. Applied/reversed diffs come from the exact retained
+write intent. <code>a</code> accepts, <code>r</code> rejects, <code>A</code> accepts pending and stale proposals sequentially,
+and <code>R</code> rejects pending proposals. Rejection is one key; use a prefix argument to
+enter an optional reason. <code>u</code> performs checked reversal. <code>c</code> reconciles an
+interrupted write; <code>U</code> explicitly rolls back a known interrupted attempt.
+<code>v</code> opens a separate inspector for this client's running request. Admitted
+evidence and model response occupy separate sections; incoming source changes
+update the reader without moving focus. Closing the inspector leaves the request
+running; when the source closes, the inspector reports that state. <code>k</code> cancels
+the request through the pass owner,
+and <code>j</code> opens pending journal jobs with their inspection/retry/discard actions.
+<code>m</code> runs another consolidation; a prefix argument asks for focus. The first-class
+<code>/remember [focus]</code> command and <code>M-x mevedel-remember</code> use the same bounded
+sessionless pass, allow explicit current-memory review without eligible digests,
+and open this table. Completion refreshes an existing matching table without
+reopening a closed table or altering the composer. The command may run while a
+conversation request is active; already published digests from it remain eligible.
+<code>g</code>, <code>?</code>, and <code>q</code> follow the shared cockpit refresh/help/back contract.</p>
+<h2 id="journal-discovery-and-context">Journal discovery and context<a class="headerlink" href="#journal-discovery-and-context" title="Permanent link">&para;</a></h2>
+<p>The <code>journal</code> component is selected only by <code>main</code> and delivered as an independent
+retained context update, leaving the system prefix stable. It shows at most
+five recent digests with date, session name, canonical address, and the first
+nonempty Learned bullet (falling back to Done). The entire component is bounded
+to 2 KiB of UTF-8, including labels and addresses; long names and excerpts get
+visible omission markers. These are dated evidence, not current instructions
+or authority to resume unfinished work. Worker, explorer, verifier, reviewer,
+guardian, buddy, and context-summary prompts omit the map. Review coverage is
+the exact union of digest IDs in published general-review records. Focused
+reviews retain their examined IDs without advancing general coverage. The
+cached observation includes reviews, so additions or removals refresh the count
+even when the newest digest filename stays unchanged. Changed maps or coverage
+produce a new complete journal section; unchanged state is not repeated. Empty
+state clears an earlier map, and outgoing-history loss causes redelivery through
+the ordinary context acknowledgement mechanism. The resource roster advertises
+journal retrieval only when validated public entries are available.</p>
+<p>Discovery refreshes at most once per ten seconds. On local physical paths, it
+reuses the last validated entries when directory and file attributes for public
+records and expiry markers are unchanged. Access times are excluded; change
+times, modification times, identity, size and permissions remain in the source
+signature. A read whose before/after signatures differ is not reusable across
+refreshes. Remote or unavailable observations use the ordinary validated read
+path. Cached-only completion performs no filesystem operations, and every use
+still applies the age limit. This snapshot is advisory: evidence reads,
+consolidation admission and publication do not use it as storage authority.</p>
+<p>A completed review records its pass ID, exact examined digest IDs, focus,
+reference-check evidence and dates, and generated proposal IDs. Its public body
+is derived from that metadata; it contains no proposal replacement bodies or
+captured private topic content. Publication is the coverage commit point, so the
+pass owner must persist its proposal batch before publishing the review. Review
+records remain retained while any examined digest survives. Once their evidence
+dependencies end, old reviews can expire with their private prepared/accepted
+bodies and complete terminal decision/write history.</p>
+<h2 id="working-notes-and-completed-turn-capture">Working notes and completed-turn capture<a class="headerlink" href="#working-notes-and-completed-turn-capture" title="Permanent link">&para;</a></h2>
+<p>Main and worker guidance asks for attributed factual lessons in
+<code>work://shared/</code> when the request permits workspace writes. Agents search before
+creating and update relevant existing files; no filename or structure is required. Read-only agents
+report lessons through their existing results or available SendMessage; they
+gain no mutation tools. <code>$learn</code> considers available notes and digests as
+additional evidence, verifies relevant claims, and acknowledges omissions.</p>
+<p>With <code>mevedel-journal-enabled</code> (default <code>t</code>), a successful completed root-turn
+save freezes a checkpoint before generation collection. One immutable private
+record contains projected evidence, notes, their hashes, stable completed-turn
+identities, and serializable journal model selection. It pins the source
+session and any committed publication head. A newer checkpoint supersedes an
+unsealed predecessor only when it contains all that predecessor's turns.
+Published and sealed turns stay outside later checkpoints; replacement
+branches use distinct persisted fork-point identities even when turn numbers
+repeat. A turn that spanned an auto-compaction is captured from the segment
+where it finished, whose inherited summary stands for the earlier part
+(<a href="../sessions/">Sessions</a>). Storage failure reports a warning without failing the conversation save.</p>
+<p>For deferred root-turn settlement on local Linux portable sessions, a batch
+Emacs child prepares that checkpoint from the committed publication and frozen
+turn index, model policy and client identity. It receives no source mutation
+lease or provider object. The editor retains request admission while allowing
+input, then checks the same live root, request, saved head and source authority
+before publishing and pinning. Changed or cancelled sources cannot publish late
+results; preparation has a 120-second timeout. The child's request and reply
+files use an explicit lossless coding: detection read evidence holding a NUL
+byte, such as binary tool output, as raw bytes and broke every non-ASCII string.
+Terminal hooks and queued requests
+wait for settlement, and collection is offered afterward. Explicit checkpointing,
+compaction/close, PID-lock sessions and remote roots use the same preparation
+and publication operations synchronously.</p>
+<p>Publication retains capture and completed-turn IDs in private immutable coverage
+records. These contain no transcript or digest text and survive deletion or
+expiry of public digests. A later checkpoint therefore excludes previously
+published work even when its public digest is gone. This capture coverage is
+separate from consolidation review coverage.</p>
+<p>Public entries and private capture bundles have separate 8 MiB storage bounds;
+digest bodies remain capped at 16 KiB. Metadata admission reserves the entire
+body allowance, so long completed-turn ID lists are never silently truncated.
+An oversized capture is rejected before publication or pinning and stays
+eligible for a later successful capture.
+Capture decoding also checks the complete source-reference schema, unique
+segment names, their revision hash, and all frozen policy fields. Malformed
+descriptors remain inspectable with their source pins intact. A saved reasoning
+effort that the resolved model no longer supports stays unavailable before any
+provider request.</p>
+<p>Successful root compaction and <code>/clear</code> seal the completed-work checkpoint
+selected before the transcript was replaced, with <code>compaction</code> and <code>clear</code>
+triggers respectively. Clear retains the pre-clear evidence and captured title;
+it does not capture unfinished output or create an empty digest. Pre-commit
+failures or cancellations leave checkpoints unsealed. A committed clear still
+seals its checkpoint if subsequent presentation or hook work fails. Agent
+compactions create no journal work. Closing the root data buffer or exiting Emacs seals completed
+checkpoints as session-end work. View-pair close seals before removing the
+root registration. Read-only buffers do not seal, and a portable session must
+still own its lease; closing does not reacquire authority. Neither path
+snapshots incomplete streaming output. Exit starts no model request.</p>
+<p>A session that stays open is sealed after it goes quiet. Each completed, saved
+root turn restarts a per-session period of <code>mevedel-journal-seal-idle-minutes</code>
+(default 20; nil disables). When it ends with no newer completed root turn and
+no running request, the ready checkpoints are sealed with the <code>idle</code> trigger
+once the workspace transport is idle, and a processing opportunity is queued. A
+request still running at that moment restarts the period instead. Later turns
+form a new checkpoint, so a long-running session produces digests without
+compaction, clear, or close. The same ownership rules apply: the buffer must
+still be the session's root, read-only buffers do not seal, and a portable
+session must still own its lease. Closing the buffer or exiting cancels the
+period.</p>
+<p>The closed trigger vocabulary is <code>compaction</code>, <code>clear</code>, <code>session-end</code>, and
+<code>idle</code>; capture descriptors, seal records, and public digest metadata reject
+anything else. Sealing is immutable and preserves the first trigger. Disabling
+journaling stops new capture and sealing while keeping existing snapshots and
+pins.</p>
+<h3 id="digest-generation">Digest generation<a class="headerlink" href="#digest-generation" title="Permanent link">&para;</a></h3>
+<p>Completed turns, successful root compaction, successful <code>/clear</code> with captured
+work, idle sealing, session close, and session opening schedule one background
+processing opportunity. Opening or resuming a root session also queues
+abandoned-capture recovery and a consolidation offer, so work sealed at exit is
+processed without waiting for a turn; it only queues work. While any root
+session is open, a maintenance timer runs every
+<code>mevedel-journal-idle-maintenance-minutes</code> (default 10; nil disables) once Emacs
+has had no input for 30 seconds. For each local Linux workspace with a live root
+session it queues a processing opportunity with recovery, a consolidation
+offer, and the hourly-throttled journal and artifact cleanup, so the backlog
+drains one digest per opportunity while Emacs is idle. Remote workspaces rely
+on turn, lifecycle, and session-opening opportunities. The timer stops when no
+root session remains and at exit. Scheduling waits until the caller returns
+and the target transport is idle. Already-due journal and memory opportunities
+leave an event-loop interval between jobs rather than executing back-to-back.
+On local Linux workspaces, scheduled abandoned-capture recovery, digest discovery
+and claim admission, and journal retention run in short-lived batch Emacs children using the same pinned storage
+operations and fenced claims. Children load package dependencies without user
+init, receive frozen storage inputs and retention settings, and return bounded
+completion records. Digest preparation returns a capture identity and fenced
+claims; the editor freshly reads the selected capture and rechecks both claims
+before starting inference. Provider requests keep the editor's configured gptel backend;
+no backend or authentication objects are serialized to maintenance children. Recovery completes before its
+processing opportunity resumes. Remote workspaces retain transport-aware editor
+scheduling. Live-buffer artifact retention remains in the editor, where active
+buffers and gptel context can protect references. Interrupted workers leave durable
+claims and evidence for later recovery; exit stops this client's children.</p>
+<p>Capture discovery observes marker directories in batches and omits fully retired
+records whose evidence descriptor has already been removed. Retired records with
+remaining descriptors stay visible to recovery. Claim ownership verifies the
+latest generation on the target without transferring the full claim listing;
+pruning stops when its deletion budget is exhausted.</p>
+<p>Duplicate events coalesce, and completion
+does not recursively drain the backlog. Only sealed captures run. A dedicated
+workspace admission claim permits one digest request at a time; the capture's
+own claim accepts its result. Both share a 120-second target-clock deadline.
+Failed jobs get at most three automatic attempts on separate opportunities.
+When a capture exhausts them, the next opportunity shows one warning per capture
+and Emacs session naming it and pointing to <code>M-x mevedel-journal-jobs</code>, where it
+can be retried or discarded.</p>
+<p>Generation records dated evidence supporting qualifying user, feedback, project,
+or reference knowledge under the save policy above, rather than conversation
+progress. A correction or discovery may qualify; completing a task, passing
+tests, encountering a blocker, or making a decision does not qualify by itself.
+The digest's Unfinished section preserves uncertainty about qualifying knowledge,
+not pending work. A validated result with <code>- none</code> in all four sections succeeds
+without publishing a journal entry or scheduling consolidation. Its accepted
+outcome records turn coverage before releasing source pins, so recovery needs no
+replacement inference and later boundaries do not recapture those turns.
+Consolidation independently judges whether journal evidence supports a useful
+memory, including when older notes contain project progress. It treats No action
+as success, avoids duplicates, and proposes corrections or removal of outdated
+memories when supported. Existing notes and memories are not rewritten merely
+because the selection policy changed.</p>
+<p>Processing re-resolves the exact frozen provider/model and uses the saved
+streaming, effort, and output settings. Missing policy or client-owned evidence
+stays unavailable instead of selecting a fallback. Frozen evidence is bounded
+again to the generator's actual input budget, with explicit omissions. No live
+conversation buffer or tools are needed. Cancellation and timeout preserve
+pins; late callbacks cannot replace an accepted outcome.
+If one accepted result cannot finish recovery, a background opportunity retains
+it and can process another sealed capture. Explicit retry reports the recovery
+error. The job browser identifies a capture that requires its original client.</p>
+<p>New captures use the configured <code>journal</code> workload (default tier <code>balanced</code>)
+and its effort selection. Unspecified effort retains the provider default;
+journaling does not force reasoning off or translate a universal effort level
+across models. Existing frozen policies keep their saved effort and limit.
+Digest prompts request a few decisive facts and skip routine successful tool
+chatter; continuation and handoff policy is unchanged.</p>
+<p>Journaling adds no server token limit. Explicit output limits from the resolved
+policy or originating buffer's <code>gptel-max-tokens</code> are frozen and honored where
+the provider supports them, without an automatic 4,000-token ceiling. Omitting
+a limit uses provider defaults, not unlimited generation. Input admission uses
+the ordinary model context reserve (<code>mevedel-model-reserve-tokens</code>) and any
+configured output allowance. Accepted digest text remains limited to 16 KiB,
+with a 120-second client deadline. Streaming overflow cancels the request;
+oversized final output is rejected. These client guards do not bound internal
+reasoning tokens or guarantee a server billing ceiling. Codex OAuth has no
+server output-token control. Changing journal policy affects new captures;
+queued captures keep their frozen choice and published digests remain readable.</p>
+<p>Successful output is accepted durably before publication. If publication
+fails, the next opportunity recovers that exact output without another model
+request. After successful publication, the processor releases the source pin,
+retires the job, and removes its frozen transcript/notes bundle. Exit cancels
+queued and active processing before sealing remaining checkpoints, starts no
+inference, and does not wait for a model.</p>
+<h3 id="abandoned-checkpoint-recovery">Abandoned checkpoint recovery<a class="headerlink" href="#abandoned-checkpoint-recovery" title="Permanent link">&para;</a></h3>
+<p>Completed, durably saved root turns, session opening, and idle maintenance
+schedule recovery before processing. Recovery inspects inactive captures as well as ready jobs,
+repairs interrupted pin/ready publication, and seals abandoned completed work.
+It verifies the original source session and frozen evidence under temporary
+source authority. PID locks use the existing dead-holder check and a checked
+replacement serialized with normal resume and release by Emacs native file
+locking. A resume replacing the observed stale record prevents recovery from
+acquiring it. Live, foreign,
+or unreadable locks remain untouched. Portable recovery fences an expired
+ordinary lease through the existing generation election. Live leases, publishing
+leases, unresolved mutation, and reserved control transfers remain held for
+normal session recovery. No conversation is resumed and no model request runs
+while source authority is held. One unavailable capture does not prevent the
+recovery scan from examining unrelated captures.</p>
+<p>Recovery also finishes superseded pin release after checking the successor's
+retained completed-turn coverage. It then removes the old raw bundle. Retirement
+markers prevent an old completed-turn set from recreating its retired capture.</p>
+<h2 id="journal-jobs-and-inspection">Journal jobs and inspection<a class="headerlink" href="#journal-jobs-and-inspection" title="Permanent link">&para;</a></h2>
+<p><code>M-x mevedel-journal-jobs</code> lists pending checkpoints and jobs, including failed,
+exhausted, unavailable, and unreadable captures. <code>RET</code> inspects the frozen
+evidence, <code>r</code> retries the selected sealed job once, <code>d</code> discards it, and <code>g</code>
+refreshes the list. The corresponding commands are <code>mevedel-journal-inspect</code>,
+<code>mevedel-journal-retry</code>, and <code>mevedel-journal-discard</code>. They work from a session
+or workspace buffer as well as the job list. Pending jobs and overdue retained
+evidence have separate headings. Capture inspection uses a section navigator for
+diagnostics and exact frozen evidence. Inspection starts no inference.
+Manual retry retains the frozen model policy and attempt history, and respects
+active ownership and already accepted results.
+Unready checkpoints also appear as recovery work, including damaged descriptors;
+retired captures remain outside the pending list. Inspection does not acquire
+source authority or repair storage.</p>
+<p>Explicit discard remains available when journaling is disabled. It cancels a
+matching request owned by this client, records an immutable omission before
+releasing the source pin, and removes the raw evidence bundle. It cannot take
+over another client's live request. An interrupted discard resumes from its
+accepted outcome. An already accepted digest is recovered instead of discarded.
+When a capture descriptor is unreadable, the interactive command asks for its
+original source directory and verifies the matching pin before proceeding.
+Discarding a checkpoint prevents that exact capture from being repinned; new
+completed work can still produce a new capture.</p>
+<p>The journal jobs inspector also shows overdue public entries that remain in
+storage: total count, age in days, review mode, and observed retention reasons.
+Unreviewed evidence, unfinished capture publication, evidence pins and retained
+review/decision history appear separately from pending digest jobs. Entry buttons
+read current validated storage for human inspection. Review and proposal/recovery
+buttons use the existing <code>/remember</code> and proposal cockpit commands; capture retry
+and discard keep their existing authority checks. No inspection grants ordinary
+model recall or unconditional deletion.</p>
+<h2 id="journal-recall-and-retention">Journal recall and retention<a class="headerlink" href="#journal-recall-and-retention" title="Permanent link">&para;</a></h2>
+<p><code>mevedel-journal-max-age-days</code> defaults to 14; nil disables ordinary recall age
+filtering. It does not disable storage cleanup.
+The clock starts at the immutable public entry <code>created</code> timestamp in UTC.
+For a digest, this is the execution target time when its completed-turn capture
+was first frozen, carried unchanged into later digest publication. Reviews and
+decisions use their native record-creation time. Delayed digest generation can
+therefore publish evidence whose ordinary recall period has already ended;
+unprocessed evidence remains available for consolidation and human inspection.
+Reading, retrying, reviewing and changing the address namespace do not reset it.
+At the limit, ordinary Read/Glob/Grep, exact addresses, discovery and completion
+exclude an entry even if physical storage must retain it. Recall checks use the
+client's current UTC clock; native cleanup and automatic review use the execution
+target's clock. Machines should have synchronized clocks for matching boundaries.
+Cached discovery checks age on every use, and prepared reads check at execution.</p>
+<p>Physical deletion follows review completion, independently of recall age. Unreviewed digests remain available
+to consolidation and human inspection after their ordinary recall expires. A
+successful general review with no proposed changes counts as processing; failed,
+cancelled and focused reviews do not consume general coverage. Pending proposals
+and interrupted operations can retain evidence indefinitely until resolved. A
+14-day recall limit is therefore not a physical-erasure guarantee. Once a
+published general review has terminal decisions for every candidate, its public
+source notes retire at the next idle cleanup opportunity after other references
+end, including when they are younger than 14 days. One decision does not discard
+notes still needed by another candidate or review. Exact evidence remains in the
+private review history for inspection and undo.</p>
+<p><code>mevedel-memory-history-max-age-days</code> is an independent nonnegative setting,
+defaulting to 14 days after the latest terminal decision, or completion of a
+review with no proposals. Reversal restarts that window. Expired history is
+removed as a complete public/private dependency group. Curated memories remain.
+Expiry runs independently of session expiry and new capture, for local and TRAMP
+workspaces, after completed, saved root turns and existing cleanup opportunities.
+On local Linux workspaces with an open root session, the idle maintenance timer
+also offers cleanup. These opportunities are throttled to once an hour. Review/decision publication
+also schedules idle cleanup. Each batch selects at most 50 content groups and
+prunes at most 200 obsolete claim pairs. Progress queues another idle batch;
+no progress stops the drain. Scheduled cleanup returns to Emacs between ownership
+phases and coordination records. It rechecks acquired claims before resuming;
+expired or fenced ownership stops the batch and settles its remaining claims.
+Claim directories containing only the newest or referenced generations need only
+a fresh listing; they do not trigger record reads, clock probes, or resumptions.
+A possible deletion still requires fresh claim and target-clock observations and
+locked byte verification.
+Live-buffer artifact retention checks and their deletions remain one phase.
+Explicit synchronous cleanup drains the same steps. Redraw does not run cleanup.
+Selection currently scans validated
+public entries. Pending captures and pinned review evidence remain retained.</p>
+<p>Expiry accepts an immutable manifest through journal mutation ownership before
+removing anything. Later mutations recover accepted expiry before selecting new
+evidence. An expiry marker hides the public entry immediately, even if physical
+deletion is interrupted; recovery finishes deletion without inference. Changed
+public or private bytes are retained for inspection. Retired capture payloads can be removed
+with their expired digest, while identity-only capture coverage survives.
+Consolidation uses the same mutation boundary when pinning proposal evidence.
+Cleanup also acquires consolidation admission, so a live pass postpones cleanup.
+When an interactive memory decision encounters this client's active cleanup,
+it waits for that batch to release ownership, with quitting available and a
+120-second bound. Queued idle cleanup does not delay decisions. Bulk decisions
+defer newly scheduled cleanup until the command finishes. Other owners still
+prevent conflicting decisions.
+Completed general reviews become eligible only after all their examined digests are gone,
+their own evidence pins are released, and their accepted private state matches
+the public record. A digest and its covering review expire on separate
+opportunities; selecting a digest for deletion does not prematurely remove its
+coverage. A completed focused review can expire while its unprocessed public
+source notes remain. Retirement is recorded before public or private deletion. Pass recovery
+and the proposal table skip retired passes, including interrupted deletions.
+Retirement retains the completion date and general/focused scope, without the
+focus text, so expiry does not erase the scheduling history of general reviews.
+Every proposal must have a terminal applied, rejected, or reversed decision, and
+the group must satisfy the resolution-based history deadline. Unpublished decisions, unresolved
+write intents, outstanding target markers, and unavailable original targets
+retain the group. The manifest includes the complete related public decision
+history and exact private pass, decision, and write filenames with accepted
+hashes; it cannot name arbitrary workspace files. Its encoded size is capped at
+4 MiB before acceptance or deletion. A group may contain more than fifty public
+records; splitting it would break retained reversal dependencies. Current curated
+memory files are never deleted by journal expiry. Readers skip retired history
+even when an interrupted deletion leaves only a private write intent behind.
+Prompt and cockpit observations are invalidated after cleanup.</p>
+<p>Private <code>.mevedel/state/journal/</code> directories serve separate purposes:</p>
+<table>
+<thead>
+<tr>
+<th>Directory</th>
+<th>Purpose and retention</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>captures</code></td>
+<td>Frozen inputs and per-capture attempts; payload retires with its processed digest.</td>
+</tr>
+<tr>
+<td><code>coverage</code></td>
+<td>Minimal turn identities preventing duplicate capture; retained.</td>
+</tr>
+<tr>
+<td><code>mutation</code>, <code>digest-run</code>, <code>consolidation</code></td>
+<td>Numbered ownership claims and outcomes; obsolete settled pairs are pruned after their deadlines.</td>
+</tr>
+<tr>
+<td><code>passes</code>, <code>decisions</code>, <code>writes</code></td>
+<td>Exact review evidence, decisions and transaction snapshots; removed with expired history after recovery dependencies end. Failed/abandoned preparations retain a diagnostic window of the configured history duration after their deadline.</td>
+</tr>
+<tr>
+<td><code>evidence-pins</code></td>
+<td>References preventing early evidence deletion; released when resolved, empty directories removed.</td>
+</tr>
+<tr>
+<td><code>expiry</code></td>
+<td>Accepted cleanup manifests and completion receipts; collected after completion and claim expiry. Unaccepted abandoned manifests are collected after fencing and expiry.</td>
+</tr>
+<tr>
+<td><code>expired</code>, <code>retired-passes</code></td>
+<td>Minimal retirement identities preventing late recovery from republishing deleted records; retained.</td>
+</tr>
+</tbody>
+</table>
+<p>Claim pruning always preserves the newest generation, unexpired or unsettled
+attempts, and any claim still referenced by recovery/history. It covers capture
+attempts and configured shared memory-root claims too; outstanding target write
+markers block pruning there. Acquisition, settlement, and pruning use the same
+target lock and check the observed generation inside it. Delayed callers cannot
+recreate a removed generation. Thus bulky coordination history is bounded by
+active dependencies and batch progress, while minimal identity records remain.
+Unreadable proof records stop cleanup rather than being treated as garbage.</p>
+<h2 id="working-note-snapshot-limits">Working-note snapshot limits<a class="headerlink" href="#working-note-snapshot-limits" title="Permanent link">&para;</a></h2>
+<p>The internal note snapshotter caps the entire working-note input at 32 KiB,
+including provenance and omission labels. It visits shared files first and
+session files second, in filename order without a preferred filename. Shared
+content is labelled as potentially coming from other sessions, not evidence of
+this session's work. It labels notes as untrusted prior context, lists binary or non-UTF-8 files by
+name, and includes only names and first lines for <code>local/plans/</code>. Reads are
+bounded on the execution target before transfer. Snapshot strings remain
+unchanged when the source files later change.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

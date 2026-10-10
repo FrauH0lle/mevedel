@@ -1,0 +1,3016 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/collaboration/">
+      
+      
+        <link rel="prev" href="../view/">
+      
+      
+        <link rel="next" href="../plan-mode/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Browser collaboration - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#browser-collaboration" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Browser collaboration
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#start-and-stop-sharing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Start and stop sharing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-owner-link" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The owner link
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#narrowed-interactions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Narrowed interactions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#handing-on-a-link" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handing on a link
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#room-navigation-and-appearance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Room navigation and appearance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Room navigation and appearance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#who-else-is-here" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Who else is here
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#guest-requested-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guest-requested sessions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#questions-nobody-can-answer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Questions nobody can answer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-lobby" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The lobby
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scoped-prompts-and-attachments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scoped prompts and attachments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transcript-agent-and-task-projection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transcript, agent, and task projection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remote-interactions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote interactions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commands-skills-and-tool-display" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commands, skills, and tool display
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#artifact-viewing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact viewing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Artifact viewing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-artifact-store-in-the-browser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The artifact store in the browser
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#artifact-comments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact comments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notifications-and-browser-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notifications and browser storage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#connection-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection recovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#start-and-stop-sharing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Start and stop sharing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-owner-link" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The owner link
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#narrowed-interactions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Narrowed interactions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#handing-on-a-link" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handing on a link
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#room-navigation-and-appearance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Room navigation and appearance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Room navigation and appearance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#who-else-is-here" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Who else is here
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#guest-requested-sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guest-requested sessions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#questions-nobody-can-answer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Questions nobody can answer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-lobby" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The lobby
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scoped-prompts-and-attachments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scoped prompts and attachments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transcript-agent-and-task-projection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transcript, agent, and task projection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remote-interactions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote interactions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#commands-skills-and-tool-display" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commands, skills, and tool display
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#artifact-viewing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact viewing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Artifact viewing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-artifact-store-in-the-browser" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The artifact store in the browser
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#artifact-comments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact comments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notifications-and-browser-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notifications and browser storage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#connection-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection recovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/collaboration.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="browser-collaboration">Browser collaboration<a class="headerlink" href="#browser-collaboration" title="Permanent link">&para;</a></h1>
+<p>The Emacs host owns session state and execution. Browsers receive a live
+projection through a content-blind relay and submit only the typed actions their
+bearer links permit. Visible prompts, paths, source, and tool results can contain
+secrets; the projection does not redact them.</p>
+<pre class="mermaid"><code>flowchart TD
+    Host["Emacs host&lt;br/&gt;State, permissions, execution"]
+    Relay["Relay&lt;br/&gt;Routes ciphertext"]
+    Guest["Browser&lt;br/&gt;Decrypted view and local navigation"]
+    Host --&gt;|Sealed projection| Relay
+    Relay --&gt;|Sealed projection| Guest
+    Guest --&gt;|Sealed typed input| Relay
+    Relay --&gt;|Sealed typed input| Host</code></pre>
+<p>Only the host interprets guest input and performs permitted session actions.
+The relay serves the viewer but never receives the room key.</p>
+<h2 id="start-and-stop-sharing">Start and stop sharing<a class="headerlink" href="#start-and-stop-sharing" title="Permanent link">&para;</a></h2>
+<p><code>/collab</code> starts a room for the current session, dialing the relay at
+<code>mevedel-collaboration-relay-url</code> as a WebSocket client, and
+reports its bearer links (the full-control link is copied to the kill ring).
+<code>/collab status</code> reports the room, relay connectivity, and guest names
+without printing any secret, and <code>/collab stop</code> ends that session's room.
+<code>/collab lobby</code> shares a workspace's session list instead; see
+<a href="#the-lobby">the lobby</a>.
+Sessions may be shared concurrently; each has an independent room, key,
+and guest set. Killing the owning data buffer, ending its session, explicitly
+stopping the share, or exiting Emacs tears its room down. Otherwise the room
+remains available for the host share's lifetime, including when no guest is
+connected. The share surface is a singleton QR panel for the selected room.</p>
+<p>The relay (the Go binary in <code>relay/</code>, which also serves the static viewer)
+is content-blind: every frame is sealed with AES-256-GCM under a room key
+that travels only in the links' URL fragments. A view link carries the bare
+key and grants live read access. A full link appends a 16-byte write token;
+its holder can additionally queue prompts and interrupt the running request.
+An owner link appends a further 16-byte owner token. Authority follows
+possession of the link, and each tier is a prefix of the next, so the
+secret's length alone tells the viewer which one it holds.</p>
+<h2 id="the-owner-link">The owner link<a class="headerlink" href="#the-owner-link" title="Permanent link">&para;</a></h2>
+<p>The owner link exists for the case the other two do not cover: the host is
+not at the keyboard and something needs granting. It is full control plus
+the following authorities, delivered as typed frames rather
+than through the command allowlist:</p>
+<ul>
+<li><code>set-mode</code> changes the session permission mode, including to <code>full-auto</code>.
+  The <code>mode</code> slash command stays in
+  <code>mevedel-collaboration-unsafe-guest-commands</code> for every guest: that
+  refusal protects the allowlist from becoming an escalation path, and says
+  nothing about a credential the host handed out for this purpose. The
+  viewer offers the mode in its session settings, and keeps showing the mode
+  the session is actually in until the host's status frame confirms the
+  change.</li>
+<li>
+<p><code>new-session</code> creates a session. The request itself needs only write
+  authority -- every full-control guest gets the button -- and the owner
+  token decides what happens next: an owner link is granted it outright,
+  any other full-control guest has the request put to Emacs and to the
+  room's owner-link guests. Approving someone else's request is no new
+  authority for an owner, who can create a session outright. The sheet
+  says which of the two it is doing before the guest presses anything.</p>
+</li>
+<li>
+<p><code>recovery</code> exposes selection among the offered models and registered presets,
+  native-history recovery, retained-input retry, reviewed input requeue/discard,
+  provider login and, in Claude Code sessions, runtime update checks. Login
+  challenges go only to owner peers viewing that provider's credential store;
+  each owner keeps the provider it last selected. Codex uses device authorization
+  (URL and user code); Claude runs the CLI's login, shows its authorization URL,
+  takes the full returned code and then verifies the subscription. Codex tokens
+  also refresh asynchronously without a challenge. Tokens and subprocess output
+  never enter shared transcript or recovery state. Owners see each recovery issue
+  once, with the host's details; other readers see readiness and runtime issues
+  only by category, since host diagnostics can name local paths. Signing in
+  changes host-wide provider credentials; cancelling discards the challenge.
+  Model/preset/history/input changes require idle turns and current session
+  mutation authority. Preset replacement preserves the session's and data
+  buffer's permission and sandbox modes. The frame names the current model as
+  the same <code>BACKEND:MODEL</code> label the offered models use. Only providers with a
+  browser login (Codex and Claude Code) are offered for sign-in, defaulting to
+  the session's own. Queue retry is offered only while a failed turn paused
+  delivery, and native-history recovery only for a history Claude cannot or did
+  not resume: one edited after Claude received it, one another machine or
+  installation retained, or one whose resume failed to start. Choices refresh
+  when session status or retained input changes and are sent only when they
+  changed; unchanged updates preserve an in-progress login code and the
+  composer draft.</p>
+</li>
+</ul>
+<p>The viewer gathers these choices and the permission mode in a <strong>Session
+  settings</strong> sheet, opened from the status strip's Settings button or its
+  model and mode, which only owner links can do. The button reads <strong>Needs
+  attention</strong> while an issue, paused queue, input awaiting review or
+  recoverable history is pending; those actions head the sheet. Model and
+  mode apply on pick, a preset after confirmation. Every control carries a
+  tooltip and, since phones have no hover, a visible explanation.</p>
+<p>Owner authority is never granted alone: the owner link contains the write
+token, so a peer claiming the owner token without it is a forgery and is
+refused. The viewer's own knowledge of its tier is cosmetic; the host
+re-checks the token on every owner frame.</p>
+<h2 id="narrowed-interactions">Narrowed interactions<a class="headerlink" href="#narrowed-interactions" title="Permanent link">&para;</a></h2>
+<p>A mirrored interaction reaches every writable guest by default. The closed
+<code>:audience</code> contract on its <code>mevedel--remote</code> descriptor is either nil for
+that default or the symbol <code>owner</code> to restrict it to owner-link guests. Both
+the creation broadcast and the replay a joining guest receives apply the
+filter, and so does the
+response handler -- seeing a narrowed interaction and answering it are
+the same authority, and a request id is guessable while an audience is
+not. The push that wakes a sleeping browser follows the same audience,
+because waking someone for a decision they are not shown is noise.</p>
+<p>An audience turns on the link a peer holds, never on who is holding it.
+Guest identity is per browser, not per tab: a person with the writer
+link open beside the owner link is one guest id in two tabs, and an
+audience keyed on identity would blank the owner tab for a request the
+writer tab made. Keying on the link is also sufficient here, because
+only a non-owner request ever becomes a question -- an owner's is
+granted outright -- so restricting to owners already excludes the
+requester. An audience that matches nobody is not an error: it is a
+decision only Emacs can take.</p>
+<h2 id="handing-on-a-link">Handing on a link<a class="headerlink" href="#handing-on-a-link" title="Permanent link">&para;</a></h2>
+<p>Because each tier's secret is a prefix of the next, a viewer can derive
+every tier at or below its own by truncating the secret it already holds:
+an owner can offer all three links, a full-control guest two, a view guest
+one, and no one can express a link stronger than their own. Inviting
+therefore involves neither the host nor the relay -- the Invite sheet
+builds the links in the page and copies them. That is also why the tiers
+are a prefix chain rather than three unrelated tokens.</p>
+<p>The room header and the tab title name the shared session. The host's
+<code>status</code> frame carries the session's display name, which a joining guest
+receives at once and every guest again after a rename, manual or automatic;
+until it arrives the header shows the start of the room ID. A lobby's header
+names its project instead.</p>
+<p>Invite sits in the room header and remains available to read-only guests.
+Rooms and New session are in <strong>In this room</strong>. Invite disappears when the room
+ends, because the link goes with it.</p>
+<h2 id="room-navigation-and-appearance">Room navigation and appearance<a class="headerlink" href="#room-navigation-and-appearance" title="Permanent link">&para;</a></h2>
+<p><strong>In this room</strong> groups Shared work, artifacts, progress, skills and commands,
+and room actions. Shared work and artifacts start expanded; skills and commands
+start collapsed and include a search field. <strong>Skills +</strong> beside the composer
+opens and focuses that search. Each section reports its counts through the
+shared <code>summarize</code> seam and hides when it has nothing to offer.</p>
+<p>Tapping a chip selects it while keeping the menu and keyboard focus in place.
+Skills combine on one message (up to six); a slash command is a single action
+and replaces the skill selection. Selecting a skill replaces a slash command.
+Selected chips stay highlighted and appear above the composer, each with a
+remove button. Removing a selection preserves the message draft.</p>
+<p>At viewport widths of 1100px and above, the navigation occupies an independently
+scrolling right column. At smaller widths and increased browser zoom, it becomes
+a disclosure above the composer. Conversation text and the composer share a
+bounded reading width. Message and display-name fields have visible labels;
+keyboard users can skip the header directly to the transcript.
+The display name initially uses a randomly generated alliterative adjective
+and animal, such as <strong>Curious Capybara</strong>. It is visible and editable in the
+composer and retained in that browser's storage per relay origin; existing
+chosen names are preserved. Enter or leaving the name field saves the change
+and sends a sealed <code>set-name</code> frame to update the host's registered guest.
+Clearing the field restores that browser's saved generated name. Enter in the
+name field does not submit a message draft. Names are labels, not identities
+or unique handles.
+The guest's independent browser ID continues to identify its queued work.</p>
+<h3 id="who-else-is-here">Who else is here<a class="headerlink" href="#who-else-is-here" title="Permanent link">&para;</a></h3>
+<p>The header, the artifact panel and the editor tab's header show initials for
+the other people on the same page, with their names on hover. A page is the
+store artifact a tab has open -- a whiteboard, document, HTML page or image --
+or otherwise the tab's room. An artifact page spans every room and the lobby
+of the workspace, because one whiteboard can be open from a session's room and
+from its own conversation's; a room page is that room's alone. A browser counts
+once per page however many of its tabs are there, and is faded while all of
+them are hidden. Lobby session rows show how many people are in each live
+session, and artifact rows how many have the artifact open. Only browsers
+count; the host at Emacs does not appear.</p>
+<p>Each hello carries the tab's page and visibility, and a sealed <code>viewing</code>
+frame reports every later change. <code>mevedel-collaboration-presence</code> recomputes
+the workspace on each change, admission, departure, rename or room stop, and
+sends a guest a <code>presence</code> frame only when its content changed. Frames carry
+display names only; browser IDs stay on the host. Whiteboard cursors remain
+scoped to one room.</p>
+<p>Room and editor chrome share color tokens. <strong>Appearance</strong> selects a complete
+cool (default) or warm palette, system/light/dark appearance, and selective or
+minimal accent detail. Selective accents color participant attribution and the
+sidebar scrollbar; minimal accents make those details neutral. Errors, diffs,
+comments, presence and authored drawing colors retain their meaning. Choices
+persist in browser storage per relay origin and follow other open room/editor
+tabs. Editors receive them through their bound item port without replacing the
+frame, document, selection or question draft. The same Appearance menu is
+available in the editor tab's header.</p>
+<p>Pending decisions use a quiet card with an accent edge. Host-provided options
+retain their labels and response IDs, with no implicit preferred answer.
+<strong>Suggest a change</strong> expands the feedback field when the host allows feedback.
+Repeated unchanged requests preserve the open card and draft feedback.</p>
+<h2 id="guest-requested-sessions">Guest-requested sessions<a class="headerlink" href="#guest-requested-sessions" title="Permanent link">&para;</a></h2>
+<p>A guest supplies an optional name and an optional first prompt; the workspace
+and working directory come from the room's own session, never from the guest.
+The browser creation path limits the name to 48 display columns, replaces
+characters outside <code>[A-Za-z0-9_-]</code> with underscores, and requires at least one
+ASCII letter or digit in a typed name. This is narrower than Emacs session
+renaming. The new session still gets an independent ID; its display name does
+not name its directory. A matching name among live root sessions in that
+workspace is refused; this is not a uniqueness check across all saved display
+names.</p>
+<p>Without a name, or with one that sanitizes to no letter or digit, the session
+is created unnamed, like one started in Emacs without a name: it shows its ID
+until its first prompt, the guest's or a later one, gives it an automatic title
+(see <a href="../sessions/">session naming</a>). Outcomes and offers carry the name the
+session starts with, its ID, and the approval prompt says it will be titled
+from the first prompt.</p>
+<p>A guest may also pick the session's model. The <code>welcome</code> frame lists every
+model registered with gptel, as exact <code>BACKEND:MODEL</code> labels, to writable guests;
+the request sheet offers them after a Default entry and sends the pick as the
+<code>new-session</code> frame's optional <code>model</code>. A label that no registered model
+resolves refuses the request instead of falling back to the default. The new
+session gets the default chat preset first and the picked model second, because
+a preset may name a model of its own that would otherwise replace the guest's
+choice. Only the lead model changes: the preset's model tiers and workloads,
+and so its agents, stay as configured. The choice is stored like <code>/model</code>'s and
+survives resume. An owner's session settings also permit registered preset replacement; it preserves
+permission and sandbox modes because a preset carries
+tools, agents and arbitrary settings, not just a model. An approval prompt
+shows the requested model, or <code>default</code>.</p>
+<p>One creation request per guest waits at a time; another is refused while the
+first awaits approval. Outcomes repeat the request ID and sanitized name so the
+viewer can settle the matching request. Each completed request has its own dock
+notice carrying its link or refusal and a Dismiss action.</p>
+<p>The room reaches more than the requester. Its other owner-link guests are
+offered an owner link to it in a <code>room</code> frame -- its own frame rather than
+a reply, because pairing it with a request the receiver did not make is how
+one guest's approval lands on another guest's pending card. An owner can
+already reach a session it approved; being told is the difference between
+reaching it and knowing it exists. Offers and replies land in one dock
+strip as notices, and every reachable one is kept in browser storage per
+relay origin and listed in the Rooms sheet beside Invite.</p>
+<p>One relay serves every host and project, so the store is grouped by
+workspace. Every welcome and lobby listing carries an opaque <code>workspace</code>
+key, a hash of the host's system name and the workspace's type and id, and
+a room is kept under the key of the tab that was handed it; a session
+requested from a room or lobby is created in that same workspace. The
+Rooms sheet lists only rooms under the current tab's key.</p>
+<p>The two surfaces answer different questions. A notice says what just
+happened -- approved, refused, someone handed you a room -- and Dismiss
+dismisses the news. The Rooms sheet answers which rooms this browser can
+get back to, and only Forget takes one out of it.  A refusal is
+never stored: it is news and nothing else. Rooms die with the host's
+share regardless of what the browser remembers.</p>
+<p>A room is stored by its id and secret rather than as a whole link,
+because one origin can hold several tiers at once: two tabs of one
+browser on the full and owner links share that store. The browser keeps
+the strongest secret it was handed, and a tab presents that room capped
+to its own tier -- truncation again, the same prefix property the Invite
+sheet uses. Writes merge by room ID instead of replacing the list, preserving offers
+received by other tabs. A weaker tab cannot expose a stronger stored bearer. The room a tab is
+currently in is kept but not listed: it is not somewhere to go. It is kept
+under the name its host currently gives it, so a session renamed or titled
+after its first prompt is listed by that name.</p>
+<p>The new session gets its own room, and the requester is handed the tier it
+already holds -- an owner requester an owner link, a full-control requester
+a full-control one -- so asking for a session can never be a way to gain
+authority. The first prompt enters the new session's pending-input queue,
+which drains on idle: the host read that text when approving, so submitting
+it is what the approval was for. Because a browser will not let an approval
+that arrives later open a tab by itself, the link arrives in the request
+sheet as something to tap. Creating a session is not idempotent, so a repeat
+request inside the duplicate-prompt window is dropped.</p>
+<h2 id="questions-nobody-can-answer">Questions nobody can answer<a class="headerlink" href="#questions-nobody-can-answer" title="Permanent link">&para;</a></h2>
+<p>A guest may be the only one there, as on an Emacs daemon, so nothing a guest
+does waits for an answer in the minibuffer. Room frames run with
+<code>inhibit-interaction</code>, as lobby frames do, and so does the drain step that
+starts a guest's queued message as a turn. A step that would ask in Emacs
+signals instead:</p>
+<ul>
+<li>a frame is refused to its sender with a notice, "This needs a decision in
+  Emacs on the host first", and the room stays up;</li>
+<li>a queued message is dropped with its attachments, as on a retraction; its
+  sender gets the same notice, and the host a warning naming the guest.</li>
+</ul>
+<p>Either way the host's warning quotes the question; guests see only the notice,
+since prompts can name hosts and paths.</p>
+<p>A queued message the host refuses for another reason, such as <code>/compact</code> in a
+Claude session, is dropped the same way rather than blocking the queue. Its
+sender is told it was not sent, and the host sees the error. A settling turn or
+running compaction only delays the drain, so the message waits in the queue. An
+attempt that may already have reached the transcript stays queued for review
+instead, and its sender is told so. None of these refusals blocks the host's own
+requests.</p>
+<p>Owners can choose a replacement provider or preset, complete provider login,
+recover a root or child native history, or explicitly retry retained input.
+Undelivered steering or an interrupted queued delivery pauses delivery and must
+be reviewed first. Recovery never resends a submitted prompt. Queue acceptance,
+removal and pause state are persisted with the session.</p>
+<p>A failing observer or projection preserves the room and its last good snapshot.
+The host gets one warning with the error and guests one reconnect notice until a
+publication succeeds again. A fault while handling one guest's frame warns the
+host and notifies only that guest.</p>
+<p>Later steps of a turn run from timers and process callbacks, outside any
+binding. An Emacs daemon without a client frame reads the minibuffer on its
+invisible initial terminal, where a question waits forever while guests keep
+the event loop running inside it. So while a room or lobby is live, a
+<code>minibuffer-setup-hook</code> refuses any minibuffer question on that terminal
+before it waits, with the same <code>inhibited-interaction</code> signal and its prompt;
+<code>sit-for</code> and other event reads are untouched. This covers TRAMP passwords,
+one-time codes and host-key questions when a connection reopens, taking over a
+portable session lease another client let expire, and GPG passphrases read for
+<code>auth-source</code> through loopback pinentry. The failing step reports an error
+instead of hanging. A question on a client frame reaches the person there as
+usual. Before its first write to a remote target, mevedel asks once per target
+and Emacs process whether to keep the project's state there; a daemon nobody
+sits at sets <code>mevedel-session-durability-accept-target-storage</code> to accept in
+advance. Questions that read single keys instead of the minibuffer are reached
+only from host commands.</p>
+<p><code>mevedel-busy-p</code> tells whether any buffer in the Emacs is running or settling
+a turn, including retained agents awaiting admission or terminal publication.
+A host can wait for it to return nil before restarting a daemon whose rooms
+are idle.</p>
+<p>Questions that are only offers are skipped where nobody can be asked: a
+directive turn's offer to save modified file buffers leaves the host's buffers
+alone. The cockpit refuses to open, so a bare <code>/goal</code> from a guest is refused
+rather than opening a menu on the host's screen. A guest can scope a message
+only to a directive bound to the room's own session, since another session's
+directive would run, and maybe restore, that session.</p>
+<p>Steps that run without the guard never ask either. Tool calls are confirmed by
+mevedel's permission pipeline, whose prompts room participants can answer, so
+session and agent buffers turn off gptel's own confirmation. A session save
+whose visited file changed on disk fails with an error instead of asking
+whether to save anyway. Tool file visits skip unsafe local variables, the
+large-file warning and the version-control symlink question, and session
+segments skip the project's unsafe directory-local variables.</p>
+<h2 id="the-lobby">The lobby<a class="headerlink" href="#the-lobby" title="Permanent link">&para;</a></h2>
+<p>A lobby is a room bound to a workspace instead of a session: one bookmarkable
+link that lists the workspace's sessions and opens or creates them. <code>/collab
+lobby</code> starts the current workspace's lobby and presents its links in the
+share panel; <code>/collab lobby stop</code> stops it, and <code>/collab lobby rotate</code>
+replaces its credentials. A host without a keyboard, such as an Emacs daemon,
+starts one with <code>(mevedel-collaboration-lobby-start DIRECTORY)</code>, which
+returns the lobby with its links under <code>:link-view</code>, <code>:link-full</code> and
+<code>:link-owner</code>. <code>/collab status</code> reports running lobbies beside rooms.</p>
+<p>Unlike a room, a lobby's credentials persist, and so does the lobby itself.
+The credentials are generated once and stored in <code>.mevedel/lobby</code> in the
+workspace state directory, readable only by the user. A lobby runs until it is
+stopped: starting one records its workspace root in <code>lobbies.el</code> under
+<code>mevedel-user-dir</code>, and exiting Emacs leaves that record in place. When the
+next Emacs runs <code>mevedel-install</code>, it restarts every recorded lobby, after
+startup has finished when it is installed from the init file, so the relay
+settings that follow it apply. The restarted lobby dials the same relay room,
+its links keep working, and browser tabs still within their reconnect window
+rejoin on their own. A lobby that cannot restart is reported as a warning and
+stays recorded for the next start. Automatic restore never prompts, and a
+failed workspace probe does not prevent other lobbies from restarting.
+<code>/collab lobby stop</code> in that workspace removes the record. A recorded workspace whose directory no longer exists is
+forgotten with a warning.</p>
+<p><code>/collab lobby stop</code> stops the lobby and removes the record, so it stays
+stopped across restarts; starting it again revives the same links. Stopping
+leaves the credentials in place. Rotating them is the revocation operation:
+every earlier lobby link stops working. The rooms a lobby hands out are
+ordinary rooms with the ordinary share lifetime
+(<a href="../adr/0114-tie-collaboration-room-lifetime-to-host-share/">ADR 0114</a>).</p>
+<p>Link tiers keep their meaning. A view link lists sessions and the
+workspace's <a href="#artifact-viewing">artifacts</a>, and opens artifacts; a full link
+can also open sessions, change artifacts, and use the
+<a href="#project-files">project files</a>; an owner link can also create and delete
+sessions. Opening a session resumes
+it when it is not live, shares it when it is not already shared, and returns
+its room's link at the requester's own tier, so the lobby never grants more
+than the link that reached it. The session id in an open request only selects
+among the sessions the listing shows; it never becomes a path. Creation uses
+the <a href="#guest-requested-sessions">guest-requested session</a> path with the
+lobby's workspace and root; a non-owner request is refused, because a lobby
+has no session in which to ask the host. For the same reason only an owner's
+listing carries the models it may create a session on.</p>
+<p>Deleting removes a saved session's directory for good, under the safety rules
+of expired-session cleanup without its age cap: a session live in this Emacs
+is refused (close it first, or its buffer would save it back), and so is one
+whose lock or lease another client may still hold or whose journal captures
+are pending. After a deletion every lobby guest receives a fresh listing.</p>
+<p>Each row carries the session id, display name, last save time, a prompt
+preview of at most 160 characters, and whether the session is live in Emacs
+and shared. An artifact's dedicated session is not listed; it is reached from
+its artifact. Live sessions that were never saved come first, then saved ones,
+newest first; a listing holds at most 200 rows and reports how many it left
+out. The listing is sent on join and on request; the browser asks again on
+Refresh and whenever the lobby tab returns to the foreground.</p>
+<p>Guests act while nobody may be at the keyboard, so lobby frames run with
+<code>inhibit-interaction</code>. A step that would prompt in Emacs refuses the request
+instead of waiting: a session whose lock is held by another live Emacs, or was
+left stale by a crash, must be opened in Emacs first. A clean exit releases
+session locks. Rooms follow the same rule; see
+<a href="#questions-nobody-can-answer">questions nobody can answer</a>.</p>
+<p>In the browser, a lobby link renders the session list in place of the
+conversation and composer. Open replaces the page with the session's room;
+an owner's rows also carry Delete, which asks for confirmation first.
+The lobby stores itself in the browser's room list, so every room it opens
+lists it under Rooms as the way back. An <strong>Artifacts</strong> tab beside
+<strong>Sessions</strong> lists the <a href="#the-artifact-store-in-the-browser">artifact store</a>
+for every link; a full or owner link adds a <strong>Files</strong> tab: the
+<a href="#project-files">project files</a>. Refresh and a return to the foreground reload
+whichever tab is shown.</p>
+<h2 id="project-files">Project files<a class="headerlink" href="#project-files" title="Permanent link">&para;</a></h2>
+<p>A lobby is the project's view, so it also shows the project's files: the
+material every session in the workspace can read, which in a whiteboard or
+chat project may be nothing but uploaded reference data. Browsing, reading,
+uploading and removing all need a full or owner link; a view link gets no
+<strong>Files</strong> tab and its requests are refused, so it still reveals only the
+session list. The host owns this in <code>mevedel-collaboration-files.el</code>.</p>
+<p>The project's own listing is the authority. It is <code>project-files</code> for the
+lobby's workspace root -- the VC backend's tracked and untracked files minus
+ignored ones in a repository, the transient project's ignores elsewhere --
+with the workspace state under <code>.mevedel/</code> removed, because it holds the
+lobby credentials, permissions and memory. A Git repository cloned inside a
+Git project without being tracked or ignored there, such as a reference
+repository, contributes the same listing of its own root by its own rules;
+Git reports it as a single directory entry, which <code>project-files</code> drops
+although the model's search tools read its files. Registered submodules come
+from project.el itself (<code>project-vc-merge-submodules</code>), and with
+<code>project-vc-include-untracked</code> off no untracked clone is listed. A guest names files and folders by
+their path relative to the root, but a path is accepted only when the
+listing shows it: a file must be listed, and a folder must hold a listed
+file. The resolved name is then re-verified beneath the root with
+<code>mevedel-resource-within-root-p</code> before any I/O, which also refuses a
+symlinked file or folder. An ignored, private or linked file is therefore
+neither readable nor writable from a browser.</p>
+<p>The browser lists one folder at a time (<code>files</code>), folders first; a listing
+holds at most 1000 entries and reports how many it left out. Opening a file
+(<code>file-get</code>) uses the <a href="#artifact-viewing">artifact panel</a> and its transfer:
+bytes on demand, at most 16 MiB, in base64 chunk frames under the wire bound,
+rendered by the same sandboxed and XSS-safe renderers. A file with no type
+of its own previews as plain text when its content is UTF-8, so source and
+configuration files read in place. A project file has no comments and no
+Delete there; for an owner link, <strong>Ask</strong> opens the new-session dialog with
+the file's path in the first prompt.</p>
+<p><strong>Upload</strong> adds files to the folder on screen, from the picker or dropped on
+the tree. A file travels in acknowledged chunks of 512 KiB (<code>file-upload</code>):
+the first announces folder, name and size, and the browser sends the next
+only after the host took the previous one, so a refusal stops the transfer
+and the socket never queues a whole file. The host keeps one unfinished
+upload per guest, and a new request id replaces it. An upload is at most
+16 MiB. The name must be one path component that is neither hidden nor a
+<code>~</code> reference, and the file must not exist: an upload never replaces one.
+The file is written with an exclusive create. If the project's ignore rules
+would hide the new file, it is deleted again and the upload refused, since
+the browser could neither list nor remove it.</p>
+<p><strong>Remove</strong> (<code>file-remove</code>) asks for confirmation, then moves the file to the
+trash with <code>move-file-to-trash</code>; on a TRAMP workspace that is this Emacs's
+trash, which still keeps the bytes. A file with unsaved changes in an Emacs
+buffer is refused, because the buffer would save it straight back. Only
+files are removed, never folders. After an upload or removal the host tells
+every writable guest of that lobby which folder changed (<code>files-changed</code>),
+and a tree showing that folder reloads. These are direct changes by the
+link holder, outside the model's permission checks and patch review; the
+trash is their safety net.</p>
+<h2 id="scoped-prompts-and-attachments">Scoped prompts and attachments<a class="headerlink" href="#scoped-prompts-and-attachments" title="Permanent link">&para;</a></h2>
+<p>Directives and shared items are the room's discussions. Records inside a
+directive turn carry its id and records inside a shared-item turn carry the
+item's id, so the filter strip lists <strong>All</strong>, <strong>Main chat</strong>, each directive
+(◆) and each whiteboard, document or artifact with turns (◇). <strong>Main chat</strong> hides every
+discussion. A turn's discussion chip selects that discussion too. A deleted item
+has no tab: its turns stay under <strong>All</strong> with a disabled chip marked <strong>deleted</strong>
+(see <a href="../shared-editing/#deleting">deleting</a>).</p>
+<p>Selecting a directive scopes ordinary guest text to discussion of that directive;
+the host rechecks its workspace identity on receipt. A missing or invalid
+directive selection falls back to ordinary chat. Explicit command/skill
+invocations use their own route instead of inheriting the directive scope.</p>
+<p>Selecting a shared item sends the composer's text into that item's own
+conversation as a whole-item question, the same way the editor asks. A room
+message has no reviewed snapshot, so the helper captures the item as currently
+committed. An artifact's whole-item question names its file instead (see
+<a href="#artifact-comments">artifact comments</a>). Commands and skills stay main-chat features; the viewer
+refuses them in an item discussion and says so. The composer placeholder and
+scope line name the discussion a message will reach.</p>
+<p>Every composer that asks the model takes attachments: the room composer in
+any discussion, the whiteboard and document <strong>Ask the assistant</strong> form, and the
+new-session first prompt. <strong>Attach</strong>, pasting into the message and dropping
+files onto the composer all add them. Comments and replies stay text-only.
+A prompt can carry up to three attachments totaling 1.25 MiB decoded: JPEG,
+PNG, WebP, PDF, plain text, Markdown, CSV, JSON, or patch text, and any other
+UTF-8 text such as source code or HTML, which reaches the model as text under
+its own extension. An extension Read treats as binary becomes <code>.txt</code>; content
+with NUL bytes or invalid UTF-8 is not text. The host generates
+filenames under workspace media storage and queues them through the normal
+file-mention path; a whiteboard question's own board snapshot rides beside them.
+The viewer can downscale images; non-image files cannot be
+resampled to fit. In a room's composer, each attachment chip has a
+<strong>＋ project</strong> toggle. A marked file is also uploaded to the project root
+through the <a href="#project-files">project file upload</a>, as its original bytes
+rather than the prompt's downscaled copy, after the prompt is sent. The
+prompt keeps its own copy either way. A taken name is numbered instead of
+refused (<code>image.png</code> becomes <code>image-2.png</code>), because pasted images share a
+name; a room accepts uploads but no other project file request. On a main-chat prompt an invalid attachment set is omitted
+as a whole and its text may still be queued; an item, artifact or new-session
+question with an invalid set is refused, so it never reaches the model without
+the files its sender chose. A storage error refuses that prompt without ending
+the room. Failed enqueue removes the files just created for it.</p>
+<h2 id="transcript-agent-and-task-projection">Transcript, agent, and task projection<a class="headerlink" href="#transcript-agent-and-task-projection" title="Permanent link">&para;</a></h2>
+<p>Compaction and clearing model context retain earlier conversation segments.
+The browser lists them in expandable <strong>Earlier conversation</strong> rows above the
+live transcript. Opening a row loads the host's canonical archived projection
+on demand; it does not restore that segment into model context or change where
+new prompts are sent. Loaded disclosures remain open across live updates, and
+unavailable archives show a retry action. Rejoining a room reconstructs the
+segment index from the session, rather than relying on browser memory.
+An expanded segment has a collapse rail along its full left edge; closing it
+brings its heading back into view and returns keyboard focus there.
+Archived and agent transcripts use the live conversation's compact grouping:
+consecutive assistant text and tool calls share one visible speaker label.</p>
+<p>The <strong>Assistant working…</strong> indicator sits above the message composer. The
+host publishes status immediately after request admission and teardown,
+including interruption and failure, rather than inferring activity from the
+arrival of transcript text. A lost connection clears the working indicator.</p>
+<p>The shared browser renderer owns disclosure continuity when rebuilding a record.
+Main transcript updates, reconnect snapshots, and polled agent transcripts pass
+the previous record element to it, so explicit expansion and collapse survive
+while new nested disclosures use the host's defaults.
+Shared questions use this same renderer in the room and editor sidebar: the
+question stays visible above a closed <strong>Shared context</strong> disclosure containing
+the sent snapshot and attachment links. Its summary identifies the item, scope,
+and revision. Host-edited or mismatched prompts stay fully visible; attribution
+alone does not hide arbitrary text.</p>
+<p>The browser is an observer of the canonical data buffer plus, for full
+links, a remote input source. It receives visible user and assistant text
+and tool records whose start and settlement state are explicitly published,
+never raw hidden audit or internal render data or arbitrary mutation commands.
+Each projection builds one tool-boundary index, avoiding repeated searches
+through historical tool results as new text arrives. A room also retains each
+transcript segment's records between publishes. A segment is reprojected only
+when its characters or text properties, the session context including plan
+mode, or a live input it read -- a running execution, pending completion
+evidence, an artifact's file stat, the tool registry -- has changed, so the
+result always equals a full projection. A room's first projection fills this
+cache. Segment classification still scans the whole transcript: while a
+reply streams, a publish costs about a fifth of a full projection, but still
+grows with transcript length. Streamed updates therefore coalesce for at least
+0.1 s and four times the previous publish's cost, up to one second, keeping a
+streaming room to about a fifth of the Emacs thread that every room shares
+without letting one slow publish stall the stream.
+A tool record keeps
+one stable identity from running through its settled canonical result. A
+guest prompt enters the ordinary pending-input queue as a queued follow-up;
+a hidden <code>guest-prompt</code> transcript audit record attributes the inserted
+prompt durably, renders as a badge, and never enters model-visible context.
+Every string a guest sends -- a prompt, a questionnaire answer, interaction
+feedback -- crosses the same per-string byte budget, because each of them
+reaches model-visible context and the transcript the same way. Outbound, every
+frame is bounded by the wire limit at the transport itself, and a snapshot
+record too large to travel in a frame of its own is dropped rather than
+sent: the relay refuses an oversized frame by closing the connection, and
+for the host connection it collects the room with it.</p>
+<p>Guests of every link tier also receive the retained agent roster:
+the canonical path, role, and status of every active or settled registered agent,
+broadcast on change and told to a joining guest directly. An active
+agent carries its blocked/waiting/running status; a settled one carries
+its terminal outcome (done, errored, or interrupted), because retained
+agents persist in the session and their final reports are worth reading
+after the fact. The roster is read state, which is why a view link gets
+it too. It rides the same coalesced publication as the transcript; the
+view's status render nudges that publication so a retained agent working
+while the root request is idle, when no gptel observer fires, still
+reaches the strip. The viewer splits the roster inside the Session menu:
+active agents render as chips, marking a blocked or waiting agent so a
+session that fans out workers never reads as an opaque gap, while settled
+agents collapse into a "Finished agents" disclosure whose rows open the
+same transcript sheet. A settled agent whose conversation
+buffer is not resident (cold state after a restart) answers a fetch with
+the standard not-available message; a browser poll never hydrates cold
+state.</p>
+<p>The same publication cycle sends the session task list to either link:
+identity, subject, status, optional owner, and unresolved dependency IDs.
+The frame is latched on change and sent directly to each joining guest so an
+unchanged list cannot disappear on reconnect. The viewer keeps it collapsed
+to a done/total summary, orders in-progress work first, and strikes completed
+rows. Task projection is capped at 64 KiB of encoded JSON: it admits
+in-progress tasks first, then pending tasks, then the most recently completed
+tasks. The frame carries total, completed, omitted, and omitted-active counts,
+so a shortened history remains explicit and any omitted active work is
+conspicuous. The transport's larger wire bound remains the final safety check.</p>
+<p>Tapping a chip opens that agent's live transcript as a full-screen
+sheet. The viewer polls with <code>fetch-agent</code> frames while the sheet is
+open and refetches promptly on a roster change; the host validates the
+path against the agent registry -- never the filesystem -- and answers
+with targeted <code>agent</code> frames chunked under the wire bound. The reply
+crosses <code>mevedel-collaboration--canonical-records</code> over the agent's
+resident conversation buffer, the same projection that scrubs the root
+transcript, so only visible user text, response text, and settled tool
+records and allowlisted presentation travel, excluding raw hidden audit and
+internal render data. A digest rides
+each reply; a poll carrying a still-matching digest is answered with
+one <code>unchanged</code> frame instead of the transcript, and a per-guest
+throttle bounds what a hostile client can make the host project. A
+settled agent of a resumed session stays on disk until first opened; a
+guest fetch queues that one load on a timer, as the host's own open would
+perform it, and sends nothing while it runs, so the viewer's loading note
+stays until a later poll finds the conversation. A failed load is
+remembered for the room and refused instead of retried. The frame handler
+itself never starts target I/O. Artifact cards in an agent reply receive
+room-wide ids derived from the agent path and transcript-local id, so they
+remain openable without colliding with a root-transcript card. Agent control
+-- chat, interrupt, kill -- stays in Emacs.</p>
+<h2 id="remote-interactions">Remote interactions<a class="headerlink" href="#remote-interactions" title="Permanent link">&para;</a></h2>
+<p>Full-link guests are also presented pending interactions as <code>ui-request</code>
+frames — generic requests (approve/deny/feedback), permission prompts
+(one-shot allow-once/deny-once/feedback; session, workspace, and always
+authority is never mintable remotely), plan approval (accept with the
+host-configured axes; Worktree acceptance and feedback drafts stay in
+Emacs), ApplyPatch review (apply the staged selection or request a
+revision with whole-patch feedback; side-by-side editing stays in
+Emacs), and Ask questionnaires (the frame carries questions, option
+descriptions and samples, and current answers; the guest answers atomically,
+with a blank answer meaning no preference, or dismisses only the
+questionnaire) — and the first answer,
+from Emacs or any guest, settles everywhere. Pending interactions stay above
+an open panel, such as a shared editor or an artifact, because an item's own
+conversation runs turns that ask too.
+<code>mevedel-collaboration-remote-interactions</code> gates that surface. Lease
+transfer, save, rewind, fork, publication, and execution-target changes are
+impossible from the browser regardless of link strength.</p>
+<h2 id="commands-skills-and-tool-display">Commands, skills, and tool display<a class="headerlink" href="#commands-skills-and-tool-display" title="Permanent link">&para;</a></h2>
+<p>A writable guest's welcome also publishes the invocation roster its link
+tier is admitted to. <code>mevedel-collaboration-guest-skills</code> is an alist keyed
+by <code>full</code> and <code>owner</code> whose values follow the <code>global-minor-mode</code> mode-list
+shape: <code>t</code>, <code>nil</code>, or a list of names, <code>(not NAME...)</code>, <code>t</code>, and <code>nil</code> read
+left to right until one decides, with an implicit <code>nil</code> at the end. An owner
+link without its own entry inherits the <code>full</code> entry; the default admits an
+owner link to everything and a full link to nothing. The candidate universe
+is every local slash command plus every user-invocable skill, a bare name
+resolving to the command first, and
+<code>mevedel-collaboration-unsafe-guest-commands</code> wins over any admission: it
+holds the commands that escalate, mutate durable state, manage the share, or
+only report to the host's display (<code>tokens</code>, <code>ps</code>, <code>tools</code>, <code>worktree</code>
+included), none of which can do anything useful for a guest. The guest may
+queue a command through the typed <code>invoke</code> field or combine selected skills
+through the <code>skills</code> name array on one prompt frame. These fields are mutually
+exclusive. Free text remains skill-inert; only selected names are planned.
+The host revalidates every selection against the original link tier on receipt
+and again at delivery. A removed or disallowed skill drops the whole queued
+selection. Selected skills use the existing ordered skill planner, including
+its command/instruction and fork semantics. <code>/review</code> and <code>/verify</code> sent without an argument are queued as
+<code>uncommitted</code>, because their argument-less form is a minibuffer picker on
+the host, and their chip hint lists the accepted target forms.
+Browser tool rows use the host's bounded semantic presentation tree. Direct
+ToolCall expressions display the underlying tool (for example, <code>Skill:
+artifact-dashboard</code>); composed expressions retain ToolCall and nested tool
+rows, parallel groups and returned output. Skill bodies render as safe
+Markdown, with delivered dependencies in separate collapsed foldouts. Missing
+historical dependency bodies are labelled unavailable rather than reread from
+current files. Raw model-facing reminder wrappers are not the display body.
+Noteworthy sandbox boundaries use the host's formatted, bounded disclosure in
+the collapsed tool header, including nested Bash rows. Raw sandbox facts and
+grant details are not sent as presentation metadata.
+Routine empty-input <code>WriteStdin</code> observations stay out of the guest transcript;
+their output and terminal status belong to the original Bash row. After
+the running owner's bounded tail replaces earlier output, the Bash row discloses
+that its preview is truncated even when the latest poll omitted no bytes. On
+completion, retained output remains available through the result link. After
+compaction, that row appears only in <strong>Earlier conversation</strong>, where projection
+uses later completion evidence from the session's segments to show the final result
+without a duplicate current-segment output card. This also applies to Bash
+children of ToolCall. If an intervening archive is unreadable and the command
+is no longer running, its original row keeps the available output but warns
+that completion evidence is unavailable instead of guessing an outcome.
+Yielded root and child Bash executions produce one compact, output-free
+completion breadcrumb in their owning guest transcripts. A forwarded child
+<code>EXECUTION</code> mailbox gives the parent its own breadcrumb. Each receiving
+transcript deduplicates by owner and execution ID.
+<strong>Show result</strong> makes a separate read-only request for retained output; it does
+not duplicate the body in the parent transcript or alter the model-visible
+mailbox. The host validates owner and ID against either the receiving root or
+registered child's trusted local breadcrumb, or a forwarded mailbox in the
+parent's live or archived segments. It prefers the child's trusted terminal
+row or completion audit and retained output when the child transcript is resident. If it is cold,
+the bounded forwarded mailbox output is the fallback. Missing archives or
+evidence are reported explicitly, not resolved from a browser-supplied path.
+Each response is capped at 50,000 output bytes and repeated requests from one
+guest are throttled. View-only guests can use the link.
+Nested open and closed choices survive record updates, reconnect snapshots
+and agent transcript refreshes; the composer draft stays untouched. Direct
+ApplyPatch calls keep artifact cards and diff presentation.</p>
+<h2 id="artifact-viewing">Artifact viewing<a class="headerlink" href="#artifact-viewing" title="Permanent link">&para;</a></h2>
+<p>Artifacts are files in the <a href="../view/#artifact-store">workspace artifact store</a>,
+authored through the normal patch workflow.</p>
+<p>In a room, the projection turns each selected applied artifact destination
+into a card carrying name, size and the id of the store artifact it belongs
+to -- never the bytes, and never the host-side path, which stays in the
+unserialized <code>:artifact-path</code> field. A multi-file
+patch produces one card per artifact destination; rejected changes produce
+none, and a mixed code/artifact patch retains its ordinary tool row.
+File stats are memoized against per-publish-tick target round trips and
+invalidated when ApplyPatch settles. A deleted artifact still
+projects, marked missing, so it reads as deleted rather than as a gap
+in the log. The sidebar combines live and archived artifact records with
+the store artifacts attached to the room's session (last record per name
+wins), so compaction does not remove access to published work.
+Archived transcripts are read once per segment to reconstruct artifact metadata;
+their full browser projection is sent only when that segment is expanded.</p>
+<p>Bytes travel only on demand: opening a card sends <code>artifact-get</code> with
+the record id, and opening a store artifact sends it with
+<code>artifact:ID</code> -- resolution is by identity against live or archived root
+records, agent records already published to that guest, or the store's own
+artifact ids, never by a guest-supplied path. Any link to the workspace may
+reach any store artifact this way, which deliberately widens the room's
+published records as the only authority (see
+<a href="../adr/0124-keep-artifacts-in-a-workspace-store/">ADR 0124</a>). Agent
+artifact ids are namespaced before publication because canonical ids are only
+transcript-local. The request id must be a nonnegative JavaScript-safe integer
+before projection or file I/O starts, the resolved path is re-verified inside
+the artifact store before a byte is read, files over 16 MiB are refused, and repeat fetches from a guest within one
+second are dropped. The host answers targeted
+<code>artifact</code> frames with base64 chunks under the wire bound. The viewer
+renders HTML in an <code>&lt;iframe sandbox="allow-scripts"&gt;</code> (never
+<code>allow-same-origin</code>, which beside <code>allow-scripts</code> would hand the
+artifact the viewer's origin -- the decrypted transcript and the room
+key) with a prepended CSP of <code>default-src 'none'</code>, so a self-contained
+page can run inline scripts and styles while external subresource loading is
+blocked by the policy. Because the frame's origin is
+opaque, the viewer's colour-theme choice cannot be read from it: a prelude
+script bakes the current <code>data-theme</code> stamp onto the artifact's root and
+follows later toggles over <code>postMessage</code>, so an artifact themes off
+<code>html[data-theme]</code> beside <code>prefers-color-scheme</code>. The prelude also handles
+local <code>#section</code> links inside the artifact, including encoded section IDs,
+so they scroll within its sandbox rather than navigating to the room URL.
+This applies in both the panel and the separate artifact tab.
+Markdown goes through the
+DOM-built XSS-safe renderer, images display inline, plain text shows as
+text, and anything else is offered as a download. "Open in tab" puts an
+HTML artifact beside the conversation: a same-origin shell opened
+synchronously from the click -- the bytes are already in hand, so no
+popup blocker races the transfer -- whose only content is the same
+sandboxed frame. Guests author artifacts through the model: they ask,
+the model writes, everyone gets the card. There is no guest upload
+path into the artifact store -- guests add files to the
+<a href="#project-files">project</a> instead -- and the relay is untouched:
+artifact frames are sealed like every other frame.</p>
+<p>Full and owner links can <strong>Delete</strong> an open artifact after confirming, in a
+room or the lobby. The host resolves it from its own record of the card or
+from the store id, never from a guest path, and deletes the whole artifact --
+its id directory with versions and comments, and its dedicated session --
+through the same path as the Emacs cockpit. A dedicated session open in Emacs
+is closed first; only a turn running there refuses the deletion (see
+<a href="../view/#artifact-store">the artifact store</a>). The card then reads as
+deleted. Every live room of the workspace is re-published, and every room and
+the lobby receive the store's new listing.</p>
+<h3 id="the-artifact-store-in-the-browser">The artifact store in the browser<a class="headerlink" href="#the-artifact-store-in-the-browser" title="Permanent link">&para;</a></h3>
+<p>A room's dock ends with rows for <strong>New session</strong>, <strong>Project artifacts</strong>, which
+opens a sheet, and <strong>Rooms</strong> with its count; the lobby has an <strong>Artifacts</strong>
+tab with its create buttons beside Refresh. Both listings show the workspace's
+<a href="../view/#artifact-store">artifact store</a> newest first, one line each: name,
+kind, size, version count, age of the last change, and in a room whether the
+artifact is attached to the room's session; the id shows on hovering the name.
+Lobby rows show how many sessions attach the artifact. Explicit listings
+refresh saved-session discovery; change notifications reuse that discovery
+with current live-session attachments, so ordinary edits do not rescan saved
+sessions. Changes coalesce into one notification per workspace after the current
+mutation, when its transport is idle. That fanout reads the latest artifact store
+once and resolves the rooms still open, so saving does not wait for browser
+listing updates. A save that changes only an item's content, not its title or
+kind, is announced up to two seconds later, together with further such saves:
+the item's viewers already have the edit, and listings only show its size and
+time. An immediate notification for the workspace meanwhile carries them.
+The host sends the listing when a guest joins a room or asks for it
+(<code>store-list</code>), and to every room and lobby of the workspace after a store
+change (<code>store-artifacts</code>): once per change however many steps it took, built
+once for all of them, after the change is acknowledged, and only where a guest
+is connected. Each row shows <strong>Open</strong>, which any link can use to open file
+artifacts in the panel or whiteboards and documents in their editor. From the
+lobby, an editor opens through the artifact's dedicated session, with a bearer
+link capped to the guest's existing tier. Each row keeps its other actions in
+a <code>⋯</code> menu, which a refreshed listing keeps open. Any link can list an
+artifact's <strong>Versions</strong> and <strong>View</strong> a historical snapshot without changing
+the current content. Editor snapshots preview as SVG or HTML exports;
+historical previews have no comment, delete or assistant actions. The bounded
+<code>artifact-get</code> transfer accepts an optional version number, resolved by the
+host inside the store.</p>
+<p>Full and owner lobby links also offer <strong>New whiteboard</strong> and <strong>New document</strong>.
+Creation runs through the workspace's editing queue, then opens the new item's
+dedicated editor room. Full and owner links also act through <code>store-action</code>
+frames:</p>
+<ul>
+<li><strong>Restore</strong> makes any saved version the newest, including the latest saved
+  snapshot when live edits have changed the artifact since. A whiteboard or
+  document restores as the guest's edit through its editing queue, and the
+  answer waits until it is saved, or says why it was not;</li>
+<li><strong>Save version</strong>, for a whiteboard or document, keeps its current state as a
+  version;</li>
+<li><strong>Attach</strong>, in a room, attaches the artifact to the room's session;</li>
+<li><strong>Duplicate</strong> copies it into a new, independent artifact under a name the
+  guest gives, attached to the room's session;</li>
+<li><strong>Conversation</strong> opens the artifact's dedicated session in a room of its
+  own, created on first use;</li>
+<li><strong>Delete</strong> deletes it for everyone, after a confirmation, with its
+  versions, comments and dedicated session. The answer waits for a
+  whiteboard's or document's editing queue. A dedicated session open in Emacs
+  is closed, so guests in its room see "Artifact deleted" rather than a
+  session the host ended.</li>
+</ul>
+<p>Actions that would need a decision in Emacs, such as resuming a dedicated
+session another client holds, are refused with the usual notice.</p>
+<h3 id="artifact-comments">Artifact comments<a class="headerlink" href="#artifact-comments" title="Permanent link">&para;</a></h3>
+<p>Writable guests can comment on part of an HTML artifact in the panel.
+<strong>Comment</strong> turns on comment mode: hovering highlights what a click would
+pick, a word under the pointer or otherwise the element; Alt prefers the
+element, Arrow Up widens the highlight to its parent and Arrow Down narrows
+it again, and Enter picks it. Dragging across text keeps the browser's own
+selection and comments on that passage; dragging anywhere else draws a box
+and comments on the area. The box names the elements at least half inside
+it, searching inside larger elements it only crosses, and anchors to their
+nearest common parent. While commenting, the artifact's own
+click, pointer and keyboard handlers do not run. Escape leaves the mode.
+The separate artifact tab has no comment mode.</p>
+<p>The picker is inlined into the panel frame ahead of the artifact and only
+reports what was picked: a CSS selector, a text fingerprint of the element,
+the quoted word or passage with its offset, the box as fractions of the
+element, a label such as <code>Decisions at a glance › word "share"</code>, and a
+bounded text and HTML excerpt of the target. The composer is drawn by the
+viewer, outside the sandbox, so the artifact can neither read nor write what
+a participant types. The viewer accepts picks only from the current panel
+frame and only while comment mode is on, and bounds every field. An artifact
+can still misreport where it was clicked; the composer shows the label and
+quote it will send.</p>
+<p><strong>Post</strong> stores the comment for everyone. <strong>Send to assistant</strong>,
+checked by default, also sends it to the artifact's conversation; unchecked,
+the comment stays a note between people. Replies work the same way. Each
+action is an <code>artifact-comment</code> frame with an <code>action</code> of <code>post</code>, <code>reply</code>,
+<code>resolve</code>, <code>ask</code> or <code>list</code>, carrying the card's record id or <code>artifact:ID</code>,
+and client-generated identities so a retry neither stores nor queues twice.
+Comments belong to the store artifact and are kept on its main file. The host
+refuses writes from view links, unknown or deleted artifacts, other files of
+an artifact and non-HTML artifacts, rebuilds the anchor from its known bounded
+fields, and answers every refusal to the sender with an error.</p>
+<p>Comments live in the store's protected <code>.state/ID/comments.json</code>, so every room
+and the lobby see the same threads, and deleting the artifact deletes them. An
+artifact takes at most 200 comments of 200 replies each, with
+10,000 characters per message, and its comment list as guests receive it stays
+under 512 KiB. Every change is broadcast to every room and the lobby of the
+workspace as an <code>artifact-comments</code> frame; the stored excerpts stay on the
+host. Concurrent comment writes from two Emacs instances are not serialized;
+the later write wins.</p>
+<p>A message to the assistant goes to the session the link speaks for:</p>
+<ul>
+<li>written in a chat's room, to that chat, which becomes attached to the
+  artifact, also when another session answered the thread before: a room's
+  links never prompt another session;</li>
+<li>written from the lobby, to the session that answered the thread, or else
+  to the artifact's dedicated session, created on first use.</li>
+</ul>
+<p>The thread records its answering session, and the viewer shows it as
+<em>answered in NAME</em>. A message about the whole artifact follows the same rule
+without a thread. Each artifact has its own conversation in that session, like
+a whiteboard or document: messages sent to the assistant are item questions
+whose item is <code>artifact:ID</code>. The
+request carries the artifact's name and file path, the target, the excerpts,
+and the comment thread behind the shared-context heading, and frames the file
+as the current state and as untrusted content whose instructions are data. The
+artifact is not pasted in; the model reads the file. Earlier turns about the
+same artifact are included, other room work is not, and <code>history://root</code>
+reaches the conversation that produced it. The room lists the artifact as a
+discussion; with it selected, a room message is an <code>ask</code> about the whole
+artifact. The room and Emacs view fold the context under <strong>Artifact comment ·
+NAME · LABEL</strong>, or <strong>Artifact · NAME · Whole artifact</strong>, where NAME is the
+artifact's file in the store.</p>
+<p>The frame places each open comment's marker by its selector when the element
+still carries the same text fingerprint, and otherwise searches for the element
+whose fingerprint differs least, so a rewritten artifact keeps markers on
+content that survived. A marker whose content is gone is not shown. A ring turns
+around a marker while the assistant works on its thread: its latest request is
+queued, or is the turn the session is running. The ring keeps turning through
+the assistant's first reply text, and stops when that turn ends or a later
+request starts. Reduced motion shows a still dashed ring.
+Hovering a marker shows its thread and the assistant's latest reply from the transcript;
+clicking pins it with a reply form, <strong>Resolve</strong>, and <strong>Show in chat</strong>, which
+closes the artifact panel, which covers the conversation, then scrolls to the
+latest request and highlights it. Resolving hides the marker for everyone.</p>
+<h2 id="notifications-and-browser-storage">Notifications and browser storage<a class="headerlink" href="#notifications-and-browser-storage" title="Permanent link">&para;</a></h2>
+<p>The viewer supports installable-PWA presentation, host-synchronized theme,
+and opt-in system notifications for attention-worthy session changes. On
+platforms with the Push API, opt-in registers a service worker and a
+room-scoped Web Push endpoint. Pending interactions wake only the subscribed
+writable guests they target; a completed turn wakes all subscribers. The
+relay sends an empty push, so browser push services receive no session
+content; the service worker displays a generic notice and the viewer
+reconnects for sealed detail. This works for supporting Android browsers as
+well as an iOS/iPadOS Home Screen web app.</p>
+<p>Notification preferences and Push subscriptions are owned per room, with the
+subscriptions separated by service-worker registration scopes derived locally
+from the bearer. The scope itself is never fetched, and the worker script and
+empty push carry no bearer. Opting out of one room therefore does not affect
+another. A notification click opens the owning room with its credentials in
+the URL fragment. A freshly installed Home Screen app with no shared browser
+storage asks the user to paste the full share link and extracts that fragment
+locally without submitting it.</p>
+<p>The credentials are stripped from the URL and history before the socket
+opens, so a plain reload would otherwise land on a bare relay URL. The
+viewer therefore keeps the share it is in under <code>sessionStorage</code>, per tab
+and gone with the tab, which never enters history and so keeps the reason
+for the wipe: F5, or navigating away and back, rejoins the room for as
+long as the tab and the room live. On boot the URL fragment wins, then the
+tab's share, then the notification opt-in's persisted last share. That last store is refreshed only for a room whose notifications are on. On an initial connection the relay answers an unknown room with
+close code 4004. The host hands out a new room's links before its own relay
+dial settles, so a guest following one at once, as the lobby does, can
+arrive first; the viewer therefore retries a first-join 4004 for five
+seconds. A 4004 that outlasts that window is terminal: the viewer shows
+"Room closed" and drops the stale stored share instead of retrying for
+three minutes. Code 4001 (room closed by the host) starts the bounded reconnect
+window; a 4004 during that window stays retryable because the guest may have
+reached the relay before the host recreated the room.</p>
+<p>An ended room shows a prominent status panel above the loaded conversation,
+or centered in the main area when no messages are loaded. It explains that
+continuing requires a new invitation from the host. The loaded transcript
+remains readable.</p>
+<p>An actively focused viewer reports itself active and receives no Web Push.
+When a push-enabled viewer moves away, it receives Web Push whether its page
+is still live, suspended, or disconnected. When service-worker Push is
+unsupported or its subscription is unavailable, the viewer uses the live-page
+Notification fallback. The host retains
+endpoint routing metadata in memory and replays it after a relay transport
+reconnect, so background delivery survives an ordinary host network blip.</p>
+<p>Notification opt-in retains the bearer link in browser local storage so a
+suspended PWA can reconnect. The viewer clears it and unsubscribes after
+observing room termination or exhausting reconnects; otherwise browser site
+data can outlive the room, although an ended room id and key no longer
+authorize a live share.</p>
+<h2 id="connection-recovery">Connection recovery<a class="headerlink" href="#connection-recovery" title="Permanent link">&para;</a></h2>
+<p>The host delivers authenticated frames and peer controls in arrival order once
+remote I/O is idle. Input received while a callback is running waits behind
+already received input, including peer departures. Each delivery checks idle
+state again, so a callback that starts remote work delays the remaining input.
+Disconnecting or stopping the transport discards its pending input; a reconnect
+starts with fresh guest admission.</p>
+<p>TCP/TLS dialing runs asynchronously, so starting or reconnecting a room does
+not wait for an unreachable address before returning control to Emacs. The
+share panel can appear while the transport is still connecting; its presence
+does not prove that the relay room is ready. TLS retains Emacs' configured
+certificate and hostname verification policy. Only the current connection may
+report an open room; callbacks from cancelled or replaced attempts cannot
+revive it. A dial the relay has not answered within 30 seconds is abandoned
+and retried like a dropped connection. A nonblocking connect can stall without
+ever failing: a headless host that dialed while its container started stayed
+<code>connecting</code> indefinitely, so the relay never knew its lobby room and every
+link to it showed "Room closed".</p>
+<p>The host reconnects to the relay with bounded backoff, from 1 up to 30
+seconds, after a network blip; the relay garbage-collects the room with the
+host connection, so guests treat <code>room-closed</code> as retryable, rejoin the same
+room id, and re-hello for a fresh welcome and snapshot. A guest gives up
+after three minutes without its room.</p>
+<p>A connection can also die without any notice: after a suspend or a network
+change the host's socket still reads as open, and a write fails only once the
+kernel stops retransmitting, long after guests gave up. The host therefore
+pings the relay every 15 seconds and requires inbound bytes, a pong or the
+relay's own 30-second ping, within 45 seconds. A connection silent for longer
+is dropped and redialed, so a dead path is replaced within about a minute.
+The window outlasts the relay's own dead-host detection (a 10-second ping
+timeout), so the redial finds the old room collected rather than being
+refused as a second host.</p>
+<p>Starting a room confirms that visible text, paths, and tool results may
+contain credentials or secrets and that the links are bearer credentials.</p>
+<p>Shared-item questions retain item and comment correlation in the canonical
+transcript's guest attribution. The editor panel reuses those records and the
+existing pending-input queue. Each item has separate model context, selected
+from the live transcript and archived segments without a second transcript store.
+In a Claude session each item question starts an isolated native conversation
+with that context, so it neither resumes nor enters the room's native history.
+Room chat can retrieve those turns through the same history resources.
+Canonical provider-failure summaries also appear in browser conversations.
+See <a href="../shared-editing/#questions-and-comments">shared editing</a>.</p>
+<p>Shared editing is optional: missing Node or helper resources on the Emacs host
+disable editing actions with a reason while chat, static artifacts, and the saved
+item list remain available. <strong>Recheck availability</strong> enables them after repair
+without reloading the room. Browser guests do not install Node. See the
+<a href="../shared-editing/#runtime-and-build">runtime contract</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

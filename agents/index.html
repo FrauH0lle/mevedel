@@ -1,0 +1,2386 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/agents/">
+      
+      
+        <link rel="prev" href="../goals/">
+      
+      
+        <link rel="next" href="../mentions/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Agents and tasks - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#multi-agent-system" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Agents and tasks
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#asynchronous-agent-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asynchronous agent lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-resource-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent resource results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interrupting-retained-agent-turns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupting retained agent turns
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inter-agent-messaging-sendmessage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inter-agent messaging (SendMessage)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review-and-verify-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review and verify commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transcript-persistence-and-views" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transcript persistence and views
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#permission-and-confinement-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission and confinement propagation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model tiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#asynchronous-agent-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asynchronous agent lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-resource-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent resource results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interrupting-retained-agent-turns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupting retained agent turns
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inter-agent-messaging-sendmessage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inter-agent messaging (SendMessage)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review-and-verify-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review and verify commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transcript-persistence-and-views" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transcript persistence and views
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#permission-and-confinement-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission and confinement propagation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model tiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/agents.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="multi-agent-system">Multi-agent system<a class="headerlink" href="#multi-agent-system" title="Permanent link">&para;</a></h1>
+<p>Main and worker prompts ask for short attributed lessons in <code>work://shared/</code>
+only when the current request permits shared-file writes. Standalone Plan
+permits session-owned plan edits but excludes shared and memory writes. Explorer, verifier, and
+reviewer report observations and hypotheses through existing results or an
+available SendMessage; they receive no extra write authority. Reviewer lessons
+stay within its existing JSON response schema. Only the main prompt receives
+the recent journal map; all roles may use permitted journal reads on demand.</p>
+<p>The model-facing <code>Agent</code> tool starts a retained child asynchronously. It
+accepts a lowercase <code>task_name</code> path segment, a complete <code>message</code>, and
+optional <code>role</code>, <code>context</code>, <code>model</code>, and <code>effort</code> controls, then returns the
+committed canonical path after preparation and provider dispatch succeed.
+An omitted role selects <code>default</code> and inherits the delegator's effective
+instructions, tools, model policy, and delegation capability. A named role
+supplies its own configuration rather than intersecting its tools with the
+delegator's. Children are created below the caller, so recursive delegation
+forms paths such as <code>/root/implementation/tests</code>.</p>
+<p><code>context</code> defaults to <code>none</code>, so the complete initial <code>message</code> is the
+child's sole assigned task and no parent dialogue is copied. Explicit <code>all</code>
+copies the complete effective parent conversation, and a positive decimal
+string such as <code>"3"</code> copies the anchored summary plus the three most recent
+live turns. Explicit <code>summary</code> freezes the realized parent transcript without
+the triggering Agent tool segment, runs one central handoff-summary request
+focused on the hook-accepted task, and stores the result as a labelled advisory
+<code>Task background</code> block before that authoritative task. The copy modes retain
+gptel's user/response/tool span properties,
+including actionable user instructions, and are taken from the current
+post-compaction buffer only. Callers use copied context only when the child
+must inspect parent dialogue and identify that dialogue as background in the
+initial task. Archived raw segments are never reconstructed. The initial task
+is appended after this immutable snapshot; parent turns added later are not
+synchronized into the child.</p>
+<p>Before provider dispatch, after task preparation, mevedel materializes the
+role's dynamic instructions and effective tools, then captures the exact
+request backend, model, reasoning effort,
+system prompt, tools, context settings, request parameters, and model policy
+maps. Resolution starts with the delegator's current request defaults, applies
+the role workload, and finally applies explicit <code>model</code> and <code>effort</code> values.
+<code>model</code> accepts either a configured tier or <code>BACKEND:MODEL</code>; gptel validates
+the selected model's effort support. Follow-ups reuse this frozen
+configuration even if presets, role definitions, or parent settings change.
+Root-session permission decisions and confinement remain live shared policy,
+not part of the frozen request configuration.</p>
+<p>Claude Code selections dispatch through ACP using the frozen child model and
+instructions. Each canonical child path has its own native conversation
+reference, persisted before prompting, and follow-ups resume that reference.
+The ACP/MCP transport shares root streaming and tool projection; completion,
+interruption, capacity release and RESULT publication remain owned by the
+agent runtime. Child turns do not complete the root request or advance its
+turn count. A native child admits an ordinary request in its own conversation
+buffer for pipeline, permission and interaction ownership. Its invocation still
+owns native history and terminal publication; no gptel state machine is created.
+Interruption drains that request's cancellers and queued prompts, including
+while its parent is waiting. Final prompt usage is attached to the RESULT and charged to the
+owning Goal once. Adapter failures settle as errors; interrupted/failed native
+histories retain an uncertain marker. Follow-up recovery guidance requires the
+native user-message echo before tools continue. A lost turn restores as
+uncertain and requires acknowledged reconciliation before more tools.</p>
+<p>When a child's native history is unavailable, the user can select its canonical
+path with <code>M-x mevedel-claude-code-recover-history</code> in the session. Recovery
+requires all turns to be idle and any active Goal paused. It preserves the
+retained agent record, frozen configuration and private transcript, and marks
+the next follow-up for an explicitly labelled excerpt continuation into a new
+native conversation. Root and sibling history are not included or detached.</p>
+<p>Native children use the <a href="../sessions/#native-context-delivery">native context delivery</a>
+contract. Queued mail is attached to the prompt after the native identity is
+persisted; mail arriving during a turn follows native tool batches, and duplicate
+or failed receipts cannot consume it. The child's frozen component selection
+defines both its system baseline and its compaction restoration. Its prompt
+collects the invocation's configured reminders without consuming the parent's
+reminders or hook context, and native compaction restores only that child's
+direct-child roster and learned path instructions. Continuation prompts keep the
+native ID, frozen configuration, current invocation and accumulated usage.</p>
+<p>The root session retains every child's storage identity, path, activity, and
+transcript location after the turn settles. <code>ListAgents</code> returns the full
+path-sorted retained roster without storage IDs or transcript content.
+<code>FollowupAgent</code> continues an idle retained conversation or steers a running
+invocation at its next safe request boundary; later terminal results still go
+to the original spawn parent. A successful follow-up renders a collapsed
+<code>FollowupAgent: PATH (follow-up sent)</code> disclosure containing the exact
+follow-up text.
+<code>SendMessage</code>
+queues interim plain-text mail for <code>/root</code> or any retained path without
+activating a turn. <code>WaitAgent</code> suspends its ordinary asynchronous tool callback
+until mail, user steering, follow-up steering, or its bounded successful
+timeout wakes it. A <code>MAIL</code> wake-up is not sender completion; only the canonical
+<code>RESULT</code> is terminal.
+<code>InterruptAgent</code> aborts one retained non-root agent's current turn by canonical
+path, returns its previous activity, and leaves its identity, conversation,
+mailbox, descendants, and future follow-up capability intact.</p>
+<p>Creation validates and freezes its inputs, privately reserves the canonical
+path and a tree-wide capacity slot, runs <code>SubagentStart</code> exactly once, then
+runs <code>UserPromptSubmit</code> for the initial task. The hook-accepted task is passed
+to dispatch without rerunning either hook. For <code>summary</code>, generation starts
+only after that final task exists; the parent row remains in <code>Preparing summary
+context...</code> until generation and durable child setup finish. The reservation is absent from
+<code>ListAgents</code> and path resolution until a durable transcript and provider FSM
+exist. Failure or parent cancellation releases it synchronously and suppresses
+late preparation callbacks. Every idle-agent follow-up
+runs <code>UserPromptSubmit</code> again but not <code>SubagentStart</code>. A blocked follow-up is
+not appended as a user turn; its additional hook context stays with that
+identity and is consumed once by its next accepted task. Every completed,
+errored, or interrupted turn runs one observational <code>SubagentStop</code> without
+removing the retained identity.</p>
+<p>Each invocation aggregates only its own direct operating-system children.
+After those children are stopped or settled, noteworthy confinement facts are
+patched into the exact <code>Agent</code> row that started a new conversation or the
+exact idle <code>FollowupAgent</code> row that activated the retained turn. Descendant
+agents, earlier turns, and steering messages sent to an already-running agent
+are excluded. The rollup uses hidden transcript render-data and is not added
+to agent sidecars or model-visible results.</p>
+<p>The built-in role configurations are:</p>
+<ul>
+<li><strong>worker</strong>: broad implementation, execution, navigation, skill, task, and
+  collaboration tools, with explicit concurrent-edit guidance</li>
+<li><strong>explorer</strong>: directly read-only investigation with authority to delegate to
+  workers</li>
+<li><strong>verifier</strong>: adversarial read-only verification. Final reports must
+  end with <code>VERDICT: PASS</code>, <code>VERDICT: FAIL</code>, or <code>VERDICT: PARTIAL</code>; the
+  parsed verdict is stored in transcript render-data for the handle badge.
+  PASS requires an adversarial probe, FAIL requires a concrete actionable
+  defect, and PARTIAL is reserved for environmental limitations.</li>
+<li><strong>reviewer</strong>: retained leaf code-review agent used by <code>/review</code>. Reads diffs and
+  surrounding code, then returns prioritized findings as JSON.</li>
+</ul>
+<p>Child request defaults come from the parent, the selected role and mevedel’s
+model policy. There is no separate global child-agent preset layer.</p>
+<p>The frozen role prompt owns read-only judgment and the report contract. It is
+restored before each request, independently of transcript compaction; no
+every-turn reminder repeats it. Direct tool rosters and shared permission
+checks remain in force. Role names do not impose extra hidden reminder policy.</p>
+<p>Every named role receives <code>SendMessage</code> and <code>ListAgents</code>. Possession of
+<code>Agent</code> grants transitive delegation authority and automatically supplies the
+complete <code>Agent</code>, <code>FollowupAgent</code>, <code>WaitAgent</code>, and <code>InterruptAgent</code> control
+bundle. Worker and explorer therefore orchestrate recursively; reviewer and
+verifier are communicating leaves without those control tools. The complete
+root-session tree shares the session's active-turn capacity (ten non-root
+turns by default), regardless of path depth. The root does not consume a slot,
+allowing eleven active agents in total. Waiting and human-blocked turns remain
+active and continue consuming their existing slot.</p>
+<p>Before the first sample, the WAIT boundary injects only the caller's direct
+children as compact path and role references. Later WAIT boundaries add a
+child created in the same turn exactly once. Peers and deeper descendants are
+not injected; <code>ListAgents</code> is the explicit full-tree discovery surface.</p>
+<p>A Goal runs in the root session conversation rather than through a special
+agent or phase machine. Child-agent turns are not Goal turns, but agents started
+from a Goal turn, nested agents included, charge their usage to that Goal as
+they work and receive its budget crossings (<a href="../goals/#token-budget">Goals</a>).
+The RESULT's <code>:usage</code> field reports the settled request's usage.
+Each active root turn receives current Goal facts through retained context delivery, while the existing
+agent tree, capacity, and permission rules remain unchanged. Queued user
+messages steer the Goal before its next automatic continuation.</p>
+<p>Each agent's <code>:tools</code> resolved via <code>mevedel-tool-resolve-gptel</code> at
+invocation time. Registered buffer-locally via <code>mevedel-agents--specs</code> per
+request (no caching). Each invocation gets a cloned reminder list with
+independent <code>last-fired</code>.</p>
+<p>An optional <code>:max-turns</code> caps one Agent call's model samples. Every sample of
+the tool loop counts as one turn, however many tools it calls. At 80% the agent
+receives a one-shot warning to wrap up. The sample that reaches the cap tells
+the agent to answer now and ends its turn at the next tool boundary. If the
+agent still called tools, the call settles with its latest response followed by
+a <code>[Stopped before a final answer: ...]</code> note, so the caller can tell the report
+is incomplete. Retained follow-ups start a fresh count.</p>
+<p>For Claude, the initial prompt prepares sample one. Each <code>PostToolBatch</code> hook
+either prepares the next sample or stops after the capped sample's tools have
+settled; a final text-only response is the sample its last boundary prepared.
+Warnings are turn events whose firing marks wait for exact SDK receipt; native
+compaction restores current limit guidance, including the final-sample notice,
+through the producer shared with gptel. A compaction that must wait for a
+continuation prompt has already spent a sample on the denied tool attempt or
+text-only response, so continuation reserves another within the same cap and
+delivers its warning; a spent cap ends the invocation without another prompt.
+This uses mevedel's existing sample definition rather than mapping the value to
+the SDK's tool-use-only <code>maxTurns</code>. Internal provider retries are not separately
+counted. A normal answer before the cap has no incomplete-result note.</p>
+<p>The built-in agents set no cap, as in Claude Code, whose built-in agents also
+leave <code>maxTurns</code> unset; Codex has no agent turn limit. Their earlier caps
+(worker 50, explorer 30, verifier 20, reviewer 12) were never enforced.
+Telemetry from 238 agent runs in September 2026 showed medians of 12-22
+samples, 90th percentiles of 34-51, and a maximum of 94, with about three tool
+calls per sample: enforcing the old caps would have cut about half of all
+verifier and reviewer runs, and no run approached a runaway bound worth
+setting by default.</p>
+<p>Agent definitions may include <code>:hooks</code> using the same declarative hook
+shape as project hook files. These rules are scoped to invocations of that
+agent and are folded into the agent invocation layer before skill-scoped
+hook rules for fork skill invocations. Within an agent definition, <code>Stop</code>
+means "when this sub-agent stops" and is normalized to <code>SubagentStop</code>;
+top-level <code>Stop</code> remains reserved for the main assistant turn.
+<code>SubagentStart :additional-context</code> is auditable in both transcript
+surfaces: the parent Agent tool row records that hook context was supplied,
+and the child transcript stores the full hook context on the initial
+prompt.</p>
+<p>Agent definitions declare an ordered <code>:system-components</code> list. Entries are
+registered prompt component symbols or inline <code>(NAME :file PATH)</code> /
+<code>(NAME :text STRING)</code> components. Every agent profile is workspace-aware, so
+<code>workspace-config</code> and <code>environment</code> must be present explicitly. There are no
+per-section inclusion flags and no automatic skills inference: selecting
+<code>memory</code> or <code>skills</code> is part of the role definition.</p>
+<p>The built-ins all receive scoped <code>AGENTS.md</code> / <code>AGENTS.local.md</code> and
+environment context without inheriting the main coding-assistant role. Worker
+also receives memory; Explorer, verifier, and reviewer do not. Worker and
+Explorer select the active skills roster and expose <code>Skill</code> / <code>ListSkills</code>;
+verifier and reviewer remain skill-free. Worker, Explorer, and verifier share
+the reporting tone, while reviewer relies on its strict output contract.</p>
+<h2 id="asynchronous-agent-lifecycle">Asynchronous agent lifecycle<a class="headerlink" href="#asynchronous-agent-lifecycle" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>sequenceDiagram
+    participant P as Spawn parent
+    participant H as Agent runtime
+    participant C as Retained child
+    P-&gt;&gt;H: Agent request
+    H-&gt;&gt;H: Reserve path and prepare the accepted task
+    Note over P,H: Setup failure releases the reservation and returns an error
+    H-&gt;&gt;C: Persist transcript and start request
+    H--&gt;&gt;P: Canonical child path
+    Note over P,C: Parent and child continue independently
+    C-&gt;&gt;H: Turn settles
+    H-&gt;&gt;H: Stop hook, release capacity, retain conversation
+    H--&gt;&gt;P: Queue terminal RESULT and wake an existing waiter</code></pre>
+<p>The diagram covers initial spawning and settlement. Follow-ups reuse the
+retained identity and configuration, run UserPromptSubmit for an idle agent's
+new task, and do not rerun SubagentStart. Tool counts, activity and response
+refresh belong to the current invocation in that retained conversation. An
+invocation keeps only its latest few activity items. Settlement drops the
+retained buffer's last request payload and audit decoding memo: an idle agent
+otherwise kept about as much Lisp data alive as its transcript, and a
+continuation builds a fresh request. A caller
+that needs the result explicitly
+invokes <code>WaitAgent</code>; a caller that does not may finish while descendants keep
+running. <code>/review</code>, <code>/verify</code>, and fork-skill workflows may keep their owning
+interaction open until a leaf result arrives, but that awaiting behavior does
+not create another agent execution mode.</p>
+<h2 id="agent-resource-results">Agent resource results<a class="headerlink" href="#agent-resource-results" title="Permanent link">&para;</a></h2>
+<p>Each retained registry record keeps the complete latest settled payload and
+its terminal outcome (<code>completed</code>, <code>errored</code>, or <code>interrupted</code>) separately from
+the bounded inline <code>RESULT</code> mailbox preview. The complete payload is recorded
+before the preview is published, including recovery settlements. Request and
+owned-execution teardown must both succeed before terminal state is published.
+PID-lock settlement commits the idle record and queued result before delivery;
+portable settlement -- every project session, local target included --
+publishes transcript plus sidecar atomically before it wakes a waiter or
+invokes a workflow result handler. Authority, not target locality, chooses:
+a portable session resolves its transcripts through the publication, so a
+direct write would leave resume unable to see them. A new or
+follow-up turn clears the previous settled result before it becomes active,
+including the <code>starting</code> interval in which provider setup can yield to other
+mailbox publications. Failed or quit follow-up dispatch restores the previous
+result without discarding mail delivered during setup. Active agents expose no
+streaming or stale result and are reported as not ready. A later idle turn replaces the retained result atomically.</p>
+<p><code>agent://root/PATH</code> reads that complete settled payload and
+<code>history://root/PATH</code> reads the same retained identity's transcript through
+the shared read-only resource-address resolver. Neither address changes the
+conversation, mailbox, transcript, or settlement state. The canonical path,
+not the registry's opaque storage identity, is the only addressable identity.
+<code>history://root</code> uses the same projection for the main agent's current
+conversation, including unsaved transcript content. It resolves the owning
+session's root data buffer even when called by a retained agent, and appears
+in history listings and completion without requiring a child agent. Both
+history forms support the existing Read pagination and concise tool results;
+neither traverses pre-compaction archives or supports search. Root history
+requires a live root buffer, including one restored by normal session resume;
+the read itself never resumes a session.
+See <a href="../address-to-resource/#agent-and-history"><code>address-to-resource.md</code></a>.</p>
+<h2 id="interrupting-retained-agent-turns">Interrupting retained agent turns<a class="headerlink" href="#interrupting-retained-agent-turns" title="Permanent link">&para;</a></h2>
+<p><code>InterruptAgent(target)</code> resolves only canonical or relative retained paths. It
+rejects <code>/root</code>, the caller itself, malformed paths, unknown paths, and opaque
+storage ids. An idle target is a successful no-op. An active target's provider
+request or requestless wait is aborted, its transcript is finalized as
+<code>aborted</code>, its active-turn slot is released, and exactly one canonical RESULT
+with outcome <code>interrupted</code> goes to the stable spawn parent. The payload includes
+the interruption reason, bounded useful partial work when available, and the
+saved transcript path when available. Request teardown cancels the active tool
+pipeline, terminates the target's child executions, and prevents its queued
+execution work from being admitted after the turn becomes terminal.
+Native ACP interruption waits for its bounded terminal acknowledgement before
+settling the retained turn, so its final usage remains accountable. The runtime
+canceller returns <code>deferred</code> while it owns that acknowledgement; killing the
+owning buffer still closes the connection immediately.</p>
+<p>Interruption never recurses. Descendant turns continue, and the target's path,
+conversation buffer, mailbox, and registry record remain retained. A later
+<code>FollowupAgent</code> therefore continues the same conversation. Interrupt-versus-
+settlement races use the ordinary exactly-once settlement gate: whichever
+terminal event wins is the only RESULT. The tool result itself contains only
+the target's activity observed before the request and renders <code>Interrupted
+PATH</code> from the canonical event.</p>
+<h2 id="inter-agent-messaging-sendmessage">Inter-agent messaging (SendMessage)<a class="headerlink" href="#inter-agent-messaging-sendmessage" title="Permanent link">&para;</a></h2>
+<p><code>SendMessage(target, message)</code> resolves canonical or relative retained paths
+tree-wide. It queues one canonical <code>MAIL</code> record containing type, sender path,
+recipient path, and payload; it never starts an idle turn. Successful sends
+return an empty result and render a collapsed
+<code>SendMessage: PATH (message queued)</code> disclosure whose path opens the retained transcript and whose body contains the
+sent message. Canonical <code>MAIL</code> payloads are retained in full without a mailbox
+body cap. Since this delivery is interim and may cross a root-turn boundary,
+an agent should put its final verdict in its terminal response rather than
+treating <code>SendMessage</code> as its completion channel.</p>
+<p>Mailbox append is an acknowledged durable mutation. Once the session has a
+storage path, mevedel rolls back a failed append and reports the send as
+failed; it releases a matching <code>WaitAgent</code> only after the root session snapshot
+has committed.</p>
+<p>Before a recipient's next model sample, its retained unread queue drains in
+FIFO order. Each record is injected as a separate user-role communication
+block and written to the retained conversation transcript before the unread
+record is removed. Mail queued for an idle agent therefore waits for a later
+follow-up, while mail for an active agent is delivered at its next ordinary
+WAIT boundary. The tool result never duplicates the message body.</p>
+<p><code>WaitAgent(timeout_ms?)</code> is a wake primitive over the caller's mailbox, not a
+message transport. Its ordinary asynchronous callback stays pending without a
+model sample and without releasing the caller's active-turn slot. Existing or
+new mail releases it immediately, as does follow-up steering. New root user
+input becomes a separate user-role
+steering message in the same resumed request, so no intermediate model sample
+can run before the input is visible. The default timeout is 30,000 ms.
+Out-of-range numeric tool arguments clamp to 10,000-3,600,000 ms; unrepairable
+tool arguments are rejected, and timeout is a successful outcome. Its result
+contains only the wake reason. The view renders <code>Waiting for agents</code> while the
+tool is pending. Settled waits render <code>WaitAgent: agents (OUTCOME)</code>;
+consecutive calls coalesce into the final row with a count while every
+canonical call remains in the transcript.</p>
+<p>Independently completed yielded Bash executions use the session or invocation
+object captured for their fixed owner when Bash starts. A retained invocation
+holds its terminal response while an owned execution is live. A completion that
+arrives while the agent still works goes to the agent's own mailbox, read at its
+next provider request as for the root. Settlement publishes the unchanged final
+answer as <code>RESULT</code>, and each completion the agent could not read (arrived after
+its answer or still unread) as a separate <code>EXECUTION</code> record to the spawn parent,
+attributed to the agent. These records commit together; workflow result
+handlers consume only the <code>RESULT</code>. Bash
+completion does not wake <code>WaitAgent</code> before settlement, and starts no model request.</p>
+<h2 id="review-and-verify-commands">Review and verify commands<a class="headerlink" href="#review-and-verify-commands" title="Permanent link">&para;</a></h2>
+<p><code>mevedel-review</code> / <code>/review</code> and <code>mevedel-verify</code> / <code>/verify</code> run
+dedicated asynchronous leaf-agent turns. They share a target picker for
+uncommitted changes, diff against a base branch merge-base, a specific
+commit, the last commit, or custom instructions. Unlike ordinary user
+skills, this path is first-class: it ignores user/project skills named
+<code>review</code>, creates a context-isolated retained agent at a unique path such as
+<code>/root/review</code> or <code>/root/verify_2</code>, and shares target CAPF for explicit target
+forms such as <code>current</code>, <code>HEAD</code>, <code>branch:&lt;name&gt;</code>, and <code>commit:&lt;rev&gt;</code>.</p>
+<p>Git evidence packages are prepared after the accepted command returns, one
+section per callback. Aborting the request or killing its source buffer cancels
+preparation and removes the unfinished package before any agent is dispatched.
+Git commands still run individually and synchronously; a very large diff or a
+slow remote command can exceed the normal callback budget.</p>
+<p>The owning workflow attaches a one-shot consumer before provider dispatch and
+awaits that leaf's ordinary terminal <code>RESULT</code>. Settlement first queues the
+canonical envelope in parent mail; after successful workflow delivery, the
+consumer removes that exact envelope so a later model turn cannot receive a
+duplicate. Handler failure leaves the queued result recoverable. Completion
+therefore uses the same settlement and active-turn accounting as every other
+asynchronous agent. Cancellation interrupts only the active turn: the
+canonical agent path and conversation remain retained for inspection or
+follow-up.</p>
+<p><code>/review</code> dispatches the <code>reviewer</code> agent and parses its Codex-style JSON
+finding shape: <code>findings</code>, <code>overall_correctness</code>, <code>overall_explanation</code>,
+and <code>overall_confidence_score</code>. Finding priority accepts integers 0–3 or
+JSON null; null and omission both mean unspecified. mevedel renders a readable
+summary as the assistant reply and stores a synthetic review <code>&lt;user_action&gt;</code> in the
+parent transcript so later turns can refer to numbered findings. The view
+buffer strips that synthetic block from normal display. Schema-invalid JSON
+falls back to the raw reviewer output and still settles the parent turn.</p>
+<p><code>/verify</code> dispatches the <code>verifier</code> agent with verifier-oriented wording:
+inspect adversarially, run or recommend relevant checks when allowed, and
+finish with the verifier prompt's <code>VERDICT: PASS</code>, <code>VERDICT: FAIL</code>, or
+<code>VERDICT: PARTIAL</code> line. The workflow accepts only one exact final verdict,
+read from the complete settled report rather than the bounded preview;
+malformed reports remain visible but are marked rejected.</p>
+<p>Goal completion uses the same verifier role and verdict contract, but selects
+its model and effort through <code>goal-review</code> (default tier: <code>strong</code>). <code>/verify</code>
+and ordinary verifier agents retain the <code>verifier</code> workload. The Goal check
+receives the exact objective and any accepted plan with <code>context: none</code>, so it
+discovers evidence independently of the implementation conversation.</p>
+<p>While either task runs, the parent view shows an inline <code>Review</code> or
+<code>Verify</code> handle backed by transcript metadata. The handle updates with
+running/done/error state and recent tool-call counts like other agent
+handles, without exposing the hidden bookkeeping block to the model.</p>
+<h2 id="transcript-persistence-and-views">Transcript persistence and views<a class="headerlink" href="#transcript-persistence-and-views" title="Permanent link">&para;</a></h2>
+<p>Each retained agent runs in its own gptel conversation buffer backed by a
+canonical transcript under the root session's <code>agents/</code> directory. The
+buffer's <code>default-directory</code> remains the session working directory (falling
+back to the workspace root), including after transcript attachment and cold
+hydration; transcript storage location never becomes tool cwd. The
+sidecar persists an explicit registry record for its canonical and parent
+paths, role and frozen configuration, activity, unread mailbox, pending
+conversation-local hook context, conversation location, and internal storage
+identity, plus the latest settled payload and terminal outcome when present.</p>
+<p>Cold restore resolves missing mevedel built-in tools through their owning
+registrars before decoding the frozen roster. This does not substitute unknown
+tools or search other categories. Claude root and retained-child conversations
+resume their separate native references after an editor restart; restored child
+model selection remains frozen even when the parent model changes.
+Resume derives an idle turn's transcript status from that durable outcome
+rather than from activity alone, so an agent that failed or was
+interrupted does not come back reading as one that finished, and a settled
+turn with no recorded outcome reads as incomplete rather than complete.
+The canonical path is the only model-facing address; storage identities never
+enter collaboration tools or resource addresses. The mailbox remains a
+bounded delivery preview rather than the source of truth for an agent result.
+The frozen configuration is authoritative for the agent's request setup, so
+agent transcripts omit all of gptel's request-config Org properties
+while retaining <code>GPTEL_BOUNDS</code>.
+Initial task text is saved after installing the frozen configuration; provider
+setup does not force a second save of the same transcript. In materialized
+portable sessions, a new transcript and its dirty metadata share one strict
+publication through the session's root buffer, including for nested agents.
+Registry admission remains a separate acknowledged commit.</p>
+<p>Terminal settlement publishes the result before delivery. After that commit,
+gptel's post-response hooks may add transcript text; their extra checkpoint uses
+the existing debounced conversation save instead of extending the terminal
+callback. If settlement is still pending, that checkpoint remains synchronous.
+Explicit saves and teardown flush the pending checkpoint normally.
+Generated task background is ordinary persisted conversation context with its
+own structural type. Follow-ups and agent compaction therefore absorb it
+naturally without replaying or regenerating it.</p>
+<p>Resume validates the registry, configuration and transcript locations without
+loading idle conversations. The first FollowupAgent, history resource read, or
+Emacs transcript inspection hydrates only the selected identity through the same
+verified artifact resolver. Unread mail and pending hook context remain in the
+registry until their ordinary delivery boundary. Active abandoned turns still
+hydrate during resume so recovery can retain their partial responses. Failure to
+load a deferred conversation is reported at access before provider dispatch.</p>
+<p>Inspection keeps the resolver's read-only/no-save marker after major-mode setup.
+A later owned follow-up loads a writable conversation rather than writing through
+an inspection snapshot. Browser polling keeps its existing resident-only contract;
+it does not cause cold target reads.</p>
+<p>The registry stores each conversation location as a session-relative path.
+For a remote session, cold hydration, terminal inspection, recovery links, and
+compaction resolve that logical path through the session's staged or captured
+publication and verify its digest; a materialized fixed-path cache is never
+read as authority. The conversation buffer still visits the qualified logical
+path, so immutable publication filenames never reach tools, prompts, or views.</p>
+<p><code>mevedel-agent-conversation.el</code> owns conversation creation and hydration,
+frozen request-local installation, activity snapshots, response extraction,
+and transcript saves. Native Emacs auto-save also checkpoints modified retained
+conversations, as does the in-flight checkpoint timer while any request runs,
+so an unattended agent turn reaches disk before it settles. Emacs exit flushes their text and pending transcript timers
+before root session ownership is released. <code>mevedel-agent-exec.el</code> is the provider
+adapter: it owns
+the gptel request FSM, prompt dispatch, and streaming callback contract. It
+consumes its exactly-once terminal latch only after runtime settlement accepts
+the handoff; transformer or transcript-extraction failures become structured
+terminal errors, while a rejected runtime handoff remains pending for retry.
+Frozen request locals use one closed symbol schema owned by
+<code>mevedel-agents.el</code>. Durable configurations contain every schema entry exactly
+once, and hydration rejects unknown, duplicate, or missing keys before it
+changes a conversation buffer.</p>
+<p>Persisted agents may compact older history immediately before a continuation
+request.  The canonical transcript path remains stable, the original task and
+recent tail remain visible, and later compactions update the existing anchored
+summary instead of stacking summaries.  Each rewrite first creates the next
+numbered <code>compact-NNNN</code> sibling as a recovery artifact.  Those siblings are not
+agent handles or sidecar entries; they belong only to the original session and
+are not copied by Session Forks. Each retained conversation owns this lifecycle
+independently; compacting one agent does not change its registry path or any
+other conversation.</p>
+<p>Session Forks copy eligible canonical transcript files and metadata only as
+historical inspection artifacts. They do not copy registry identities, frozen
+configuration, mailboxes, waiters, or active turns. Historical agent
+transcripts remain openable from their handles but are absent from the
+collaboration roster, and their former canonical task names are immediately
+available to the child. Rewind creates no child: it clears the current
+session's live agent ownership.</p>
+<p><code>mevedel-view-agent.el</code> owns transcript lookup and inspection views plus the
+aggregate live-agent status and targeted handle refresh. The main view renders
+compact one-line agent handles from tool render-data and sidecar state.
+Handles show canonical path, role, status, call count, and transcript
+attribution; recent ephemeral
+activity is kept out of the default view to avoid churn. Resident retained
+agents open a rendered read-only view over their conversation buffer whether
+running or idle; cold and historical handles use the saved transcript file.
+Open live transcript
+views are observation-only projections that follow the main renderer's stream
+and tool cadence without redirecting parent interactions. See
+<a href="../view/#buffer-roles"><code>docs/view.md</code></a> for their update, scrolling, header,
+settlement, and failure-isolation contract.</p>
+<p>The agent view owner supplies aggregate running or blocked rows to the status
+zone so the user can locate active handles without scanning the whole
+transcript. Terminal agent outcomes stay in their inline tool handles
+and transcript views instead of being repeated in the aggregate status
+zone.</p>
+<h2 id="permission-and-confinement-propagation">Permission and confinement propagation<a class="headerlink" href="#permission-and-confinement-propagation" title="Permanent link">&para;</a></h2>
+<p>Every nested agent shares the root session's permission mode, direct rules,
+explicit denies, protected resources, resource grants, and confinement policy
+by
+reference. Its Bash and Eval calls therefore follow the same authority state as
+the root. Required decisions and direct interactions are attributed with the
+requester's canonical path and rendered in the root view's shared queues; child
+transcript views remain inspection-only. A turn blocked on either queue remains
+active and consumes tree capacity. Interrupting that turn cancels only its own
+queued entries.</p>
+<p>The retained-agent tree shares the root session's <code>work://</code> namespace,
+with session-owned <code>work://plans/</code> and workspace-owned <code>work://shared/</code>
+for notes, findings and handoffs across sessions. Standalone/sticky Plan mode keeps session-only <code>ApplyPatch</code> available to
+retained agents.
+It rejects any ordinary, shared, memory, or bare endpoint before local
+materialization, including mixed local/ordinary and ordinary-only calls, while
+other edit tools and <code>Eval</code> remain unavailable.</p>
+<p>Every agent turn started under Plan carries immutable Plan read-only
+authority: directive planning stamps its root request, and a spawn or
+follow-up made while sticky Plan is active stamps the new invocation. The
+stamp is copied into every nested invocation and request, including forked
+skills and their preparation. Those turns keep Plan tool and Bash restrictions
+after the root workflow advances to approval or implementation, or the user
+leaves Plan; mutable session phase is not an authority boundary. Unlike
+standalone/sticky Plan mode, directive Planning denies <code>ApplyPatch</code>, including
+session-only proposals, to its requests and retained agents. <code>Eval</code> is
+unavailable in both.</p>
+<p>A caller with Plan authority cannot direct a turn that lacks it.
+FollowupAgent on an active agent and SendMessage require the target's current
+turn to be Plan read-only; SendMessage to <code>/root</code> is always accepted.
+FollowupAgent on an idle agent starts a stamped turn. See
+<a href="../plan-mode/#tool-boundary">Plan mode</a>.</p>
+<p>Delegated invocation/request rules may narrow authority and may allow ordinary
+known-safe commands, but they cannot authorize dangerous or complex Bash, live
+Eval, protected resources, or full execution escalation. An ordinary sub-agent
+may request additive or full authority only through the same user-visible queue;
+there is no separate model-visible access-request tool. The main view's
+agent row retains durable warnings for materially non-default child access.
+Additional read-only mounts stay silent. Each Bash or batch-Eval result records
+the boundary used by that call, and the agent transcript identifies the
+affected tool.</p>
+<h2 id="task-status">Task status<a class="headerlink" href="#task-status" title="Permanent link">&para;</a></h2>
+<p>Tasks are tracked per caller (<code>/root</code> and each retained agent path). Agent-owned
+tasks and status notes use the retained agent's canonical path for automatic
+assignment, grouping, rendering, and terminal finalization; opaque storage IDs
+never enter the task surface. Explicit canonical owners must name a retained
+agent in the session, while <code>/root</code> normalizes to the main owner. Explicit
+non-path owner strings remain available as user-defined task buckets.
+Resume validates persisted task and status-note owners against the restored
+registry and drops entries carrying opaque IDs, malformed paths, or unknown
+canonical paths before they can reach model-visible task state. <code>blockedBy</code>
+is the only dependency edge. Every task write drops the edges it resolved:
+an edge to a task that is absent or already completed is removed, so
+neither a task created blocked by finished work nor a resume can leave a
+surviving task blocked by something that will never clear. Tasks therefore remain stable across follow-ups and cold
+session resume.</p>
+<p>The task status fragment is compact and appears only while at least one
+task is open. Open tasks are ordered once by display priority --
+in progress, then pending, then blocked -- and the separator rule
+carries the session tallies (<code>tasks · 3 running · 1 blocked · 6 done</code>),
+so each count is stated once rather than per owner. An owner holding a
+single open task renders inline behind a dim owner label with the
+<code>/root/</code> prefix stripped; an owner holding several renders under one dim
+header placed at its best-ordered task, which keeps that owner's rows
+adjacent. A running agent-owned row shows its <code>activeForm</code> in place of
+its subject. <code>TAB</code> or <code>RET</code> on the fragment toggles completed task
+details, which render in a single <code>done</code> section, each row keeping its
+owner attribution. The fragment caps itself against the live window
+height; when rows are omitted, it keeps a stable prefix with open rows
+ahead of completed rows and reserves one final count row such as
+<code>... 4 completed</code>, dropping any header left with nothing under it. A
+subject is stored as one non-blank line: whitespace runs collapse to a
+single space and a blank subject is rejected. Completed tasks are not
+pruned from the session task list.</p>
+<p>The task nudge reminder does not reuse this rendering. It sends the
+model the same shape <code>TaskList</code> returns, with canonical owner paths and
+unabbreviated subjects, so display decisions cannot alter what the model
+reads.</p>
+<p>Each owner group can also carry a short status note through <code>TaskNote</code>
+or the top-level <code>note</code>/<code>noteOwner</code> arguments on <code>TaskCreate</code> and
+<code>TaskUpdate</code>. An unknown note owner rejects the whole call; no task is
+created or updated. Notes render under the owner's header, or under
+its single inline row; the main session's note opens the panel, having
+no header to hang from. A note is dropped from view when that owner has
+no open tasks, so a completed-only task list does not keep the overlay
+visible.</p>
+<h2 id="model-tiers">Model tiers<a class="headerlink" href="#model-tiers" title="Permanent link">&para;</a></h2>
+<p><code>mevedel-models.el</code> resolves the current session's preset-local named tiers and
+workload map. A tier can select a concrete gptel provider and reasoning effort;
+a workload can select a tier or exact provider and override effort. Resolution
+starts from the session backend/model/effort, then applies tier and workload
+values, followed by explicit Agent policy or the policy of a skill that owns
+the child request. Explicit Agent <code>model</code> and <code>effort</code> values have final
+precedence. Skill-specific preset entries use <code>$skill-name</code> symbols in the
+same workload map. Agent buffers receive a deep-copied snapshot of the maps,
+so nested agents keep the policy in effect when they were launched.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

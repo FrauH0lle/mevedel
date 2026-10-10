@@ -1,0 +1,2266 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/telemetry/">
+      
+      
+        <link rel="prev" href="../development/">
+      
+      
+        <link rel="next" href="../commits/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Telemetry and diagnostics - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#session-telemetry-and-profiling" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Telemetry and diagnostics
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#storage-and-representation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage and representation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#detail-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detail tiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#covered-lifecycle-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Covered lifecycle boundaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproducing-a-goal-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproducing a Goal run
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#comparing-session-instrumentation-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comparing session instrumentation modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-cache-efficiency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt-cache efficiency
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt guard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-the-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#storage-and-representation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage and representation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#detail-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detail tiers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#covered-lifecycle-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Covered lifecycle boundaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproducing-a-goal-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproducing a Goal run
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#comparing-session-instrumentation-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comparing session instrumentation modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-cache-efficiency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt-cache efficiency
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt guard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-the-stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/telemetry.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="session-telemetry-and-profiling">Session telemetry and profiling<a class="headerlink" href="#session-telemetry-and-profiling" title="Permanent link">&para;</a></h1>
+<p>mevedel writes a versioned, append-only diagnostic event stream for every
+session. The stream is evidence for postmortems and performance analysis; it
+is not session state and is never read during resume.</p>
+<h2 id="storage-and-representation">Storage and representation<a class="headerlink" href="#storage-and-representation" title="Permanent link">&para;</a></h2>
+<p>The stream lives at <code>SESSION_DIR/telemetry-log.el</code>. Each line is one readable
+Emacs Lisp plist. This uses the package's existing append-only log convention,
+requires no serializer dependency, and remains streamable even when a run is
+interrupted. Every entry has schema version 1, an ISO wall time,
+process-relative elapsed milliseconds, a process-local sequence number, the
+session and turn, and any current preset and Goal identity.</p>
+<p>Sessionless background work uses the same envelope and privacy filter at
+<code>WORKSPACE/.mevedel/state/diagnostics/telemetry-log.el</code>, through target-native control
+operations on local and TRAMP workspaces. It has no session identity or Goal
+and does not manufacture a conversation. It follows the same enable switch;
+disabled telemetry creates no diagnostic state.</p>
+<p>Workspace appends rotate before <code>telemetry-log.el</code> exceeds 10 MiB, keeping one
+<code>telemetry-log.el.1</code> archive. Cooperating writers share a target directory lock.
+The next rotation replaces the old archive. An already oversized log is trimmed
+to its last complete lines within 10 MiB on rotation; a single oversized event
+is rejected with the ordinary telemetry failure diagnostic. No age timer is
+needed. Session telemetry keeps its existing session-owned lifetime.</p>
+<p>On Linux, elapsed milliseconds and span durations use the kernel monotonic
+clock exposed by <code>/proc/uptime</code>. Other systems fall back to process-relative
+wall time and clamp emitted elapsed values so they never move backwards. Use
+<code>:duration-ms</code> for latency analysis and <code>:time</code> for correlation with external
+logs.</p>
+<p>Permission queue events use a stable <code>:permission-id</code> across admission, initial
+display, and settlement. <code>permission-displayed</code> occurs once per card, including
+when that card is later refreshed; <code>permission-enqueued</code> alone does not mean the
+user saw a prompt. <code>permission-resolved</code> counts user answers, while coalescing,
+owner-request sweeps, cancellations, and aborts retain distinct event or
+<code>:settlement-source</code> values. Captured admission modes are separate from Eval's
+<code>:eval-mode</code>. See <a href="../permissions/">permission diagnostics</a> for event semantics
+and the richer resource-scope fields restricted to <code>permission-log.el</code>.</p>
+<p>Telemetry may be disabled with <code>mevedel-telemetry-enabled</code>. Events emitted
+before a new session has a directory are held in the session and flushed as
+soon as it is materialized. Persistence failures warn but never fail the user
+workflow. Local session events are appended synchronously as UTF-8, one write
+per event; the session directory is created only when an append finds it
+missing.</p>
+<h2 id="data-policy">Data policy<a class="headerlink" href="#data-policy" title="Permanent link">&para;</a></h2>
+<p>Telemetry records lifecycle metadata, sizes, classifications, hashes, and
+bounded identifiers. The emitter keeps only the keys named in
+<code>mevedel-telemetry--allowed-keys</code> and drops everything else, at every depth: a
+nested property list is filtered by the same rule as the event's own
+properties. This is a structural filter, not content classification: a string
+under an allowed key is bounded but is not inspected for secrets or payload
+text. Callers must classify or hash payload-derived values before emission.
+The names of dropped keys -- names only -- are
+recorded on the event as <code>:dropped-keys</code>, so a caller whose property was
+omitted can see that instead of nothing. Adding a property to telemetry means
+adding its key to that list, and classifying or hashing anything derived from
+a payload first. Shell commands are correlated by a SHA-256 hash; a Buddy
+scope key is hashed for the same reason; Eask test paths are extracted only when they are repository-local
+<code>test/*.el</code> names. Cache identity is a hash of the relevant parent environment,
+not the environment values.</p>
+<p>The ordinary hook, permission, execution, and repair logs remain available for
+their subsystem-specific details. Telemetry connects their lifetimes through
+shared session, request, tool-use, execution, interaction, agent, Goal, and
+span identifiers.</p>
+<p>An ephemeral <code>/btw</code> conversation has no telemetry file of its own. Its
+allowlisted tool, permission, repair, sandbox, and managed-execution audit
+events are redacted again, tagged with <code>:conversation-scope btw</code>, and recorded
+through the durable parent session. Conversational events remain transient.
+Side prompts, response prose, commands, tool arguments and results, paths,
+permission profiles, and justifications are not forwarded.</p>
+<h2 id="detail-tiers">Detail tiers<a class="headerlink" href="#detail-tiers" title="Permanent link">&para;</a></h2>
+<p>Normal sessions keep tool-, request-, interaction-, execution-, agent-, Goal-,
+and other outcome-level events. They omit routine per-pipeline-step spans,
+per-hook-handler lifecycle spans, and hook-event spans with no matching
+handlers. Hook events that actually run handlers and nontrivial repair
+outcomes remain visible. A compaction attempt refused before admission is not
+measured at all; one rejected after measurement starts closes its span as
+rejected, so every recorded start has a finish.</p>
+<p>Valid no-op input-validation and repair events are never recorded in any
+tier, detailed profiler runs included: a validation that changed nothing and
+raised nothing carries no information, and a profiled session emits hundreds
+of them. Input validation therefore records one settled
+<code>tool-input-validation-repair</code> event carrying its own <code>:duration-ms</code> instead
+of a start/finish span, and only for outcomes with repairs, issues, or
+errors.</p>
+<p>An active <code>mevedel-telemetry-profiler-start</code> run records the full detailed
+stream for its owning session, minus those no-op validation and repair
+events. <code>mevedel-session-debug</code> starts that same profiler, so it also enables
+full telemetry. Other concurrently live sessions remain on the normal tier.</p>
+<h2 id="covered-lifecycle-boundaries">Covered lifecycle boundaries<a class="headerlink" href="#covered-lifecycle-boundaries" title="Permanent link">&para;</a></h2>
+<p>Request settlement <code>:duration-ms</code> remains end-to-end wall-clock latency,
+including user waits. Interaction events separately identify whether active
+work was paused. The request-progress display and persisted request summary use
+active elapsed time instead and exclude actionable user-input waits.</p>
+<p>A <code>request-settled</code> event with <code>:outcome lost</code> records a degraded
+settlement: the turn's request slot was emptied without its settlement
+ever running -- a terminal transition lost with its process -- and a
+later terminal transition on the same machine settled what it still
+could.  Its request identity comes from the machine itself, and it
+carries no duration or token facts.  The session reports <code>settling</code> and
+rejects new admission until the degraded settlement chain completes; transport
+cancellation releases the fence and leaves the machine retryable.</p>
+<ul>
+<li>Goal start, continuation dispatch, root-turn settlement, accounting, retries,
+  and terminal status changes;</li>
+<li>request queueing, provider dispatch, first response, stream end, callback
+  settlement, cancellation, and teardown;</li>
+<li>every tool pipeline step during profiler/debug runs, plus every permission
+  queue transition, interaction lifetime,
+  sandbox preparation/refusal, scheduler dwell, child start/first output/end,
+  <code>WriteStdin</code> requested/effective wait, and result return;</li>
+<li>every ToolCall script as one redacted span with outcome, budget category,
+  nested-call count, and duration, never script text, arguments, or results;</li>
+<li>aggregate hook events with matching handlers, plus every hook handler and
+  empty aggregate event during profiler/debug runs, including handler identity,
+  process outcome, contributed-context size, and acquisition/release of
+  slow-hook status ownership;</li>
+<li>agent dispatch, provider send, first response, settlement, waits, and UI
+  status ownership transitions;</li>
+<li>queued user messages with enqueue/dequeue events and dwell time;</li>
+<li><code>event-loop-lag</code> whenever the editor's event loop ran more than
+  <code>mevedel-telemetry-lag-threshold</code> (0.5 s) late. Watching runs while a
+  request runs and for two minutes after it settles, since journal,
+  collection and publication work follows settlement. Every timer delivered
+  meanwhile reports how late it ran, since a stall delays every timer due
+  during it; a 500 ms heartbeat samples quiet stretches without other timers
+  and reports the worst delay since the previous heartbeat, once. A stall
+  shorter than the heartbeat with no timer due during it can go unseen. This
+  heartbeat shares a host wakeup with due GC maintenance, process-exit
+  recovery and quiet progress/metadata updates. Each callback retains its own
+  timing attribution; the shared dispatcher does not replace callback names.
+  Disabling telemetry stops the heartbeat at its next tick, since requests
+  no longer report settling to close their windows. Lateness the
+  previous heartbeat already saw is not counted again, and idle timers do not
+  count. The heartbeat was 100 ms until each wakeup was measured to repaint a
+  whole pgtk frame: on a 2x-scaled frame it cost 23% editor CPU on its own.
+  The event carries the delay, whether input was pending, whether the request
+  had settled, the running command's name, and the name and duration of
+  the slowest timer callback since the previous heartbeat. <code>:gc-count</code> and
+  <code>:gc-ms</code> report garbage collection anywhere since the previous heartbeat;
+  <code>:timer-gc-count</code> and <code>:timer-gc-ms</code> the part inside that slowest callback,
+  so a pause can be split into collection and callback work. <code>:cpu-ms</code> is
+  the CPU time Emacs used since the previous heartbeat: close to the delay
+  for a busy editor, near zero for a suspended machine or a blocking wait on
+  a child process. A closure is
+  labelled <code>closure:</code> plus the function it calls, preferring a <code>mevedel-</code>
+  one: that names what it does, not where it was created. One that calls
+  only primitives is named <code>anonymous</code>. Each settled request adds an <code>event-loop-lag-summary</code>
+  with the counts above 200, 500 and 1000 ms, the maximum, and how many had
+  input pending. Wait time the CPU profiler cannot see, such as a blocking
+  remote command, shows up here;</li>
+<li><code>session-save</code> (<code>:kind full</code> or <code>agent-registry</code>), <code>session-publication</code>
+  (<code>:artifact-count</code>, <code>:input-bytes</code>), and <code>control-program</code> (<code>:kind</code>, the
+  first operation's verb, and <code>:operation-count</code>) for synchronous
+  persistence work. Each is one settled event recorded when the work returns,
+  with <code>:duration-ms</code>, <code>:gc-count</code> and <code>:gc-ms</code> inside it, an estimated
+  <code>:allocated-kb</code> from <code>memory-use-counts</code>, and <code>:outcome</code> (a returned
+  symbol such as <code>queued</code>, else <code>ok</code>, or <code>error</code>). Allocation is reported
+  apart from collection because persistence defers collection past its own
+  extent, into whatever runs next. A save contains its publication and
+  programs, so these durations nest. A target program has no session of its
+  own: it is recorded only into the sessions the lag heartbeat is watching,
+  and only when it blocked for 20 ms or more. Nothing is measured while a
+  measurement is being recorded, since a remote session appends telemetry
+  through the same programs;</li>
+<li><code>publication-collection</code> when a collection job ends, with <code>:outcome</code>
+  (<code>completed</code>, <code>proof-failed</code> when a deletion proof refused and nothing was
+  deleted, or <code>failed</code>), candidate and retained head counts, deleted file and
+  directory counts, and duration;</li>
+<li><code>journal-capture-queued</code> when a checkpoint first becomes ready, carrying its
+  capture identity, checkpoint trigger, and frozen input byte count; no evidence
+  body is logged;</li>
+<li><code>journal-digest-written</code>, <code>journal-digest-omitted</code> (nothing noteworthy), and
+  <code>journal-digest-failed</code> in workspace diagnostics,
+  with capture identity, trigger, attempt generation, publication/failure outcome,
+  body byte count, and available provider uncached-input, cached-input, and
+  output token counts. Input and cached counts are exclusive. Recovery
+  can report publication without provider usage when those counts were not
+  retained. Retries and failed publication remain diagnostic events; logs are
+  not used as completion or review-coverage authority;</li>
+<li><code>memory-consolidation-fired</code>, <code>memory-consolidation-completed</code>,
+  <code>memory-consolidation-failed</code>, and <code>memory-consolidation-killed</code> in workspace
+  diagnostics. Each pass carries its identity, ownership generation, frozen
+  mode, general/focused scope, and <code>memory</code> workload. Terminal events add duration,
+  available provider usage, published proposal/review counts, consumed coverage,
+  and the frozen eligible backlog remaining. Focused passes consume no general
+  coverage; failed or cancelled passes leave the selected batch in the backlog.
+  Auto completion also records <code>updated-file-count</code>, the distinct paths newly
+  confirmed written by that run, without exposing those paths or claiming that
+  the resulting memory is better.
+  Terminal events and pass results retain <code>:output-bytes</code> (cumulative reply,
+  reasoning, and normalized tool-call bytes), <code>:output-estimated-tokens</code> (the cumulative
+  client estimate), and <code>:result-bytes</code> (current-round reply bytes, final at DONE),
+  separately from provider token counts. See the <a href="../memory/#request-limits-and-settlement">accounting limits</a>
+  for raw and in-flight tool arguments excluded from these counters.
+  <code>:reasoning-bytes</code>, <code>:reply-bytes</code>, and <code>:tool-call-bytes</code> break down accounted
+  output into cumulative reasoning, replies across all rounds, and normalized
+  executable-name/argument JSON. <code>:tool-call-count</code> counts admitted investigation
+  calls; <code>:rounds</code> counts completed HTTP rounds independently of whether provider
+  token metadata was reported. These are numeric diagnostics, not retained
+  payloads. Budget failures carry
+  <code>:failure-class output-limit</code>, <code>:budget-kind</code> (<code>output-bytes</code>,
+  <code>output-estimated-tokens</code>, <code>output-tokens</code>, or <code>proposal-bytes</code>), and the numeric
+  failing threshold in <code>:output-limit</code>; the latter two fields are nil when no
+  budget failed. The review freezes its configurable cumulative limits at request
+  start (64,000 tokens and 262,144 accounted bytes by default). Investigation
+  permits 64 calls but still only 64 KiB of aggregate tool results, capped at
+  8 KiB each. The deadline remains 180 seconds. The final proposal parser has
+  an independent 32 KiB cap, diagnosed as <code>proposal-bytes</code> at DONE.
+  Cancellation retains diagnostics already observed, and late callbacks do not
+  emit another terminal event. Storage failures retain those diagnostics too,
+  with failure class <code>publication</code>. Failure classes are categorical; focus text,
+  evidence, proposal bodies, credentials,
+  and arbitrary error messages are excluded. Unreported provider usage remains
+  unknown, so these events do not establish a billing ceiling;</li>
+<li>compaction threshold inputs, hook work, segment-save stages, publication,
+  and total duration, plus context-summary purpose, provider/model/effort,
+  outcome, and token usage without raw evidence, focus data, or generated text;</li>
+<li>one terminal <code>session-naming</code> event per background title attempt: <code>renamed</code> on
+  success, otherwise <code>provider-error</code>, <code>aborted</code>, <code>invalid-response</code>, <code>timeout</code>,
+  <code>cancelled</code>, or <code>error</code>, each with a categorical <code>:error-class</code>. <code>cancelled</code>
+  covers an attempt the transport refused to schedule, and an attempt the user
+  ends by renaming the session or closing its root buffer records nothing.
+  Provider failures also carry <code>:provider-status</code> and, when the provider
+  structured its error, <code>:provider-error-type</code> and <code>:provider-error-code</code>;
+  provider message text is never recorded, so a refusal is attributable to its
+  class and code but not quotable from telemetry;</li>
+<li>Agent summary preparation uses that same context-summary span; the parent
+  handle stores only provider/model/effort metadata and never summary content;</li>
+<li>skill-roster advertisement and model/user skill invocation outcomes; and</li>
+<li>profiler environment snapshots, prompt failures, and saved artifacts.</li>
+</ul>
+<h2 id="reproducing-a-goal-run">Reproducing a Goal run<a class="headerlink" href="#reproducing-a-goal-run" title="Permanent link">&para;</a></h2>
+<p>Start from the root data or view buffer immediately before creating the Goal.
+The session does not have to have hit disk yet: profiler start materializes a
+cold session itself, so a run can begin without sending a throwaway turn
+first.</p>
+<ol>
+<li>Run <code>M-x mevedel-telemetry-profiler-start</code>. Combined CPU and memory
+   profiling is the default. With a prefix argument, choose a single mode.</li>
+<li>Create the Goal with the preset and objective being investigated. For a
+   comparison, repeat the same interaction sequence, including any queued input,
+   and avoid unrelated commands.</li>
+<li>Let the Goal reach a terminal state or a clearly stranded state.</li>
+<li>Run <code>M-x mevedel-telemetry-profiler-stop</code>.</li>
+</ol>
+<p>For a session-level reproduction, <code>M-x mevedel-session-debug</code> starts the same
+profiler while enabling gptel debug logging and the existing view-render trace.
+Run it again to stop and save all three captures. The view trace includes
+buffer point, selected-window point/start, composer-relative offsets, and
+managed-fragment coordinates around interaction registration, full rerenders,
+and zone reconciliation.</p>
+<p>During <code>mevedel-session-debug</code>, <code>gptel--log</code> appends raw entries without
+JSON pretty-printing. The debug log remains an opt-in raw-data artifact; ordinary
+telemetry still follows the bounded metadata policy. See
+<a href="../adr/0118-keep-diagnostics-observational-and-bounded/">ADR 0118</a> for the
+instrumentation tradeoffs.</p>
+<p>From the repository checkout, <code>python3 scripts/analyze-gptel-log.py LOG_FILE</code>
+analyzes raw or pretty-printed gptel captures. Add <code>--json</code> for structured events.
+Requests, responses and streaming completions retain source line numbers and
+appear in log order.</p>
+<p>Each profiler run gets a directory containing:</p>
+<div class="highlight"><pre><span></span><code>profiler-cpu-profile.el       native readable Emacs CPU profile, when enabled
+profiler-cpu-report.txt       rendered CPU report, when enabled
+profiler-memory-profile.el    native readable Emacs memory profile, when enabled
+profiler-memory-report.txt    rendered memory report, when enabled
+full-suite-time.txt           GNU time report, when a full Eask suite ran
+gptel-debug.log               gptel log captured by mevedel-session-debug
+view-render-debug.log         view trace captured by mevedel-session-debug
+</code></pre></div>
+<p>For a session saved locally, the directory is
+<code>SESSION_DIR/diagnostics/run-TIMESTAMP-ID/</code>. For a remote session, it is a fresh
+client-local directory under <code>temporary-file-directory</code>. Remote-session
+profiler artifacts are not portable: another client resuming the session does
+not receive them. <code>profiler-stopped</code> records the absolute client-side
+<code>:artifacts-directory</code>, and the stop command prints it.</p>
+<p>Current diagnostic limitation: <code>:artifacts-local</code> is false for remote sessions
+even though their profiler artifacts are client-local. Use the explicit
+directory and the storage rules above to locate the files; the flag does not
+reliably describe artifact locality.</p>
+<p>Native profile files hold <code>profiler-fixup-profile</code> output, which normalizes
+sampled runtime objects before serialization.  Open them with
+<code>M-x profiler-find-profile</code>.  A run is recorded as <code>profiler-stopped</code> only
+after every expected profile and report exists and is nonempty; otherwise it
+records <code>profiler-stop-failed</code> and signals the save error.</p>
+<p>Both ends of a run are atomic about what they leave behind. Stop halts the
+native profiler before it takes its closing environment snapshot, so a
+snapshot that fails cannot leave Emacs profiling after the run has released
+the handle for stopping it -- and the snapshot's own Git and hashing work
+stays out of the profile it describes. If any part of start fails after the
+native profiler is running, start stops it, removes the prompt guard, and
+clears run ownership before re-signalling, so a reported failure to start
+never leaves a run sampling in the background. A run raises
+<code>profiler-max-stack-depth</code> globally, because the C log fixes its backtrace
+width when profiling begins; whichever way the run ends restores the previous
+value.</p>
+<p>The two debug logs are explicit opt-in artifacts and may contain raw prompts,
+responses, request headers, connection settings, and short rendered text
+previews. Before persistence, mevedel replaces <code>Authorization</code>,
+<code>ChatGPT-Account-Id</code>, and <code>Session-Id</code> header values in the gptel log with
+<code>&lt;redacted&gt;</code>. Other diagnostic content remains raw. The logs are written with
+owner-only permissions (<code>0600</code>); still treat the diagnostics directory as
+sensitive session data.</p>
+<p>While profiling is active, the first full Eask ERT suite is transparently run
+under <code>/usr/bin/time -v</code> when GNU time is installed. Focused test files and
+subsequent full-suite attempts are not wrapped. The corresponding execution
+events identify the report and include scheduler dwell, overlap count, cache
+identity, timeout state, and report size. Classification uses the original Bash
+text. <code>mevedel-execution-telemetry.el</code> owns that recognition and prepends GNU
+time directly to the already-tokenized argv; it does not add another shell
+layer or inspect the live process record.</p>
+<p>At profiler start and stop, telemetry records Git HEAD, dirty-file count,
+status hash, an exact dirty-content hash (tracked diff plus untracked
+file content hashes), loaded gptel artifact hash and checkout commit,
+Emacs and system versions, configured sandbox mode, and Bubblewrap
+availability. Library identity comes from Emacs's loaded-feature history, not
+the first matching library on the current <code>load-path</code>. The hash and snapshot
+byte count describe the loaded artifact's <strong>current disk bytes</strong>, including
+bytecode when an <code>.elc</code> was loaded; they do not reconstruct bytes from load time.
+For Git provenance only, an existing sibling <code>.el</code> of an <code>.elc</code> is preferred,
+then symlinks are resolved before searching for a repository. This can identify
+the source checkout behind a compiled build tree. Its commit is checkout
+provenance, <strong>not proof that the source and compiled artifact are equivalent</strong>.
+Without sibling source, Git lookup starts at the resolved artifact directory.
+Unloaded, unknown, or missing loaded artifacts have unavailable identity and
+provenance; another copy on <code>load-path</code> is never substituted. Missing Git or a
+repository leaves the commit unavailable without losing readable artifact
+identity. File contents are not written to telemetry, and neither are
+arbitrary source paths. The explicit path exceptions are repository-local
+Eask test names used for workload classification and <code>:artifacts-directory</code>,
+which locates the client-side profiler output.</p>
+<h2 id="comparing-session-instrumentation-modes">Comparing session instrumentation modes<a class="headerlink" href="#comparing-session-instrumentation-modes" title="Permanent link">&para;</a></h2>
+<p>The maintained
+<a href="https://github.com/FrauH0lle/mevedel/blob/master/benchmark/session-performance-workload.md">controlled session performance workload</a>
+exercises the native ApplyPatch tool, a child-agent permission request, retained
+agent coordination, focused Bash tests, and an ignored-file-safe Elisp Xref
+search.  It defines normal, profiler-only, and full-debug runs from equivalent
+repository state.  Use profiler-only results for performance comparisons;
+full-debug capture deliberately pays the cost of gptel request logging and the
+view-render trace.</p>
+<h2 id="prompt-cache-efficiency">Prompt-cache efficiency<a class="headerlink" href="#prompt-cache-efficiency" title="Permanent link">&para;</a></h2>
+<p>Ordinary telemetry records <code>provider-call</code> events with <code>:stage start</code> and at
+most one <code>:stage finish</code> per actual gptel provider dispatch. A <code>:call-id</code> identifies
+the HTTP call, unlike <code>:request-id</code>, which can span a whole tool-loop turn.
+Both events retain the dispatch-time session turn, request identity, agent
+path (when applicable), backend name and concrete <code>:backend-type</code>, model,
+and workload (<code>root</code>, <code>agent</code>, <code>naming</code>, or <code>context-summary</code>). Context
+summaries also retain their categorical purpose. Helpers write into the owning
+session; sessionless journal/memory work keeps its separate workspace stream.
+Transient <code>/btw</code> conversational calls do not create per-call events.
+Only gptel dispatch is observed. Claude Code requests run through ACP and emit
+no <code>provider-call</code> events: root and child turns, and isolated text and workload
+requests such as naming, context summaries, permission review, buddy and
+memory review, are absent from prompt-cache analysis. Root and child turn usage
+still reaches Goal accounting.</p>
+<p>Normal completion observes gptel's per-call <code>:tokens</code> at streaming transport
+cleanup or non-streaming response parsing, before callbacks can tear down a
+buffer, run tools, or dispatch another call. Transport completion metadata
+keeps an older cleanup's error from contaminating a replacement call. Streaming
+parsing retains only a boolean for provider errors, with no per-chunk events.
+Abort callbacks and explicit <code>ABRT</code> transitions cover cancellation, including
+retained-agent interruption with a muted callback. It never uses cumulative
+<code>:tokens-full</code> for per-call accounting. Successful tool-only responses that
+have no text callback also settle before tool or terminal handling. Finish adds <code>:outcome</code>
+(<code>success</code>, <code>error</code>, or <code>aborted</code>) and monotonic <code>:duration-ms</code>, which ends
+before subsequent tool execution and user waits. An interrupted process may
+leave an unmatched start. A failed/aborted call may retain partial usage; it
+does not imply a zero bill.</p>
+<p>Token fields have one normalized meaning across providers:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>:input-tokens</code></td>
+<td>Input not read from cache, including cache-write tokens under gptel's normalized accounting</td>
+</tr>
+<tr>
+<td><code>:cached-tokens</code></td>
+<td>Input read from cache</td>
+</tr>
+<tr>
+<td><code>:cache-write-tokens</code></td>
+<td>Cache-write subset of input, when reported; do not add it to input again</td>
+</tr>
+<tr>
+<td><code>:output-tokens</code></td>
+<td>Provider-reported output</td>
+</tr>
+</tbody>
+</table>
+<p>Counts are nonnegative integers or nil (unknown). <code>:usage-status</code> is <code>complete</code>
+when input, cached input, and output are known, <code>partial</code> when only some are
+known, <code>missing</code> when none are known, and <code>invalid</code> when a reported value is
+invalid. Cache writes are optional, so their absence does not make otherwise
+complete usage partial. Invalid counts are retained as unknown. gptel can
+normalize omitted provider fields to zero; telemetry cannot reconstruct that
+lost distinction. Token-baseline events normalize nested <code>:provider-context-usage</code>
+and <code>:cumulative-usage</code> into these same allowlisted names without broadening
+the privacy filter to generic <code>:input</code>/<code>:output</code> keys.</p>
+<p>Analyze logs from a repository checkout, without loading mevedel or making
+provider calls:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Text summary of every session with a log in this workspace.</span>
+emacs<span class="w"> </span>-Q<span class="w"> </span>--batch<span class="w"> </span>-l<span class="w"> </span>scripts/analyze-session-cache.el<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-f<span class="w"> </span>mevedel-analyze-session-cache-main<span class="w"> </span>--<span class="w"> </span>.mevedel/sessions
+
+<span class="c1"># Structured report for explicit logs or session directories.</span>
+emacs<span class="w"> </span>-Q<span class="w"> </span>--batch<span class="w"> </span>-l<span class="w"> </span>scripts/analyze-session-cache.el<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-f<span class="w"> </span>mevedel-analyze-session-cache-main<span class="w"> </span>--<span class="w"> </span>--json<span class="w"> </span>/path/to/session/telemetry-log.el
+</code></pre></div>
+<p>The analyzer accepts telemetry files, session directories, or sessions
+directories. It reads Lisp data without evaluating it and validates records.
+It reports source files and line numbers, duplicate/conflicting records,
+malformed lines, incomplete calls, outcomes, usage coverage, and breakdowns
+by session, backend/model, and workload. Chronological call details let you
+locate reuse drops without recording prompt content.</p>
+<p>The token-weighted cached-input share is
+<code>sum(cached) / sum(input + cached)</code> over calls with both fields known. It is
+not the average of call percentages. The cache-positive call fraction uses
+calls with known cached-input usage; coverage is reported separately. Zero
+denominators are unavailable, not 0%. Field totals sum known values and cannot
+establish complete usage when coverage is partial.</p>
+<p>Only per-call events enter these totals. Existing <code>request-settled</code> events
+remain cumulative lifecycle summaries and are never added. Older logs have
+insufficient per-call evidence; mixed logs disclose limited coverage rather
+than backfilling call counts from settlements. Historical logs are not changed.</p>
+<p>Observed reuse is not theoretical cacheability, monetary savings, or evidence
+that caching caused a latency improvement. Cold starts, compaction, model or
+schema changes, routing, and provider retention can legitimately reduce reuse.
+The report locates drops; it does not automatically attribute their cause.</p>
+<h2 id="prompt-guard">Prompt guard<a class="headerlink" href="#prompt-guard" title="Permanent link">&para;</a></h2>
+<p>Profiler runs temporarily advise <code>ask-user-about-supersession-threat</code>,
+<code>yes-or-no-p</code>, and <code>y-or-n-p</code>. Each invocation records the function, prompt
+length, and prompt hash. By default,
+<code>mevedel-telemetry-profiler-fail-on-prompt</code> then raises a <code>user-error</code>, making
+an unexpected compaction, file-conflict, or edit question a visible failed
+reproduction rather than unclassified user-wait time. Set the option to nil
+only when the reproduction intentionally includes synchronous prompts.</p>
+<h2 id="reading-the-stream">Reading the stream<a class="headerlink" href="#reading-the-stream" title="Permanent link">&para;</a></h2>
+<p>The file can be read incrementally with ordinary Lisp <code>read</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="nb">with-temp-buffer</span>
+<span class="w">  </span><span class="p">(</span><span class="nf">insert-file-contents</span><span class="w"> </span><span class="s">"/path/to/session/telemetry-log.el"</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="k">let</span><span class="w"> </span><span class="p">(</span><span class="nv">events</span><span class="p">)</span>
+<span class="w">    </span><span class="p">(</span><span class="k">condition-case</span><span class="w"> </span><span class="no">nil</span>
+<span class="w">        </span><span class="p">(</span><span class="k">while</span><span class="w"> </span><span class="no">t</span><span class="w"> </span><span class="p">(</span><span class="nb">push</span><span class="w"> </span><span class="p">(</span><span class="nf">read</span><span class="w"> </span><span class="p">(</span><span class="nf">current-buffer</span><span class="p">))</span><span class="w"> </span><span class="nv">events</span><span class="p">))</span>
+<span class="w">      </span><span class="p">(</span><span class="nv">end-of-file</span><span class="p">))</span>
+<span class="w">    </span><span class="p">(</span><span class="nf">nreverse</span><span class="w"> </span><span class="nv">events</span><span class="p">)))</span>
+</code></pre></div>
+<p>Build the critical path from paired <code>:stage start</code> and <code>:stage finish</code> entries
+sharing <code>:span-id</code>, then use queue dwell events and provider, child-process,
+interaction, hook, and compaction spans to classify every interval longer than
+five seconds. <code>status-transition</code> events identify the subsystem that owned a
+long-lived spinner independently of whether background work was still live.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

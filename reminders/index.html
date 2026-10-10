@@ -1,0 +1,2236 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/reminders/">
+      
+      
+        <link rel="prev" href="../compaction/">
+      
+      
+        <link rel="next" href="../hooks/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Context delivery and reminders - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#system-reminders" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Context delivery and reminders
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#delivery-and-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delivery and history
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reminder-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reminder flow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reminder flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#staging-seams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Staging seams
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-injection-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The injection record
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent requests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implemented-reminders" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implemented reminders
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Implemented reminders">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#session-state-and-mode-guidance-evaluated-from-current-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session state and mode guidance (evaluated from current state)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changing-prompt-observations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changing prompt observations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runtime-status-and-event-reminders" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime status and event reminders
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-edited-file-reminder-watches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the edited-file reminder watches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pdf-and-large-attachment-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PDF and large-attachment guidance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edit-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edit diagnostics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#delivery-and-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delivery and history
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reminder-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reminder flow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reminder flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#staging-seams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Staging seams
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Commits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-injection-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The injection record
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent requests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implemented-reminders" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implemented reminders
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Implemented reminders">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#session-state-and-mode-guidance-evaluated-from-current-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session state and mode guidance (evaluated from current state)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changing-prompt-observations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changing prompt observations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runtime-status-and-event-reminders" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime status and event reminders
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-edited-file-reminder-watches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the edited-file reminder watches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pdf-and-large-attachment-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PDF and large-attachment guidance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edit-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edit diagnostics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/reminders.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="system-reminders">System reminders<a class="headerlink" href="#system-reminders" title="Permanent link">&para;</a></h1>
+<p>System reminders are model-visible guidance injected into the request
+stream as <code>&lt;system-reminder&gt;</code> blocks. <code>mevedel-reminders.el</code> owns the
+reminder struct, firing policy, session and agent scoped reminder
+lists, the staging seam other modules deliver through, request-time
+injection, and the hidden injection record the view renders. The base
+system prompt teaches the model that these blocks are system context,
+not user text or tool output.</p>
+<p>Contextual reminders remain a valid delivery mechanism; neither their count nor
+raw specialist-tool usage establishes whether guidance improved a task.</p>
+<h2 id="delivery-and-history">Delivery and history<a class="headerlink" href="#delivery-and-history" title="Permanent link">&para;</a></h2>
+<p>Deliver reminders only when their firing policy establishes relevance. Once
+actually delivered, retain their complete content at that point in conversation
+history until compaction removes the corresponding prefix. Later state changes
+arrive as new context; old state descriptions do not override current settings.</p>
+<p>Retention consumes historical context and local storage; sparse firing,
+deduplication, and compaction control that cost. The rationale and prior delivery
+behavior are recorded in <a href="../adr/0115-retain-delivered-conversation-fragments/">ADR 0115</a>.</p>
+<p>Staged entries and turn events share this delivery contract. Unsent events remain
+owner-bound and transient; cancellation must not manufacture delivered history.
+Position-bound text such as Read truncation notices, the <code>/btw</code> interruption
+boundary and compaction summaries remains ordinary durable transcript content.</p>
+<h2 id="reminder-flow">Reminder flow<a class="headerlink" href="#reminder-flow" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TD
+    A[Session, agent, or runtime event] --&gt; B[Evaluate reminder policy]
+    B --&gt; C{Should fire now?}
+    C -- No --&gt; D[Keep or throttle reminder]
+    C -- Yes --&gt; E[Stage typed entry or queue turn event]
+    E --&gt; F[Coalesce at the next WAIT]
+    F --&gt; G[Inject one synthetic user-role message]
+    G --&gt; H[Write hidden injection record into the transcript]</code></pre>
+<p>Staged reminders travel as typed entries <code>(:type SYM :body STRING)</code>;
+wrapping into <code>&lt;system-reminder&gt;</code> blocks happens once at injection.
+At every WAIT, the synthetic message appends after the actual user message or
+complete tool results, matching the durable record's transcript position. This
+never splits a tool call from its result. Observations produced while tools run are buffer-local and
+bound to the active root request or retained-agent invocation.
+Repeated observations with the same key coalesce and are injected at
+the next WAIT owned by that same turn. They are discarded when the
+owner changes and are never carried into the next user turn.
+The compaction provider-dispatch wrapper is the final injection seam:
+continuation auto-compaction may rebuild the realized payload first,
+then reminders are injected, recorded, and committed against the
+payload that is actually dispatched.</p>
+<h3 id="staging-seams">Staging seams<a class="headerlink" href="#staging-seams" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>mevedel-reminders-stage-entry</code> appends one typed entry (plus an
+  optional deferred commit) to the request's fsm info. Callable from
+  any prompt transform and from WAIT-time handlers that run before the
+  final provider dispatch: mentions (depth -90) and skills-input (-89) stage before
+  the reminders transform (-80) collects session reminders;
+  auto-compaction (-70) and the steering WAIT handler stage after.</li>
+<li><code>mevedel-reminders-stage-commit</code> defers a commit thunk alone, for
+  consumable state whose payload rides the prompt text or the staged
+  entries of the same request.</li>
+<li><code>mevedel-reminders-queue-turn-event</code> queues an owner-bound,
+  key-coalesced observation for the current turn, delivered at the
+  next WAIT after the tool results.</li>
+<li><code>mevedel-session-enqueue-pending-reminder</code> appends to the session's
+  transient pending FIFO, consumed by the <code>pending-events</code> reminder on
+  the next request. Survives a request boundary but not a restart.</li>
+</ul>
+<h3 id="commits">Commits<a class="headerlink" href="#commits" title="Permanent link">&para;</a></h3>
+<p>Consuming a reminder is a separate step from staging it. A content
+function returns either its body or a <code>:body</code>/<code>:commit</code> plist. A nil <code>:body</code>
+stages only the commit, for a silent acknowledgement of context already in the
+prompt. Pending-event consumption, observed dates, external-change snapshots,
+turn events, mention deduplication, and reminder firing marks commit only after
+the final provider-bound payload exists at WAIT. A request that fails before
+injection keeps that state eligible for a later attempt.</p>
+<p>Hook context has two entry paths. Composer preparation consumes accepted hook
+context when its user turn is committed to the transcript; a later dispatch
+failure cannot redeliver text already stored there. Context still pending when
+the prompt transform runs is reserved into that request's prompt text. Its WAIT
+commit clears the reservation, and request teardown returns an uncommitted
+reservation to the pending list. See <a href="../hooks/#lifecycle-integration">hook lifecycle integration</a>.</p>
+<p>A trigger that mutates state has no commit channel, so a reminder
+whose trigger consumes still reports once per attempt rather than once
+per delivery.</p>
+<p>The Claude engine collects configured reminders once at prompt submission,
+using the same session or invocation context and firing policy as gptel. Pending
+root hook context joins that delivery. Mid-turn turn events, changed selected
+observations, new direct children and mail ride native tool-batch hooks, and
+native compaction restores current guidance. Exact SDK receipt, not submission,
+commits firing marks, including silent commits, and consumes only captured
+pending events and hook context; later arrivals stay pending. Receipt
+boundaries, the hook size limit and continuation prompts are described in
+<a href="../sessions/#native-context-delivery">native context delivery</a>. Local transcript
+estimates do not produce context-pressure reminders for externally owned model
+history.</p>
+<p>Reminder eligibility is evaluated from current session state; delivered
+observations remain historical context rather than current authority. Root and retained-agent queues
+remain isolated.</p>
+<h2 id="the-injection-record">The injection record<a class="headerlink" href="#the-injection-record" title="Permanent link">&para;</a></h2>
+<p>Every delivery writes one trusted hidden record (<code>:type injected-reminders</code>,
+phase <code>turn-start</code> or <code>mid-turn</code>) containing each entry's type and complete
+body: a gptel injection when its payload is realized, a Claude delivery only on
+exact SDK receipt. Bodies are not truncated: the record supplies reconstruction
+as well as inspection. Missing insertion markers or recording failures prevent
+committing delivery; injection failures retain pending state. A Claude record
+states delivered guidance, not that a gptel payload exists; mail delivered in
+the same batch follows it as ordinary mailbox blocks. The Claude wire
+correlation marker (<code>&lt;!-- mevedel-delivery:... --&gt;</code>) never enters the
+transcript, so the view, excerpts and engine transfer never see it.</p>
+<p>The encoded record stays out of provider text. <code>mevedel-history.el</code> decodes it
+as a separate message during prompt preparation, including fresh-process
+restore. Compaction evidence includes its instruction bodies, and local token
+estimates count the decoded guidance instead of encoded metadata. The record
+continues to be excluded from collaboration projection and persists through
+session segments. Compaction can summarize or retire obsolete guidance.</p>
+<p>The view renders it as one grouped collapsed row -- <code>◇ N system
+reminders (labels…)</code> -- above the user turn for turn-start injections
+and inline in the assistant turn for mid-turn injections, expanding to
+per-entry bodies. Inline <code>&lt;system-reminder&gt;</code> text (fork disclosures and the btw boundary) keeps the single-block
+<code>◇ System reminder (N lines)</code> row.</p>
+<h2 id="agent-requests">Agent requests<a class="headerlink" href="#agent-requests" title="Permanent link">&para;</a></h2>
+<p>Agent invocations carry their own reminder roster (configured reminders and
+max-turns warning), cloned at spawn. <code>mevedel-reminders--agent-transform</code> runs in every agent
+request's transform list and collects that roster with the invocation
+as firing context; delivery, commits, and the injection record ride
+the shared WAIT injector. The max-turns warning is instead evaluated at
+every agent WAIT, where each model sample is counted, so it fires inside
+long tool loops (<a href="../agents/">Agents</a>). Turn events queue against the
+invocation as owner exactly as on the root path.</p>
+<p>Claude children use the same warning and final-sample producers at native
+sample boundaries; see <a href="../agents/">Agents</a> for their sample accounting.</p>
+<h2 id="implemented-reminders">Implemented reminders<a class="headerlink" href="#implemented-reminders" title="Permanent link">&para;</a></h2>
+<h3 id="session-state-and-mode-guidance-evaluated-from-current-state">Session state and mode guidance (evaluated from current state)<a class="headerlink" href="#session-state-and-mode-guidance-evaluated-from-current-state" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Plan-mode workflow:</strong> the every-turn <code>plan-mode</code> reminder
+  describes read-only project inspection, unavailable Eval, session-only
+  ApplyPatch in standalone/sticky Plan, and no writes in directive Planning.
+  It retains exploration-first behavior,
+  replacement semantics, exact proposal tags, and the preferred
+  proposal shape. Rebuilding a root tool continuation after compaction stages
+  the same active Plan reminder again, unless it is already staged; this also
+  covers directive planning. A generated summary cannot replace the current
+  proposal contract.</li>
+<li><strong>Mode constraints / full-auto:</strong> permission-mode guidance, including the
+  disclosure that live Eval runs inside Emacs without confinement.</li>
+<li><strong>Fork provenance:</strong> the sparse (interval 20) <code>fork-provenance</code>
+  reminder regenerates a fork's provenance from durable session slots
+  via <code>mevedel-session-fork-provenance-body</code>: source session and, for
+  worktree forks, worktree directory, branch, and base commit. The
+  one-time worktree restore report (restored count, unrestored files,
+  external shared paths, dropped state) is enqueued on the pending
+  FIFO at fork time and delivered on the child's first request; the
+  FIFO is transient, so a restart before that request drops the report
+  detail while the provenance reminder keeps the durable facts.</li>
+<li><strong>Plan-file reference:</strong> the one-shot <code>plan-reference</code> reminder
+  surfaces bounded contents of the approved plan on later turns when
+  it may still be relevant. Main-session compaction resets its fired
+  mark (<code>mevedel-reminders-rearm-plan-reference</code>), because the summarized
+  prefix may have carried both its earlier delivery and the
+  implementation prompt's full plan text; the reference then re-fires
+  once with the plan address. The trigger suppresses it when an active Goal
+  carries that exact accepted-plan reference, because the Goal's retained current-context
+  delivery supplies the binding plan address. A Goal with
+  no plan or a different plan does not suppress it. Standalone Plan Direct
+  handoff does not use this reminder. Native Claude compaction restores an
+  eligible reference immediately through the same producer; it does not wait
+  for the next user prompt.</li>
+<li><strong>Recent-edit verification:</strong> <code>verification-suggestion</code> requires a
+  recorded file modification in the latest committed turn or the active
+  turn, and fires at most once every ten turns. Reading a file does not
+  qualify; older edits do not keep the suggestion eligible. When an
+  accepted plan's verification is pending, the suggestion also asks for
+  evidence that the plan was executed. Spawning a verifier clears that
+  plan flag. The generic suggestion remains applicable to recent edits.</li>
+</ul>
+<p>Read-only role and report contracts live in the frozen agent prompt, restored
+for every request even when the transcript is compacted. They are not repeated
+as reminders. Explicitly configured role reminders retain their own lifetimes.</p>
+<p>Specialist tools are discoverable through ToolSearch by capability or name.
+Their descriptions and search results own suitability and call guidance.
+There is no generic ToolSearch/ToolCall availability reminder. The native descriptions deliver that stable guidance.
+Ordinary Read/Grep calls and open editor buffers do not trigger navigation
+workflow advice; a registered tool alone does not establish that its backend
+works for a particular file.</p>
+<h3 id="changing-prompt-observations">Changing prompt observations<a class="headerlink" href="#changing-prompt-observations" title="Permanent link">&para;</a></h3>
+<p>Named workspace guidance, environment/date, memory indexes, compact skill
+catalogs, resource availability and active Goal facts are separate from the stable
+system prefix. Each changed section delivers its complete current contents with
+an explicit notice that other previously supplied state remains applicable.
+Unchanged sections remain in retained history. Delivery is checked against actual
+selected history; absent observations are redelivered after compaction, filtering
+or restore. If all selected sections are absent, all are delivered again. Explicitly configured custom date reminders remain available. See
+<a href="../architecture/#retained-instruction-context">retained instruction context</a>.</p>
+<h3 id="runtime-status-and-event-reminders">Runtime status and event reminders<a class="headerlink" href="#runtime-status-and-event-reminders" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Goal budget:</strong> every Goal charge (root settlement or agent progress)
+  reports each newly crossed 50%, 80%, or 100% threshold once, as a turn
+  event for a still-running root turn or a pending reminder otherwise;
+  budget changes queue one event with old and new limits. At each root
+  tool-result boundary the pipeline also checks known in-flight usage and
+  queues newly crossed thresholds as turn events delivered at the same WAIT;
+  the fsm guard suppresses the settlement duplicate. Agents charged to the
+  Goal receive a notice of the highest threshold reached at their next WAIT
+  (<a href="../goals/#token-budget">Goals</a>).</li>
+<li><strong>Mention expansions:</strong> <code>@ref</code>/<code>@file</code>/<code>@mcp</code>/<code>@agent</code> contents and
+  rejection notices are staged entries (typed by mention key).
+  Deduplication commits only once the payload exists, so a cancelled
+  request never marks content as shown.</li>
+<li><strong>Skill attachments:</strong> inline user <code>$skill</code> bodies and recursively required
+  authored <code>!$skill</code> bodies reuse staged entries of type <code>skill-attachment</code>.
+  Required contributions are flattened dependency first into the same pending
+  collection; no new reminder type or late hidden reminder path is used. The
+  corresponding attachment placeholder stays in the prompt or parent body.</li>
+<li><strong>Compact file-reference:</strong> manual compaction enqueues pending-FIFO
+  reminders for file references whose contents were not retained; auto
+  compaction stages a <code>compact-file-references</code> entry on the in-flight
+  fsm instead, delivered at its next WAIT. Native Claude compaction has no
+  gptel request to stage on and enqueues the pending-FIFO reminder.</li>
+<li><strong>Path-scoped workspace instructions:</strong> a successful <code>Read</code> below
+  the session working directory queues changed <code>AGENTS.md</code> and
+  <code>AGENTS.local.md</code> files as turn events, ordered broad to narrow and
+  deduplicated by owner, path, and content. Delivery is acknowledged only at
+  payload injection or exact native SDK receipt, so cancellation leaves the
+  guidance eligible for retry. Fresh directive requests keep their own hashes;
+  root history cannot suppress their guidance. Local compaction, rewind, and
+  cold resume reset the relevant local-history delivery acknowledgements.
+  Native conversations keep their learned scopes across reopening; prompts
+  re-send only changed instructions, and native compaction restores all of
+  them (<a href="../sessions/#native-context-delivery">native context delivery</a>).
+  This post-read discovery helps subsequent model decisions: it is not an edit
+  gate and cannot affect another tool already scheduled in the same batch.
+  The shared task policy therefore still requires inspecting applicable project
+  guidance before changing code. Resource reads such as session working-file
+  <code>work://</code> addresses do not discover workspace policy.</li>
+<li><strong>Recovery reconciliation:</strong> cold resume and abort of a live root
+  request queue one warning that processes or tool effects may be
+  partial.</li>
+<li><strong>User-revised patch:</strong> the one-shot <code>user-revised-patch</code> reminder
+  repeats the applied-content-is-authoritative directive on the turn
+  after a user-edited ApplyPatch review.</li>
+<li><strong>Compaction availability</strong>, <strong>token usage</strong>,
+  <strong>agent listing delta</strong>,
+  <strong>path-scoped skill activation</strong>,
+  <strong>max-turns warning</strong>, <strong>edited files</strong>: state
+  snapshots and deltas, each regenerated from session or invocation
+  state.</li>
+<li><strong>Hook outcome:</strong> hooks record blocking outcomes through
+  <code>mevedel-hooks-record-session-reminder</code> as turn events; additional
+  hook context still rides the prompt text as <code>&lt;hook-context&gt;</code>.</li>
+</ul>
+<h3 id="what-the-edited-file-reminder-watches">What the edited-file reminder watches<a class="headerlink" href="#what-the-edited-file-reminder-watches" title="Permanent link">&para;</a></h3>
+<p>The <code>edited-file</code> reminder reports every file in the workspace file cache
+whose content moved outside mevedel's tools. Two boundaries keep that from
+turning into per-turn noise and per-turn cost.</p>
+<p>mevedel's own session bookkeeping never enters the cache. A session
+directory holds append-only logs, transcript segments, and sidecars that
+mevedel rewrites every turn, so caching one would report mevedel's own
+writes back as external edits for the rest of the session, and let a
+multi-megabyte telemetry log evict every cache entry describing real work.
+Sibling sessions under the same sessions root are excluded too — reading a
+second live session's files churns identically — each confirmed by its
+sidecar rather than assumed from its location. The workspace artifact store
+lies outside session directories and stays watched: its files are authored
+deliverables, and an outside edit to one is worth reporting. The interaction
+record is still written for an excluded path.</p>
+<p>Content is bounded twice. A file the filesystem reports as larger than
+<code>mevedel-file-cache-max-file-bytes</code> is cached as a fingerprint — timestamps
+and reported size, no content — so it is still seen to move but claims none
+of the <code>mevedel-file-cache-max-bytes</code> budget. Content past
+<code>mevedel-reminders-edited-file-max-diff-bytes</code> is not diffed at all:
+<code>mevedel-generate-diff</code> spools both sides to temporary files and forks
+<code>diff</code>, which is not worth paying every turn for the
+<code>mevedel-reminders-edited-file-max-diff-lines</code> lines that survive. Both cases
+report the change and its size and tell the model to re-read the file.</p>
+<p>The diffs are prepared before the request is dispatched: the provider-wait
+handler detects the changes, runs one <code>diff</code> helper per changed file, and
+stages the reminder from those changes once the diffs return. The dispatch
+does not block while it waits. A cancelled request stops a pending
+preparation and ends the turn. A diff that fails leaves its file reported
+without one, as does any evaluation of the reminder outside a prepared
+dispatch.</p>
+<p>Diff spooling explicitly uses UTF-8, encoding decoded text while preserving
+literal bytes from the file cache. It never asks the user to choose a coding
+system during prompt preparation, even when cached files contain non-ASCII text.</p>
+<h3 id="pdf-and-large-attachment-guidance">PDF and large-attachment guidance<a class="headerlink" href="#pdf-and-large-attachment-guidance" title="Permanent link">&para;</a></h3>
+<p>Large PDFs read without a <code>pages</code> selector receive an appended
+<code>&lt;system-reminder&gt;</code> telling the model to prefer bounded
+<code>Read(..., pages="START-END")</code> requests (a Read result rider, thus
+positional). Large PDFs attached through <code>@file</code> get the same guidance
+as part of the mention's staged entry.</p>
+<h3 id="edit-diagnostics">Edit diagnostics<a class="headerlink" href="#edit-diagnostics" title="Permanent link">&para;</a></h3>
+<p>The edit-diagnostics state machine is its own owner,
+<code>mevedel-edit-diagnostics.el</code>: the patch tool drives it, and the
+reminder module only delivers what it queues through the generic
+turn-event channel. Diagnostics are observed only after a successful
+<code>ApplyPatch</code>. Before the first edit of a visited file in a request,
+mevedel captures that file's current Flymake and Flycheck diagnostics
+as its baseline. After the edit, an unmodified stale buffer is safely
+reverted, active checkers are started, and the tool callback waits on
+Flymake report callbacks and Flycheck's completion hook, with a fixed
+30-second timeout. A Flycheck buffer with no selected checker is
+treated as immediately ready and never starts that timeout. Modified
+stale buffers are never reverted, and rejected or failed edits produce
+no diagnostic observation.</p>
+<p>The first fresh result is compared with the baseline: new or changed
+diagnostics are completion work, while pre-existing diagnostics are
+context only unless they block the requested work. Later edits compare
+with the last fresh result and do not repeat the pre-existing
+category. Resolved diagnostics are telemetry only. Model-visible
+output prioritizes new diagnostics, sorts by severity, caps output at
+10 diagnostics per file and 30 total, and reports one aggregate
+omitted count. Telemetry records counts and outcomes, never diagnostic
+text or file paths.</p>
+<p>Default session reminders are installed idempotently through
+<code>mevedel-reminders-install-defaults</code>. Lifecycle events use the session
+pending-reminder FIFO and <code>pending-events</code>; observations use the
+owner-bound turn queue.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

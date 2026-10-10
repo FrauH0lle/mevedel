@@ -1,0 +1,2906 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/permissions/">
+      
+      
+        <link rel="prev" href="../memory/">
+      
+      
+        <link rel="next" href="../architecture/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Permissions and confinement - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#permission-system" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Permissions and confinement
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#decision-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resource-address-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource-address authority
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bucket-precedence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bucket precedence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rule-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-queues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt queues
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bash-specifics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bash specifics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Bash specifics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#child-confinement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Child confinement
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-approval-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional approval review
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#introspection-source-reads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Introspection source reads
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eval
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sub-agent-permission-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sub-agent permission propagation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bash-permission-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bash permission example
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#decision-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resource-address-authority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource-address authority
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bucket-precedence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bucket precedence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rule-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule format
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-queues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt queues
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bash-specifics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bash specifics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Bash specifics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#child-confinement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Child confinement
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-approval-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional approval review
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#introspection-source-reads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Introspection source reads
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eval
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sub-agent-permission-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sub-agent permission propagation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bash-permission-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bash permission example
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/permissions.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="permission-system">Permission system<a class="headerlink" href="#permission-system" title="Permanent link">&para;</a></h1>
+<p>The core policy has four owners. <code>mevedel-permission-mode.el</code> owns mode
+normalization and session-scoped transitions; <code>mevedel-permission-rules.el</code>
+owns rule matching, precedence buckets, protected-path policy, and resource
+grants; <code>mevedel-permission-persistence.el</code> owns authority-store validation and
+target-aware I/O. <code>mevedel-permissions.el</code> is the decision facade that combines
+those facts with tool policy. <code>mevedel-permission-review.el</code> owns optional
+automatic exception review before human queue admission.</p>
+<h2 id="decision-flow">Decision flow<a class="headerlink" href="#decision-flow" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TD
+    Input[Operation and resource facts] --&gt; Absolute{Absolute deny or workflow restriction?}
+    Absolute --&gt;|Yes| Deny[Deny]
+    Absolute --&gt;|No| Tool[Resolve tool or command authority]
+    Tool --&gt; Resource[Resolve independent resource authority]
+    Resource --&gt; Result{Combined decision}
+    Result --&gt;|Denied| Deny
+    Result --&gt;|Missing authority| Ask[Permission hooks and user decision]
+    Result --&gt;|Authorized| Allow[Continue within approved confinement]
+    Ask --&gt;|Denied| Deny
+    Ask --&gt;|Approved| Allow</code></pre>
+<p>The diagram shows authority composition; the ordered resolver below supplies the
+exact precedence. Bash and batch Eval also resolve their child-confinement
+capabilities before execution. An approval applies only within the requested and
+approved scope; it cannot override an absolute denial or workflow ceiling.</p>
+<p>Single decision function <code>mevedel-check-permission</code>. Decision chain:</p>
+<ol>
+<li>Extract specifier values via <code>get-path</code> / <code>get-pattern</code> / <code>get-domain</code> /
+   <code>get-name</code> slots</li>
+<li>Deny rules (across all buckets — see bucket precedence below)</li>
+<li>Workflow restrictions: standalone/sticky Plan denies native edit tools and
+   Eval, except ApplyPatch whose every operand is a session-owned <code>work://</code>
+   descendant. Directive Planning denies all native edits and Eval. These
+   restrictions apply regardless of allow rules or permission mode. An agent
+   turn started under Plan keeps them for its lifetime through its Plan
+   read-only stamp.</li>
+<li>Full Access bypasses ordinary asks, resource defaults and review; explicit
+   tool denials still apply. Otherwise the tool's own <code>check-permission</code> slot
+   decides command authority</li>
+<li>Allow/ask rules (innermost-bucket-first — see bucket precedence below)</li>
+<li>For a path not directly covered by a native path rule, resolve an allowed
+   root, exact allowed path, or covering resource grant</li>
+<li>A protected or outside-root path without that authority → ask</li>
+<li>Permission-mode fallback when no earlier policy decides; in Edits, ordinary
+   native reads cover the OS-readable filesystem except inaccessible protected
+   paths, and Bash/batch Eval run with required confinement</li>
+</ol>
+<p>The permission mode itself never denies: modes decide between automatic
+allowance and a prompt, and every hard denial is a step-2 or step-3 policy.
+ApplyPatch is the deliberate exception to step 8. Its reviewed-edit capability
+is allowed because <code>ask</code> mode already supplies mandatory per-file/hunk review
+before any write. Allowed-root patches therefore proceed directly to that
+review. Protected or outside-root paths still require resource authority before
+the review appears, and explicit allow/ask/deny rules retain their precedence.</p>
+<p>For a tool with a command checker, command authority and filesystem resource
+authority are layered: both must allow. A plain command allow cannot authorize its
+path, and a resource grant cannot authorize its command. A matching direct
+command rule with <code>:file-system</code> supplies both operation and scoped filesystem
+authority for that execution. Native <code>:path</code> rules remain direct tool
+authorization, but cannot bypass a protected path's
+resource-grant requirement.</p>
+<p>Hook integration sits around this chain:</p>
+<ul>
+<li><code>PreToolUse</code> runs before the chain. A hook <code>deny</code> is final. A hook
+  <code>ask</code> can tighten an allow into a prompt in Ask or Edits. A hook <code>allow</code> can only skip
+  a prompt when the normal resolver would have returned <code>ask</code>; explicit
+  denies still win. The resulting <code>ask</code> still crosses <code>PermissionRequest</code>
+  once before that earlier allow suppresses queue admission. Full Access ignores
+  hook asks but retains hook denies.</li>
+<li><code>PermissionRequest</code> runs whenever generic, Bash, Eval, or sandbox authority
+  resolution reaches <code>ask</code>, before the corresponding entry enters the shared
+  queue. It can allow, deny, or leave the prompt in place. Queue display and
+  rule-driven re-evaluation do not rerun it. Every approval source, including
+  hook and fallback approvals, rechecks current policy at settlement in every
+  mode. Hard denies still apply before queue admission, even without a mode
+  transition. A cancelled request cannot admit a new card or automatic review,
+  or resume execution through a late approval.
+  Prepared session-owned patch classification is retained through prompts and
+  automatic review, so valid Plan-file edits remain distinguishable from forbidden
+  ordinary or shared writes.</li>
+<li><code>PermissionDenied</code> runs after any final denial. It can adjust the
+  reason/context shown to the model, but it cannot turn the denial into an
+  allow. Its payload identifies the original policy, user, reviewer, <code>PreToolUse</code>, or
+  <code>PermissionRequest</code> provenance.</li>
+</ul>
+<p><code>mevedel-tool-permission-decide-now</code> decides a call that a running tool makes
+on the model's behalf without dispatching it, such as WebFetch following a
+redirect to another host. It runs the same decision chain under a given
+buffer's session, request, agent invocation and buffer-local policy, but never
+prompts and never runs hooks: an <code>allow</code> becomes <code>ask</code> when a <code>PreToolUse</code>
+handler would run for the tool, since only a dispatched call runs it. A dead
+buffer or one without a session yields <code>ask</code>. The caller treats <code>ask</code> as "make
+this a fresh tool call", which then receives the full chain, hooks and prompt
+included. Each decision is written to the permission log with its reason.</p>
+<p>Permission invocation context is normalized in the decision facade before
+callers enter the decision chain. That context centralizes specifier
+extraction, rule buckets, mode, allowed roots, resource grants,
+missing-session fallback warnings, and the prompt rule shape used for
+outside-root approvals.</p>
+<h2 id="resource-address-authority">Resource-address authority<a class="headerlink" href="#resource-address-authority" title="Permanent link">&para;</a></h2>
+<p>A resource address identifies a target; it is not a permission grant. After
+repair and final validation, resource preparation resolves an opaque attempt
+and only the logical authority facts needed here, without reading content.
+Permission then applies the ordinary operation policy before the authorized
+handler consumes that attempt. Malformed or unsupported addresses, traversal,
+and containment failures stop before permission and post-use hooks; a valid but
+missing, disconnected, stale, or unreadable resource follows ordinary handler
+failure handling.</p>
+<p>Read-only <code>artifact://</code>, <code>skill://</code>, <code>agent://</code>, <code>history://</code>, <code>memory://</code>, and <code>memory://journal/</code>
+resources keep their intrinsic read capability and current freshness rules.
+<code>work://</code> and explicit memory-file mutation use ordinary <code>ApplyPatch</code> permission
+and patch review. Shared and memory operands use their real backing paths for
+protected-path and workspace-boundary decisions;
+recognizing an address does not broaden roots or create a grant. Skill and
+memory addresses retain client-local origin, while MCP authority remains with
+the current configured connection. Standalone/sticky Plan mode allows session-only
+<code>ApplyPatch</code>, including requests from retained agents, but denies any proposal
+containing an ordinary, shared, memory, or bare endpoint before local materialization
+or ordinary mutation. Mixed local/ordinary and ordinary-only proposals
+therefore fail tree-wide; permission modes and allow rules cannot reopen that
+boundary. See
+<a href="../address-to-resource/#shared-resolution-and-permission-seam"><code>address-to-resource.md</code></a>.</p>
+<p>The synchronous and asynchronous decision entry points then share one pure
+preflight. It normalizes decision facts, resolves absolute deny rules, and
+records protected-path and resource-boundary facts exactly once. Both paths
+use the same synchronous tool slot adapter and decision tail; only a tool that
+supplies an asynchronous permission callback introduces an asynchronous
+branch.</p>
+<h2 id="bucket-precedence">Bucket precedence<a class="headerlink" href="#bucket-precedence" title="Permanent link">&para;</a></h2>
+<p>Steps 2 and 5 consume rules from multiple buckets, in this order:
+invocation <code>skill-permission-rules</code>, request <code>skill-permission-rules</code>,
+session rules, persistent rules, defcustom <code>mevedel-permission-rules</code>.</p>
+<ul>
+<li>Step 2 (deny) is absolute — any bucket's <code>deny</code> wins.</li>
+<li>Step 5 (allow/ask) is innermost-first — the first bucket yielding any
+  decision wins.</li>
+<li>Directive discussion installs request-scoped denies for every registered
+  mutation-capable tool and for mutation-capable delegation. These denies are
+  a hard capability ceiling: broader session, workspace, or global allows
+  cannot enable mutation during that discussion request.</li>
+<li>Goals use the same tool permission policy as ordinary root conversation
+  turns. Goal lifecycle state never raises the session permission mode.</li>
+<li>Standalone Plan approval applies the selected Ask, Edits, or Full Auto mode to
+  the session that performs Direct implementation. Here changes the source
+  session; Worktree leaves the source mode unchanged and applies the selection
+  only after the target session and accepted artifact are prepared. Summary
+  generation does not raise either session's permission mode.</li>
+</ul>
+<h2 id="rule-format">Rule format<a class="headerlink" href="#rule-format" title="Permanent link">&para;</a></h2>
+<p>Rules live on <code>mevedel-permission-rules</code> with form
+<code>(TOOL-NAME &amp;key SPECIFIER VALUE :network BOOL :file-system GRANTS
+:sandbox-permissions LEVEL :action ACTION)</code>.
+One specifier per rule:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Matches</th>
+<th>Used by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>:path</code></td>
+<td>path (glob, <code>~</code> exp.)</td>
+<td>Read, ApplyPatch, Glob, Grep, ...</td>
+</tr>
+<tr>
+<td><code>:pattern</code></td>
+<td>command/expression glob</td>
+<td>Bash; deliberately authored Eval rules</td>
+</tr>
+<tr>
+<td><code>:expression</code></td>
+<td>whole expression, literal</td>
+<td>Remembered Eval approvals and execution profiles</td>
+</tr>
+<tr>
+<td><code>:domain</code></td>
+<td>host name (glob)</td>
+<td>WebFetch</td>
+</tr>
+<tr>
+<td><code>:name</code></td>
+<td>free-form name (glob)</td>
+<td>Agent (<code>role</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Precedence: specifier rules outrank generic; within a group
+<code>deny &gt; ask &gt; allow</code>. Ask and Edits retain explicit ask rules. Full Access
+ignores ask rules and default protected paths; explicit denies remain absolute.</p>
+<p><code>:sandbox-permissions</code> is an execution-level qualifier, not a request to raise
+authority. A rule carrying <code>require-escalated</code> is considered only after Bash or
+batch Eval has explicitly requested that level. Ordinary command allows cannot
+authorize full escalation in Ask or Edits. Only direct user-authored session, persistent, and
+defcustom rules may allow it; delegated invocation/request rules cannot. A
+pattern scopes authority to the matching Bash command or Eval expression, and
+omitting the pattern deliberately authorizes every expression for that tool at
+that execution level. Qualified and ordinary explicit denies remain final.</p>
+<p><code>:network</code> and <code>:file-system</code> form an execution permission profile on a
+matching Bash or batch-Eval allow rule. The profile records the additive child
+authority approved with that operation; it is not a workload classifier.
+Single-segment Bash approvals may use the recognized safe command pattern.
+Compound commands keep generalized operation rules for their segments but
+store the profile against the complete compound command, preventing one
+segment from inheriting another segment's capability.
+Filesystem entries are <code>(:path PATH :access read-or-write [:recursive t])</code>
+grants. <code>PATH</code> is either absolute or home-relative with <code>~</code>/<code>~/</code>; stored
+home-relative paths expand in the execution target. Grant paths are literal —
+<code>*</code>, <code>**</code>, and <code>?</code> carry no glob meaning; <code>:recursive t</code> extends an entry from
+the exact path to the directory and all its descendants, present and future.
+Project and session stores
+encode exact paths and absolute path rules without a client-specific TRAMP
+prefix, then qualify them through the currently opened matching target. A
+foreign target prefix invalidates the stored authority instead of being
+reinterpreted. Entries in a direct allow rule authorize their own filesystem
+access for matching executions. They need no companion <code>:resource-grants</code> entry
+and do not grant native tools or unrelated commands access. Independent resource
+grants remain sufficient for explicitly requested access, but are not
+automatically attached to every child. Multiple matching profiles
+are unioned, with write dominating read for the same path and scope; exact and
+recursive entries on the same path stay distinct. Only session, persistent,
+and defcustom rules can contribute a reusable profile. Invocation- and
+request-scoped delegated rules may still authorize ordinary operations but
+never broaden the child sandbox.</p>
+<p><code>mevedel-protected-paths</code> is an alist from glob to <code>read-only</code> or
+<code>inaccessible</code>. The default <code>.git</code> glob is read-only, and so is the
+<a href="../view/#artifact-store">artifact store</a>'s bookkeeping under
+<code>.mevedel/artifacts/.state/</code> -- metadata, shared item state, comments and versions -- and
+<code>.mevedel/leases/</code>, so a model write cannot bypass an item's lease, versions
+and validation. These directory boundaries cover future artifact ids and missing
+bookkeeping files too. Authored files under <code>.mevedel/artifacts/ID/</code> stay writable,
+including file creation and atomic replacement. Before a confined launch, missing
+protected state directories and their parents are created; only the protected
+leaf is mounted read-only. These directories and their parents remain after
+execution, since removing an empty directory could detach another running
+sandbox's protection and allow it to recreate that path as writable. If a prepared state
+directory disappears before launch, confinement refuses to start the command.
+The default SSH,
+GnuPG, AWS, Azure, Google Cloud, and Kubernetes credential globs are
+inaccessible. On
+a trailing <code>/**</code>, policy covers both the directory and its descendants. On a
+remote session, leading <code>~</code> uses the target user's probed home; a
+client-absolute custom pattern stays in the client path domain and therefore
+does not become a remote protection rule.
+String-only entries are invalid by design. Glob discovery walks the
+workspace, memory, and additional writable roots before every launch; the
+execution target's temporary directory is excluded as a discovery root. A
+workspace or additional root beneath it is still searched when independently
+listed. Other repositories placed only in temporary scratch do not receive
+glob-discovered protection.</p>
+<p>On local Linux, literal directory globs such as <code>**/.git/**</code> use GNU <code>find</code>
+when available. Discovery still runs before each launch: it follows a symlink
+only at the supplied root, prunes matched and unreadable directories, and includes
+Git worktree pointer files. NUL framing preserves spaces and newlines in names.
+Managed Bash and one-shot helpers run native scans asynchronously under their
+execution owner. Cancellation, owner teardown or changed launch authority prevents
+the pending command from starting. Results are never reused across launches.
+A failed or truncated native scan refuses preparation; it does not discard missing protection.
+A pattern below <code>**/.mevedel/</code>, mevedel's own state directory, which exists
+only at a workspace root, protects in the Bash sandbox the whole directory its
+literal part names, at each discovery root and without a walk:
+<code>**/.mevedel/artifacts/.state/**</code> is one mount however many artifacts there
+are. A literal file pattern protects the file. Native
+tool checks match the pattern itself, at any depth; a <code>.mevedel</code> nested deeper
+in a root is covered by native tool checks only.
+Other patterns and targets retain the Lisp walker. Canonical target checks and
+final confinement validation remain unchanged.</p>
+<p>The three canonical modes are <code>ask</code>, <code>edits</code>, and <code>full-auto</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Native tools</th>
+<th>Bash and Eval</th>
+<th>Confinement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ask</code></td>
+<td>Root/resource checks and patch review</td>
+<td>Recognized inspection automatic; uncertain execution asks</td>
+<td>Configured sandbox preference</td>
+</tr>
+<tr>
+<td><code>edits</code></td>
+<td>Native edits automatic within roots; ordinary reads span OS-readable paths, retaining credential masks</td>
+<td>Arbitrary Bash and batch Eval automatic; live Eval and additional authority require approval</td>
+<td>Required; an unavailable backend refuses execution</td>
+</tr>
+<tr>
+<td><code>full-auto</code></td>
+<td>Full Access</td>
+<td>Automatic, including live Eval and explicit escalation</td>
+<td>Off; filesystem and network unrestricted under the target OS account</td>
+</tr>
+</tbody>
+</table>
+<p>Full Access bypasses ordinary ask rules, default protections, resource boundaries,
+hook asks and automatic review. Explicit hard denies, Plan restrictions,
+validation, and session ownership remain. It does not override OS access controls:
+other users' files are readable only when the target account can read them.
+Edits also exposes broad ordinary read access, including outside the workspace;
+its configured inaccessible credential paths remain protected. Choosing Full
+Access deliberately removes those default credential masks.</p>
+<p>This is Codex's Full Access analogue, not the historical sandboxed <code>--full-auto</code>
+CLI preset. Mode changes do not overwrite the stored sandbox preference.</p>
+<p>Configuration, interactive commands, and persisted sessions accept only these
+canonical values.</p>
+<p>The prompt offers allow/deny choices for the invocation, session, or persistent
+workspace scope. When one Bash or batch-Eval call needs both operation and
+additive authority, one card presents the complete request. Session and
+workspace approval default to remembering the complete selected profile;
+command and network toggles can narrow it before approval. For each path,
+<code>p</code> offers <strong>With this command</strong>, <strong>Independent path access</strong>, or <strong>Do not
+remember</strong>. Command scope is the default for reusable commands; independent
+access is an explicit choice and is stored only in <code>:resource-grants</code>. Commands
+that cannot be remembered offer independent path access or no remembering,
+with neither path authority nor command authority selected by default.
+Selecting command-scoped paths enables command remembering. Turning command
+remembering off clears its path and network selections, without converting them
+to independent grants. Independent selections remain unchanged. The <code>g</code> extent
+selector preserves each path's remembering scope.
+The current invocation always receives the complete approved request.
+<code>.mevedel/permissions.el</code> stores a plist containing both <code>:rules</code> and
+<code>:resource-grants</code>. It lives with the project on its execution target and stores
+target-native paths, so reopening the same workspace through an equivalent
+TRAMP alias reuses its authority. Paths under the target's home directory are
+written abbreviated as <code>~/...</code> and expanded against the current target at
+load, so the file can be committed and shared between machines whose home
+directories differ. A target-incarnation change never rewrites this file; only
+session filesystem grants, including paths embedded in command profiles, are
+revoked. Command and network approvals survive; invalidated frozen filesystem
+authority is cleared as well. Both global and project stores belong
+to the session's execution target:</p>
+<table>
+<thead>
+<tr>
+<th>Session</th>
+<th>Global store</th>
+<th>Project store</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Local</td>
+<td><code>mevedel-user-dir/permissions.el</code> (default <code>~/.mevedel/permissions.el</code>)</td>
+<td><code>PROJECT/.mevedel/permissions.el</code></td>
+</tr>
+<tr>
+<td>TRAMP</td>
+<td>Target user's <code>~/.mevedel/permissions.el</code></td>
+<td>Target's <code>PROJECT/.mevedel/permissions.el</code></td>
+</tr>
+</tbody>
+</table>
+<p>Both stores contribute <code>:rules</code> and <code>:resource-grants</code>. Global and project
+rules share the persistent rule bucket and its ordinary matching precedence;
+explicit denies still win. Resource grants are additive, retaining their read
+or write access and exact or recursive extent. Paths in either store refer to
+the execution target, including <code>~</code> and filesystem requirements in command
+profiles. Durable files use native paths, without client-specific TRAMP prefixes.
+Local <code>mevedel-user-dir</code> customization does not relocate remote stores.</p>
+<p>A remote session does not inherit the client's global file, even if its target
+global file is missing or unavailable. Global authority is read at runtime,
+not copied into a project or portable session. Store replacement is atomic
+and descriptor-pinned; a symlink in the state path or at <code>permissions.el</code>
+fails closed before any linked target is changed.</p>
+<p>Global and project stores are validated when a fresh, resumed, or forked
+session initializes. Invalid files contribute no authority and produce one
+actionable warning per file version. Persistent permission changes refuse to
+overwrite an invalid file; fix it to the current
+<code>(:rules (...) :resource-grants (...))</code> shape first. Missing files are valid
+empty stores.</p>
+<p>Before each permission-controlled tool, mevedel refreshes both stores once and
+uses that snapshot for every rule and resource-grant lookup in the invocation.
+A remote refresh waits until the transport is idle, so it cannot re-enter a
+TRAMP command already in flight. Thus an external edit or revocation, including
+one made by another Emacs in a different session for the same project, governs
+the next tool admitted by this Emacs. An already admitted tool keeps its prior
+decision. Frozen <code>/btw</code> conversations retain their documented creation-time
+authority snapshot.</p>
+<p>Default allowed roots are the workspace root, the system temporary directory,
+configured memory roots, and manually configured additional roots. A native
+filesystem write outside those roots prompts for exact <code>write</code> authority in
+Ask and Edits. Ask also gates outside reads. Edits permits ordinary OS-readable
+paths, retaining inaccessible credential protections. Full Access removes these
+default resource restrictions. A session grant is stored in the durable session sidecar and
+survives save/resume of that same session; an always grant is stored only in
+the workspace permission file. Neither enters an unrelated session. ApplyPatch
+authority covers reading the same exact path, but read authority does not cover
+writes. An exact grant does not cover siblings or descendants; a grant carrying
+<code>:recursive t</code> covers the directory and everything beneath it, present and
+future. Prompts and the cockpit label every grant <code>(exact)</code> or <code>(recursive)</code>,
+and a remembered execution profile's row lists its child grants after the
+pattern. Neither kind
+adds workspace roots or authorizes Bash/Eval code. Revoking the grant restores
+the underlying
+workspace/protected-path restriction unless another entry still grants access.
+Session-side paths use the same target-native codec as persistent authority;
+resume reloads the target's global and project stores. Invocation-only authority is consumed
+by the approved call and is not stored.</p>
+<p>The permissions cockpit shows <code>session</code>, <code>workspace</code>, and <code>global</code> entries,
+including their backing store in the details. Refresh reads current stores.
+Revoking a global entry edits the target user's global file and affects every
+project using it; revoking a workspace entry edits only that project's file.
+Identical entries in different scopes remain separate and independently
+revocable. Global entries are authored explicitly: prompt-based remembering
+continues to write only session or workspace authority.</p>
+<p>Human permission cards select an enforceable scope before displaying approval
+controls. For confined Bash and batch Eval, existing directory writes and
+reads beneath inaccessible masks default to the requested directory's recursive
+scope. Files, missing paths, already-readable directory reads, native operations,
+live Eval, and unconfined execution retain their original scope. Defaults never
+select an ancestor or change read access to write access. Hooks and automatic
+reviewers receive the unchanged original request before human admission.</p>
+<p>The card displays the selected authority consistently for the current invocation
+and remembering controls, with exact/recursive labels and target-native paths.
+Original request facts remain available in the permission audit. Press <code>g</code> to
+choose another enforceable scope, including a higher containing directory tree;
+unrepresentable exact directory choices are omitted. For several resources,
+first choose which resource to change. Selection alone neither creates a grant
+nor runs the tool. <code>RET</code> approves the displayed scope for the current invocation,
+<code>s</code> remembers session authority, and <code>A</code> remembers workspace authority; one-shot
+interactions retain only their permitted lifetime choices. Remembering preserves
+the selected command-bound or independent path scope. Approval and launch still
+reject unusable grants if filesystem or confinement facts change.
+Approving a tree installs its grant before checking queued siblings. Rechecks
+retain the originating tool buffer and delegated rules, and a captured hook ask
+continues to require its own answer.</p>
+<p>Read-only tools also receive mevedel's installed package source directory as
+an allowed root, so the model can read bundled manuals named by an absolute
+tool-description path. Mutation-capable tools do not receive this root; an
+installed package outside the active workspace therefore remains outside their
+automatic edit boundary.</p>
+<p>A conversation or worktree session fork copies the source session's permission
+mode, sandbox mode, session permission rules, and resource grants at the fork
+point. Subsequent authority changes are local to the source or fork unless they
+modify the shared workspace permission store.</p>
+<p>An ephemeral <code>/btw</code> side also copies that policy, but every side request carries
+an immutable one-shot mutation boundary. Analyzer-proven read-only Bash and
+read-only tools remain automatic when the ordinary policy allows them. Other
+mutations ask in Ask and Edits even under an inherited allow rule; Full Access
+authorizes them without a prompt. When a prompt is needed it
+offers only allow-once, deny-once, or feedback; defensive outcome normalization
+prevents hooks or non-UI callers from creating reusable authority. ApplyPatch's
+mandatory hunk review itself satisfies this boundary, so it does not show a
+duplicate generic permission prompt. Explicit denies and protected-resource
+checks still precede approval. Oversized side tool results are bounded and
+discarded in memory rather than materializing an ephemeral session on disk.
+The side publishes only explicit file/search/code/web inspection tools,
+ApplyPatch, Bash, and managed-execution controls. Eval, delegation, Ask,
+tasks, Goals, skills, introspection tools, deferred tools, and arbitrary
+MCP tool schemas are absent.</p>
+<p>The side freezes session, workspace-persistent, global-rule, protected-path,
+sandbox, and additional-root authority at creation; later configuration changes
+cannot broaden or narrow it. Mutation approval warns when the parent request is
+still active because both requests affect the same workspace. The side owns a
+separate permission queue and execution state, while allowlisted redacted audit
+events are attributed to <code>/btw</code> and written through the durable parent session.
+Side prompts, command text, paths, patch contents, results, and justifications
+are never copied into that parent audit stream.</p>
+<p>Files dropped into the view buffer can add exact, session-scoped <code>Read</code>
+grants when the next sent prompt still mentions the same path. These
+grants are in-memory only, do not grant the containing directory, do not
+apply to write tools, and are still lower precedence than explicit deny or
+ask rules and protected-path resource checks. A queued steering entry or
+follow-up activates its grant before its own mention expansion, which
+needs it to read the dropped file, so the grant is provisional until that
+entry is delivered: an entry that fails to deliver stays pending and its
+grant is given back.</p>
+<p>Local slash commands may own deterministic workflows outside the model tool
+pipeline. <code>/worktree status</code> and <code>/worktree create</code> run argv-safe Git commands
+directly on the session execution target because the user explicitly typed the
+command in the mevedel UI. That does not grant the model any Bash permission.
+When the model uses the <code>git-worktree</code> skill and falls back to creating a
+worktree itself, creation happens through the normal Bash tool and this
+permission chain.</p>
+<h2 id="prompt-queues">Prompt queues<a class="headerlink" href="#prompt-queues" title="Permanent link">&para;</a></h2>
+<p>The root session owns one authority boundary for its complete agent tree. Every
+child uses the root session's permission mode, sandbox mode, user-authoritative
+permission rules, and resource grants. A child may exercise that existing
+authority but cannot broaden it independently. Permission prompts from the
+complete tree are therefore queued on the root session, not displayed as
+independent blocking overlays, and carry the requesting agent's canonical path
+for attribution. Nested ToolCall asks instead show their envelope and child
+tool-use identities, including for root-owned requests.
+<code>mevedel-permission-queue.el</code> owns a heterogeneous FIFO with four entry kinds:</p>
+<ul>
+<li><code>generic</code> for pipeline permission asks</li>
+<li><code>bash</code> for Bash command confirmation</li>
+<li><code>eval</code> for Eval expression confirmation</li>
+<li><code>sandbox</code> for additive network, exact filesystem, or full execution authority</li>
+</ul>
+<p>Only the head is visible in the view interaction zone. The permission UI
+registers that head with <code>mevedel-view-interaction.el</code>, which owns ordering,
+callback overlays, and redraw. Rule-creating outcomes (<code>allow-session</code>,
+<code>deny-session</code>, <code>always-allow</code>) can coalesce
+queued siblings by re-running the decision chain. Resolved siblings leave the
+queue before any callback runs. Execution admission and rechecks share one
+pure decision in <code>mevedel-tool-exec-permission.el</code>: it orders operation
+policy, full escalation, denied capabilities, command
+resources, and missing capabilities, and names the one thing that still
+stands in the way. Admission resolves that need through hooks, optional approval
+review and then a human card if needed; a recheck reports unresolved asks. Rechecks
+therefore cover the operation and its complete requested filesystem/network
+authority, including capabilities that were already granted at admission. They retain the originating request,
+agent invocation, Plan restrictions, and frozen policy context. An operation
+rule alone cannot release a sibling that still lacks a capability; a directory
+grant alone cannot release an uncertain command in Ask. Edits already authorizes
+ordinary commands under required confinement. Every queue exit
+uses the permission
+queue's exactly-once settlement gate. The queue is transient
+runtime state and is not written to the session sidecar; unfinished
+prompts are aborted on their owning request or root-session teardown. A child
+turn awaiting one of these prompts remains active and continues to occupy one
+tree capacity slot.</p>
+<p>The permission hook boundary precedes queue admission. An admitted entry has
+already fired <code>PermissionRequest</code>; rendering the head, redrawing it, and
+coalescing siblings by re-running policy never fire that hook again.</p>
+<p><code>mevedel-permission-notify-function</code> (default nil) is called once per admitted
+card with its entry plist, at admission -- never for decisions the rule chain
+or hooks settle without prompting, and never again on head redraw, coalesce,
+or resolution. Only prompts the user must answer notify, never auto-resolved
+tool calls; how many that is per session depends entirely on the session's
+permission mode and rules. It fires at enqueue rather than after an
+unanswered delay because the machine is certainly awake then; an
+idle-escalation timer dies with a suspend, which is exactly the situation --
+the user stepped away, the machine slept on an open prompt -- the hook exists
+for. Errors are demoted so a broken notifier cannot break admission.</p>
+<p>The value is always a small wrapper that formats a message from the entry;
+the entry carries mevedel's card keys, not a notification API's keywords, so
+pointing the variable directly at <code>notifications-notify</code> shows an empty
+notification.</p>
+<div class="highlight"><pre><span></span><code><span class="c1">;; One formatter, reused by every wrapper below.  A notification is a</span>
+<span class="c1">;; glance surface: name the session, name the tool, and give one</span>
+<span class="c1">;; truncated line of the command -- never the whole thing.</span>
+<span class="p">(</span><span class="nb">defun</span><span class="w"> </span><span class="nv">my/mevedel-permission-summary</span><span class="w"> </span><span class="p">(</span><span class="nv">entry</span><span class="p">)</span>
+<span class="w">  </span><span class="p">(</span><span class="k">let</span><span class="w"> </span><span class="p">((</span><span class="nv">session</span><span class="w"> </span><span class="p">(</span><span class="nf">plist-get</span><span class="w"> </span><span class="nv">entry</span><span class="w"> </span><span class="nb">:session</span><span class="p">)))</span>
+<span class="w">    </span><span class="p">(</span><span class="nf">format</span><span class="w"> </span><span class="s">"%s%s: %s"</span>
+<span class="w">            </span><span class="p">(</span><span class="k">if</span><span class="w"> </span><span class="nv">session</span><span class="w"> </span><span class="p">(</span><span class="nf">concat</span><span class="w"> </span><span class="p">(</span><span class="nv">mevedel-session-name</span><span class="w"> </span><span class="nv">session</span><span class="p">)</span><span class="w"> </span><span class="s">" "</span><span class="p">)</span><span class="w"> </span><span class="s">""</span><span class="p">)</span>
+<span class="w">            </span><span class="p">(</span><span class="k">or</span><span class="w"> </span><span class="p">(</span><span class="nf">plist-get</span><span class="w"> </span><span class="nv">entry</span><span class="w"> </span><span class="nb">:tool-name</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nf">plist-get</span><span class="w"> </span><span class="nv">entry</span><span class="w"> </span><span class="nb">:kind</span><span class="p">))</span>
+<span class="w">            </span><span class="p">(</span><span class="nv">truncate-string-to-width</span>
+<span class="w">             </span><span class="p">(</span><span class="nv">replace-regexp-in-string</span>
+<span class="w">              </span><span class="s">"[ \t\n]+"</span><span class="w"> </span><span class="s">" "</span>
+<span class="w">              </span><span class="p">(</span><span class="k">or</span><span class="w"> </span><span class="p">(</span><span class="nf">plist-get</span><span class="w"> </span><span class="nv">entry</span><span class="w"> </span><span class="nb">:command</span><span class="p">)</span>
+<span class="w">                  </span><span class="p">(</span><span class="nf">plist-get</span><span class="w"> </span><span class="nv">entry</span><span class="w"> </span><span class="nb">:expression</span><span class="p">)</span>
+<span class="w">                  </span><span class="p">(</span><span class="nf">plist-get</span><span class="w"> </span><span class="nv">entry</span><span class="w"> </span><span class="nb">:specifier-value</span><span class="p">)</span>
+<span class="w">                  </span><span class="s">""</span><span class="p">))</span>
+<span class="w">             </span><span class="mi">110</span><span class="w"> </span><span class="no">nil</span><span class="w"> </span><span class="no">nil</span><span class="w"> </span><span class="no">t</span><span class="p">))))</span>
+
+<span class="c1">;; Desktop notification via Emacs's built-in DBus client</span>
+<span class="c1">;; (notifications.el ships with Emacs and talks to the same</span>
+<span class="c1">;; freedesktop daemon notify-send does):</span>
+<span class="p">(</span><span class="nb">require</span><span class="w"> </span><span class="ss">'notifications</span><span class="p">)</span>
+<span class="p">(</span><span class="k">setq</span><span class="w"> </span><span class="nv">mevedel-permission-notify-function</span>
+<span class="w">      </span><span class="p">(</span><span class="nb">lambda</span><span class="w"> </span><span class="p">(</span><span class="nv">entry</span><span class="p">)</span>
+<span class="w">        </span><span class="p">(</span><span class="nv">notifications-notify</span>
+<span class="w">         </span><span class="nb">:title</span><span class="w"> </span><span class="s">"mevedel needs permission"</span>
+<span class="w">         </span><span class="nb">:urgency</span><span class="w"> </span><span class="ss">'critical</span>
+<span class="w">         </span><span class="nb">:timeout</span><span class="w"> </span><span class="mi">0</span>
+<span class="w">         </span><span class="nb">:body</span><span class="w"> </span><span class="p">(</span><span class="nv">my/mevedel-permission-summary</span><span class="w"> </span><span class="nv">entry</span><span class="p">))))</span>
+
+<span class="c1">;; The same through the notify-send binary; destination 0 makes</span>
+<span class="c1">;; call-process fire-and-forget:</span>
+<span class="p">(</span><span class="k">setq</span><span class="w"> </span><span class="nv">mevedel-permission-notify-function</span>
+<span class="w">      </span><span class="p">(</span><span class="nb">lambda</span><span class="w"> </span><span class="p">(</span><span class="nv">entry</span><span class="p">)</span>
+<span class="w">        </span><span class="p">(</span><span class="nf">call-process</span><span class="w"> </span><span class="s">"notify-send"</span><span class="w"> </span><span class="no">nil</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="no">nil</span>
+<span class="w">                      </span><span class="s">"--app-name=mevedel"</span><span class="w"> </span><span class="s">"--urgency=critical"</span>
+<span class="w">                      </span><span class="s">"--expire-time=0"</span>
+<span class="w">                      </span><span class="s">"mevedel needs permission"</span>
+<span class="w">                      </span><span class="p">(</span><span class="nv">my/mevedel-permission-summary</span><span class="w"> </span><span class="nv">entry</span><span class="p">))))</span>
+
+<span class="c1">;; Phone push through ntfy, for the prompt that opens after you have</span>
+<span class="c1">;; left the desk:</span>
+<span class="p">(</span><span class="k">setq</span><span class="w"> </span><span class="nv">mevedel-permission-notify-function</span>
+<span class="w">      </span><span class="p">(</span><span class="nb">lambda</span><span class="w"> </span><span class="p">(</span><span class="nv">entry</span><span class="p">)</span>
+<span class="w">        </span><span class="p">(</span><span class="nf">call-process</span><span class="w"> </span><span class="s">"curl"</span><span class="w"> </span><span class="no">nil</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="no">nil</span><span class="w"> </span><span class="s">"-s"</span>
+<span class="w">                      </span><span class="s">"-d"</span><span class="w"> </span><span class="p">(</span><span class="nv">my/mevedel-permission-summary</span><span class="w"> </span><span class="nv">entry</span><span class="p">)</span>
+<span class="w">                      </span><span class="s">"https://ntfy.sh/YOUR-TOPIC"</span><span class="p">)))</span>
+</code></pre></div>
+<p>The desktop wrappers request a non-expiring critical notification.  The
+notification server may ignore the timeout hint.</p>
+<p><code>mevedel-permission-prompt.el</code> is the focused UI owner for all four entry
+kinds. It owns generic permission controls, agent attribution, dangerous-command
+presentation, and Eval presentation. The queue passes
+the entry, attribution, pending count, and settlement callback through
+<code>mevedel-permission-prompt-render</code>; the UI owner selects its presentation.
+Rendering an Eval card does not load the execution-policy adapter. The queue
+retains ordering and outcome semantics; the shared interaction primitive retains
+overlay settlement and request cancellation.</p>
+<p>A Bash command longer than <code>mevedel-permission-command-display-limit</code> (400
+characters) and an Eval expression longer than
+<code>mevedel-eval-expression-display-limit</code> (20 lines) are elided in the prompt
+behind a <code>TAB</code> toggle, which names how much is hidden and re-renders the queue
+head in place. Only the command or expression body elides: agent attribution,
+the detected-command summary, the patterns a
+session/always allow would add, and every warning stay visible, because those
+are what the decision rests on. The <code>mevedel--remote</code> descriptor a browser
+collaborator reads always carries the whole command, elided or not -- a guest
+has no <code>TAB</code> to press and must not approve what it cannot see. Both surfaces
+show the captured admission mode, approval cause, and selected resource scope,
+including directory selections on one-shot cards without remembering controls.</p>
+<p><code>mevedel-bash-policy.el</code> supplies Bash classification and reusable rule patterns. <code>mevedel-tool-exec-permission.el</code> combines that policy
+with the generic permission chain, persists approved authority, and adapts
+Bash and Eval decisions to the permission queue. Execution and rendering stay
+in <code>mevedel-tool-exec.el</code>.</p>
+<p>Permission diagnostics are persisted to <code>permission-log.el</code> in the session
+directory when <code>mevedel-permission-log-enabled</code> is non-nil. The log is
+diagnostic only: resume never replays it into live permission state.
+Entries recorded before first materialization are buffered transiently and
+flushed when the session directory is created.</p>
+<p>Each tool invocation that reaches permission checking records a sanitized
+<code>permission-decision</code> event with fields such as tool name, origin, mode,
+outcome, specifier, protected-path flag, resolver path, and rule bucket. It
+does not include raw ApplyPatch content, arbitrary tool args, or extra raw
+Bash/Eval payloads. Prompt lifecycle events remain separate: queue
+enqueue/resolve/abort/coalesce events describe prompt handling without raw
+Bash commands or Eval expressions.</p>
+<p>Each queued card gets a <code>:permission-id</code> at admission, separate from the owning
+<code>:request-id</code> and nested tool-call identifiers. Its captured
+<code>:permission-mode-base</code> and <code>:permission-mode-effective</code> remain unchanged when
+the user changes modes while the card is pending. Eval's live/batch choice is
+recorded separately as <code>:eval-mode</code>. The visible card shows the admission mode
+and the cause supplied by the policy owner: mode-based operation judgment,
+resource boundary, protected resource, explicit ask rule, hook, missing
+additive filesystem/network authority, or execution without confinement.</p>
+<p>Count <code>permission-displayed</code> to measure actual initial card displays. Admission
+is <code>permission-enqueued</code>; refreshing a card's scope or queue count does not emit
+another display. Automatic review records <code>permission-review-completed</code> with
+outcome, source and elapsed seconds, without raw user evidence. It does not count
+as a displayed card or a human answer. Each admitted request settles once as
+<code>permission-resolved</code> for a user answer, <code>permission-coalesced</code> for a covering
+policy decision, <code>permission-swept</code> for owner-request teardown, or
+<code>permission-aborted</code> for cancellation, queue abort, or rendering failure.
+<code>:settlement-source</code> distinguishes these paths. A crash may leave an admission
+without a terminal record; that is an unrecorded outcome, not an approval.</p>
+<p>The permission log retains <code>:resource-originals</code> and <code>:selected-resources</code>,
+including path, read/write access, and <code>:recursive</code> extent (nil means exact),
+plus <code>:approval-lifetime</code> for invocation, session, or workspace approval.
+Unified telemetry retains the categorical identity, mode, cause, outcome, and
+lifetime fields, while its allowlist drops resource paths and capability
+payloads. Forwarded side-conversation events use the same categorical fields;
+feedback is recorded as a denial outcome without copying the user's text.</p>
+<h2 id="bash-specifics">Bash specifics<a class="headerlink" href="#bash-specifics" title="Permanent link">&para;</a></h2>
+<p>Bash analysis returns a normalized command class, structured argument vectors,
+parser source, literal resources, and human-readable reasons.  It uses a
+normally configured Bash Tree-sitter grammar when available and a conservative
+scanner otherwise.  Redirections, substitutions, expansions, assignments,
+subshells, here-documents, control flow, parse errors, and unsupported operators
+are complex.  A dangerous component takes precedence in a compound request.
+Read-only classification uses argument-aware built-in policies. Reading,
+searching, listing, comparing and path inspection need no broad default Bash
+allow patterns. Besides the existing readers, supported policies include
+<code>diff</code>, <code>cmp</code>, <code>readlink</code>, <code>realpath</code>, <code>du</code>, and literal file/string/integer
+<code>test</code>/<code>[</code> forms. Unsupported options, variable lookup and recursive arithmetic
+expressions remain unknown. Find, ripgrep, base64, sed and awk reject deletion,
+helper execution, output-file options and unrecognized programs.
+Uniq accepts ordinary inspection options before its input and an optional <code>-</code>
+stdout operand, but rejects output filenames and options after the input.</p>
+<p>Git inspection covers <code>status</code>, <code>diff</code>, <code>log</code>, <code>show</code>, <code>rev-parse</code>, <code>ls-files</code>,
+<code>ls-tree</code>, bounded <code>cat-file</code> and <code>merge-base</code>, <code>for-each-ref</code>, and explicit
+branch listing. Recognized flags, literal <code>-C</code> paths and <code>--</code> path operands
+are supported; mutations, arbitrary config overrides and helper-enabling
+options are not. Classification requires hardened launch: pager, filesystem
+monitor, external diff/text conversion, signature verification, tracing,
+optional index writes and implicit object fetching are disabled. The target
+launcher clears every inherited <code>GIT_*</code> environment entry before installing
+fixed inspection controls; environment enumeration failure refuses launch.
+This relies on trusted Git/env executables, PATH and dynamic loader, not on the
+classifier replacing ordinary child confinement. Worktree
+<code>status</code>/<code>diff</code> use a private temporary metadata view with copied HEAD/index
+and flattened effective repository/user/system config. Includes and filter
+commands are removed from the launch config; active configured clean/process
+filters and gitlinks cause explicit refusal. Final submodule traversal is
+disabled, so concurrent source config, attributes or index edits cannot enable
+those helpers after preflight. Objects, refs, worktree files and attributes
+remain live: output is not an atomic repository snapshot. The view uses the
+execution target's authorized temporary directory and is removed on ordinary
+exit and caught signals; an uncatchable kill may leave a private temporary view.
+Ordinary config remains available except for these safety overrides.
+Git inspection does not need <code>.git</code> write grants.</p>
+<p>Supported pipes and <code>&amp;&amp;</code>, <code>||</code>, <code>;</code> chains are read-only when every component
+is read-only. Read-only launch uses Bash without startup files or inherited
+shell functions/options, and prepares Git/ripgrep spans from parsed arguments while
+preserving shell connectors, quoting and short-circuit behavior. Original
+authored commands remain the permission/hook/audit facts; prepared launch
+text is not new user authority. Parser/preparation disagreement refuses
+launch. Unknown commands and unsupported syntax remain conservative.
+Ripgrep receives <code>--no-config</code>, so inherited <code>RIPGREP_CONFIG_PATH</code> cannot inject
+helper-enabling options absent from the analyzed command.
+Bash keeps its specialized permission entry and controls, but an <code>ask</code> passes
+through the pipeline's shared <code>PermissionRequest</code> boundary before that entry
+is admitted.
+Edits authorizes arbitrary Bash syntax within required confinement; unknown
+commands, pipes, redirects and substitutions alone do not prompt. Full Access
+runs without confinement or prompts. Ask uses conservative classification: unknown
+commands default to ask. Explicit hard denies still apply in all modes. Direct user-authored session, persistent, and defcustom
+patterns may authorize dangerous or complex forms. Invocation- and
+request-scoped delegated patterns may not. Explicit denies always win.
+When a prompted dangerous command is literal and contains no dynamic shell or
+glob ambiguity, session/workspace remembering stores the complete command
+exactly. Ambiguous commands remain invocation-only; users may still author
+broader rules directly.</p>
+<h3 id="child-confinement">Child confinement<a class="headerlink" href="#child-confinement" title="Permanent link">&para;</a></h3>
+<p>Bash, batch Eval, and native external tool helpers share the guarded child
+launcher and use one effective policy: required in Edits, off in Full Access,
+and the session's configured <code>mevedel-sandbox-mode</code> in Ask. On Linux, the backend resolves
+<code>bwrap</code> with <code>executable-find</code> and caches a real probe of the core mount, user,
+process, and network namespaces. Each probe attempt defaults to a 500 ms bound
+and retains at most 64 KiB of combined diagnostics. The probe waits for its own
+process only, running no timers or other process output that would charge
+their time to the bound. A probe that times out or cannot start says nothing
+about the backend, so it is cached as retryable and the next launch probes
+again. If the full probe fails,
+Mevedel retries without replacing <code>/proc</code>. A successful retry retains the
+mount, user, process, and network boundary while exposing the host <code>/proc</code>
+view; pending and execution facts record <code>proc: host</code> instead of treating the
+whole backend as unavailable. A full successful profile mounts <code>/</code> read-only,
+rebinds the workspace, temporary directory, memory roots, manually configured
+roots, and session working directory writable, installs a fresh <code>/proc</code>, and
+changes to the canonical working directory. Its private <code>/dev</code> supplies
+<code>/dev/null</code> without host authority; redundant additive grants for that device
+are ignored rather than remounted. The default profile also isolates the
+network. A justified additive network request requires authority in Ask and
+Edits and changes only network isolation for that invocation. Full Access already
+has unrestricted network and filesystem access. The namespace and mount boundary
+is inherited by descendants.</p>
+<p>Native tools pass already-authorized input and search paths to the launcher as
+read-only mounts and pass only their generated-artifact directories as writable
+roots. Each invocation also gets a private writable scratch directory, which is
+removed on settlement. This currently covers <code>diff</code> for previews, <code>rg</code> for
+Read directory listings, Glob, and Grep, and <code>pdfinfo</code>, <code>pdftoppm</code>, and
+ImageMagick for Read media handling. These helper profiles are chosen by native
+code; they do not add model-facing escalation arguments or another permission
+prompt. Live Emacs operations, long-lived language servers, hooks, and
+user-triggered Git, clipboard, and UI helpers are not external tool helpers.</p>
+<p>An exact filesystem grant may name a symlink. The launcher opens the granted
+path but mounts its canonical target, leaving the requested command and symlink
+chain unchanged while avoiding Bubblewrap mounts onto symlink entries. Before
+Bubblewrap starts, the target-side launcher compares the device/inode identity
+of each already-open descriptor with the identity captured during grant
+resolution. A failed open, missing descriptor stat support, or replacement
+mismatch refuses the child; <code>best-effort</code> does not retry that authority failure
+as an unrestricted launch. Beneath a masked parent it recreates only the link
+hops and empty traversal directories needed to reach that exact target.</p>
+<p>An inaccessible file is masked by a private empty file with mode 000, then
+mounted read-only. Dedicated launcher descriptors supply the empty contents;
+the child's stdin remains available. No chmod is applied to a host inode or an
+already read-only bind. Multiple masks and exact file additions share the
+existing descriptor-backed launcher with distinct descriptor numbers.</p>
+<p>Bubblewrap cannot add authority for only a directory inode: binding a directory
+also exposes its descendants. Exact directory write grants, and exact directory
+read grants beneath inaccessible masks, therefore refuse confined preparation with a
+message identifying the directory and the prompt's recursive-scope selection.
+An exact directory read already available through the baseline filesystem adds
+no mount. An explicitly approved recursive grant subsumes redundant exact
+mounts only when it supplies the same enforceable authority, without merging
+their separate identities in the authority store. Execution-specific coverage
+does not cross a separately protected descendant: a recursive checkout grant
+does not authorize <code>.git</code> writes. The missing child request reaches the human
+card, whose displayed recursive directory scope requires explicit approval.
+Sufficient approved child-tree authority is reused without another prompt;
+meaningful exact child-file grants are retained during mount normalization.
+Capability checks, queued rechecks, approval validation and mount normalization
+share this rule. Native resource-grant coverage remains unchanged.</p>
+<p>A justified additive filesystem request names exact absolute paths and marks
+each as read or write. Ungranted paths require approval in Ask and Edits;
+Full Access bypasses ordinary resource asks. Invocation approval applies only
+to the current child. Reusable approval
+stores each selected path either in the matching operation profile or as an
+independent resource grant shared with native filesystem tools. It never
+creates both entries implicitly. Human directory defaults and the card's <code>g</code> selection can
+broaden a requested resource to a displayed directory tree. Both the current
+child and a selected remembered profile receive that explicit extent. Narrowing
+the remembering toggles does not narrow the current invocation's approval.
+The default remembered selection includes every requested capability, including
+ones already granted before the card appeared. The network and path toggles
+therefore cover the complete request, rather than only its missing additions.
+Recursive profile entries carry <code>:recursive t</code>, exposing the directory tree
+through one bind mount at the selected access level; model-facing requests
+name exact paths only. A
+later matching default call
+reattaches paths from its matching direct profiles without a second grant.
+Revoking a profile removes that command-scoped authority; revoking an independent
+grant removes only the independent authority. Other sufficient approvals remain
+effective. Existing profiles also use these semantics: deleting a former
+companion resource grant no longer revokes a profile. No migration or automatic
+cleanup of existing independent grants is performed. Approved paths
+are rebound at only the requested access level. A grant that contains a
+protected descendant is bound before that descendant is masked; all other
+grants are bound after protected masks are installed. An explicit write grant
+supersedes the read-only restriction at that exact mount, including when the
+mount precedes protected children. It does not remove those children's masks.
+Inaccessible parents
+expose traversal only far enough to reach the named mount, so their contents
+and sibling resources remain hidden. Command or Eval authorization is resolved
+independently and is never supplied by the resource grant. Explicit path denies
+remain final. Network and filesystem additions may be combined without
+changing any unrequested confinement boundary.</p>
+<p>Protected linked-worktree <code>.git</code> pointers resolve both the worktree metadata
+directory and its <code>commondir</code> target. Both retain the applicable protection.
+Failed confined results identify the discovered shared metadata location for
+objects and refs; this is repository-layout information, not a diagnosis
+inferred from stderr or an automatic grant. A new explicit invocation can
+request the missing scope.
+Before Bash or batch Eval starts, one shared resolver merges capabilities
+explicitly requested by that invocation with every matching direct
+session/workspace/global profile. A non-empty effective profile promotes
+<code>use_default</code> to additive confinement; <code>require_escalated</code> is never changed.
+This resolution happens both during permission checking and immediately before
+child launch. It never applies to live Eval. A capability not present in a
+matching approved profile is not inferred from failures or earlier commands:
+the model must make a new explicit invocation with the missing capability and
+justification. A started process is never replayed.</p>
+<p>In Ask, before Bash executes, identified literal resources are resolved against
+the working directory. Resources outside the allowed roots require a covering
+additive grant — exact, or recursive over an ancestor directory; bare <code>.</code> and
+<code>..</code> operands participate in this check. Command
+authorization is resolved first so an explicit command deny retains precedence.
+Provider-shaped empty optional fields, such as disabled network plus empty
+filesystem lists, are treated as omitted rather than as an authority request.
+Non-empty additions still require <code>with_additional_permissions</code> and a
+justification.</p>
+<p><code>require_escalated</code> is a separate complete bypass for Bash and batch Eval. It
+requires a justification and cannot be combined with additive permissions. It
+prompts in Ask and Edits unless a matching
+direct user-authored <code>:sandbox-permissions require-escalated</code> rule already
+exists or the optional reviewer approves that invocation. Full Access already
+authorizes direct execution. The prompt and diagnostics identify that filesystem,
+network, and process confinement will all be disabled. Operation denials,
+including Bash mutations prohibited by Plan, still apply before escalation.
+In Ask and Edits, explicit operation ask rules still need approval even when a
+remembered rule already authorizes escalation. Once approved, the child runs directly as the
+user and reports <code>sandbox: escalated</code>. Delegated rules
+cannot grant this authority, and non-interactive trusted skill expansion cannot
+request it or create reusable escalation rules. An ordinary sub-agent may still
+place the same user-visible request in the shared permission queue.</p>
+<p>Literal stable Bash commands, including dangerous commands, and literal batch
+Eval expressions may be remembered exactly. Dynamic, glob-bearing, or otherwise
+ambiguous Bash remains invocation-only; experts may still author an exact,
+scoped, or deliberately broad qualified rule directly. Reusable deny remains
+available because it can only reduce authority.</p>
+<p>Remembered Eval rules use <code>:expression</code>, including ordinary permission,
+additive profiles, and full escalation. They match the complete expression text
+with no wildcard expansion or whitespace normalization. Approving
+<code>(message "*")</code> therefore does not authorize <code>(message "different")</code>.
+Deliberately authored <code>:pattern</code> rules retain glob semantics; the remembered
+authority cockpit labels literal expression rules explicitly.</p>
+<p><code>best-effort</code> in Ask executes directly when the initial probe is unavailable.
+Edits always requires confinement, regardless of the stored preference. Full
+Access deliberately selects direct execution. Once
+confined preparation begins, a failure is returned without an unrestricted
+replacement. A private marker emitted immediately before <code>exec</code> distinguishes
+launch refusal from a started command; grant refusals do not emit that marker.
+Detection and removal match complete, case-sensitive marker lines without
+splitting the command's entire output. Lookalikes embedded in ordinary output
+remain intact.
+Signals, timeouts, and ordinary command failures are returned once and never
+replayed. <code>required</code> refuses an unavailable backend, while <code>off</code> selects direct
+execution deliberately. Direct execution reports <code>filesystem: unrestricted</code>
+and <code>network: unrestricted</code>; refused attempts report unavailable boundaries.
+A pre-marker failure retains its launcher error, diagnostics, or exit code.
+The next independent invocation reprobes the backend, so a transient launch
+failure does not disable confinement permanently. Bash and batch-Eval results append their active
+sandbox facts for the model and audit trail. Native helper facts remain
+internal and in tests rather than being added to successful tool content.
+Trusted skill substitutions keep those facts out of the substituted literal.
+The first direct fallback in each live session emits one user-visible warning
+and adds one model-visible note to the affected tool result. Later fallbacks do
+not repeat the warning, but completed Bash and batch-Eval results retain their
+actual invocation facts for the transcript and audit trail. Additive filesystem
+facts include read and write grant counts. Mevedel does not add a persistent
+sandbox status-line item.</p>
+<p>Protected restrictions are layered after writable roots. Existing glob matches
+and canonical targets become concrete mounts; <code>.git</code> pointer files also protect
+their Git directory target. Read-only paths remain visible but immutable, while
+inaccessible directories are replaced by empty read-only mounts. Determinable
+missing directory roots receive identity-checked temporary mount targets that
+are removed after settlement. A protected path crossing a symlink that the
+child could rewrite fails closed instead of relying on a racy canonical-path
+snapshot.</p>
+<h3 id="optional-approval-review">Optional approval review<a class="headerlink" href="#optional-approval-review" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-permission-reviewer</code> is <code>user</code> by default. Set it to <code>auto</code> to review
+permission exceptions before displaying a card. The <code>guardian</code> workload may
+approve the complete invocation once, deny with a reason, or defer. It sees
+actual root user intent, exact arguments, requested capabilities, current target
+and confinement facts. It cannot persist grants or change mode. Failure,
+timeout and uncertainty fall back to the ordinary human card. Full Access
+bypasses review entirely.</p>
+<p>Review cancellation and evidence revalidation prevent late responses, mode
+changes, target replacement or revoked authority from reusing an obsolete
+approval. Human queues also recheck policy on mode changes. Already-running
+processes retain their admitted authority; queued children refuse launch if
+the captured permission mode has changed.</p>
+<p><a href="../guardian-prompts/">Approval reviewer</a> owns the trusted prompt, bounded evidence
+and JSON response contract. Historical approval counts do not measure the new
+reviewer's safety or achieved reduction in prompts.</p>
+<h2 id="introspection-source-reads">Introspection source reads<a class="headerlink" href="#introspection-source-reads" title="Permanent link">&para;</a></h2>
+<p><code>library_source</code> bypasses ordinary path arguments only for a simple library
+name whose resolved canonical file remains below a canonical local <code>load-path</code>
+entry. Absolute names, directory components, remote entries, and library
+symlinks that escape their load-path entry are denied before the upstream
+reader runs. Use the ordinary <code>Read</code> tool when source outside that closed set is
+needed; its path goes through the normal resource permission boundary.</p>
+<h2 id="eval">Eval<a class="headerlink" href="#eval" title="Permanent link">&para;</a></h2>
+<p>Eval asks through the same session permission queue's Eval-specific
+entry type when approval is required. Edits automatically permits confined
+batch Eval, while live Eval remains an exception. Full Access permits both. Like Bash,
+an <code>ask</code> fires <code>PermissionRequest</code> before queue admission without changing the
+specialized card. The expression shown in the prompt is subject to
+<code>mevedel-eval-expression-display-limit</code>.  The prompt also shows the
+requested execution mode and, for live Eval, whether UI preservation is
+enabled.</p>
+<p>The full-auto reminder explicitly states that live Eval runs inside Emacs
+without confinement, alongside the tool and permission-card disclosures.</p>
+<p>Eval supports two execution modes.  <code>live</code> is the default and evaluates
+inside the current Emacs process so the expression can inspect live
+buffers, variables, windows, timers, advice, and package state.  Live
+Eval restores the selected frame's window configuration by default;
+callers can pass <code>preserve_ui: false</code> only when intentional UI
+manipulation is desired.  <code>batch</code> starts a child <code>emacs --batch -Q</code>
+process with the current <code>load-path</code> and the session working directory.
+Batch Eval protects the interactive Emacs session from UI/global-state
+mutation and uses the same effective child confinement as Bash. Edits refuses
+unavailable confinement; Ask may use its configured fallback, and Full Access
+runs directly as the same OS user with unrestricted filesystem/network disclosure.</p>
+<p>Skill body elisp injections (<code>!el</code> inline and <code>```!el</code> fenced blocks)
+are the exception: they pass a trusted-literal flag because the
+expression is author-written SKILL.md content, not model-generated Eval
+input. A matching Eval allow authorizes model-generated or trusted Eval, while
+a matching ask requires approval in Ask and Edits; Full Access bypasses it. Deny
+rules still win absolutely.
+Trusted skill expansion cannot create an interactive prompt and therefore
+requires existing authority, typically from the skill's <code>allowed-tools:
+[Eval]</code>.
+Standalone/sticky Plan mode withholds Eval regardless of this authority;
+directive Planning also withholds it. Goal turns use ordinary Eval policy. Markers
+introduced by argument
+substitution are not trusted literals and are left as text.
+Literal markers may still contain substituted text in their expression
+body; only the marker syntax and delimiters carry the trusted-literal
+provenance.</p>
+<h2 id="sub-agent-permission-propagation">Sub-agent permission propagation<a class="headerlink" href="#sub-agent-permission-propagation" title="Permanent link">&para;</a></h2>
+<p>Sub-agent buffers carry <code>mevedel--session</code> set buffer-locally to the
+<strong>root session struct, by reference</strong> (allocated in
+<code>mevedel-agent-conversation-open</code>). The pipeline reads
+<code>mevedel--session</code> from the current buffer at tool-dispatch entry, so a
+tool dispatched at any nesting depth observes the root's permission mode,
+direct rules, explicit denies, protected resources, resource grants, and
+confinement policy. Any
+"allow-session" / "deny-session" outcome accepted inside the sub-agent's
+prompt is written via <code>setf</code> on the same struct -- so the new rule
+applies immediately to the root and to every other live sub-agent.
+Plan restrictions are the exception to live sharing. An agent turn started
+under Plan carries an immutable Plan read-only stamp, so leaving Plan or
+accepting a proposal does not widen a turn that is already running. See
+<a href="../plan-mode/#tool-boundary">Plan mode</a>.</p>
+<p>An agent's tool list limits which operations it can request. A read-only
+agent can still need a permission prompt for a protected or outside-root
+resource; read-only capability does not confer unrestricted read authority.</p>
+<p>All queued permission prompts render in the root session's interactive
+view buffer, not inside the sub-agent transcript buffer or a read-only
+transcript inspection view. Queue entries carry a canonical origin (<code>/root</code>
+or a retained agent path such as <code>/root/worker/verifier</code>), and request teardown
+only aborts entries owned
+by the ending request. This keeps a retained agent's visible prompt
+open across root-view rerenders and unrelated request cleanup until the
+user explicitly resolves it or interrupts that agent turn. Redraws use the
+ordinary interaction-zone lifecycle and preserve the active composer draft.</p>
+<p>If the permission step ever runs without a session in context,
+<code>mevedel-tool-permission-step</code> emits a <code>display-warning</code> once per tool
+("Permission step for ... ran with no session in context"); that
+fallback would silently consult only the defcustom-scoped global
+defaults, which is the actual hazard. Repeats are logged quietly to
+<code>*Messages*</code> without disturbing the echo area.</p>
+<p><code>mevedel-tool-permission.el</code> owns permission-step path fan-out, decision
+logging, permission hook dispatch, and prompt orchestration. The Pipeline only
+places that step in the standard tool sequence.</p>
+<h2 id="bash-permission-example">Bash permission example<a class="headerlink" href="#bash-permission-example" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="k">setq</span><span class="w"> </span><span class="nv">mevedel-permission-rules</span>
+<span class="w">      </span><span class="o">'</span><span class="p">((</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:action</span><span class="w"> </span><span class="nv">ask</span><span class="p">)</span><span class="w">                       </span><span class="c1">; default ask</span>
+<span class="w">        </span><span class="p">(</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:pattern</span><span class="w"> </span><span class="s">"echo"</span><span class="w">     </span><span class="nb">:action</span><span class="w"> </span><span class="nv">allow</span><span class="p">)</span>
+<span class="w">        </span><span class="p">(</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:pattern</span><span class="w"> </span><span class="s">"echo *"</span><span class="w">   </span><span class="nb">:action</span><span class="w"> </span><span class="nv">allow</span><span class="p">)</span>
+<span class="w">        </span><span class="p">(</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:pattern</span><span class="w"> </span><span class="s">"ls"</span><span class="w">       </span><span class="nb">:action</span><span class="w"> </span><span class="nv">allow</span><span class="p">)</span>
+<span class="w">        </span><span class="p">(</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:pattern</span><span class="w"> </span><span class="s">"ls *"</span><span class="w">     </span><span class="nb">:action</span><span class="w"> </span><span class="nv">allow</span><span class="p">)</span>
+<span class="w">        </span><span class="p">(</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:pattern</span><span class="w"> </span><span class="s">"git log*"</span><span class="w"> </span><span class="nb">:action</span><span class="w"> </span><span class="nv">allow</span><span class="p">)</span>
+<span class="w">        </span><span class="p">(</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:pattern</span><span class="w"> </span><span class="s">"rm *"</span><span class="w">     </span><span class="nb">:action</span><span class="w"> </span><span class="nv">deny</span><span class="p">)))</span>
+
+<span class="p">(</span><span class="k">setq</span><span class="w"> </span><span class="nv">mevedel-bash-dangerous-commands</span>
+<span class="w">      </span><span class="o">'</span><span class="p">(</span><span class="s">"rm"</span><span class="w"> </span><span class="s">"sudo"</span><span class="w"> </span><span class="s">"dd"</span><span class="w"> </span><span class="s">"chmod"</span><span class="w"> </span><span class="s">"curl"</span><span class="w"> </span><span class="s">"wget"</span><span class="w"> </span><span class="s">"ssh"</span><span class="p">))</span>
+</code></pre></div>
+<p>Use space-boundary patterns (<code>"ls"</code> + <code>"ls *"</code>) rather than <code>"ls*"</code> to
+avoid matching <code>lsof</code>. Supported plain syntax is commands joined by
+<code>&amp;&amp;</code>, <code>||</code>, <code>;</code>, or <code>|</code>. Dynamic shell forms are complex and require either
+an interactive decision, <code>full-auto</code>, or a deliberately authored direct-user
+pattern.</p>
+<p>A portable project-local store that authorizes the Eask CLI, network access,
+and writes within npm's cache directory is:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="nb">:rules</span>
+<span class="w"> </span><span class="p">((</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:pattern</span><span class="w"> </span><span class="s">"npx @emacs-eask/cli *"</span>
+<span class="w">   </span><span class="nb">:network</span><span class="w"> </span><span class="no">t</span>
+<span class="w">   </span><span class="nb">:file-system</span><span class="w"> </span><span class="p">((</span><span class="nb">:path</span><span class="w"> </span><span class="s">"~/.npm"</span><span class="w"> </span><span class="nb">:access</span><span class="w"> </span><span class="nv">write</span><span class="w"> </span><span class="nb">:recursive</span><span class="w"> </span><span class="no">t</span><span class="p">))</span>
+<span class="w">   </span><span class="nb">:action</span><span class="w"> </span><span class="nv">allow</span><span class="p">))</span>
+<span class="w"> </span><span class="nb">:resource-grants</span><span class="w"> </span><span class="no">nil</span><span class="p">)</span>
+</code></pre></div>
+<p>A <code>:recursive t</code> entry grants a whole directory tree — here read access to
+the system Emacs installation for one Bash command. Its profile exposes the
+tree to the sandboxed child through one read-only bind mount:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="nb">:rules</span>
+<span class="w"> </span><span class="p">((</span><span class="s">"Bash"</span><span class="w"> </span><span class="nb">:pattern</span><span class="w"> </span><span class="s">"some-command *"</span>
+<span class="w">   </span><span class="nb">:file-system</span><span class="w"> </span><span class="p">((</span><span class="nb">:path</span><span class="w"> </span><span class="s">"/usr/share/emacs"</span><span class="w"> </span><span class="nb">:access</span><span class="w"> </span><span class="nf">read</span><span class="w"> </span><span class="nb">:recursive</span><span class="w"> </span><span class="no">t</span><span class="p">))</span>
+<span class="w">   </span><span class="nb">:action</span><span class="w"> </span><span class="nv">allow</span><span class="p">))</span>
+<span class="w"> </span><span class="nb">:resource-grants</span><span class="w"> </span><span class="no">nil</span><span class="p">)</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

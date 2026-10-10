@@ -1,0 +1,2392 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/shared-editing/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Shared whiteboard and document editing - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#shared-whiteboard-and-document-editing" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Shared whiteboard and document editing
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-and-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime and build
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#editing-and-pointing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing and pointing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#element-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Element library
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-with-the-assistant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working with the assistant
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Working with the assistant">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#questions-and-comments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Questions and comments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durability-and-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durability and recovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deleting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deleting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#downloads-and-imports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Downloads and imports
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checks
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/shared-editing.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="shared-whiteboard-and-document-editing">Shared whiteboard and document editing<a class="headerlink" href="#shared-whiteboard-and-document-editing" title="Permanent link">&para;</a></h1>
+<p>Whiteboards and documents live in the workspace
+<a href="../view/#artifact-store">artifact store</a>, so every session and room of the
+project sees the same ones. The room's <strong>Shared work</strong> section separates
+creation and import controls from its list of the whiteboards and documents
+attached to the room's session; creating, importing or editing one attaches
+it. The open item and local recoveries stay listed; <strong>Project artifacts</strong>
+lists the rest of the project. Full and
+owner links can create, rename, import, edit and delete them concurrently. View
+links can observe and download. Opening an item affects that browser only;
+other participants get a followable entry. Each editor opens in its own
+browser tab, leaving the room and its composer draft in the original tab.
+The editor tab reconnects independently and reopens its item on reload.
+<strong>Back to room</strong> shows the session in that tab. The host uses the same editor through
+a browser share link. Browser popup permission is needed to open a new tab.
+An editor tab shows its loading state immediately. If the item cannot be read,
+it keeps the requested item and displays an error with Retry; it does not fall
+back silently to the room. Back to room cancels a pending editor opening.</p>
+<p>From Emacs, <code>o</code> on an item's row in the artifacts cockpit, or clicking a
+<code>[title](shared://ID)</code> link in the transcript, opens that item's editor tab in
+the default browser with the session's full-control link. The editor exists
+only in a room, so for a session that is not shared this first asks, with
+<code>/collab</code>'s disclosure, to start sharing it; the room then stays up until
+<code>/collab stop</code>. The cockpit opened outside a session uses the room of the
+item's own conversation, its dedicated session, and the lobby's <strong>Artifacts</strong>
+tab does the same: a whiteboard or document opens in its editor there.</p>
+<p>Documents use a continuous paper surface, serif body text, and grouped <strong>Text</strong>,
+<strong>Lists</strong>, and <strong>Insert</strong> menus. Room and editor controls share cool and warm
+palettes and system/light/dark appearance; changes follow the editor without
+replacing its document or question draft. The whiteboard keeps a light drawing
+surface so authored colors remain unchanged.</p>
+<p><strong>Discussion</strong> (documents) or <strong>Assistant</strong> (whiteboards) opens a sidebar on
+desktop and a full-width overlay on phones; both have <strong>Comments</strong> and
+<strong>Assistant</strong> views. Document discussion starts open on
+wide screens. Drag its divider to widen it, up to half the viewport; Left/Right
+arrow keys also resize it, Home/End select the limits, and double-click resets
+its width. The width is retained with the item's private drafts. Closing the
+panel preserves drafts, captured context, and editor position. The editor
+follows the visible viewport above the keyboard; Escape closes the panel, and
+Ctrl/Command+Enter submits its composer.
+Downloads, recovery, retry, contribution history, and assistant highlighting
+are in the editor's <strong>☰</strong> menu.</p>
+<p>A whiteboard's <strong>Canvas background</strong> in that menu offers the theme's board
+colour, Excalidraw's white, grey, blue, yellow and rose canvases, and a custom
+opaque colour; the model sets it with <code>SharedEdit</code>'s <code>background</code> action. The
+colour belongs to the board: every participant sees it,
+it is an attributed, revertible contribution and follows local Undo/Redo, and
+PNG, SVG and <code>.excalidraw</code> exports and the model's board images carry it as
+Excalidraw's <code>viewBackgroundColor</code>. Importing an Excalidraw file keeps its
+canvas colour. Without a choice the board follows the room theme and exports
+stay white. Outlined arrowheads are filled with the canvas colour.</p>
+<p>A dark theme shows the canvas, its grid and its elements as Excalidraw does,
+through <code>invert(93%) hue-rotate(180deg)</code>, which keeps hues; images are
+inverted back to their own pixels. The swatches preview the colours as the
+board will show them. Stored colours, exports, and the model's board images
+stay as authored.</p>
+<h2 id="runtime-and-build">Runtime and build<a class="headerlink" href="#runtime-and-build" title="Permanent link">&para;</a></h2>
+<p>Shared editing requires Node 22.4 or newer on the Emacs host. Set
+<code>mevedel-shared-editing-node-program</code> if it is not on PATH. Node stays local
+when the session's execution target is remote; Emacs owns every durable
+read and write on that target. Ordinary chat, static artifacts, and browser
+viewing do not need Node; browser guests never install it.</p>
+<p>Shared editing is optional. On connection the browser loads the saved item
+catalog independently, then asks the host to check the configured runtime,
+document schema, and packaged PNG renderer. This check creates no saved session
+or item. If startup or resource loading fails, creation, import, and opening
+items are disabled with an explanation. Existing items stay listed; open editors
+and locally stored recovery copies remain accessible.</p>
+<p>After installing Node, changing <code>mevedel-shared-editing-node-program</code>, or repairing
+helper resources, use <strong>Recheck availability</strong> in Shared work. The host
+starts a fresh helper between queued operations, so repaired resources take
+effect without cancelling an edit or discarding drafts. A successful check
+reenables controls and reconnects an open editor to host state. Read-only links
+can check availability and view items but still cannot edit them.</p>
+<p>The minimum includes the switch disabling Node web storage, introduced in
+<a href="https://nodejs.org/en/blog/release/v22.4.0">Node 22.4</a>. The helper uses Yjs,
+Tiptap's shared schema, roughjs and perfect-freehand, and packaged resvg WASM
+with Excalifont, Nunito, Comic Shanns and Noto Sans for headless PNG rendering. It exposes only a private stdin/stdout connection to Emacs.
+End users receive generated bundles, renderer resources, and third-party
+notices; they do not run npm installation.</p>
+<p>To rebuild after changing browser/helper source or dependency versions:</p>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>ci<span class="w"> </span>--prefix<span class="w"> </span>shared-editing
+npm<span class="w"> </span>run<span class="w"> </span>build<span class="w"> </span>--prefix<span class="w"> </span>shared-editing
+</code></pre></div>
+<p>The board fonts are generated from Excalidraw's font subsets with
+<code>python3 shared-editing/fonts.py EXCALIDRAW_CHECKOUT</code> (fontTools and brotli).
+It writes the TTFs the host renders with, the WOFF2 files embedded in the
+editor bundle, and <code>font-metrics.json</code>, the advance widths every client uses
+to measure and wrap text. Rebuild the bundles afterwards.</p>
+<p>Commit the lockfile and generated helper/viewer bundles together. The build
+also assembles license notices; font and renderer licenses accompany their
+packaged resources. Rebuild the relay to embed changed viewer assets.</p>
+<h2 id="editing-and-pointing">Editing and pointing<a class="headerlink" href="#editing-and-pointing" title="Permanent link">&para;</a></h2>
+<p>A whiteboard holds Excalidraw elements and draws them as Excalidraw does
+(<a href="../adr/0121-store-whiteboards-as-excalidraw-elements/">ADR 0121</a>): roughjs
+strokes and fills from each element's seed, perfect-freehand drawing, and
+Excalidraw's fonts and text layout. Every browser, the host's PNGs and the
+exports draw the same wobble.</p>
+<p>The drawing menu follows Excalidraw: hand (H), selection (V), rectangle (R),
+diamond (D), ellipse (O), sticky note (N), arrow (A), line (L), freehand
+drawing (P or X), <strong>Shape from drawing</strong> (Shift+X), text (T) and eraser (E),
+followed by the laser (K), comment (M) and image (9) tools. Number keys 1–8
+and 0 select tools as in Excalidraw. Buttons expose tool names and keyboard
+shortcuts. Selection supports Shift multi-selection, arrow-key
+movement, Delete, and resizing. Dragging across empty canvas with the
+selection tool, including by touch, draws a selection box: releasing selects
+the objects it fully contains, Alt selects every object it touches, and Shift
+adds them to the current selection. Connectors are tested by their drawn path.
+A press without movement clears the selection. The box disappears on release,
+but its area stays attached to the selection, even when it contains no
+objects, until the selection changes or an object moves: <strong>Ask about
+selection</strong> and <strong>Add comment</strong> use it, and the area shows again while a
+question or comment draft carries it. Box selection never edits content.</p>
+<p>Selection follows Excalidraw's handles. A lone element shows an outline with
+eight resize handles and a rotation handle above it; a group or several
+elements share one frame with the same handles, and each group is outlined
+once. Corner handles keep the opposite corner in place and side handles the
+opposite side, in the element's rotated frame; Shift keeps the proportions,
+which images and text keep by default. Dragging a text corner scales its font;
+dragging its side wraps it to that width. Several elements scale from their
+common frame. The rotation handle turns the selection about its centre,
+snapping to 15° with Shift. A lone arrow or line shows its points instead:
+dragging a point moves it, dragging a segment's midpoint adds a bend there,
+and dropping an arrow end on a shape binds it. Double-clicking a group enters
+it, so its members select and edit one by one; Escape or clicking outside
+leaves it.
+Moving and resizing show a preview while the pointer is held, including
+selection handles and bound connectors. Geometry previews also travel over the
+existing presence channel, so other participants see movement before the save
+round trip. Their status reads <strong>Live movement · not saved yet</strong>. Releasing
+commits the geometry through the normal validated save path. Previews never
+enter content, exports, recovery drafts, or undo history; cancellation restores
+the committed scene without creating an edit. Commit, cancellation, disconnect,
+and a five-second expiry remove remote previews. A preview packet contains only
+up to 100 object IDs and bounding boxes, with the pending operation ID after
+release. New shapes, text, style, and keyboard edits use normal committed
+updates.
+Click inside a shape or a closed line to select it, filled or not; lines have
+a wider invisible hit area. Double-click a shape or press Enter to edit its label in place, with
+the label's font, size, alignment and line height; double-clicking empty canvas
+starts free text there. A label is an Excalidraw text element bound to its
+container: it wraps to the container, centres in it, moves with it, and grows
+the container when it no longer fits. Arrows carry labels the same way, with a
+gap cut into the line behind them. Clicking a label selects its container.
+Finishing a shape returns to selection with the shape selected, so a
+double-click edits it instead of creating more shapes. Freehand drawing keeps
+its tool, as strokes come in runs. The lock button (Q) after the tools keeps any
+drawing tool active after each shape; it belongs to the browser, not the board. Text is shared while typing; blur or Ctrl/Command+Enter
+finishes, and Escape cancels if another writer has not changed that text.
+Finishing with no text removes the label or text element.</p>
+<p><strong>Shape from drawing</strong> turns a stroke drawn by hand into a clean rectangle,
+diamond, ellipse, arrow or line when it matches one, using Excalidraw's
+recognizer; other strokes stay freehand drawings. A finished stroke waits
+0.7 seconds for another, and strokes drawn within that pause are recognized
+together, so an arrow's head may be drawn after its shaft. An unrecognized
+group keeps each stroke as its own drawing. A recognized arrow binds its start
+to the shape the first stroke began on and its end to the shape under its tip,
+wherever the pen lifted. The result takes the current
+style and is an ordinary edit, so Undo restores the board as it was before the
+strokes. Strokes smaller than 25 screen pixels are not converted.</p>
+<p>The <strong>Style</strong> panel follows Excalidraw: stroke and background colours,
+hachure/cross-hatch/solid fill, stroke width, solid/dashed/dotted strokes,
+sloppiness (architect, artist, cartoonist), sharp or round edges, the arrow
+type (sharp, curved or elbow), start and end arrowheads (none, arrow,
+triangle, circle, bar), font (hand-drawn Excalifont, normal Nunito, code Comic
+Shanns), font size, text alignment, vertical alignment for a label inside a
+shape, and opacity. It shows only the sections that apply to the selection or
+the active drawing tool, changes the selected objects and their labels, and
+remembers the choices for new ones. On screens at least 1,100 pixels wide it
+opens by itself when something is selected and closes when the selection is
+cleared; closing it keeps it closed until then.
+A curved arrow runs through its points; switching a straight arrow to curved
+adds a bend to drag. An elbow arrow leaves and enters its bound shapes at the
+facing side and runs in horizontal and vertical segments between them,
+rerouted as the shapes move. The route does not avoid other shapes.
+Freehand drawing records a pen's pressure for every sample the browser
+reports; mouse and touch strokes simulate pressure from their speed. Stored
+line, arrow and stroke points keep 0.1 board units, and a freehand stroke drops
+samples within one unit of the last one it keeps, retaining its first and last.
+Pointer input repeats and jitters, and every sample costs storage, sync and
+model context. Elements stored before this rule keep their points until next
+written. Elements imported with other Excalidraw values, such as
+the cardinality arrowheads, keep and draw them.
+<strong>Objects</strong> exposes Select all, Clear selection, Edit text, Duplicate
+(Ctrl/Command+D), Group (Ctrl/Command+G), Ungroup (Ctrl/Command+Shift+G), Lock,
+Unlock all, Delete, and <strong>Arrange &amp; move</strong> for layer order and precise nudges.
+Clicking any member of a group selects the whole group. A locked element
+cannot be selected, moved or erased until <strong>Unlock all</strong>. Duplicates and
+copies keep the bindings and labels among themselves and drop the others.
+<strong>Shortcuts</strong> lists the canvas keys. Selection handles retain their screen
+size as the view changes.
+Scrolling pans the board, and Shift turns a mouse wheel sideways;
+Ctrl/Command+scroll and a trackpad pinch zoom at the pointer, in proportion to
+the scroll. Panning, zooming, the zoom buttons, Fit, and the percentage button
+(reset to 100%) affect only the local viewport. The board fits existing objects once on opening; Fit and opening keep them clear of the floating zoom controls.
+Both whiteboards and documents accept PNG, JPEG, and WebP through the board's
+image button or <strong>Insert → Image…</strong>, clipboard paste, or file drag-and-drop. Dropped images land at the board pointer or document insertion
+position; multiple files insert together and support Undo/Redo. Images are
+embedded in the item and retained in native exports; document HTML and Markdown
+exports also carry their image data. External image URLs are not fetched.
+A board stores each image once as an Excalidraw file named by its content
+hash; image elements refer to it, so repeated images and contribution history
+never repeat its bytes.
+Selecting an image exposes <strong>Crop image</strong>, <strong>Rotate 90°</strong>, <strong>Flip horizontal</strong>,
+<strong>Flip vertical</strong>, and <strong>Reset image</strong> in both editors. Crop opens a shared
+dialog with draggable edges, arrow-key adjustments (Shift for ten pixels),
+percentage fields, and a live result preview. <strong>Reset crop</strong> restores the
+full source while retaining orientation; <strong>Reset image</strong> clears both. Apply
+commits one undoable edit; Cancel leaves the image unchanged. A removed or
+changed image is reported instead of overwritten when applying a stale dialog.</p>
+<p>On a board these are Excalidraw's <code>crop</code>, <code>scale</code> (flips) and <code>angle</code>
+(rotation, about the image's centre): the original pixels stay in the file and
+the renderer crops them. Cropping keeps the image's display scale. In a
+document, the original stays in <code>src</code>; optional <code>imageEdit</code> holds the
+normalized crop, quarter-turn rotation, flips, and rendered PNG together as one
+attributed shared property, and both count toward image and item limits.
+Board PNG and SVG downloads and document HTML/Markdown exports show only the
+visible pixels: an SVG download replaces a cropped image with its cropped
+rendering. The <code>.excalidraw</code> and native document files keep the original so
+reset remains possible. Transformations follow local Undo/Redo and arrive at
+other participants through the existing editor synchronization.
+Arrows bind to shapes as in Excalidraw. A bound end in orbit mode sits on the
+target's outline, offset by 5 + half its stroke width, toward the binding's
+fixed point; inside mode places it at the fixed point. Bound ends follow moves
+and resizes of their targets. Moving an arrow away from its targets unbinds
+the ends whose targets stay behind. The editor and PNG/SVG exports share this
+geometry; a binding to a deleted element is drawn unbound.</p>
+<h2 id="element-library">Element library<a class="headerlink" href="#element-library" title="Permanent link">&para;</a></h2>
+<p><strong>Library</strong> offers the libraries kept on the session host: <strong>My library</strong>,
+installed libraries, and mevedel's <strong>Built-in</strong> library. Each library is a
+collapsible section; My library starts open, the others closed, and the
+editor remembers which sections a participant opened while it stays loaded.
+The search field matches item names and library names across every library,
+opening the sections with matches. Clicking an item
+inserts copies with fresh identities at the centre of the view, selected for
+moving; groups, labels and bindings within the item are kept.</p>
+<p>Each library is an <code>.excalidrawlib</code> file in <code>mevedel-shared-library-directory</code>,
+by default <code>~/.mevedel/whiteboard-libraries/</code>, named after the file. <strong>Add
+selection</strong> stores the selected objects and their labels in <strong>My library</strong>;
+<strong>Import file…</strong> adds the items of an <code>.excalidrawlib</code> file there;
+<strong>Download</strong> saves it. Items are removed with ×. Copying any Excalidraw
+library file into the directory installs it as well. The libraries belong to
+the host's Emacs, not to a session or board: every writable participant in
+every room, and the assistant, sees the same libraries. Inserted items are
+ordinary elements, so a board carries them without its libraries, as an
+Excalidraw scene does. View links have no library.</p>
+<p><strong>Browse public libraries</strong> lists the collection at
+<a href="https://libraries.excalidraw.com">libraries.excalidraw.com</a> with a search
+field, sorted by downloads, recent updates, age or name. Opening one previews
+its items; <strong>Install library</strong> saves it in the directory, where it stays
+available in every whiteboard until the <strong>Remove</strong> button inside its opened
+section, which names the library, removes it. Installed libraries are removed
+whole: they mirror a published file, so useful items are kept by inserting
+them and adding them to My library. The editor has no network
+access, so Emacs fetches the index, download counts and library files from
+<code>mevedel-shared-library-catalog-url</code>, and only library files listed there.
+The built-in <strong>Database</strong> item replaces the former cylinder shape: a group of
+an ellipse and lines, as Excalidraw has no cylinder element.</p>
+<p>Ordinary board cursors move one named arrow per participant. Selecting <strong>Laser
+pointer</strong> makes mouse or pen hover visible locally and to collaborators; on a
+touchscreen, press and drag to point, then lift to stop. A bright tip, a compact
+name tag, and a short curved trail distinguish deliberate pointing from an
+ordinary cursor. Older trail segments fade independently within about half a
+second; a stationary tip stays visible while the participant points. Holding
+the mouse button, pen, or touch while pointing draws laser ink instead: the
+line stays for two seconds and fades over the next, so a participant can
+sketch a circle or arrow on top of the board without editing it.</p>
+<p>Coordinates travel in board space and render through each receiver's viewport.
+Remote cursors use a short transition from the displayed position to each
+received sample, without predicting past it. Laser packets retain up to 64
+input samples from the last 550 ms, rather than only each packet's last position.
+The observer plays those samples with a short 55 ms delay, preserving curves
+between network updates. Each sample is <code>[x, y, age, ink]</code>; held samples carry
+an increasing ink index, which lets observers accumulate a line longer than one
+packet's window. Each press skips an index, so separate strokes do not join. A stale gap starts a new pointer
+instead of drawing a bridge across the board. Reduced-motion preferences remove
+trails and interpolation. Leaving the canvas, switching tools, cancellation,
+hiding the page, and disconnect clear the local pointing state; item changes
+and peer departure clear remote state. Idle presence expires if its occasional
+refresh is lost. Motion coalesces to at most 20 updates per second and retains
+the final position. Presence is discarded behind queued content/control traffic;
+it creates no revision, undo history, export marks, queued question, or model
+context.</p>
+<h2 id="working-with-the-assistant">Working with the assistant<a class="headerlink" href="#working-with-the-assistant" title="Permanent link">&para;</a></h2>
+<p>The model reads shared items with Read and Grep at <code>shared://</code> addresses and
+changes them with <code>SharedCreate</code> and <code>SharedEdit</code>. Every role has Read; the
+editing tools are discoverable through ToolSearch/ToolCall to implementation
+and worker roles. Their summaries name whiteboards and documents, and
+ToolSearch's <code>shared</code> key separates them from artifacts, so a requested
+whiteboard finds <code>SharedCreate</code>. The prompt's resource roster lists
+<code>shared://</code> once the project has an item.</p>
+<table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Read returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>shared://</code></td>
+<td>the project's items with kind and title, marking those attached to the session, and <code>shared://library</code></td>
+</tr>
+<tr>
+<td><code>shared://ID</code></td>
+<td>a header with kind, title, revision and the related addresses, then one line per element in drawing order or per top-level block in document order</td>
+</tr>
+<tr>
+<td><code>shared://ID/elements/ELEMENT</code></td>
+<td>one element or block in full, with each stroke point on its own line</td>
+</tr>
+<tr>
+<td><code>shared://ID/view.png</code></td>
+<td>the board rendered, long edge at most 2048 px</td>
+</tr>
+<tr>
+<td><code>shared://ID/images/KEY</code></td>
+<td>an embedded image: a board file by its <code>fileId</code>, a document image by the key its <code>src</code> shows</td>
+</tr>
+<tr>
+<td><code>shared://ID/comments</code></td>
+<td>comments and their replies with anchor status and live quote</td>
+</tr>
+<tr>
+<td><code>shared://ID/history</code></td>
+<td>retained contributions, newest first, with their changed ids</td>
+</tr>
+<tr>
+<td><code>shared://library</code>, <code>shared://library/NAME</code></td>
+<td>element library items as <code>LIBRARY/ITEM-ID</code> references</td>
+</tr>
+<tr>
+<td><code>shared://library[/NAME]/sheet.png</code></td>
+<td>a numbered sheet of the first 60 of those items</td>
+</tr>
+</tbody>
+</table>
+<p>An overview line is <code>HASH JSON</code>: a 12-character content hash of the element or
+block, then its JSON. The hash is computed over sorted keys, so writers' key
+order does not matter. Lines stay within Read's 2,000-character cap: past
+1,800 characters a stroke's <code>points</code> and <code>pressures</code> become a count with the
+element's address. Document images appear as <code>shared://ID/images/KEY</code>, never as
+image data. Text pages through Read's ordinary <code>offset</code> and <code>limit</code> and its
+50 KiB output bound, so an item of any size can be read in parts. Grep searches
+the text views: an item's overview, comments or history, or every item's
+overview under bare <code>shared://</code>. Images go through Read's ordinary media
+delivery, so models without image support get its explicit refusal. Glob and
+ApplyPatch do not accept <code>shared://</code>. Views are computed by the workspace's
+editing host from committed state, without a browser.</p>
+<p>Creating or editing an item attaches it to the model's session. When a turn
+that created or changed items settles, each of them gets a version in the
+store; an edit that changed nothing does not count.</p>
+<p><code>SharedCreate</code> creates a named item and returns its address. <code>SharedEdit</code>
+applies patches, inserts library items, renames, sets a board's background,
+or reverts a contribution from <code>shared://ID/history</code>. A patch change is
+<code>{id, hash, set, unset, after, afterId}</code>:</p>
+<ul>
+<li><code>set</code> merges fields into the current element or block and <code>unset</code> removes
+  fields; the result is validated whole.</li>
+<li><code>after</code> replaces the element or block; <code>null</code> deletes it.</li>
+<li>A new element or block gives <code>after</code> without a hash.</li>
+<li>Document blocks may give an <code>afterId</code> insertion anchor, which may name a
+  block inserted earlier in the same patch; insertions sharing an anchor keep
+  patch order, each followed by those anchored to it. Their image <code>src</code>
+  values may keep the <code>shared://ID/images/KEY</code> form, which the host restores
+  to the image data.</li>
+</ul>
+<p>The host compares every given hash, or its absence, with the current target.
+Any mismatch rejects the whole patch and returns each stale target's current
+hash and line. Unrelated changes do not invalidate an otherwise valid patch.
+Board elements use Excalidraw's field names; absent fields take Excalidraw's
+defaults, labels are text elements with a <code>containerId</code>, and connections are
+arrows with <code>startBinding</code>/<code>endBinding</code>. The derived Excalidraw fields
+<code>version</code>, <code>versionNonce</code>, <code>updated</code>, <code>isDeleted</code> and <code>boundElements</code> are
+refused. An image element must reference an existing file; the assistant cannot
+add image bytes. <code>insert</code> places a library item with its top-left corner at
+<code>x</code>, <code>y</code> as new elements.</p>
+<p>An edit result names the item, its revision, address and contribution, the
+deleted ids, and the stored lines of the elements it changed, including
+derived changes such as a label's container growing. Past 24 KiB of lines,
+the rest are reported as ids and hashes. It does not repeat the board. Whiteboard
+edits also return a PNG of the resulting canonical revision through the normal
+tool-media path, so the model can inspect the visual result without a separate
+read or a connected browser. Tools use normal permissions, Plan and read-only
+ceilings, cancellation, and result/media persistence. They work with every
+browser closed and never silently start a share.</p>
+<h3 id="questions-and-comments">Questions and comments<a class="headerlink" href="#questions-and-comments" title="Permanent link">&para;</a></h3>
+<p>The document's <strong>Discussion</strong> panel and the whiteboard's <strong>Assistant</strong> panel have
+<strong>Comments</strong> and <strong>Assistant</strong> views. The assistant shows questions about
+that item and their canonical replies, with the session's queued, paused,
+working, disconnected, or provider-failure state.
+While the session is working, a spinner accompanies the status and the panel's
+toolbar button. The room chat shows <strong>Assistant working…</strong> in its status strip.
+These indicators follow the host's session activity, including tool execution,
+and clear on completion or disconnection. Reduced-motion preferences disable
+the spinning animation. A paused follow-up queue does not conceal a running turn.
+All submitted questions, comments, replies, and assistant answers are shared with the room; drafts stay
+in the current browser's recovery storage. View participants can read them.</p>
+<p>Selecting document text shows <strong>Add comment</strong> and <strong>Ask about selection</strong> beside
+the passage. <strong>Add comment</strong> (Ctrl+Alt+M) opens a separate draft; <strong>Post</strong>
+publishes an anchored discussion and <strong>Post reply</strong> adds an attributed human
+reply. Each has a <strong>Send to assistant</strong> choice, checked by default: posting then
+also sends the thread to the assistant, which answers in it. Unchecked, the
+message stays a note between people and submits no model turn. The same choice
+applies to artifact comments in the room. Questions and comment/reply drafts remain
+independent when switching views, receiving updates, or reopening the editor.
+An unrecognized saved discussion-draft format is reported and reset without
+blocking recovery of document content or posted discussions.</p>
+<p><strong>Ask about selection</strong> opens the assistant composer directly with the passage
+attached. <strong>Use whole document</strong> explicitly changes its scope. The attached quote
+stays fixed when focus or the document selection moves elsewhere.</p>
+<p>A request submits the posted human thread and its passage, without changing the
+assistant composer or including unposted reply text. The thread's latest human
+message is the visible request in the room and to the model; the whole thread
+travels in the shared context. <strong>Send thread to assistant</strong> sends the thread as
+it stands without a new message, and confirms a reviewed context or retries an
+unconfirmed request. Queue and delivery status appear alongside the discussion. Canonical
+AI replies render in that thread beneath the human message that prompted them;
+ordinary questions remain in the Assistant view. Another AI request requires
+another message sent to the assistant or an explicit thread send. The host checks the reviewed thread version as well as
+the passage; concurrent replies require reviewing the updated discussion before
+resubmission. Failed delivery retains its request identity for retry.</p>
+<p>Clicking a document highlight opens its discussion; <strong>Show passage</strong> scrolls back
+to the live anchor. Participants with edit authority can resolve or reopen a
+thread. Resolution hides its highlight and removes it from the open list;
+<strong>Show resolved</strong> reveals its retained discussion. AI responses never resolve
+threads automatically. Reopen a resolved thread before posting or asking again.
+There are at most 200 comments per document and 200 human replies per comment,
+with at most 10,000 characters per message and the normal snapshot size limit
+on submissions to the assistant.</p>
+<p>Comments keep their original quote and collaboration-aware text anchors. The
+panel marks a passage changed or removed after later edits. Changed passages
+require reviewing current context before sending; removed passages cannot be
+sent. The immutable snapshot of an already sent question remains unchanged.
+In the editor sidebar, room transcript, and Emacs view, sent questions keep their
+authored text visible and collapse the snapshot under <strong>Shared context</strong> by
+default. Expand it to inspect the full sent context and attachment links; the
+summary names the item, scope, and revision. This affects display only, not what
+the model receives. Prompts edited on the host remain fully visible.
+Comments are item annotations: native, document and board exports contain the
+content, not the comments or conversation. A fresh import starts without those
+annotations.</p>
+<p>Whiteboard comments anchor to objects, to a board area, or to both. Select
+objects or box-select an area and choose <strong>Add comment</strong> (Ctrl/Command+Alt+M),
+or use the <strong>Comment</strong> tool (M): it outlines the object under the pointer,
+comments on a clicked object, and comments on a dragged area together with the
+objects it contains. The tool stays active for further comments; Escape returns
+to selection. Every open comment shows a numbered pin at the top-right corner
+of its anchor, following moves live. Hovering a pin outlines its anchor and
+shows the author, text, reply count, and whether its objects changed; clicking
+it opens the thread. A ring turns around a pin while the assistant works on its
+thread, the same way as for artifact comments. Resolved comments have no pin,
+and pins renumber in order of the open comments. <strong>Show objects</strong> selects the thread's surviving objects
+and area and frames them. Pins, hover cards and threads are visible to view
+participants, who cannot post.</p>
+<p>A board comment records its object IDs, optional area, quote, and a fingerprint
+of those objects and their labels. The quote names labelled objects and counts
+unlabelled ones by type, such as <code>freedraw ×24</code>. In a thread, a question sent to
+the assistant shows only its sender and shared context, since its text is the
+thread's latest message. The thread is
+<strong>changed</strong> once an object moves, restyles, changes its label or is deleted, and
+<strong>removed</strong> when none of its objects remain and it has no area. An area
+outlives its objects. A request to the assistant attaches the anchor's surviving
+objects and its area, subject to the same review of changed context; the host
+accepts only objects from the comment's own anchor and its exact area.
+The same 200-comment and 200-reply limits apply to whiteboards.</p>
+<p>For a whiteboard, select one or more objects and choose <strong>Ask about selection</strong>.
+After a box selection, the question is about the <strong>Selected area</strong>: it carries
+the box's board region with the objects it contains, including an area with no
+objects, so a request such as “put a legend here” names a place. Unselected
+objects the area touches accompany it as context with their labels; images
+appear by file reference, and their pixels only in the attached PNG, which
+shows the area with a small margin and is scaled up to four times so small
+areas stay legible. Selected objects bring their labels and the shapes their
+arrows connect as context.
+The discussion composer offers <strong>Selected objects</strong> (or <strong>Selected area</strong>) /
+<strong>Whole whiteboard</strong> or <strong>Selected passage</strong> / <strong>Whole document</strong>. Switching to the whole item retains
+the previously attached selection, so switching back does not require selecting
+it again. A private document highlight keeps the attached passage visible while
+focus is in the discussion or comment draft; closing discussion removes that
+highlight. The attached quote shows the chosen scope before submission. Opening controls, typing, and toggling the panel retain that capture.
+Pending edits must save first. The browser sends a content hash of the capture
+it showed, and the host compares it with a capture of its committed content; a
+concurrent change rejects the request with an explicit <strong>Refresh context</strong>
+recovery. It never substitutes a whole item for a missing selection. No
+selection is too large to ask about. The model receives the reviewed content
+as the hashed lines it reads at <code>shared://ID</code>, introduced by the item's address
+and revision. A document selection gives its text and the blocks it spans; a
+board selection or area gives its elements, then its labels, connected and
+nearby elements. A thread's discussion comes first. Past a 128 KiB budget the
+remaining lines are counted and the model is told to read on at <code>shared://ID</code>
+and, for a thread, <code>shared://ID/comments</code>. The board PNG accompanies it as
+before.</p>
+<p>Each document and whiteboard has its own model conversation. A question receives
+its reviewed content snapshot and recent turns about the same item, including
+questions sent from its comment threads. Other items and ordinary room chat are
+excluded. Ordinary room requests and room compaction summaries likewise exclude
+item discussion turns. The room transcript still shows their shared chronology,
+and lists each existing item as a discussion of its own: selecting it in the room shows
+its turns and sends room messages into its conversation as whole-item questions
+about the committed content (see <a href="../collaboration/#scoped-prompts-and-attachments">scoped prompts</a>).
+This is context selection, not a privacy boundary or a separate execution agent.
+Questions keep the session's permissions, tools, queue, and checkpoints, so they
+can edit content. Directive discussions retain their separate read-only contract.</p>
+<p>When broader context matters, the assistant can search <code>history://root</code> with
+Grep and read the matching line range with Read. This includes unsaved room
+turns; <code>history://saved</code> covers archived segments. The prompt advertises those
+resources, and the model chooses whether to retrieve them from the request's
+meaning. No keyword trigger or automatic full-room attachment runs. For example,
+“Make this consistent with our earlier architecture decision” can prompt a
+search followed by reading the relevant exchange. An unavailable decision must
+be retrieved or clarified, not assumed to have been included.</p>
+<p>Canonical transcript segments remain the only conversation store. On subsequent
+requests, same-item turns are restored from archived segments and deduplicated by
+question identity against the live tail. The request includes up to 128,000
+characters of prior complete turns, newest first in selection and chronological
+in presentation; omitted older history is explicitly disclosed and remains
+retrievable. The budget is applied while reading history: once the next unique
+item turn exceeds it, older segments are not opened. The current question and
+its archived duplicates do not consume that budget. Sparse item history can
+still require scanning all segments before reaching the budget. Retry identity
+checks remain exhaustive so old accepted questions cannot be submitted twice.
+The current question is retained separately. Item requests do not
+compact the unrelated room to make space. Current snapshots, tools, and provider
+context limits still apply; a large single turn may need a narrower question.
+The editor restores recent archived discussion on opening, reconnecting, or
+transcript replacement/removal, and reports truncated or unavailable history.
+Failure to read a needed archive prevents a model request from silently losing
+context, but does not prevent editing the item. Archives older than an already
+established truncation point are not consulted. Ordinary requests without
+trusted item attribution skip item-related transcript classification.</p>
+<p>Accepted questions include item identity, title, committed revision, exact selected
+text or elements, the selected board area, bounded surrounding document blocks,
+labels, connector endpoints or touched neighbours, and a matching board PNG as a normal
+attachment. Questions use the ordinary queue
+with guest attribution; correlation metadata is persisted as model-invisible
+transcript audit data. Provider failures appear in the conversation. If the host edits a queued question,
+the panel explicitly marks it <strong>Edited on host</strong> and shows the revised input; it
+no longer claims that the original attachment is what the model received.
+Disconnected or rejected submissions retain the draft and request identity.
+Retrying an accepted question finds its queued or delivered record across browser
+reconnects, preventing a second turn. Editing the question or refreshing context
+creates a new identity; an intentional follow-up is a new question. Drawing,
+typing, posting comments, and synchronization never start model turns automatically.</p>
+<h2 id="durability-and-recovery">Durability and recovery<a class="headerlink" href="#durability-and-recovery" title="Permanent link">&para;</a></h2>
+<p>An item is <code>&lt;workspace&gt;/.mevedel/artifacts/.state/ID/state.json</code>, with <code>meta.el</code>
+naming its kind, title and revision, and <code>versions/</code>. Catalogs read these small
+metadata records without parsing the item's CRDT state or history.
+Emacs serializes operations per
+workspace in one queue, which every room and session of this Emacs shares,
+validates candidates in the helper, checks continuing authority, and commits
+before acknowledging Saved on host. Consecutive queued edits of one item
+(updates, patches, inserts, renames and background changes) commit together:
+each is computed from the state the previous one left, and up to 16 are
+written by one commit, then acknowledged and announced in order. When an edit
+continuing such a batch fails, the batch commits on its own. A batch commits
+only while none of its edits was cancelled or lost its authority and this
+Emacs still holds the item's lease as it did when the batch began; otherwise
+every edit in it is reported unsaved, since each was computed from the one
+before. Batched edits count toward the queue's limits. Under several
+writers the commit, one fenced target program, otherwise made edits wait for
+each other's commits. Embedded images travel with their item's
+state. Ordinary read-only artifact addresses gain no new mutation capability.
+Requests and helper replies arriving during a remote file operation retain
+their continuations until the transport is idle, so TRAMP's temporary timer
+lists cannot strand the workspace queue.</p>
+<p>Across Emacs instances, an item lease decides who may commit
+(<code>mevedel-artifact-lease.el</code>). It lives outside the store, under
+<code>.mevedel/leases/artifacts/ID/</code>, so the store stays safe to commit. It uses
+the session lease's generation records, target clock and expiry
+(<code>mevedel-session-lease-seconds</code>): the first edit in an Emacs acquires it,
+a timer renews it, and every state write proves ownership and expiry in the
+same target program. Lease transitions, state and metadata writes, and item
+deletion share a target-side <code>flock</code> on the stable
+<code>.mevedel/leases/artifacts/</code> directory, so a takeover cannot interleave with a
+commit. The execution target must provide <code>flock</code>.
+These file operations are serialized, but are not a crash-atomic multi-file
+transaction. A failed program reports a save failure and can leave an incomplete
+new item or state and catalog metadata at different revisions until retried.
+After <code>mevedel-artifact-lease-idle-seconds</code> without edits, or when Emacs
+exits, the lease is released. Another Emacs that tries to edit a held item
+gets a read-only refusal and asks the holder to hand it over; the holder
+releases it to that Emacs at its next renewal once its queue for the item is
+idle and nobody has edited the item there for 10 seconds, so a person still
+drawing keeps it. A request that is not repeated within one lease period
+lapses, so a requester who walked away does not take the item later. A
+lease whose holder stopped renewing, such as a suspended laptop's, is taken
+over by the next edit, from Emacs or a browser, and Emacs says so. Each write
+replaces the whole item under the lease, so a late write from the old holder
+fails instead of overwriting.
+While the lease is held and was renewed within the last minute, an edit does
+not read the target clock again. While this Emacs still holds the lease it
+last committed under, and renewed it within one lease period, an edit or read
+starts from that commit instead of reading the item back: the lease fences every state write, so one fenced target program
+per edit remains. Metadata has other writers, so the commit verifies it and,
+when it changed meanwhile, rereads it and retries once. Reading needs no lease. An open editor that
+receives a change skipping a revision, as after a hand-over between two Emacs
+instances, rereads the whole item instead of applying only that change. If
+that read fails, the editor says so and reads again with the next change.</p>
+<p>Versions follow the store's caps. A version keeps the item's content, title
+and comments but not its receipts or contribution history. One is recorded
+through the item's editing queue, after the saves before it, when a model
+turn that changed the item settles, and on <strong>Save version</strong> (the
+cockpit's <code>s</code>, or the store list in a room or the lobby). Restoring a version
+is one ordinary, attributed edit through the queue: lineage, comments and
+history stay, concurrent editors receive it as an update, and the restore can
+itself be reverted. The most blocks of a document that are the same in the
+version and still in its order keep their identity, so comments anchored in
+them stay current, even around a moved block; the others are copied whole
+from the version. Whiteboard restores update retained objects in place, so a
+pending browser edit to an unchanged object still merges. Removed objects
+retain the normal deletion-wins behavior.</p>
+<p>Sessions only attach to items, so Resume, Save As, Fork and Rewind neither
+copy nor roll them back. Closing a browser or ending the share leaves the host
+original intact. A later share uses fresh credentials, following
+<a href="../adr/0114-tie-collaboration-room-lifetime-to-host-share/">ADR 0114</a>.</p>
+<p>An editor sends a local edit as soon as no save of its own is awaiting the
+host's reply. Edits made while one is in flight join a single follow-up
+operation, sent when the reply arrives. Consecutive sends start at least 50 ms
+apart, so a slider or color-picker drag against a fast host does not commit,
+and spend an operation receipt on, every frame.</p>
+<p>The viewer retains pending changes in browser storage, scoped to room and
+item. Reauthentication in the same logical share merges them. Disconnected,
+rejected, or storage-failed edits remain visibly pending and have a Recovery
+copy download. A recovery copy is explicitly named and represents that
+browser's content, including unsynchronized changes. It is not a host save.
+Storage quota errors ask the user to download before closing. Retry save
+rereads committed state and retries operation identities without duplicating
+content. A host storage failure leaves the item unchanged until a retried save
+succeeds.
+After a reload, locally retained items remain available as <strong>local recovery</strong>
+entries even when their share or host item is gone. They open read-only for
+recovery download until the host supplies valid current content and authority.</p>
+<h2 id="deleting">Deleting<a class="headerlink" href="#deleting" title="Permanent link">&para;</a></h2>
+<p><strong>Delete whiteboard/document…</strong> in the editor's <strong>☰</strong> menu, or <code>d</code> on its row
+in the Emacs artifacts cockpit, deletes an item for everyone: its content,
+embedded images, comments and contribution history. There is no undo; the
+browser's confirmation offers <strong>Download a copy</strong>, which can be imported
+again. The deletion runs in the workspace's editing queue, so it lands after
+any save in progress, and removes the item's whole artifact: versions, its
+lease and its dedicated session. An editor showing the item in
+another browser closes and names who deleted it; a later save to it fails
+with "This item no longer exists". A browser keeps its local draft of a
+deleted item only while it holds edits that never reached the host, listed
+as a local recovery. The transcript keeps the item's discussion: its turns stay
+in the room under <strong>All</strong>, their chip marked <strong>deleted</strong>, but the item loses its
+tab, so nothing can be sent into a conversation about an item that no longer
+exists. A browser showing that tab returns to <strong>All</strong>. A deleted HTML artifact's
+discussion goes the same way. The room lists an item's tab only once the host
+has listed its items, so a deleted item's tab does not reappear on reload. The
+model cannot delete items.</p>
+<h2 id="downloads-and-imports">Downloads and imports<a class="headerlink" href="#downloads-and-imports" title="Permanent link">&para;</a></h2>
+<p>Standard downloads use a committed revision: PNG/SVG or an Excalidraw file for
+whiteboards, and Markdown/HTML or an editable native JSON file for documents.
+The <strong>Excalidraw file</strong> (<code>.excalidraw</code>) is a complete Excalidraw scene: every
+element field, fractional z-order indices, derived reverse references, label
+and connector positions as displayed, and the image files in use. It opens in
+excalidraw.com and other Excalidraw editors. Native and Excalidraw files
+preserve supported content, relationships, and embedded assets. They exclude
+credentials, presence, collaboration history, and undo stacks. Markdown and
+images are viewable conversions with less editable structure.
+Whiteboard PNG and SVG downloads use an opaque white background independent
+of the room theme, without the editor grid or temporary highlights. SVG
+downloads embed the fonts their text uses. SVG labels use individually
+positioned text lines, preserving blank lines, and arrowheads use explicit
+paths so Qt-based viewers retain the same text layout and arrows.</p>
+<p>Import supports <code>.excalidraw</code> scenes (also as <code>.json</code>), the native document
+format, Markdown/plain text documents, and raster images, which open as a new
+whiteboard holding that image. It validates the complete input before creating
+a new item and collaboration lineage, preserving the original. An Excalidraw
+scene goes through Excalidraw's restore rules: legacy fields migrate, deleted
+and invisible elements and unknown element types are dropped, and unusable
+values take Excalidraw's defaults. Images in formats other than PNG, JPEG and
+WebP are drawn as placeholders, and the room reports them after import.
+Library files are imported in the editor's <strong>Library</strong>. Uploaded HTML,
+JavaScript, external image URLs, and unsupported formats are rejected. There
+are no legacy readers or migrations; whiteboards saved in mevedel's former
+shape format no longer open.</p>
+<p>Bounds are explicit: 16 MiB canonical state/native input, 4,000 elements and
+200 image files per board, 4,000 points per stroke, 8 MiB per library, 200 targets per agent transaction, and 1 MiB document
+JSON excluding embedded image data, with bounded depth and node count. Documents
+allow up to 12 MiB of embedded image data within the canonical state limit.
+Raster images are limited to 16 megapixels each and 32 megapixels per item; browser image uploads are at
+most 4 MiB. Recent revert snapshots are bounded by both count and bytes as
+described above; they expire before older snapshots block further saves. The
+receipt ledger has a 65,536-operation ceiling. A native export/import begins
+a fresh history when that ceiling is reached. A question's model context is
+held to 128 KiB, with the remainder named by address rather than refused.
+Transfers
+use bounded chunks; host and viewer queues also bound aggregate input size.
+Browser responses carry CRDT state or its update and compact contribution
+metadata. Full before/after snapshots stay on the host for Revert; image bytes
+are not repeated through the contribution list on every broadcast.</p>
+<p>The packaged editor has an opaque iframe origin and an item-scoped message
+port. CSP forbids networking and submitted forms while permitting local
+editor dialogs and the board fonts embedded as data (<code>font-src data:</code>). Room credentials stay in the trusted viewer. The relay stays
+content-blind. <a href="../adr/0120-edit-shared-content-through-the-session-host/">ADR 0120</a>
+records the change from model-only authorship to direct shared editing.</p>
+<h2 id="checks">Checks<a class="headerlink" href="#checks" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--prefix<span class="w"> </span>shared-editing
+npm<span class="w"> </span>run<span class="w"> </span>test:browser<span class="w"> </span>--prefix<span class="w"> </span>shared-editing
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>clean<span class="w"> </span>elc
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span><span class="nb">test</span><span class="w"> </span>ert<span class="w"> </span>test/test-mevedel-shared-editing*.el<span class="w"> </span>test/test-mevedel-shared-library.el<span class="w"> </span>test/test-mevedel-tool-editing.el<span class="w"> </span>test/test-mevedel-collaboration-editing.el
+<span class="nv">MEVEDEL_TEST_SHARED_EDITING</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>timeout<span class="w"> </span>600s<span class="w"> </span>./test/run-remote-acceptance.sh
+</code></pre></div>
+<p>The focused editor checks reproduce interior selection, inline text, cursor
+replacement, local/remote laser trails, grouped contributions, export-neutral
+assistant highlights, frozen context, stale/offline refusal, explicit comments,
+reply rendering, disclosure continuity, box selection, area questions, board
+comment pins and threads, and a small keyboard-sized viewport.
+<code>test/board-tools.browser.mjs</code> covers shape recognition, the library (with a
+stand-in for the host's library requests), groups, locking, duplicates,
+arrowheads and fonts; <code>test/test-mevedel-shared-library.el</code> covers the library
+file and public collection through a local HTTP server.
+The room scenario also checks question-draft recovery across repeated reloads. Set
+<code>MEVEDEL_EDITOR_SCREENSHOTS=1</code> when running <code>test/editor.browser.mjs</code> to save
+preview screenshots under <code>.scratch/shared-collaborative-editing/</code>.
+The focused room design and navigation checks also run with
+<code>MEVEDEL_BROWSER=firefox</code> after installing Playwright Firefox with
+<code>shared-editing/node_modules/.bin/playwright install firefox</code>.</p>
+<p>The room browser scenario checks the separate tab and preserved composer,
+as well as caret visibility after a mobile viewport resize. It uses a real
+relay and isolated Emacs, multiple Chromium contexts, and a deterministic participant invoking actual native tools. It
+requires Go, Emacs dependencies installed by Eask, and Playwright Chromium
+(<code>shared-editing/node_modules/.bin/playwright install chromium</code>). The remote
+command provisions the repository's temporary SSH/container fixture.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
