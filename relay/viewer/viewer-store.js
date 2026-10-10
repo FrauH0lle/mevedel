@@ -7,7 +7,7 @@
   // attached to the session; the lobby has no session of its own.
   function create({send, el, list, empty, state, room = false, open, notice,
                    navigate = link => window.location.replace(link),
-                   ask = text => window.prompt(text),
+                   ask = (text, value) => window.prompt(text, value),
                    confirm = text => window.confirm(text)}) {
     let rows = [];
     let requestSequence = 0;
@@ -15,8 +15,11 @@
     const expanded = new Set();
     const versions = new Map();
 
-    // A placed menu would drift from its row; scrolling closes it.
+    // A placed menu would drift from its row; scrolling closes it.  A
+    // listing that arrives while one is open waits for it to close, since
+    // rendering would remove it.
     let shown = null;
+    let stale = false;
     window.addEventListener('scroll', () => {
       if (shown) shown.hidePopover();
     }, {capture: true, passive: true});
@@ -27,8 +30,13 @@
 
     function act(action, id, fields = {}) {
       const reqId = ++requestSequence;
-      pending.set(reqId, {action, id});
-      send({t: 'store-action', reqId, action, id, ...fields});
+      const row = rows.find(candidate => candidate.id === id);
+      pending.set(reqId, {action, id, title: (row && row.title) || id});
+      Promise.resolve(send({t: 'store-action', reqId, action, id, ...fields})).then(sent => {
+        if (sent !== false) return;
+        pending.delete(reqId);
+        notice('Connection lost; nothing changed.');
+      });
     }
 
     function record(row) {
@@ -99,8 +107,11 @@
           const name = ask(`Name the copy of ${row.id}:`, `${row.id}-copy`);
           if (name) act('duplicate', row.id, {newId: name.trim()});
         }]);
-        entries.push(['Conversation', 'Continue in this artifact\'s own session',
-                      () => act('conversation', row.id)]);
+        // From the lobby, Open already opens an item in its conversation.
+        if (room || row.item !== true) {
+          entries.push(['Conversation', 'Continue in this artifact\'s own session',
+                        () => act('conversation', row.id)]);
+        }
         entries.push(['Delete', 'Delete for everyone, with versions, comments and conversation',
                       () => {
           if (confirm(`Delete ${row.title || row.id} for everyone, with its versions, `
@@ -126,7 +137,10 @@
           shown = menu;
           place(trigger, menu);
           menu.dataset.placed = '';
-        } else if (shown === menu) shown = null;
+        } else if (shown === menu) {
+          shown = null;
+          if (stale) render();
+        }
       });
       entries.forEach(([label, title, handler, danger]) => menu.append(button(label, title, () => {
         menu.hidePopover();
@@ -144,7 +158,8 @@
     }
 
     function renderRow(row) {
-      const item = el('li', 'lobby-row store-row');
+      const item = el('li', 'lobby-row');
+      item.dataset.storeId = row.id;
       const main = el('div', 'lobby-main');
       const name = el('span', 'lobby-name', row.title || row.id);
       name.title = row.id;
@@ -169,19 +184,44 @@
       return item;
     }
 
+    // Rendering replaces every row; focus moves to the same control of the
+    // same row, or its menu trigger, rather than falling to the page.
     function render() {
+      if (shown) {
+        stale = true;
+        return;
+      }
+      stale = false;
+      const active = document.activeElement;
+      const owner = active && active.closest ? active.closest('[data-store-id]') : null;
       list.replaceChildren(...rows.map(renderRow));
       if (empty) empty.hidden = rows.length > 0;
+      if (!owner || list.contains(active)) return;
+      const again = list.querySelector(`[data-store-id="${CSS.escape(owner.dataset.storeId)}"]`);
+      if (!again) return;
+      const controls = [...again.querySelectorAll('button')];
+      (controls.find(control => control.textContent === active.textContent)
+       || again.querySelector('.store-more'))?.focus();
     }
 
     // The host's listing, sent on request and after every store change.
+    // Listed versions stay until their artifact changes; a gone artifact
+    // is no longer expanded.
     function show(frame) {
+      const before = new Map(rows.map(row => [row.id, `${row.versions}:${row.modified}`]));
       rows = Array.isArray(frame.artifacts) ? frame.artifacts.filter(
         row => row && typeof row.id === 'string') : [];
       rows.sort((a, b) => (b.modified || 0) - (a.modified || 0));
-      // A changed store invalidates listed versions.
-      versions.clear();
-      expanded.forEach(id => act('versions', id));
+      const now = new Map(rows.map(row => [row.id, `${row.versions}:${row.modified}`]));
+      for (const id of [...expanded]) {
+        if (!now.has(id)) {
+          expanded.delete(id);
+          versions.delete(id);
+        } else if (before.get(id) !== now.get(id)) {
+          versions.delete(id);
+          act('versions', id);
+        }
+      }
       render();
     }
 
@@ -204,14 +244,13 @@
         notice(typeof frame.n === 'number' ? `Restored as version ${frame.n}.`
           : 'Restoring; the editor shows it once saved.');
       } else if (request.action === 'delete') {
-        const row = rows.find(candidate => candidate.id === request.id);
-        notice(`Deleted ${(row && row.title) || request.id}.`);
+        notice(`Deleted ${request.title}.`);
       } else if (request.action === 'save-version') {
         notice(`Saved as version ${frame.n}.`);
       }
     }
 
-    return Object.freeze({show, handle, refresh, rows: () => rows});
+    return Object.freeze({show, handle, refresh});
   }
 
   window.mevedelStoreView = Object.freeze({create});

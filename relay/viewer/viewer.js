@@ -218,7 +218,7 @@
     send, el, state, room: true, notice: flashNotice,
     open: record => {
       storeSheet.close();
-      if (record.item) editing.open(record.store);
+      if (record.item) editing.openItem(record.store);
       else artifacts.open(record);
     },
     list: document.getElementById('store-list'),
