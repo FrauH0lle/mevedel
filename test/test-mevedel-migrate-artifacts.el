@@ -172,6 +172,26 @@
                                                   :id)))))
       (delete-directory root t)))
 
+  :doc "copies a session closed before it ever published, and converts the rest"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-empty-" t)))
+         (destination (file-name-concat root "converted"))
+         (empty (file-name-concat root ".mevedel" "sessions" "s0")))
+    (unwind-protect
+        (progn
+          (mevedel-migrate-artifacts-test--pid-session root "s1")
+          (make-directory (file-name-concat empty ".lease") t)
+          (mevedel-migrate-session--write
+           (file-name-concat empty ".lease" "00000000000000000001.el")
+           (list :generation 1 :transfer-generation 1 :status 'released
+                 :publication-head nil :unsettled-mutation nil
+                 :client-id (make-string 64 ?a) :renewed-at 1 :expires-at 2))
+          (let ((report (mevedel-migrate-artifacts root destination)))
+            (should (eq :unconverted (cadr (assoc "s0" report))))
+            (should (file-exists-p (file-name-concat destination "s0" ".lease"
+                                                     "00000000000000000001.el")))
+            (should (member "mockup" (cdr (assoc "s1" report))))))
+      (delete-directory root t)))
+
   :doc "refuses before writing anything while a session is open"
   (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-open-" t)))
          (destination (file-name-concat root "converted")))
