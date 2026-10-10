@@ -146,7 +146,7 @@ A new item gets its store metadata; a renamed one updates its title."
        workspace id "state.json" (intern (plist-get state :kind))
        (plist-get state :title)))
      ((not (equal (plist-get meta :title) (plist-get state :title)))
-      (mevedel-artifact-store--update-meta
+      (mevedel-artifact-store-update-meta
        workspace id :title (plist-get state :title))))))
 
 (defun mevedel-shared-editing--version-content (state)

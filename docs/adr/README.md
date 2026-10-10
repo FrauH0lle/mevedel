@@ -162,3 +162,7 @@ to the decision bearing that ID.
 - [ADR 0123: Keep turn authority in mevedel across model engines](0123-keep-turn-authority-in-mevedel.md)
   also owns the native context-receipt decision; ADR 0115 keeps the gptel payload
   rule. No original ADR is replaced.
+
+- [ADR 0124: Keep artifacts in a workspace store that sessions attach to](0124-keep-artifacts-in-a-workspace-store.md)
+  amends ADR 0099's published-record authority, ADR 0120's per-session storage
+  and queue, and ADR 0122's lobby with an Artifacts tab.

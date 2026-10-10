@@ -171,12 +171,45 @@
         ;; Runtime loading remains strict; only this explicit script accepts old data.
         (should-error (mevedel-session-codec-deserialize old workspace)))))
 
+  :doc "drops retained generations and fixed caches no reader accepts"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let* ((stale ".publications/generation-aaaaaaaaaaaaaaaaaaaa")
+           (data (concat stale "/000001.data"))
+           (manifest-file (file-name-concat source stale "manifest.el"))
+           (manifest (mevedel-migrate-session--read manifest-file)))
+      (mevedel-migrate-session--write (file-name-concat source data)
+                                      (plist-put (copy-tree old) :version "v0.5.5"))
+      (setf (plist-get (cdar (plist-get manifest :artifacts)) :sha256)
+            (mevedel-migrate-session--hash (file-name-concat source data)))
+      (mevedel-migrate-session--write manifest-file manifest)
+      (mevedel-migrate-session--write (file-name-concat source "session.meta.el")
+                                      (plist-put (copy-tree old) :version "v0.5.5"))
+      (should (mevedel-migrate-session-copy source destination))
+      (should-not (file-exists-p (file-name-concat destination stale "manifest.el")))
+      (should (file-exists-p (file-name-concat destination data)))
+      (should-not (file-exists-p (file-name-concat destination "session.meta.el")))
+      (should (file-exists-p (file-name-concat destination head)))))
+
+  :doc "takes an expired active lease, left by a crash, as closed"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (mevedel-migrate-session--write
+     lease-file (plist-put (mevedel-migrate-session--read lease-file) :status 'active))
+    (should (mevedel-migrate-session-copy source destination)))
+
   :doc "refuses corrupt, unsupported, live and unsafe sources without changing them"
   (dolist (fault '(version checksum path active unsettled missing-lease lock recovery symlink))
     (mevedel-migration-test--with-source "v0.5.9"
       (pcase fault
-        ('version (mevedel-migrate-session--write
-                   (file-name-concat source "session.meta.el") (plist-put old :version "v0.5.0")))
+        ;; The published head's sidecar; a stale fixed cache would be dropped.
+        ('version
+         (let* ((data ".publications/generation-bbbbbbbbbbbbbbbbbbbb/000001.data")
+                (file (file-name-concat source head))
+                (manifest (mevedel-migrate-session--read file)))
+           (mevedel-migrate-session--write (file-name-concat source data)
+                                           (plist-put (copy-tree old) :version "v0.5.0"))
+           (setf (plist-get (cdar (plist-get manifest :artifacts)) :sha256)
+                 (mevedel-migrate-session--hash (file-name-concat source data)))
+           (mevedel-migrate-session--write file manifest)))
         ('checksum (with-temp-file (file-name-concat source ".publications/generation-aaaaaaaaaaaaaaaaaaaa/000002.data")
                      (insert "corrupt")))
         ('path (let* ((file (file-name-concat source head))
@@ -185,7 +218,10 @@
                  (mevedel-migrate-session--write file manifest)))
         ((or 'active 'unsettled)
          (let ((lease (mevedel-migrate-session--read lease-file)))
-           (setq lease (if (eq fault 'active) (plist-put lease :status 'active)
+           ;; A live holder still renews its lease.
+           (setq lease (if (eq fault 'active)
+                           (plist-put (plist-put lease :status 'active)
+                                      :expires-at (+ (float-time) 600))
                          (plist-put lease :unsettled-mutation t)))
            (mevedel-migrate-session--write lease-file lease)))
         ('missing-lease (delete-directory (file-name-concat source ".lease") t))

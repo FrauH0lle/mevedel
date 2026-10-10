@@ -40,11 +40,12 @@ Read the relevant contracts before planning or changing an unfamiliar area.
   shared working files, consolidation, and proposal decisions
 - [`view.md`](view.md) — dual-buffer view model, status /
   interaction / input zones, rendered agent transcript views, input
-  history
+  history, and the [workspace artifact store](view.md#artifact-store)
 - [`collaboration.md`](collaboration.md) — browser sharing, bearer-link
   authority, typed guest input, notifications, and relay reconnection
 - [`shared-editing.md`](shared-editing.md) — concurrent whiteboards and documents,
-  native model tools, editor isolation, host saves, and recovery
+  native model tools, editor isolation, item leases, host saves, versions, and
+  recovery
 - [`tools.md`](tools.md) — tool pipeline, hook ordering, permission checks,
   mutation snapshots, result projection and persistence, `:wrap` /
   `:groups`, renderers and render-data side channel, oversized result

@@ -63,8 +63,9 @@
     (insert-file-contents-literally file)
     (secure-hash 'sha256 (current-buffer))))
 
-(defun mevedel-migrate-session--sidecar (data)
-  "Return DATA converted to v0.5.11, preserving existing durable fields."
+(defun mevedel-migrate-session--sidecar (data &optional attached)
+  "Return DATA converted to v0.5.11, preserving existing durable fields.
+ATTACHED lists the store artifact ids a legacy session starts attached to."
   (unless (equal mevedel-session-codec-format-version "v0.5.11")
     (error "This converter targets v0.5.11; use its matching mevedel checkout"))
   (setq data (copy-tree data))
@@ -95,13 +96,15 @@
     ;; Older formats predate the artifact store: no session is attached yet.
     (when (plist-member data :attached-artifacts)
       (error "Unexpected attached artifacts in legacy sidecar"))
-    (setq data (plist-put data :attached-artifacts nil))
+    (setq data (plist-put data :attached-artifacts attached))
     (setq data (plist-put data :version "v0.5.11")))
   (mevedel-session-codec-validate-current-sidecar data))
 
 (defun mevedel-migrate-session--closed (directory)
   "Require closed DIRECTORY and return its exact lease snapshot.
-Refuse recovery or unsettled mutation rather than claiming to repair it."
+A released lease is closed, and so is an active one whose holder stopped
+renewing it: its expiry has passed, as after a crash.  Refuse recovery or
+unsettled mutation rather than claiming to repair it."
   (when (file-exists-p (file-name-concat directory ".lock"))
     (error "Close the session and release its PID lock first"))
   (when-let* ((recovery (file-name-concat directory ".recovery"))
@@ -116,8 +119,12 @@ Refuse recovery or unsettled mutation rather than claiming to repair it."
     (unless (cl-every #'mevedel-session-durability--valid-lease-p records)
       (error "Invalid portable lease record"))
     (when (and (file-directory-p lease-dir)
-               (not (and latest (eq 'released (plist-get latest :status))
-                         (not (plist-get latest :unsettled-mutation)))))
+               (not (and latest
+                         (not (plist-get latest :unsettled-mutation))
+                         (or (eq 'released (plist-get latest :status))
+                             ;; Local migration: the target clock is ours.
+                             (and (eq 'active (plist-get latest :status))
+                                  (< (plist-get latest :expires-at) (float-time)))))))
       (error "Close the session and release its portable lease first"))
     (when latest
       (let ((head (plist-get latest :publication-head)))
@@ -128,9 +135,21 @@ Refuse recovery or unsettled mutation rather than claiming to repair it."
     (mapcar (lambda (file) (cons (file-name-nondirectory file)
                                (mevedel-migrate-session--hash file))) files)))
 
-(defun mevedel-migrate-session-copy (source destination)
+(defun mevedel-migrate-session--head (lease source)
+  "Return SOURCE's published head as a relative path, or nil.
+LEASE is the snapshot `mevedel-migrate-session--closed' returned."
+  (when lease
+    (let ((latest (cl-find-if (lambda (row) (not (eq 'aborted (plist-get row :status))))
+                              (mapcar (lambda (entry)
+                                        (mevedel-migrate-session--read
+                                         (file-name-concat source ".lease" (car entry))))
+                                      (reverse lease)))))
+      (plist-get latest :publication-head))))
+
+(defun mevedel-migrate-session-copy (source destination &optional attached)
   "Copy closed local SOURCE to new DESTINATION and convert its metadata.
 Retain session identity, transcripts, artifacts and every publication head.
+ATTACHED lists the store artifact ids a legacy session starts attached to.
 Return the count of distinct converted sidecar files.  Failure removes only
 the new copy.  The caller must keep SOURCE closed throughout conversion."
   (setq source (directory-file-name (expand-file-name source))
@@ -164,6 +183,19 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
                        (manifest (mevedel-session-publication--validate-manifest
                                   (mevedel-migrate-session--read path) path))
                        (entries (plist-get manifest :artifacts)))
+                  ;; Collection may leave an older manifest naming files of a
+                  ;; generation it removed.  Nothing can read that manifest;
+                  ;; drop it from the copy, keeping its data files, which later
+                  ;; manifests may still name.  The published head must be whole.
+                  (unless (cl-every (lambda (entry)
+                                      (file-regular-p
+                                       (file-name-concat destination
+                                                         (plist-get (cdr entry) :published))))
+                                    entries)
+                    (when (equal relative (mevedel-migrate-session--head lease source))
+                      (error "The published session head is incomplete"))
+                    (delete-file path)
+                    (setq entries nil manifest nil))
                   (dolist (entry entries)
                     (let* ((published (plist-get (cdr entry) :published))
                            (expected (plist-get (cdr entry) :sha256)))
@@ -173,18 +205,40 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
                         (unless (equal expected digest)
                           (error "Artifact checksum mismatch: %s" published))
                         (when (equal (car entry) "session.meta.el")
-                          (puthash artifact t sidecars)))))
-                  (push (cons path manifest) manifests)))))
+                          (puthash artifact (cons path (gethash artifact sidecars))
+                                   sidecars)))))
+                  (when manifest (push (cons path manifest) manifests))))))
           (let ((sidecar (file-name-concat destination "session.meta.el")))
-            (when (file-regular-p sidecar) (puthash sidecar t sidecars)))
+            (when (file-regular-p sidecar) (puthash sidecar 'fixed sidecars)))
           (when (zerop (hash-table-count sidecars)) (error "No session metadata found"))
-          (maphash
-           (lambda (file _)
-             (let ((data (mevedel-migrate-session--sidecar (mevedel-migrate-session--read file))))
-               (when (and (eq 'portable (plist-get data :authority-mode)) (not lease))
-                 (error "Portable session is missing its released lease"))
-               (mevedel-migrate-session--write file data)))
-           sidecars)
+          (let ((head (and lease (file-name-concat
+                                  destination (mevedel-migrate-session--head lease source))))
+                dropped)
+            (maphash
+             (lambda (file owners)
+               (condition-case err
+                   (let ((data (mevedel-migrate-session--sidecar
+                                (mevedel-migrate-session--read file) attached)))
+                     (when (and (eq 'portable (plist-get data :authority-mode)) (not lease))
+                       (error "Portable session is missing its released lease"))
+                     (mevedel-migrate-session--write file data))
+                 (error
+                  ;; An old retained generation whose sidecar no reader
+                  ;; accepts, or a portable session's stale fixed cache, is
+                  ;; dropped; the published head and a PID-lock sidecar must
+                  ;; convert.
+                  (if (or (and (eq owners 'fixed) (not lease))
+                          (and (listp owners) (member head owners)))
+                      (signal (car err) (cdr err))
+                    (if (eq owners 'fixed)
+                        (delete-file file)
+                      (dolist (manifest owners)
+                        (when (file-exists-p manifest) (delete-file manifest))
+                        (setq manifests (cl-remove manifest manifests
+                                                   :key #'car :test #'equal))))
+                    (push file dropped)))))
+             sidecars)
+            (dolist (file dropped) (remhash file sidecars)))
           (clrhash hashes)
           (dolist (row manifests)
             (dolist (entry (plist-get (cdr row) :artifacts))

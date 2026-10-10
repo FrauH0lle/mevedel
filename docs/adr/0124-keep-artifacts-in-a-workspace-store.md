@@ -1,0 +1,138 @@
+# Keep artifacts in a workspace store that sessions attach to
+
+Status: accepted
+
+Amends [ADR 0099](0099-project-live-collaboration-from-host-authoritative-state.md)
+(what a room exposes), [ADR 0120](0120-edit-shared-content-through-the-session-host.md)
+(where shared content is edited and stored) and
+[ADR 0122](0122-let-full-links-change-project-files-directly.md) (the lobby as
+the project's view).
+
+## Current decision
+
+**The workspace artifact store is the original.** Every artifact, whiteboard
+and document lives once in `<workspace>/.mevedel/artifacts/ID/`, the directory
+name being its stable id. Sessions do not own artifacts; they attach to them.
+One artifact can be attached to several sessions, and one session can attach
+several artifacts. A session persists only its attached ids; Fork and Save As
+carry that list, so a fork points at the same artifacts, and **Duplicate** is
+the explicit way to get an independent copy. Deleting a session leaves its
+artifacts.
+
+**Attaching.** A session is attached when its model creates or edits the
+artifact, when a comment from its room reaches it, or when the user adds it
+(cockpit `a`, the room's **Attach**).
+
+**HTML, Markdown and images** change in discrete model writes with ApplyPatch.
+ApplyPatch matches its hunks against current content, so a write planned on an
+older copy fails and the model rereads: the concurrency check, without a
+lease. A write into a new id directory creates the artifact; every settled
+write of its primary file records a version.
+
+**Whiteboards and documents** are one live object edited continuously by
+people and the model, so they are edited in place in the store. One editing
+queue per workspace in each Emacs serves every room and session there.
+Across Emacs instances an item lease, with the session lease's generation
+records, target clock, heartbeat and expiry, decides who commits; each write
+proves it in the same target program. Another Emacs sees the item read-only
+and asks the holder to hand it over, which happens once the holder's queue for
+it is idle; a lease whose holder stopped renewing is taken over after
+confirmation, which a browser request cannot give. A version is recorded when
+a turn that edited the item settles, and on **Save version**; restoring one is
+an ordinary, revertible edit, so the Yjs lineage and concurrent editors
+survive.
+
+**Versions.** Up to 20 per artifact, following Claude, and at most 64 MiB of
+versions per artifact (configurable; Claude publishes no such cap). The
+oldest go first; the latest always stays.
+
+**Store contents are durable work, not machine state.** Whether the store is
+committed to Git is the project's choice; mevedel adds no ignore rule. Item
+leases therefore live outside it, under `.mevedel/leases/`. The store's
+bookkeeping -- metadata, item state, comments, versions -- and the leases are
+read-only to model tools by default, so edits cannot bypass leases, versions
+and validation; only an artifact's own files are written with ApplyPatch.
+
+**Dedicated session.** Each artifact may have one dedicated session, created
+on first use for conversation started outside any chat. It is an ordinary
+session, hidden from session lists and the default chat target, reachable from
+the artifact as its conversation, and exempt from expiry while the artifact
+exists. Deleting the artifact deletes it, which is refused while it is open.
+
+**Comment routing** follows where the comment is written, then sticks to its
+thread: written in a chat's room, to that chat; written from the lobby, to the
+dedicated session; replies, to the session that answered the thread, shown as
+"answered in", or the dedicated session when that one is gone.
+
+**Access.** View links list and open artifacts and list versions. Full and
+owner links also edit, comment, restore, attach, duplicate, delete, create
+whiteboards and documents, and open an artifact's conversation. The lobby
+shows the store in an **Artifacts** tab, visible to view links unlike
+**Files**. `shared://` lists every whiteboard and document of the workspace and
+marks those attached to the session.
+
+## Rationale
+
+Artifacts, whiteboards and documents lived inside one session:
+`<session>/artifacts/`, carried by that session's lease, publications, Fork
+and Save As. They outlived the conversation that made them, but could not be
+found, opened, commented on or continued from anywhere else; a deleted session
+took them along, and the lobby, which is the project's view, could not show
+them. Two rooms editing one board had two queues.
+
+Two alternatives were rejected. Moving the folder to the workspace unchanged
+broke the session lease model for concurrently edited boards and left comment
+conversations without an owner. Keeping session originals with a one-way
+project copy made two things to understand ("which one is real?") and needed
+a staleness indicator on every published item.
+
+Claude's artifact model, checked against support.claude.com and
+code.claude.com/docs/en/artifacts in October 2026, was the reference: one
+account-level object with a stable identity; sessions create or update it;
+another session updates it only once attached; a publish built on an older
+copy is refused and redone; comments live on the artifact and reach the
+session working on it. Its Compliance API retains "up to roughly 20" versions.
+
+The item lease reuses the session durability generation primitives instead of
+a shared lease core. The session lease functions bind publication,
+unsettled-mutation, release-pending and transfer state into about 610
+race-critical lines; extracting a holder-neutral core would have put hooks
+into all of them for an item lease that needs only acquire, renew, release,
+hand-over and a fenced write. A plain lease file written by atomic rename was
+also rejected: rename is not a compare-and-set, and local clocks disagree
+across machines.
+
+One editing queue per workspace, not per item, serializes unrelated items in
+one Emacs. It is the smallest change from the per-session queue that gives
+every room one queue per item, and nothing so far shows unrelated boards
+waiting on each other.
+
+Protected globs for the store's bookkeeping would each have cost a full
+workspace walk before every Bash launch. Patterns below `**/.mevedel/`, which
+exists only at a workspace root, are therefore expanded at each discovery root
+without a walk; a `.mevedel` nested deeper is covered by native tool checks but
+not by the Bash sandbox.
+
+## Consequences
+
+- Session persistence carries no artifact bytes: the `artifacts/` subtree left
+  portable publications, Fork staging, Resume and Save As. A session published
+  before keeps its old `artifacts/...` entries readable by logical path.
+- A room exposes artifacts by store identity, not only through its own
+  transcript records: any link to the workspace can open any artifact. This
+  deliberately widens ADR 0099's "published record is the authority".
+- Deleting an artifact deletes its versions, comments, lease and dedicated
+  session; deleting a session deletes none of them.
+- Existing per-session artifacts move once with an explicit migration script, a
+  user-requested exception to the no-migration rule, which also converts every
+  session to the v0.5.11 sidecar format that records attached ids. Transcript
+  cards in old segments that name pre-migration paths show as missing.
+- Comments on an HTML artifact are not serialized across Emacs instances; the
+  later write wins.
+
+## Evidence
+
+- Claude artifacts: https://support.claude.com/en/articles/17153992,
+  https://code.claude.com/docs/en/artifacts
+- Version retention: https://platform.claude.com/docs/en/api/compliance/code/artifacts
+  (`versions`: "Up to roughly 20 most-recently-published versions").

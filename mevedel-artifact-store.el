@@ -323,7 +323,7 @@ otherwise the next session save carries the attachment."
     (when buffer
       (mevedel-session-persistence-write-sidecar-now session buffer))))
 
-(defun mevedel-artifact-store--update-meta (workspace id &rest properties)
+(defun mevedel-artifact-store-update-meta (workspace id &rest properties)
   "Set PROPERTIES in the metadata of artifact ID and return it."
   (let ((meta (copy-sequence (or (mevedel-artifact-store-meta workspace id)
                                  (error "Artifact %s has no metadata" id)))))
@@ -371,7 +371,7 @@ before anyone has written in it."
           (mevedel-artifact-store-attach session id)
           (mevedel-session-artifacts-save session buffer nil t)
           (mevedel-session-naming-rename session buffer (format "Artifact %s" id))
-          (mevedel-artifact-store--update-meta
+          (mevedel-artifact-store-update-meta
            workspace id :dedicated-session (mevedel-session-session-id session))
           buffer))))
 
