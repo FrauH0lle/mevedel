@@ -192,6 +192,22 @@ encoding the snapshot once and ~40 ms per 400 KB chunk per guest
 open rooms; a long session open in the same project adds its publish
 (~18 ms at 1,011 records) to each commit.
 
+### Third round (deployed `88f0cce`)
+
+Every save announced a store change, so each room of the project reread
+every artifact's metadata, republished its transcript and broadcast the
+listing. Content-only saves (title and kind unchanged) are now announced up
+to 2 s later, together. With a 1,011-record session open in the same
+project: 10 guests / 3 writers 106–114 → **72–79 ms**; 20 guests /
+5 writers 69–98 ms p50 (one outlier run at 194 ms). Remaining per save:
+the commit program, ~45 ms.
+
+Not pursued, judged not worth it: a cheaper commit program (one fenced
+program per save; batching already amortizes it, the remaining options save
+a few ms each) and a faster JSON encoder for joins (0.39 s for one guest at
+1,011 records; switching encoders needs every record shape verified for
+~150 ms on a rare event).
+
 Still open:
 
 - **Prompt admission** keeps its cross-Emacs session-transfer checks
