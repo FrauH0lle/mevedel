@@ -22,7 +22,7 @@
     window.location.replace(link);
   }
 
-  function create({state, send, el, notice, sessions, files = null, store = null,
+  function create({state, send, el, notice, sessions, files, store,
                    navigate = follow, confirm = text => window.confirm(text)}) {
     const section = document.getElementById('lobby');
     const tabs = document.getElementById('lobby-tabs');
@@ -58,12 +58,12 @@
     // Project files are a full-link feature; a view link sees sessions and
     // artifacts only.
     function filesAllowed() {
-      return Boolean(files && state.writable);
+      return Boolean(state.writable);
     }
 
     function select(next) {
       if (next === 'files' && filesAllowed()) tab = 'files';
-      else if (next === 'artifacts' && store) tab = 'artifacts';
+      else if (next === 'artifacts') tab = 'artifacts';
       else tab = 'sessions';
       sessionsTab.setAttribute('aria-selected', String(tab === 'sessions'));
       artifactsTab.setAttribute('aria-selected', String(tab === 'artifacts'));
@@ -137,8 +137,7 @@
       }
       const project = typeof frame.project === 'string' && frame.project ? frame.project : null;
       document.title = project ? `${project} · mevedel` : 'mevedel';
-      tabs.hidden = !(store || filesAllowed());
-      artifactsTab.hidden = !store;
+      tabs.hidden = false;
       filesTab.hidden = !filesAllowed();
       retitle();
       const rows = Array.isArray(frame.sessions) ? frame.sessions : [];

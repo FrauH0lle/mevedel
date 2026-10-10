@@ -36,6 +36,14 @@ window.mevedelEditingView = {
       tab.opener = null;
       return tab;
     }
+    // Open item ID as the Shared work list does, saying why when it cannot.
+    async function openItem(id) {
+      try {
+        await launch(id);
+      } catch (e) {
+        flash(e.message);
+      }
+    }
     function launch(id, tab) {
       if (editorTab) return open(id);
       const url = new URL(window.location.href);
@@ -216,13 +224,7 @@ window.mevedelEditingView = {
         button.disabled = !available && !(current === item.id && frame) && !readDraft(item.id);
         button.title = button.disabled ? unavailableReason : `Open ${item.title}`;
         button.setAttribute('aria-describedby', 'editing-status');
-        button.onclick = async () => {
-          try {
-            await launch(item.id);
-          } catch (e) {
-            flash(e.message);
-          }
-        };
+        button.onclick = () => openItem(item.id);
         list.append(button);
       }
       document
@@ -744,6 +746,6 @@ window.mevedelEditingView = {
     function present(id) {
       return catalogKnown ? catalog.has(id) : catalogFailed ? true : null;
     }
-    return { welcome, connection, receive, open, conversation, refreshConversation, setAppearance, ask, present };
+    return { welcome, connection, receive, open, openItem, conversation, refreshConversation, setAppearance, ask, present };
   },
 };

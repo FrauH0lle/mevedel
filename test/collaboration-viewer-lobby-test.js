@@ -14,7 +14,7 @@ const ids = ['lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
              'lobby-tab-sessions', 'lobby-tab-artifacts', 'lobby-tab-files',
              'lobby-sessions', 'lobby-artifacts', 'lobby-files', 'files-upload'];
 
-function build({writable = true, owner = false, withFiles = false, withStore = false} = {}) {
+function build({writable = true, owner = false} = {}) {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.lobby.hidden = true;
   const body = new Element('body');
@@ -40,12 +40,12 @@ function build({writable = true, owner = false, withFiles = false, withStore = f
   const filesCalls = [];
   const confirms = [];
   const confirmAnswer = {value: true};
-  const files = withFiles ? {
+  const files = {
     show: () => filesCalls.push(['show']),
     refresh: () => filesCalls.push(['refresh']),
-  } : null;
+  };
   const storeCalls = [];
-  const store = withStore ? {refresh: () => storeCalls.push('refresh')} : null;
+  const store = {refresh: () => storeCalls.push('refresh')};
   const lobby = window.mevedelLobbyView.create({
     files,
     store,
@@ -237,16 +237,16 @@ function openButton(nodes, index) {
   assert.equal(age(at / 1000 - 3 * 86400, at), '3d ago');
 }
 
-// Project files are a tab for full links; a view link sees sessions only.
+// Project files are a tab for full links; a view link does not see it.
 {
-  const view = build({writable: false, withFiles: true});
+  const view = build({writable: false});
   view.lobby.show(listing);
-  assert.equal(view.nodes['lobby-tabs'].hidden, true);
+  assert.equal(view.nodes['lobby-tab-files'].hidden, true);
   view.nodes['lobby-tab-files'].dispatch('click');
   assert.deepEqual(view.filesCalls, []);
   assert.equal(view.nodes['lobby-files'].hidden, true);
 
-  const {lobby, nodes, sent, filesCalls, document} = build({owner: true, withFiles: true});
+  const {lobby, nodes, sent, filesCalls, document} = build({owner: true});
   lobby.show(listing);
   assert.equal(nodes['lobby-tabs'].hidden, false);
   assert.equal(nodes['lobby-new'].hidden, false);
@@ -276,8 +276,7 @@ function openButton(nodes, index) {
 
 // The artifact store is a tab for every link, a view link included.
 {
-  const {lobby, nodes, storeCalls, sent} = build({writable: false, withFiles: true,
-                                                   withStore: true});
+  const {lobby, nodes, storeCalls, sent} = build({writable: false});
   lobby.show(listing);
   assert.equal(nodes['lobby-tabs'].hidden, false);
   assert.equal(nodes['lobby-tab-artifacts'].hidden, false);

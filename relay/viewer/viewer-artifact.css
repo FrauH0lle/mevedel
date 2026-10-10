@@ -95,6 +95,12 @@
   color: var(--ink);
   font-weight: 700;
 }
+/* Long names shorten rather than push the close button out of the card. */
+.artifact-comment-head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .artifact-comment-close {
   flex: none;
   border: 0;

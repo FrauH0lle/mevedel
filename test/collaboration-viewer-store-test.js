@@ -8,12 +8,12 @@ const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
-function build({writable = true, room = false} = {}) {
+function build({writable = true, room = false, connected = true, prompt = null} = {}) {
   const list = new Element('ul');
   const empty = new Element('p');
   const document = {createElement: tag => new Element(tag)};
   const window = {mevedelTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
-                  addEventListener() {}};
+                  addEventListener() {}, prompt};
   load('relay/viewer/viewer-store.js', {window, document, console, Date});
   const sent = [];
   const opened = [];
@@ -22,13 +22,13 @@ function build({writable = true, room = false} = {}) {
   const answer = {value: 'copy'};
   const confirmed = {value: false};
   const store = window.mevedelStoreView.create({
-    send: frame => sent.push(frame),
+    send: frame => (connected ? sent.push(frame) : Promise.resolve(false)),
     el: (tag, className, text) => element(document, tag, className, text),
     list, empty, state: {writable}, room,
     open: record => opened.push(record),
     notice: text => notices.push(text),
     navigate: link => followed.push(link),
-    ask: () => answer.value,
+    ...(prompt ? {} : {ask: () => answer.value}),
     confirm: () => confirmed.value,
   });
   return {store, list, empty, sent, opened, notices, followed, answer, confirmed};
@@ -150,6 +150,9 @@ const press = (row, label) => {
   assert.deepEqual(roomView.notices, ['Saved as version 2.']);
   const lobbyView = build();
   lobbyView.store.show(board);
+  // From the lobby, Open is the item's conversation; the menu does not repeat it.
+  assert.deepEqual(buttons(lobbyView.list.children[0]),
+                   ['Open', 'Versions', 'Save version', 'Duplicate', 'Delete']);
   press(lobbyView.list.children[0], 'Open');
   assert.deepEqual(lobbyView.opened, []);
   assert.deepEqual(plain(lobbyView.sent.at(-1)), {t: 'store-action', reqId: 1,
@@ -160,4 +163,46 @@ const press = (row, label) => {
   assert.deepEqual(buttons(viewer.list.children[0]), ['Versions']);
 }
 
-console.log('viewer store passed');
+// A deleted artifact that was expanded is forgotten, not asked about again;
+// the deletion names it although its row is gone; unchanged artifacts keep
+// their listed versions.
+(async () => {
+  const {store, list, sent, notices, confirmed} = build();
+  store.show(listing);
+  press(list.children[0], 'Versions');
+  press(list.children[1], 'Versions');
+  store.handle({t: 'store-action', reqId: 1, ok: true, versions: [{n: 2, time: 20}]});
+  store.handle({t: 'store-action', reqId: 2, ok: true, versions: [{n: 1, time: 10}]});
+  confirmed.value = true;
+  press(list.children[0], 'Delete');
+  const asked = sent.length;
+  store.show({t: 'store-artifacts', artifacts: [listing.artifacts[0]]});
+  assert.equal(sent.length, asked);
+  assert.match(textOf(list.children[0]), /Version 1/);
+  store.handle({t: 'store-action', reqId: 3, ok: true});
+  assert.deepEqual(notices, ['Deleted index.html.']);
+  // A changed artifact is asked about again.
+  store.show({t: 'store-artifacts', artifacts: [{...listing.artifacts[0], versions: 2,
+                                                 modified: 30}]});
+  assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 4, action: 'versions',
+                                        id: 'old'});
+
+  // An action that cannot be sent says so and is not left pending.
+  const offline = build({connected: false});
+  offline.store.show(listing);
+  offline.confirmed.value = true;
+  press(offline.list.children[0], 'Delete');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(offline.notices, ['Connection lost; nothing changed.']);
+
+  // Duplicate proposes a name for the copy.
+  const proposals = [];
+  const copying = build({prompt: (text, value) => proposals.push(value) && null});
+  copying.store.show(listing);
+  press(copying.list.children[0], 'Duplicate');
+  assert.deepEqual(proposals, ['flow-copy']);
+  console.log('viewer store passed');
+})().catch(error => {
+  console.error(error);
+  process.exit(1);
+});
