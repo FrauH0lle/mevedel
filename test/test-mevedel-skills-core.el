@@ -2084,10 +2084,18 @@ description: Interview relentlessly about a plan
         (progn
           (mevedel-skills-test--reset-watchers)
           (make-directory plugin-skills t)
+          ;; The plugin root is also the ancestor of a missing configured root.
+          (setq mevedel-skill-dirs (list (file-name-concat plugin-skills "nested")))
           (mevedel-plugins-enable "demo" ws)
           (with-current-buffer buf
             (mevedel-skills-install session buf))
           (should (null (mevedel-session-skills session)))
+          (puthash plugin-skills 'plugin-watch mevedel-skills--watchers)
+          (cl-letf (((symbol-function 'mevedel-skills--resolve-dir)
+                     (lambda (&rest _) (ert-fail "Notification resolved a path"))))
+            (mevedel-skills--watch-callback
+             (list 'plugin-watch 'created (file-name-concat plugin-skills "new-skill"))))
+          (should (gethash buf mevedel-skills--dirty-buffers))
           (should (memq buf
                         (gethash (file-name-as-directory
                                   (expand-file-name plugin-skills))
@@ -2489,6 +2497,31 @@ paths:
       (kill-buffer buf)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-skills--watch-event-relevant-p ()
+  ,test
+  (test)
+  :doc "remote ancestor matching uses cached roots and both rename paths"
+  (with-temp-buffer
+    (let ((directory "/ssh:skill-host:/project/")
+          (default-directory temporary-file-directory))
+      (setq-local mevedel-skills--watch-roots
+                  '("/ssh:skill-host:/project/.agents/skills/"))
+      (cl-letf (((symbol-function 'mevedel-skills--resolve-dir)
+                 (lambda (&rest _) (ert-fail "Notification resolved a root")))
+                ((symbol-function 'file-truename)
+                 (lambda (&rest _) (ert-fail "Notification accessed the filesystem"))))
+        (should-not (mevedel-skills--watch-event-relevant-p
+                     (current-buffer) directory '("unrelated")))
+        (should-not (mevedel-skills--watch-event-relevant-p
+                     (current-buffer) directory '(".agents-backup")))
+        (should (mevedel-skills--watch-event-relevant-p
+                 (current-buffer) directory '("temporary" ".agents")))
+        (should (mevedel-skills--watch-event-relevant-p
+                 (current-buffer) directory '(".agents" "temporary")))
+        (should (mevedel-skills--watch-event-relevant-p
+                 (current-buffer) "/ssh:skill-host:/project/.agents/skills/"
+                 '("notes.txt")))))))
+
 (mevedel-deftest mevedel-skills--watch-callback
   (:before-each (mevedel-skills-test--reset-watchers)
    :after-each (mevedel-skills-test--reset-watchers))
@@ -2534,6 +2567,9 @@ paths:
             (setq-local mevedel-skills--watch-roots
                         (mevedel-skills--resolved-roots root)))
           (setq dirs (mevedel-skills--collect-roots root nil ws))
+          (mevedel-skills--register-buffer
+           buf dirs nil (mapcar (lambda (raw) (car (mevedel-skills--resolve-dir raw root)))
+                                mevedel-skill-dirs))
           (should (member state dirs))
           (should (member root dirs))
           (cl-flet ((event (dir &rest files)

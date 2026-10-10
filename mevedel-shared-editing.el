@@ -763,11 +763,14 @@ callback with the caller's cancellation settlement deferred until its outcome.
 All calls for one workspace in this Emacs are serialized, whichever room or
 session makes them; CALLBACK runs in the buffer current now."
   (let ((runtime (mevedel-shared-editing--runtime workspace)))
-    (when (>= (length (plist-get runtime :queue)) 64)
+    ;; Batched edits wait for their commit like queued ones.
+    (when (>= (+ (length (plist-get runtime :queue))
+                 (length (plist-get runtime :batch))) 64)
       (error "Shared editing queue is full"))
     (let* ((bytes (string-bytes (mevedel-shared-editing--json args)))
-           (queued (cl-loop for job in (cons (plist-get runtime :active)
-                                             (plist-get runtime :queue))
+           (queued (cl-loop for job in (append (mapcar #'car (plist-get runtime :batch))
+                                               (cons (plist-get runtime :active)
+                                                     (plist-get runtime :queue)))
                             sum (or (plist-get job :bytes) 0)))
            (sequence (1+ (plist-get runtime :sequence)))
            (job (list :args args :callback callback :buffer (current-buffer)

@@ -33,6 +33,18 @@ does the time go, and how does it scale with more users?
   isolated batch host of any checkout (master vs branch on one machine).
 - `projection-bench.el` — publication projection cost vs transcript length.
 
+Each edit writer waits for its acknowledgement, then waits `--interval`
+before sending again. These are closed-loop latency measurements, not a fixed
+arrival rate or a throughput-capacity measurement. Presence waits at least
+50 ms between sends.
+
+The original `joinMs` stopped at `welcome`, before the final snapshot chunk;
+the historical join numbers below therefore do not establish browser readiness.
+The reviewed runner now waits for the final chunk, times out missing replies,
+and fails incomplete reliable edit/prompt delivery. Presence remains best effort.
+The local host keeps model execution paused and supports editing/presence only;
+use an explicitly configured live host for the prompt scenario.
+
 "seen" = guest A sends → guest B receives the frame. It excludes the browser:
 the editor's 300 ms send interval and rendering add to it.
 
@@ -184,7 +196,7 @@ about 75 ms plus rendering; the browser no longer waits up to 300 ms.
 | Edit seen, 2 guests | 73 ms | 70 ms |
 | Edit seen, 10 guests, 3 writers | 74 ms | 80 ms (p95 160–180) |
 | Edit seen, 20 guests, 5 writers | 259 ms | **103–109 ms** (p95 ~220) |
-| Edit seen, 20 guests, 10 writers every 100 ms | — | 201 ms |
+| Edit seen, 20 guests, 10 writers, 100 ms after each acknowledgement | — | 201 ms |
 
 Review note: `loadbot.mjs` measured `joinMs` until each guest's `welcome`
 frame, which the host sends before the snapshot chunks, so the join rows
@@ -245,6 +257,8 @@ and 6 apply to them as well.
 
 ```sh
 npm ci --prefix shared-editing
+# runner correctness checks (no live host):
+node --no-experimental-webstorage --test benchmark/collab-latency/*.test.mjs
 # against a live room (full link):
 node benchmark/collab-latency/loadbot.mjs LINK edit --guests 10 --writers 3
 # master vs branch locally (byte-compiled checkouts):

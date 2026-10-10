@@ -117,6 +117,18 @@
       (should (equal "Later" (plist-get (mevedel-artifact-store-meta workspace "board1")
                                         :title)))))
 
+  :doc "uncommitted batched requests still count toward pending request limits"
+  (mevedel-shared-editing-test--with-workspace
+    (let ((runtime (mevedel-shared-editing--runtime workspace)))
+      (plist-put runtime :batch
+                 (list (list (list :bytes (* 32 1024 1024) :callback #'ignore))))
+      (should-error (mevedel-shared-editing-call
+                     workspace '(:action "read" :id "board") #'ignore))
+      (plist-put runtime :batch (make-list 16 (list (list :callback #'ignore))))
+      (plist-put runtime :queue (make-list 48 (list :callback #'ignore)))
+      (should-error (mevedel-shared-editing-call
+                     workspace '(:action "read" :id "board") #'ignore))))
+
   :doc "A request arriving inside TRAMP survives its temporary timer list"
   (mevedel-shared-editing-test--with-workspace
     (let (reply)
@@ -509,6 +521,36 @@
                                             workspace '(:action "read" :id "board"))
                                            :error)))))))
 
+(mevedel-deftest mevedel-shared-editing--committed-expired
+  (:doc "reads stop using cached content once the holding has expired")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let* ((directory (mevedel-artifact-lease-directory workspace "board"))
+           (held (gethash directory mevedel-artifact-lease--held)))
+      (plist-put held :renewed 0)
+      ;; Another host takes over while this one's heartbeat has not run.
+      (cl-letf (((symbol-function 'mevedel-artifact-lease--now)
+                 (lambda (_directory) (+ (floor (float-time)) 1000))))
+        (let ((mevedel-artifact-lease--held (make-hash-table :test #'equal))
+              (mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+              (mevedel-session-durability--client-id (make-string 64 ?b)))
+          (unwind-protect
+              (progn
+                (mevedel-test--with-captured-messages nil
+                  (mevedel-artifact-lease-acquire workspace "board"))
+                (should-not
+                 (plist-get (mevedel-shared-editing-test--call
+                             workspace '(:action "rename" :id "board" :title "Foreign"
+                                         :actor "Bob" :opId "foreign")) :error)))
+            (mevedel-shared-editing-stop)
+            (mevedel-artifact-lease-release-all)))
+        (let ((reply (mevedel-shared-editing-test--call
+                      workspace '(:action "read" :id "board"))))
+          (should-not (plist-get reply :error))
+          (should (equal "Foreign" (plist-get (plist-get reply :result) :title))))))))
+
 (mevedel-deftest mevedel-shared-editing--defer ()
   ,test
   (test)
@@ -672,6 +714,90 @@
         (setq busy nil)
         (mevedel-test--await 2 "finish retries" flushed)
         (should-not (plist-get runtime :active))))))
+
+(mevedel-deftest mevedel-shared-editing--validate-batch ()
+  ,test
+  (test)
+  :doc "a deferred edit still requires authority and can be cancelled before commit"
+  (dolist (withdraw '(cancel revoke))
+    (mevedel-shared-editing-test--with-workspace
+      (mevedel-shared-editing-test--call
+       workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                   :actor "Alice" :opId "one"))
+      (let ((accept (symbol-function 'mevedel-shared-editing--accept))
+            (authorized t) cancel replies)
+        (cl-letf (((symbol-function 'mevedel-shared-editing--accept)
+                   (lambda (runtime job reply)
+                     (when (plist-get runtime :batch)
+                       (if (eq withdraw 'cancel) (funcall cancel)
+                         (setq authorized nil)))
+                     (funcall accept runtime job reply))))
+          (setq cancel
+                (mevedel-shared-editing-call
+                 workspace '(:action "rename" :id "board" :title "Withdrawn"
+                             :actor "Alice" :opId "a")
+                 (lambda (reply) (push reply replies)) (lambda () authorized)))
+          (mevedel-shared-editing-call
+           workspace '(:action "background" :id "board" :background "#ffffff"
+                       :actor "Bob" :opId "b")
+           (lambda (reply) (push reply replies)))
+          (mevedel-test--await 10 "edits settle" (= 2 (length replies))))
+        (should (cl-every (lambda (reply) (plist-get reply :error)) replies))
+        (should (equal "First" (plist-get (mevedel-shared-editing--read workspace "board") :title))))))
+
+  :doc "a batch from a previous lease holding cannot overwrite a later holder's edit"
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let ((drain (symbol-function 'mevedel-shared-editing--drain)) changed replies)
+      (cl-letf (((symbol-function 'mevedel-shared-editing--drain)
+                 (lambda (runtime)
+                   (when (and (plist-get runtime :batch) (not changed))
+                     (setq changed t)
+                     (mevedel-artifact-lease-release workspace "board")
+                     (mevedel-artifact-lease-acquire workspace "board")
+                     (let ((state (mevedel-shared-editing--read workspace "board")))
+                       (setq state (plist-put state :title "Foreign"))
+                       (setq state (plist-put state :revision 2))
+                       (mevedel-shared-editing--commit workspace state)))
+                   (funcall drain runtime))))
+        (dolist (title '("A" "B"))
+          (mevedel-shared-editing-call
+           workspace (list :action "rename" :id "board" :title title
+                           :actor "Alice" :opId title)
+           (lambda (reply) (push reply replies))))
+        (mevedel-test--await 10 "edits settle" (= 2 (length replies))))
+      (should (cl-every (lambda (reply) (plist-get reply :error)) replies))
+      (should (equal "Foreign" (plist-get (mevedel-shared-editing--read workspace "board") :title))))))
+
+(mevedel-deftest mevedel-shared-editing--flush-batch
+  (:doc "a stop requested during fallback commit settles every callback once and stops")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let ((runtime (mevedel-shared-editing--runtime workspace))
+          (commit (symbol-function 'mevedel-shared-editing--commit)) replies)
+      (cl-letf (((symbol-function 'mevedel-shared-editing--commit)
+                 (lambda (&rest args)
+                   (mevedel-shared-editing-stop runtime)
+                   (apply commit args))))
+        (mevedel-shared-editing-call
+         workspace '(:action "rename" :id "board" :title "Kept" :actor "Alice" :opId "a")
+         (lambda (reply) (push (cons "a" reply) replies)))
+        (mevedel-shared-editing-call
+         workspace '(:action "rename" :id "board" :title "Refused" :actor "Alice" :opId "b")
+         (lambda (reply) (push (cons "b" reply) replies)) (lambda () nil))
+        (mevedel-shared-editing-call
+         workspace '(:action "read" :id "board")
+         (lambda (reply) (push (cons "c" reply) replies)))
+        (mevedel-test--await 10 "edits settle" (= 3 (length replies))))
+      (should-not (plist-get (cdr (assoc "a" replies)) :error))
+      (should (plist-get (cdr (assoc "b" replies)) :error))
+      (should (plist-get (cdr (assoc "c" replies)) :error))
+      (should-not (mevedel-shared-editing--live-p runtime))
+      (should (equal "Kept" (plist-get (mevedel-shared-editing--read workspace "board") :title))))))
 
 (mevedel-deftest mevedel-shared-editing--commit-directory
   (:doc "an authored directory replaced by a file cannot partially commit a new state")

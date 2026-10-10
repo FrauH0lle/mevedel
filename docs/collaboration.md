@@ -325,8 +325,9 @@ advance. Questions that read single keys instead of the minibuffer are reached
 only from host commands.
 
 `mevedel-busy-p` tells whether any buffer in the Emacs is running or settling
-a turn, so a host can wait for it to return nil before restarting a daemon
-whose rooms are idle.
+a turn, including retained agents awaiting admission or terminal publication.
+A host can wait for it to return nil before restarting a daemon whose rooms
+are idle.
 
 Questions that are only offers are skipped where nobody can be asked: a
 directive turn's offer to save modified file buffers leaves the host's buffers
