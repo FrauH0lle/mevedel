@@ -1215,6 +1215,9 @@ between all and attached artifacts. It opens an artifact locally (`o`, `e`),
 attaches it to the current session (`a`), views or restores a version (`v`),
 duplicates it into an independent artifact (`D`), opens its dedicated session
 (`c`), and deletes it with its versions, comments and dedicated session (`d`).
+`T` makes this Emacs the editor of a whiteboard or document another Emacs
+holds: a live holder is asked to hand it over, an expired one is taken over
+after confirmation (see [durability](shared-editing.md#durability-and-recovery)).
 Whiteboards and documents are store artifacts too: `o` opens one in its editor
 in the session's room, or without a session in its dedicated session's room
 (see [shared editing](shared-editing.md)); `s` saves a version of one; `d`
