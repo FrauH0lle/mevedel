@@ -371,17 +371,21 @@ stays as an ordinary session and expires like one."
 
 (defun mevedel-artifact-store-list (workspace)
   "Return WORKSPACE's artifacts as plists, newest modification first.
-Each has :id, :kind, :title, :path, :size, :modified and :versions; a
-missing primary file has :missing t."
+Each has :id, :kind, :title, :file, :dedicated-session, :path, :size,
+:modified and :versions; a missing primary file has :missing t.  An
+artifact whose metadata cannot be read is left out rather than hiding
+every other one."
   (let (rows)
     (dolist (id (mevedel-artifact-store-ids workspace))
-      (when-let* ((meta (mevedel-artifact-store-meta workspace id)))
+      (when-let* ((meta (ignore-errors (mevedel-artifact-store-meta workspace id))))
         (let* ((path (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
                                        (plist-get meta :file)))
                (attributes (file-attributes path)))
           (push (append
                  (list :id id :kind (plist-get meta :kind)
-                       :title (plist-get meta :title) :path path
+                       :title (plist-get meta :title) :file (plist-get meta :file)
+                       :dedicated-session (plist-get meta :dedicated-session)
+                       :path path
                        :versions (length (mevedel-artifact-store-versions
                                           workspace id)))
                  (if attributes

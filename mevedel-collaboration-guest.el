@@ -85,7 +85,7 @@
 (declare-function mevedel-collaboration--handle-store-list
                   "mevedel-collaboration-artifact" (room peer frame))
 (declare-function mevedel-collaboration--store-frame
-                  "mevedel-collaboration-artifact" (room))
+                  "mevedel-collaboration-artifact" (room &optional rows))
 
 ;; `mevedel-collaboration-files'
 (declare-function mevedel-collaboration-files-handle-upload
