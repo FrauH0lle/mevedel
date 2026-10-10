@@ -1575,19 +1575,57 @@ heads, updating sidecar checksums. A Goal saved before incomplete-usage
 tracking gains an explicit complete-usage flag; an invalid Goal refuses
 conversion instead of being dropped silently by the runtime loader. New recovery fields start empty because older
 formats did not persist queued input; previously unsaved queues cannot be recovered.
-Existing v0.5.10 sidecars retain their recovery state. Every converted session
-starts with no attached artifacts. Restoring an interrupted
+Existing v0.5.10 sidecars retain their recovery state. A converted session
+starts with no attached artifacts unless the artifact migration below attaches
+the ones it moved. Restoring an interrupted
 native conversation still requires explicit continuation through the current
 reader's recovery rules.
 
-Conversion refuses active locks or leases, pending recovery, invalid metadata,
-checksum mismatches and symlinks. A failed conversion removes only its new copy.
-The runtime loader continues to accept only the current schema.
+Conversion refuses PID locks, live leases, pending recovery, invalid metadata,
+checksum mismatches and symlinks. A lease that is active but past its expiry,
+as a crashed Emacs leaves it, counts as closed. Publication collection can
+leave an older retained manifest naming data files it removed, and older
+generations may hold sidecars older than v0.5.6; the copy drops such a
+manifest, and a portable session's stale fixed sidecar, while keeping their
+data files. The published head itself must be complete and convertible. A
+failed conversion removes only its new copy. The runtime loader continues to
+accept only the current schema.
 
 The converter keeps the session ID, so never leave both copies in the sessions
 directory or open both as writable sessions. After checking the copy, move the
 original out of `.mevedel/sessions` as a backup and put the converted directory
 at the original path under the same directory name.
+
+### Moving artifacts into the store
+
+The [artifact migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-artifacts-to-store.el)
+moves a workspace's per-session artifacts into its
+[artifact store](view.md#artifact-store) once, and converts every session of
+the workspace in the same run. Close every session of the workspace, then run
+from the repository root with a new destination outside the sessions
+directory:
+
+```bash
+npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-artifacts-to-store.el \
+  -f mevedel-migrate-artifacts-main -- /path/to/workspace /path/to/converted-sessions
+```
+
+For each session it reads the session's `artifacts/` entries -- a portable
+session's from its verified publication, never its fixed cache -- and creates
+one store artifact per file, whiteboard and document. A file artifact gets an
+id from its file name; a whiteboard or document keeps its own id. Artifact
+comments move with their file, and each thread keeps answering in the session
+that discussed it. Every new artifact starts with one version. The session is
+then converted as above into the destination, attached to the artifacts it
+held; it is not made their dedicated session. A session no converter accepts,
+such as one older than v0.5.6, is copied unchanged. The script prints each
+session's artifacts.
+
+Nothing in the original sessions changes, and their old `artifacts/` entries
+stay where they are, so a failed run loses nothing. A rerun reuses the store
+artifacts an earlier run created. After checking the destination, move the
+original sessions directory aside as a backup and put the destination in its
+place.
 
 ### Incompatible session inspection
 
