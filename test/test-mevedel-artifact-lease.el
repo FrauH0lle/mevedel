@@ -174,6 +174,23 @@
                               :generation)
                    1))))))
 
+(mevedel-deftest mevedel-artifact-lease-held ()
+  ,test
+  (test)
+  :doc "lapses once the lease went a whole lease period without renewal"
+  (mevedel-artifact-lease-test--with-workspace
+    (let ((directory (mevedel-artifact-lease-directory workspace "board")))
+      (should-not (mevedel-artifact-lease-held workspace "board"))
+      (mevedel-artifact-lease-acquire workspace "board")
+      (let ((token (mevedel-artifact-lease-held workspace "board"))
+            (held (gethash directory mevedel-artifact-lease--held)))
+        (should token)
+        ;; As across a suspend: another Emacs may have taken it over.
+        (plist-put held :renewed (- (float-time) mevedel-session-lease-seconds 1))
+        (should-not (mevedel-artifact-lease-held workspace "board"))
+        (plist-put held :renewed (float-time))
+        (should (eq token (mevedel-artifact-lease-held workspace "board")))))))
+
 (mevedel-deftest mevedel-artifact-lease-write ()
   ,test
   (test)
