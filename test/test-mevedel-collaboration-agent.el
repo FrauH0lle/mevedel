@@ -99,7 +99,7 @@
          sent)
     (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                (lambda (_transport peer frame)
-                 (push (cons peer frame) sent)
+                 (push (cons peer (mevedel-test--frame frame)) sent)
                  t)))
       (puthash 1 (list :name "g" :writable nil :ready t) guests)
       (mevedel-collaboration--publish-agents room)
@@ -209,7 +209,7 @@
     (puthash 1 (list :name "viewer" :writable nil :ready t) guests)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-                   (lambda (_transport _peer frame) (push frame sent) t))
+                   (lambda (_transport _peer frame) (push (mevedel-test--frame frame) sent) t))
                   ((symbol-function 'float-time) (lambda (&optional _) now))
                   ((symbol-function 'run-at-time)
                    (lambda (_time _repeat fn &rest args)
@@ -300,7 +300,7 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                    (lambda (_transport peer frame)
-                     (push (cons peer frame) sent)
+                     (push (cons peer (mevedel-test--frame frame)) sent)
                      t))
                   ((symbol-function 'float-time)
                    (lambda (&optional _) now))
@@ -331,9 +331,7 @@
             (should (equal "/root/worker-1" (plist-get frame :path)))
             (should (eq :json-false (plist-get frame :final)))
             (should (= 1 (length (plist-get frame :records))))
-            (should (equal "u" (cdr (assoc "id"
-                                           (aref (plist-get frame :records)
-                                                 0)))))
+            (should (equal "u" (plist-get (aref (plist-get frame :records) 0) :id)))
             (should (stringp (plist-get frame :digest)))
             (should (eq t (plist-get (cdr (car (last sent))) :final)))
             ;; A matching known digest earns one unchanged frame instead
@@ -481,7 +479,7 @@
                                         wire)))
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport peer frame)
-                       (push (cons peer frame) sent) t)))
+                       (push (cons peer (mevedel-test--frame frame)) sent) t)))
             (mevedel-collaboration--handle-execution-result-get
              room 999 '(:reqId 1 :owner "/root/child" :executionId "exec-1"))
             (should-not sent)
@@ -542,7 +540,7 @@
                     "<bash-execution execution_id=\"exec-large\" "
                     "outcome=\"success\"/>\n</agent-message>\n"))
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-                     (lambda (_transport _peer frame) (setq sent frame) t)))
+                     (lambda (_transport _peer frame) (setq sent (mevedel-test--frame frame)) t)))
             (mevedel-collaboration--handle-execution-result-get
              room 1 '(:reqId 1 :owner "/root/child" :executionId "exec-large"))
             (should (eq t (plist-get sent :truncated)))
@@ -614,7 +612,7 @@
             (should-not (equal (plist-get (nth 1 records) :id)
                                (plist-get (nth 2 records) :id))))
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-                     (lambda (_transport _peer frame) (setq sent frame) t)))
+                     (lambda (_transport _peer frame) (setq sent (mevedel-test--frame frame)) t)))
             (mevedel-collaboration--handle-execution-result-get
              room 1 '(:reqId 1 :owner "/root" :executionId "exec-root"))
             (should (equal "child" (plist-get sent :source)))
@@ -694,7 +692,7 @@
                                     (list :execution-id id :state 'completed
                                           :execution-output "WRONG TOOL"))))))
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-                     (lambda (_transport _peer frame) (setq sent frame) t)))
+                     (lambda (_transport _peer frame) (setq sent (mevedel-test--frame frame)) t)))
             (mevedel-collaboration--handle-execution-result-get
              room 1 '(:reqId 1 :owner "/root" :executionId "exec-nested-root"))
             (should (equal "child" (plist-get sent :source)))

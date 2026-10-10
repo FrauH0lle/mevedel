@@ -651,13 +651,22 @@ relay's room plist."
   (let* ((sent nil)
          (transport (list :state 'open :ws 'ws :key (make-string 32 ?k))))
     (cl-letf (((symbol-function 'websocket-openp) (lambda (_ws) t))
-              ((symbol-function 'websocket-send)
-               (lambda (_ws frame) (push frame sent)))
-              ((symbol-function 'make-websocket-frame)
-               (lambda (&rest args) args)))
+              ((symbol-function 'websocket-conn) (lambda (_ws) 'conn))
+              ((symbol-function 'process-send-string)
+               (lambda (_process frame) (push frame sent))))
       (should (mevedel-collaboration--transport-send
                transport 1 (list :t "record" :text "small")))
       (should (= 1 (length sent)))
+      ;; Already encoded frames travel as they are.
+      (should (mevedel-collaboration--transport-send
+               transport 1 "{\"t\":\"record\"}"))
+      (should (equal "{\"t\":\"record\"}"
+                     (mevedel-collaboration--unseal
+                      (make-string 32 ?k)
+                      (cdr (mevedel-collaboration--envelope-unpack
+                            (websocket-frame-payload
+                             (websocket-read-frame (car sent))))))))
+      (setq sent (cdr sent))
       ;; The relay must refuse an oversized frame by closing the connection
       ;; it arrived on, and for the host that ends the room for every guest.
       (should-not
@@ -666,6 +675,21 @@ relay's room plist."
         (list :t "record"
               :text (make-string mevedel-collaboration--max-message-bytes ?x))))
       (should (= 1 (length sent))))))
+
+(mevedel-deftest mevedel-collaboration--websocket-frame
+  (:doc "frames every length class as a masked binary frame websocket.el reads back")
+  (dolist (size '(0 125 126 65535 65536 300000))
+    (let* ((payload (apply #'unibyte-string
+                           (cl-loop for index below size collect (% (* index 7) 256))))
+           (encoded (mevedel-collaboration--websocket-frame payload))
+           (frame (websocket-read-frame encoded)))
+      (should-not (multibyte-string-p encoded))
+      ;; The mask bit is set: a client must mask what it sends.
+      (should (= #x80 (logand (aref encoded 1) #x80)))
+      (should (eq 'binary (websocket-frame-opcode frame)))
+      (should (websocket-frame-completep frame))
+      (should (equal payload (websocket-frame-payload frame)))
+      (should (= (length encoded) (websocket-frame-length frame))))))
 
 (mevedel-deftest mevedel-collaboration--transport-control
   (:doc "sends bounded unencrypted relay controls only on an open transport")

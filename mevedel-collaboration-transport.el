@@ -458,8 +458,34 @@ WS is nil when dialing failed before a connection was created."
        (when-let* ((ws (plist-get transport :ws)))
          (websocket-openp ws))))
 
+(defun mevedel-collaboration--websocket-frame (payload)
+  "Return a final, masked binary websocket frame carrying unibyte PAYLOAD.
+websocket.el builds a list of every payload byte to mask and assemble a
+frame, about 450 ms for one 400 KB snapshot chunk on the deployed host;
+this loop masks in place."
+  (let* ((size (length payload))
+         (k0 (random 256)) (k1 (random 256)) (k2 (random 256)) (k3 (random 256))
+         (masked (make-string size 0))
+         (index 0))
+    (while (< index size)
+      (aset masked index
+            (logxor (aref payload index)
+                    (pcase (logand index 3) (0 k0) (1 k1) (2 k2) (_ k3))))
+      (setq index (1+ index)))
+    (concat
+     ;; FIN and the binary opcode, then the masked length.
+     (cond ((< size 126) (unibyte-string #x82 (logior #x80 size)))
+           ((< size 65536)
+            (unibyte-string #x82 (logior #x80 126) (ash size -8) (logand size #xff)))
+           (t (apply #'unibyte-string #x82 (logior #x80 127)
+                     (cl-loop for shift from 56 downto 0 by 8
+                              collect (logand (ash size (- shift)) #xff)))))
+     (unibyte-string k0 k1 k2 k3)
+     masked)))
+
 (defun mevedel-collaboration--transport-send (transport peer frame)
   "Seal and send plist FRAME to PEER through TRANSPORT.
+FRAME may also be its JSON text, already encoded.
 
 PEER 0 broadcasts to every guest; PEER N targets one guest.  Return
 non-nil when the frame was written.  A closed connection drops the
@@ -472,19 +498,18 @@ one by closing the connection it arrived on -- which for the host means
 the relay collects the room, ending the session for every guest."
   (when (mevedel-collaboration--transport-open-p transport)
     (condition-case nil
-        (let ((encoded (json-encode frame)))
+        (let ((encoded (if (stringp frame) frame (json-encode frame)))
+              (ws (plist-get transport :ws)))
           (when (<= (string-bytes encoded)
                     mevedel-collaboration--max-frame-json-bytes)
-            (websocket-send
-             (plist-get transport :ws)
-             (make-websocket-frame
-              :opcode 'binary
-              :payload (mevedel-collaboration--envelope-pack
-                        peer
-                        (mevedel-collaboration--seal
-                         (plist-get transport :key)
-                         encoded))
-              :completep t))
+            (unless (websocket-openp ws)
+              (signal 'websocket-closed (list frame)))
+            (process-send-string
+             (websocket-conn ws)
+             (mevedel-collaboration--websocket-frame
+              (mevedel-collaboration--envelope-pack
+               peer
+               (mevedel-collaboration--seal (plist-get transport :key) encoded))))
             t))
       (websocket-closed (mevedel-collaboration--transport-down
                          transport (plist-get transport :ws))

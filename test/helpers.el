@@ -128,6 +128,14 @@ A muted call returns the text it would have shown, as `message' does."
         text
       (apply original format args))))
 
+(defun mevedel-test--frame (frame)
+  "Return collaboration FRAME as a plist.
+Frames carrying records are sent already encoded, as JSON text."
+  (if (stringp frame)
+      (json-parse-string frame :object-type 'plist :array-type 'array
+                         :false-object :json-false :null-object nil)
+    frame))
+
 (defun mevedel-test--read-file (path)
   "Read decoded text from PATH for filesystem assertions."
   (with-temp-buffer
