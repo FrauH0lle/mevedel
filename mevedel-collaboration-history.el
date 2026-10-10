@@ -19,6 +19,7 @@
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--snapshot-chunks "mevedel-collaboration-guest" (records &optional overhead))
+(declare-function mevedel-collaboration--records-frame "mevedel-collaboration-guest" (meta chunk final))
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
 ;; `mevedel-session-artifacts'
@@ -96,8 +97,8 @@ Cache immutable segment metadata, never a second transcript store."
       (let* ((overhead (string-bytes (json-encode (append meta '(:records [] :final :json-false)))))
              (chunks (or (mevedel-collaboration--snapshot-chunks records overhead) (list nil))))
         (cl-loop for rest on chunks do
-                 (let ((frame (append meta (list :records (vconcat (car rest))
-                                                 :final (if (cdr rest) :json-false t)))))
+                 (let ((frame (mevedel-collaboration--records-frame
+                               meta (car rest) (null (cdr rest)))))
                    (if peer
                        (mevedel-collaboration--transport-send (plist-get room :transport) peer frame)
                      (mevedel-collaboration--broadcast room frame))))))
@@ -139,8 +140,8 @@ Cache immutable segment metadata, never a second transcript store."
 		       (cl-loop for rest on chunks do
 				(mevedel-collaboration--transport-send
 				 transport peer
-				 (append meta (list :records (vconcat (car rest))
-						    :final (if (cdr rest) :json-false t))))))
+				 (mevedel-collaboration--records-frame
+				  meta (car rest) (null (cdr rest))))))
 		   (error
 		    (mevedel-collaboration--transport-send
 		     transport peer (append meta '(:error "This archived segment could not be read. Retry when the host is available."))))))))

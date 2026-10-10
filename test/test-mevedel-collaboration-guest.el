@@ -48,8 +48,7 @@
 (defun test-mevedel-collaboration-guest--chunk-frame-bytes (chunk)
   "Return the encoded size of the snapshot frame carrying CHUNK."
   (string-bytes
-   (json-encode
-    (list :t "snapshot-chunk" :records (vconcat chunk) :final t))))
+   (mevedel-collaboration--records-frame (list :t "snapshot-chunk") chunk nil)))
 
 (mevedel-deftest mevedel-collaboration--snapshot-chunks ()
   ,test
@@ -120,6 +119,30 @@
                             (list :workspace (funcall make "/home/u/other/")))))
     (should-not (mevedel-collaboration--workspace-key nil))))
 
+(mevedel-deftest mevedel-collaboration--send-snapshot--shared
+  (:doc "guests joining unchanged records share one encoding; a publish renews it")
+  (let* ((guests (make-hash-table :test #'eql))
+         (records (list (list :id "u" :kind "user" :revision 0 :text "hi")))
+         (room (list :transport 'transport :guests guests :records records))
+         (encodings 0)
+         (chunk (symbol-function 'mevedel-collaboration--snapshot-chunks))
+         sent)
+    (puthash 7 (list :name "a" :ready t) guests)
+    (puthash 8 (list :name "b" :ready t) guests)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport _peer frame) (push frame sent) t))
+              ((symbol-function 'mevedel-collaboration--snapshot-chunks)
+               (lambda (&rest args) (cl-incf encodings) (apply chunk args))))
+      (mevedel-collaboration--send-snapshot room 7)
+      (mevedel-collaboration--send-snapshot room 8)
+      (should (= 1 encodings))
+      (plist-put room :records (list (list :id "u" :kind "user" :revision 1 :text "ho")))
+      (setq sent nil)
+      (mevedel-collaboration--send-snapshot room 7)
+      (should (= 2 encodings))
+      (should (equal "ho" (plist-get (aref (plist-get (mevedel-test--frame (car sent)) :records) 0)
+                                     :text))))))
+
 (mevedel-deftest mevedel-collaboration--send-snapshot
   (:doc "sends a targeted welcome then final-flagged snapshot chunks")
   (let* ((guests (make-hash-table :test #'eql))
@@ -137,7 +160,7 @@
     (setq sent (nreverse sent))
     (should (equal '(7 7) (mapcar #'car sent)))
     (let ((welcome (cdr (nth 0 sent)))
-          (chunk (cdr (nth 1 sent))))
+          (chunk (mevedel-test--frame (cdr (nth 1 sent)))))
       (should (equal "welcome" (plist-get welcome :t)))
       (should (eq :json-false (plist-get welcome :readOnly)))
       (should (= 1 (plist-get welcome :recordCount)))

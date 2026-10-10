@@ -44,6 +44,8 @@
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--request-id-p
                   "mevedel-collaboration-guest" (value))
+(declare-function mevedel-collaboration--records-frame "mevedel-collaboration-guest"
+                  (meta chunk final))
 (declare-function mevedel-collaboration--snapshot-chunks
                   "mevedel-collaboration-guest" (records &optional overhead))
 
@@ -246,7 +248,7 @@ A failure is remembered, so later guest polls are refused, not retried."
                                  (list nil)))
                      (digest (secure-hash
                               'sha256
-                              (mapconcat #'json-encode
+                              (mapconcat #'identity
                                          (apply #'append chunks) "\n"))))
                 (plist-put guest :agent-artifacts
                            (cl-remove-if-not
@@ -260,10 +262,9 @@ A failure is remembered, so later guest polls are refused, not retried."
                   (cl-loop for rest on chunks do
                            (mevedel-collaboration--transport-send
                             transport peer
-                            (list :t "agent" :reqId req-id :path path
-                                  :digest digest
-                                  :records (vconcat (car rest))
-                                  :final (if (cdr rest) :json-false t))))))
+                            (mevedel-collaboration--records-frame
+                             (list :t "agent" :reqId req-id :path path :digest digest)
+                             (car rest) (null (cdr rest)))))))
             ;; While the conversation loads, the viewer keeps showing its
             ;; loading note and its next poll finds the resident buffer.
             (unless (mevedel-collaboration--queue-agent-load room path)

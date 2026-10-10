@@ -226,8 +226,18 @@ sizes alone never accounted for."
           :records (vconcat nil)
           :final :json-false))))
 
+(defun mevedel-collaboration--records-frame (meta chunk final)
+  "Return the JSON text of frame plist META carrying CHUNK as its records.
+CHUNK is a list of encoded records, from
+`mevedel-collaboration--snapshot-chunks'; FINAL marks the last chunk.
+Splicing them saves encoding every record a second time."
+  (let ((head (json-encode (append meta (list :final (if final t :json-false))))))
+    (concat (substring head 0 -1)
+            ",\"records\":[" (string-join chunk ",") "]}")))
+
 (defun mevedel-collaboration--snapshot-chunks (records &optional overhead)
-  "Split RECORDS into lists of JSON records each under the wire bound.
+  "Split RECORDS into lists of encoded JSON records each under the wire bound.
+Send each list with `mevedel-collaboration--records-frame'.
 The bound belongs to the frame that goes on the wire, not to the records
 in it.  A record too large to travel in a frame of its own is dropped:
 emitting a frame the relay must refuse costs the host connection, and the
@@ -239,9 +249,8 @@ frame costs before its records; it defaults to the snapshot frame's."
          (limit mevedel-collaboration--max-frame-json-bytes)
          chunks current (size 0))
     (dolist (record records)
-      (let* ((json (mevedel-collaboration--json-record record))
-             (bytes (string-bytes
-                     (json-encode json))))
+      (let* ((json (json-encode (mevedel-collaboration--json-record record)))
+             (bytes (string-bytes json)))
         (unless (> (+ overhead bytes) limit)
           ;; One separator for every record after the first in the chunk.
           (when (and current
@@ -390,8 +399,14 @@ its own workspace's rooms; the key reveals no path."
   (let* ((transport (plist-get room :transport))
          (guest (mevedel-collaboration--guest room peer))
          (records (plist-get room :records))
-         (chunks (or (mevedel-collaboration--snapshot-chunks records)
-                     (list nil))))
+         ;; Guests joining while the records are unchanged share their
+         ;; encoding: each publish stores a new list.
+         (chunks (if (eq records (car (plist-get room :snapshot-chunks)))
+                     (cdr (plist-get room :snapshot-chunks))
+                   (let ((chunks (or (mevedel-collaboration--snapshot-chunks records)
+                                     (list nil))))
+                     (plist-put room :snapshot-chunks (cons records chunks))
+                     chunks))))
     (mevedel-collaboration--transport-send
      transport peer
      (append
@@ -414,9 +429,8 @@ its own workspace's rooms; the key reveals no path."
     (cl-loop for rest on chunks do
              (mevedel-collaboration--transport-send
               transport peer
-              (list :t "snapshot-chunk"
-                    :records (vconcat (car rest))
-                    :final (if (cdr rest) :json-false t))))))
+              (mevedel-collaboration--records-frame
+               (list :t "snapshot-chunk") (car rest) (null (cdr rest)))))))
 
 
 ;;
