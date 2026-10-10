@@ -14,7 +14,11 @@
      prompt    one guest sends a chat prompt, all wait for its record
    Options: --guests N (4) --writers N (1) --count N (40) --interval MS (300)
             --item ID (reuse an existing whiteboard) --text PROMPT (appended to
-            the prompt's marker) --json (machine output) */
+            the prompt's marker) --json (machine output)
+   Each writer waits for acknowledgement, then --interval; this is closed-loop
+   latency, not a fixed arrival rate. One guest measures joining/acknowledgement
+   only and yields no peer observations. Missing reliable deliveries fail. */
+import { pathToFileURL } from 'node:url';
 import * as Y from '../../shared-editing/node_modules/yjs/dist/yjs.mjs';
 import { restore, putElement } from '../../shared-editing/model.mjs';
 
@@ -24,10 +28,6 @@ const opt = (name, fallback) => {
   return i < 0 ? fallback : args[i + 1];
 };
 const [link, scenario] = args;
-if (!link || !scenario) {
-  console.error('usage: loadbot.mjs LINK edit|presence|prompt [--guests N] [--writers N] [--count N] [--interval MS] [--item ID] [--json]');
-  process.exit(2);
-}
 const guests = Number(opt('guests', 4)), writers = Number(opt('writers', 1));
 const count = Number(opt('count', 40)), interval = Number(opt('interval', 300));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -47,9 +47,12 @@ function parseLink(text) {
            owner: raw.length >= 64 ? raw.subarray(48, 64) : null };
 }
 
-class Guest {
-  constructor(index, creds) {
+export class Guest {
+  constructor(index, creds, timeout = 15000) {
     this.index = index;
+    this.timeout = timeout;
+    this.waiters = new Set();
+    this.error = null;
     this.creds = creds;
     this.handlers = new Set();
     this.pending = new Map();
@@ -62,10 +65,18 @@ class Guest {
     this.key = await crypto.subtle.importKey('raw', this.creds.key, 'AES-GCM', false, ['encrypt', 'decrypt']);
     this.ws = new WebSocket(this.creds.ws);
     this.ws.binaryType = 'arraybuffer';
-    const welcome = new Promise((resolve, reject) => {
-      const off = this.on((f) => { if (f.t === 'welcome') { off(); resolve(f); } });
-      this.ws.addEventListener('close', (e) => reject(new Error(`closed ${e.code}`)), { once: true });
-    });
+    let welcomed = false;
+    const ready = this.waitForFrame((frame) => {
+      if (frame.t === 'welcome') welcomed = true;
+      return welcomed && frame.t === 'snapshot-chunk' && frame.final === true;
+    }, 'the final snapshot');
+    this.ws.addEventListener('close', (event) => this.fail(new Error(`closed ${event.code}`)));
+    this.ws.addEventListener('error', () => this.fail(new Error('websocket error')));
+    this.ws.addEventListener('open', () => {
+      this.send({ t: 'hello', proto: 3, name: `bot-${this.index}`, guestId: `bot-${this.index}-${process.pid}`,
+                  writeToken: Buffer.from(this.creds.write).toString('base64url') });
+    }, { once: true });
+    this.on((frame, at) => this.editingFrame(frame, at));
     this.ws.addEventListener('message', (event) => {
       if (typeof event.data === 'string') return;
       const at = now();
@@ -75,16 +86,28 @@ class Guest {
                                                   this.key, bytes.slice(16));
         const frame = JSON.parse(new TextDecoder().decode(plain));
         for (const handler of this.handlers) handler(frame, at);
-      }).catch((error) => console.error(`guest ${this.index}:`, error.message));
+      }).catch((error) => this.fail(error));
     });
-    await new Promise((resolve, reject) => {
-      this.ws.addEventListener('open', resolve, { once: true });
-      this.ws.addEventListener('error', () => reject(new Error('websocket error')), { once: true });
+    return ready;
+  }
+  waitForFrame(predicate, label) {
+    return new Promise((resolve, reject) => {
+      if (this.error) return reject(this.error);
+      const finish = (error, value) => {
+        clearTimeout(timer);
+        off();
+        this.waiters.delete(finish);
+        error ? reject(error) : resolve(value);
+      };
+      const timer = setTimeout(() => finish(new Error(`Timed out waiting for ${label}`)), this.timeout);
+      const off = this.on((frame, at) => { if (predicate(frame)) finish(null, { frame, at }); });
+      this.waiters.add(finish);
     });
-    this.send({ t: 'hello', proto: 3, name: `bot-${this.index}`, guestId: `bot-${this.index}-${process.pid}`,
-                writeToken: Buffer.from(this.creds.write).toString('base64url') });
-    this.on((frame, at) => this.editingFrame(frame, at));
-    return welcome;
+  }
+  fail(error) {
+    this.error ||= error;
+    for (const reject of this.waiters) reject(this.error);
+    for (const pending of this.pending.values()) pending.reject(this.error);
   }
   on(handler) {
     this.handlers.add(handler);
@@ -93,6 +116,7 @@ class Guest {
   send(frame) {
     const text = JSON.stringify(frame);
     this.outbound = this.outbound.then(async () => {
+      if (this.error) throw this.error;
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key,
                                                                 new TextEncoder().encode(text)));
@@ -101,6 +125,7 @@ class Guest {
       envelope.set(sealed, 16);
       this.ws.send(envelope);
     });
+    this.outbound.catch((error) => this.fail(error));
     return this.outbound;
   }
   /* Editing replies and events arrive as chunked base64 JSON. */
@@ -126,12 +151,19 @@ class Guest {
     const reqId = ++this.seq;
     const data = Buffer.from(JSON.stringify(args)).toString('base64');
     return new Promise((resolve, reject) => {
-      this.pending.set(reqId, { resolve, reject });
+      if (this.error) return reject(this.error);
+      const timer = setTimeout(() => finish(new Error(`Timed out waiting for editing request ${reqId}`)), this.timeout);
+      const finish = (error, value) => {
+        clearTimeout(timer);
+        this.pending.delete(reqId);
+        error ? reject(error) : resolve(value);
+      };
+      this.pending.set(reqId, { resolve: value => finish(null, value), reject: finish });
       for (let offset = 0; offset < data.length; offset += 65536)
         this.send({ t: 'editing', reqId, offset, total: data.length, data: data.slice(offset, offset + 65536) });
     });
   }
-  close() { this.ws.close(); }
+  close() { this.fail(new Error('Guest closed')); this.ws?.close(); }
 }
 
 function stats(values) {
@@ -142,7 +174,7 @@ function stats(values) {
            mean: +(s.reduce((a, b) => a + b, 0) / s.length).toFixed(1) };
 }
 
-async function edit(bots) {
+export async function edit(bots) {
   let id = opt('item');
   if (!id) {
     id = crypto.randomUUID();
@@ -152,6 +184,8 @@ async function edit(bots) {
     const result = await bot.request({ action: 'read', id });
     return restore(Buffer.from(result.crdt, 'base64'));
   }));
+  // A reused board's old geometry must not count as delivery of a new edit.
+  const elementIds = Array.from({ length: writers }, () => crypto.randomUUID());
   const sent = new Map(), ack = [], seen = [], seenBy = new Map();
   bots.forEach((bot, i) => {
     bot.onEvent = (value, at) => {
@@ -159,7 +193,7 @@ async function edit(bots) {
       Y.applyUpdate(docs[i], Buffer.from(value.update, 'base64'));
       for (let w = 0; w < writers; w++) {
         if (w === i) continue;
-        const element = docs[i].getMap('elements').get(`bot${w}rect`);
+        const element = docs[i].getMap('elements').get(elementIds[w]);
         const x = element?.get('geometry')?.x;
         const key = `${w}:${x}`, start = sent.get(key);
         if (start === undefined || seenBy.has(`${key}:${i}`)) continue;
@@ -171,7 +205,7 @@ async function edit(bots) {
   await Promise.all(bots.slice(0, writers).map(async (bot, w) => {
     for (let n = 1; n <= count; n++) {
       const doc = docs[w], before = Y.encodeStateVector(doc);
-      putElement(doc, { id: `bot${w}rect`, type: 'rectangle', x: n, y: w * 120, width: 100, height: 80 });
+      putElement(doc, { id: elementIds[w], type: 'rectangle', x: n, y: w * 120, width: 100, height: 80 });
       const update = Y.encodeStateAsUpdate(doc, before);
       const start = now();
       sent.set(`${w}:${n}`, start);
@@ -180,8 +214,10 @@ async function edit(bots) {
       await sleep(interval);
     }
   }));
-  await sleep(2000);
-  return { item: id, ack: stats(ack), seen: stats(seen), expectedSeen: writers * count * (guests - 1) };
+  const expectedSeen = writers * count * (guests - 1), deadline = now() + 15000;
+  while (seen.length < expectedSeen && now() < deadline && bots.every(bot => !bot.error))
+    await sleep(25);
+  return { item: id, ack: stats(ack), seen: stats(seen), expectedSeen };
 }
 
 async function presence(bots) {
@@ -211,30 +247,43 @@ async function prompt(bots) {
   for (let n = 1; n <= count; n++) {
     const marker = `latency-probe-${process.pid}-${n}`;
     const start = now();
-    const got = bots.map((bot, i) => new Promise((resolve) => {
-      const off = bot.on((frame, at) => {
-        if (frame.t === 'record' && JSON.stringify(frame.record).includes(marker)) {
-          off();
-          if (i) seen.push(at - start);
-          resolve();
-        }
-      });
-    }));
+    const got = bots.map((bot, i) => bot.waitForFrame(
+      frame => frame.t === 'record' && frame.record?.kind === 'user' &&
+        frame.record.text?.includes(marker), `prompt ${n}`,
+    ).then(({ at }) => { if (i) seen.push(at - start); }));
     bots[0].send({ t: 'prompt', name: 'bot-0', text: `${marker} ${opt('text', '')}`.trim() });
-    await Promise.race([Promise.all(got), sleep(15000)]);
+    await Promise.all(got);
     await sleep(interval);
   }
   return { seen: stats(seen), expectedSeen: count * (guests - 1) };
 }
 
-const creds = parseLink(link);
-const bots = Array.from({ length: guests }, (_, i) => new Guest(i, creds));
-const t0 = now();
-await Promise.all(bots.map((bot) => bot.connect()));
-const joinMs = now() - t0;
-const run = { edit, presence, prompt }[scenario];
-if (!run) throw new Error(`unknown scenario ${scenario}`);
-const result = { scenario, guests, writers, count, interval, joinMs: +joinMs.toFixed(1), ...(await run(bots)) };
-bots.forEach((bot) => bot.close());
-console.log(args.includes('--json') ? JSON.stringify(result) : result);
-process.exit(0);
+export function checkDelivery(result) {
+  if (result.scenario !== 'presence' && result.seen.n !== result.expectedSeen)
+    throw new Error(`Incomplete ${result.scenario} delivery: ${result.seen.n}/${result.expectedSeen} observations`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  let bots = [];
+  try {
+    const run = { edit, presence, prompt }[scenario];
+    if (!link || !run) throw new Error('usage: loadbot.mjs LINK edit|presence|prompt [options]');
+    if (!Number.isInteger(guests) || guests < 1 || !Number.isInteger(writers) || writers < 1 || writers > guests ||
+        !Number.isInteger(count) || count < 1 || !Number.isFinite(interval) || interval < 0)
+      throw new Error('Guests, writers and count must be positive integers; writers <= guests; interval >= 0');
+    const creds = parseLink(link);
+    bots = Array.from({ length: guests }, (_, i) => new Guest(i, creds));
+    const t0 = now();
+    await Promise.all(bots.map((bot) => bot.connect()));
+    const joinMs = now() - t0;
+    const result = { scenario, guests, writers, count, interval, joinMs: +joinMs.toFixed(1), ...(await run(bots)) };
+    for (const bot of bots) if (bot.error) throw bot.error;
+    checkDelivery(result);
+    console.log(args.includes('--json') ? JSON.stringify(result) : result);
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  } finally {
+    bots.forEach((bot) => bot.close());
+  }
+}
