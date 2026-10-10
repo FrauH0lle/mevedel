@@ -349,7 +349,7 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
 (mevedel-deftest mevedel-collaboration--artifact-answering-buffer ()
   ,test
   (test)
-  :doc "keeps a thread with its session, else the room's, else the dedicated one"
+  :doc "answers in the room's own session; the lobby follows the thread"
   (mevedel-test--with-artifact-comment-room
     (let ((other (generate-new-buffer " *other-session*"))
           (dedicated (generate-new-buffer " *dedicated-session*"))
@@ -364,11 +364,12 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
                                   room "schema" nil)))
             (should (eq data-buf (mevedel-collaboration--artifact-answering-buffer
                                   room "schema" (mevedel-session-session-id session))))
-            (should (eq other (mevedel-collaboration--artifact-answering-buffer
-                               room "schema" "other")))
+            ;; A room's links never prompt another session.
+            (should (eq data-buf (mevedel-collaboration--artifact-answering-buffer
+                                  room "schema" "other")))
             ;; A thread whose session is gone falls back to the dedicated one.
             (should (eq dedicated (mevedel-collaboration--artifact-answering-buffer
-                                   room "schema" "gone")))
+                                   lobby "schema" "gone")))
             ;; The lobby has no session of its own.
             (should (eq dedicated (mevedel-collaboration--artifact-answering-buffer
                                    lobby "schema" nil)))

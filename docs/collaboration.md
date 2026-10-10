@@ -852,14 +852,13 @@ workspace as an `artifact-comments` frame; the stored excerpts stay on the
 host. Concurrent comment writes from two Emacs instances are not serialized;
 the later write wins.
 
-A message to the assistant goes to the session that owns its thread:
+A message to the assistant goes to the session the link speaks for:
 
 - written in a chat's room, to that chat, which becomes attached to the
-  artifact;
-- written from the lobby, to the artifact's dedicated session, created on
-  first use;
-- a reply goes to the session that answered the thread, even from another
-  room, or to the dedicated session when that session is gone.
+  artifact, also when another session answered the thread before: a room's
+  links never prompt another session;
+- written from the lobby, to the session that answered the thread, or else
+  to the artifact's dedicated session, created on first use.
 
 The thread records its answering session, and the viewer shows it as
 *answered in NAME*. A message about the whole artifact follows the same rule
