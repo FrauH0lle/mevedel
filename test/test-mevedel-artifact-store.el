@@ -50,19 +50,52 @@
   ,test
   (test)
   :doc "nested mutations notify once after completion, including partial failure"
-  (let (seen
+  (let ((one (mevedel-workspace--create :root "/one/"))
+        (two (mevedel-workspace--create :root "/two/"))
+        seen
         (mevedel-artifact-store--pending-changes nil))
     (let ((mevedel-artifact-store-changed-functions
            (list (lambda (workspace) (push workspace seen)))))
       (should-error
        (mevedel-artifact-store--with-changes
-         (mevedel-artifact-store--changed 'one)
+         (mevedel-artifact-store--changed one)
          (mevedel-artifact-store--with-changes
-           (mevedel-artifact-store--changed 'one)
-           (mevedel-artifact-store--changed 'two))
+           (mevedel-artifact-store--changed one)
+           (mevedel-artifact-store--changed two))
          (should-not seen)
          (error "Partial mutation")))
-      (should (equal '(one two) seen)))))
+      (should (equal (list one two) seen)))))
+
+(mevedel-deftest mevedel-artifact-store--content-changed ()
+  ,test
+  (test)
+  :doc "coalesces by root and retires timers on delivery or an immediate notice"
+  (mevedel-artifact-store-test--with-workspace
+    (let* (seen timers
+           (mevedel-artifact-store--content-changes (make-hash-table :test #'equal))
+           (mevedel-artifact-store-changed-functions
+            (list (lambda (changed) (push changed seen)))))
+      (unwind-protect
+          (progn
+            (mevedel-artifact-store--content-changed workspace)
+            (let ((timer (gethash root mevedel-artifact-store--content-changes)))
+              (push timer timers)
+              (mevedel-artifact-store--content-changed (copy-mevedel-workspace workspace))
+              (should (eq timer (gethash root mevedel-artifact-store--content-changes)))
+              (should-not seen)
+              (cancel-timer timer)
+              (funcall (timer--function timer)))
+            (should (equal (list workspace) seen))
+            (should (= 0 (hash-table-count mevedel-artifact-store--content-changes)))
+            (mevedel-artifact-store--content-changed workspace)
+            (let ((timer (gethash root mevedel-artifact-store--content-changes)))
+              (push timer timers)
+              ;; A rename or deletion already publishes all current metadata.
+              (mevedel-artifact-store--changed workspace)
+              (should (= 2 (length seen)))
+              (should (= 0 (hash-table-count mevedel-artifact-store--content-changes)))
+              (should-not (memq timer timer-list))))
+        (mapc #'cancel-timer timers)))))
 
 (mevedel-deftest mevedel-artifact-store-directory ()
   ,test
@@ -615,7 +648,8 @@
   ,test
   (test)
   :doc "attaches once, keeps order, writes the sidecar only with a buffer, and announces it"
-  (let* ((session (mevedel-session--create :workspace 'workspace))
+  (let* ((workspace (mevedel-workspace--create :root "/workspace/"))
+         (session (mevedel-session--create :workspace workspace))
          changed written
          (mevedel-artifact-store-changed-functions
           (list (lambda (workspace) (push workspace changed)))))
@@ -626,7 +660,7 @@
       (mevedel-artifact-store-attach session "a" 'buffer))
     (should (equal '("a" "b") (mevedel-session-attached-artifacts session)))
     (should (equal (list (list session 'buffer)) written))
-    (should (equal '(workspace workspace) changed))))
+    (should (equal (list workspace workspace) changed))))
 
 (mevedel-deftest mevedel-artifact-store--changed ()
   ,test

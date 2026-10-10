@@ -222,14 +222,19 @@ does."
         (plist-put held :touched (float-time))
       (mevedel-artifact-lease-acquire workspace id))))
 
-(defun mevedel-artifact-lease-held (workspace id)
+(defun mevedel-artifact-lease-held (workspace id &optional fresh)
   "Return a token for this Emacs's lease on WORKSPACE's item ID, or nil.
 The token is `eq' only to itself: a lease lost, released or deleted with
 its item and then acquired again yields a new one, even where the
-generation number repeats."
+generation number repeats.  FRESH requires a recent local renewal, so a
+cached read distrusts the holding after a delayed heartbeat.  This function
+never performs target I/O; writes still prove ownership on the target."
   (when-let* ((held (gethash (mevedel-artifact-lease-directory workspace id)
                              mevedel-artifact-lease--held)))
-    (plist-get held :holding)))
+    (when (or (not fresh)
+              (< (- (float-time) (plist-get held :renewed))
+                 (- mevedel-session-lease-seconds mevedel-session-lease-renewal-seconds)))
+      (plist-get held :holding))))
 
 (defun mevedel-artifact-lease-run (workspace id operations)
   "Run target OPERATIONS while this Emacs owns WORKSPACE's item ID.

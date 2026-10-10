@@ -149,6 +149,20 @@
         (mevedel-artifact-lease-acquire workspace "board"))
       (should (<= count 4)))))
 
+(mevedel-deftest mevedel-artifact-lease-held
+  (:doc "fresh cache tokens expire conservatively without target I/O")
+  (mevedel-artifact-lease-test--with-workspace
+    (mevedel-artifact-lease-acquire workspace "board")
+    (let* ((token (mevedel-artifact-lease-held workspace "board"))
+           (held (gethash (mevedel-artifact-lease-directory workspace "board")
+                          mevedel-artifact-lease--held)) count)
+      (mevedel-artifact-lease-test--counting count
+        (should (eq token (mevedel-artifact-lease-held workspace "board" t)))
+        (plist-put held :renewed 0)
+        (should-not (mevedel-artifact-lease-held workspace "board" t))
+        (should (eq token (mevedel-artifact-lease-held workspace "board"))))
+      (should (= 0 count)))))
+
 (mevedel-deftest mevedel-artifact-lease-ensure ()
   ,test
   (test)

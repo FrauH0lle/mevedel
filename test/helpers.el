@@ -402,6 +402,10 @@ target is gone, which is slow, noisy, and order dependent."
   ;; The Markdown fontifier keeps one buffer alive across calls by design.
   (when (fboundp 'mevedel-view--release-markdown-fontify-buffer)
     (mevedel-view--release-markdown-fontify-buffer))
+  (when (boundp 'mevedel-artifact-store--content-changes)
+    (maphash (lambda (_root timer) (cancel-timer timer))
+             mevedel-artifact-store--content-changes)
+    (clrhash mevedel-artifact-store--content-changes))
   (when (boundp 'mevedel-skills--frontmatter-cache)
     (clrhash mevedel-skills--frontmatter-cache)))
 
