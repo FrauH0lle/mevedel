@@ -782,14 +782,32 @@ the lobby an **Artifacts** tab, both listing the workspace's
 [artifact store](view.md#artifact-store) newest first, one line each: name,
 kind, size, version count, age of the last change, and in a room whether the
 artifact is attached to the room's session; the id shows on hovering the name.
+Lobby rows show how many sessions attach the artifact. Explicit listings
+refresh saved-session discovery; change notifications reuse that discovery
+with current live-session attachments, so ordinary edits do not rescan saved
+sessions. Changes coalesce into one notification per workspace after the current
+mutation, when its transport is idle. That fanout reads the latest artifact store
+once and resolves the rooms still open, so saving does not wait for browser
+listing updates.
 The host sends the listing when a guest joins a room or asks for it
 (`store-list`), and to every room and lobby of the workspace after each store
 change (`store-artifacts`). Each row shows **Open**, which any link can use to
-open the artifact in the panel, and keeps its other actions in a `⋯` menu. Any
-link can list an artifact's **Versions** there. Full and owner links also act
-through `store-action` frames:
+open file artifacts in the panel or whiteboards and documents in their editor.
+From the lobby, an editor opens through the artifact's dedicated session,
+with a bearer link capped to the guest's existing tier. Each row keeps its
+other actions in a `⋯` menu. Any link can list an artifact's **Versions** and
+**View** a historical snapshot without changing the current content. Editor
+snapshots preview as SVG or HTML exports; historical previews have no comment,
+delete or assistant actions. The bounded `artifact-get` transfer accepts an
+optional version number, resolved by the host inside the store.
 
-- **Restore** makes an older version the newest;
+Full and owner lobby links also offer **New whiteboard** and **New document**.
+Creation runs through the workspace's editing queue, then opens the new item's
+dedicated editor room. Full and owner links also act through `store-action`
+frames:
+
+- **Restore** makes any saved version the newest, including the latest saved
+  snapshot when live edits have changed the artifact since;
 - **Save version**, for a whiteboard or document, keeps its current state as a
   version;
 - **Attach**, in a room, attaches the artifact to the room's session;
@@ -842,7 +860,7 @@ refuses writes from view links, unknown or deleted artifacts, other files of
 an artifact and non-HTML artifacts, rebuilds the anchor from its known bounded
 fields, and answers every refusal to the sender with an error.
 
-Comments live in the artifact's `comments.json` in the store, so every room
+Comments live in the store's protected `.state/ID/comments.json`, so every room
 and the lobby see the same threads, and deleting the artifact deletes them. An
 artifact takes at most 200 comments of 200 replies each, with
 10,000 characters per message, and its comment list as guests receive it stays
@@ -946,6 +964,13 @@ data can outlive the room, although an ended room id and key no longer
 authorize a live share.
 
 ## Connection recovery
+
+The host delivers authenticated frames and peer controls in arrival order once
+remote I/O is idle. Input received while a callback is running waits behind
+already received input, including peer departures. Each delivery checks idle
+state again, so a callback that starts remote work delays the remaining input.
+Disconnecting or stopping the transport discards its pending input; a reconnect
+starts with fresh guest admission.
 
 TCP/TLS dialing runs asynchronously, so starting or reconnecting a room does
 not wait for an unreachable address before returning control to Emacs. The

@@ -169,8 +169,10 @@
 
     function open(record) {
       if (!panel || !record || typeof record.id !== 'string') return;
-      fetch('artifact', record.id, record.artifact || 'artifact',
-            {t: 'artifact-get', id: record.id});
+      const version = Number.isSafeInteger(record.version) && record.version > 0;
+      fetch(version ? 'version' : 'artifact', record.id,
+            (record.artifact || 'artifact') + (version ? ` · Version ${record.version}` : ''),
+            {t: 'artifact-get', id: record.id, ...(version ? {version: record.version} : {})});
       view.store = typeof record.store === 'string' ? record.store : null;
     }
 
@@ -189,7 +191,7 @@
       const artifact = view.kind === 'artifact';
       if (download) download.hidden = false;
       if (remove) remove.hidden = !(artifact && typeof canDelete === 'function' && canDelete());
-      if (askButton) askButton.hidden = artifact || !ask || !ask.available();
+      if (askButton) askButton.hidden = view.kind !== 'file' || !ask || !ask.available();
       // Comments belong to a store artifact; the host keeps them on its
       // main file.
       const commentable = artifact && view.store !== null;
@@ -220,6 +222,7 @@
     function handle(frame) {
       if (!view.id || frame.reqId !== view.reqId) return;
       if (typeof frame.error === 'string') {
+        view.staging = null;
         if (metaEl) metaEl.textContent = '';
         note(frame.error);
         return;

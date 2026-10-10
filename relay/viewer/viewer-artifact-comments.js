@@ -1228,7 +1228,7 @@ function createArtifactCommentController(options) {
 
   const cardVersion = comment => JSON.stringify(
     [comment.text, comment.replies.map(reply => reply.id), comment.state, comment.working,
-     comment.reply]);
+     comment.reply, comment.sessionName]);
 
   function closeCard() {
     if (view.card) view.card.remove();

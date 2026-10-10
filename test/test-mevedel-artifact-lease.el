@@ -61,7 +61,7 @@
       (should-error (mevedel-artifact-lease-acquire workspace "board"))
       (should (file-exists-p (file-name-concat
                               (mevedel-artifact-lease-directory workspace "board")
-                              "request.el")))))
+                              "request")))))
 
   :doc "hands an idle item over to the requester on renewal"
   (mevedel-artifact-lease-test--with-workspace
@@ -86,7 +86,7 @@
         (should (eq 'owned (mevedel-artifact-lease-status workspace "board"))))
       ;; The answered request does not linger to hand a later holder's
       ;; item away.
-      (should-not (file-exists-p (file-name-concat directory "request.el")))))
+      (should-not (file-exists-p (file-name-concat directory "request")))))
 
   :doc "takes over an expired foreign lease only after confirmation"
   (mevedel-artifact-lease-test--with-workspace
@@ -125,6 +125,62 @@
       (should-error (mevedel-artifact-lease-write workspace "board" path "two"))
       (should (equal "one" (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
 
+(mevedel-deftest mevedel-artifact-lease-run ()
+  ,test (test)
+  :doc "A reentrant heartbeat cannot invalidate the active writer's proof"
+  (mevedel-artifact-lease-test--with-workspace
+    (let* ((directory (mevedel-artifact-lease-directory workspace "board"))
+           (path (file-name-concat root "state.json"))
+           (run (symbol-function 'mevedel-session-control-fs-run-program)))
+      (mevedel-artifact-lease-acquire workspace "board")
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                 (lambda (operations &optional lock)
+                   (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program) run))
+                     (let ((mevedel-session-lease-seconds 120))
+                       (mevedel-artifact-lease--renew directory)))
+                   (funcall run operations lock))))
+        (should (mevedel-artifact-lease-write workspace "board" path "saved")))
+      (should (equal "saved" (with-temp-buffer (insert-file-contents path) (buffer-string))))))
+
+  :doc "An expired generation cannot write even before a successor claims it"
+  (mevedel-artifact-lease-test--with-workspace
+    (let ((path (file-name-concat root "state.json")))
+      (cl-letf (((symbol-function 'mevedel-artifact-lease--now)
+                 (lambda (_directory) 1)))
+        (mevedel-artifact-lease-acquire workspace "board"))
+      (should-error (mevedel-artifact-lease-run
+                     workspace "board" (list (list :op 'write :path path :content "late"))))
+      (should-not (file-exists-p path))))
+
+  :doc "A newer generation fences both writes and renewal before its predecessor is pruned"
+  (mevedel-artifact-lease-test--with-workspace
+    (let* ((directory (mevedel-artifact-lease-directory workspace "board"))
+           (path (file-name-concat root "state.json"))
+           (first (mevedel-artifact-lease-acquire workspace "board"))
+           (next (copy-sequence first)))
+      (setq next (plist-put next :generation (1+ (plist-get first :generation))))
+      (setq next (plist-put next :client-id mevedel-artifact-lease-test--other))
+      (mevedel-session-durability--write-generation directory next)
+      (mevedel-test--with-captured-messages nil
+        (mevedel-artifact-lease--renew directory))
+      (should-not (gethash directory mevedel-artifact-lease--held))
+      ;; Restore stale in-memory ownership to exercise the independent write proof.
+      (mevedel-artifact-lease--hold workspace "board" directory first)
+      (should-error (mevedel-artifact-lease-run
+                     workspace "board" (list (list :op 'write :path path :content "late"))))
+      (should-not (file-exists-p path)))))
+
+(mevedel-deftest mevedel-artifact-lease--claim
+  (:doc "A stale observation cannot replace a renewed generation")
+  (mevedel-artifact-lease-test--with-workspace
+    (let* ((directory (mevedel-artifact-lease-directory workspace "board"))
+           (first (copy-sequence (mevedel-artifact-lease-acquire workspace "board"))))
+      (let ((mevedel-session-lease-seconds 120))
+        (mevedel-artifact-lease--renew directory))
+      (mevedel-artifact-lease-test--as-other
+        (should-not (mevedel-artifact-lease--claim directory first "board")))
+      (should (eq 'owned (mevedel-artifact-lease-status workspace "board"))))))
+
 (mevedel-deftest mevedel-artifact-lease-release ()
   ,test
   (test)
@@ -147,8 +203,21 @@
       (mevedel-artifact-lease-acquire workspace "board")
       (mevedel-artifact-lease-release-all)
       (should (eq 'available (mevedel-artifact-lease-status workspace "board")))
+      (mevedel-artifact-lease-acquire workspace "board")
       (mevedel-artifact-lease-forget-item workspace "board")
-      (should-not (file-exists-p directory)))))
+      (should-not (file-exists-p directory))))
+
+  :doc "a stale holder cannot report a successful handover or release its successor"
+  (mevedel-artifact-lease-test--with-workspace
+    (let* ((directory (mevedel-artifact-lease-directory workspace "board"))
+           (first (mevedel-artifact-lease-acquire workspace "board"))
+           (next (copy-sequence first)))
+      (setq next (plist-put next :generation (1+ (plist-get first :generation))))
+      (setq next (plist-put next :client-id mevedel-artifact-lease-test--other))
+      (mevedel-session-durability--write-generation directory next)
+      (should-not (mevedel-artifact-lease-release workspace "board"))
+      (should (equal next (mevedel-artifact-lease--head directory)))
+      (should-not (gethash directory mevedel-artifact-lease--held)))))
 
 (provide 'test-mevedel-artifact-lease)
 ;;; test-mevedel-artifact-lease.el ends here

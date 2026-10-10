@@ -1621,11 +1621,16 @@ then converted as above into the destination, attached to the artifacts it
 held; it is not made their dedicated session. A session no converter accepts,
 such as one older than v0.5.6 or one closed before it ever saved, is copied
 unchanged. The script prints each
-session's artifacts.
+session's artifacts. Unreadable artifact payloads also leave that session
+unconverted, while the remaining sessions are processed. Legacy payload names
+and bytes are preserved; store bookkeeping lives in the separate `.state/ID/`
+directory.
 
 Nothing in the original sessions changes, and their old `artifacts/` entries
 stay where they are, so a failed run loses nothing. A rerun reuses the store
-artifacts an earlier run created. After checking the destination, move the
+artifacts an earlier run completed, including shared items reused across forked
+sessions. Interrupted imports are removed on failure and retried with their
+comments and first version intact. After checking the destination, move the
 original sessions directory aside as a backup and put the destination in its
 place.
 

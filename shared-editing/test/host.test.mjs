@@ -420,3 +420,21 @@ test('restoring a saved version is one revertible change that keeps history', as
   await assert.rejects(handle({ action: 'restore', state: one.state, actor: 'Host', opId: 'restore3',
     target: version }), /own kind/);
 });
+
+test('restoring a board preserves pending peer edits to unchanged retained objects', async () => {
+  const made = await handle({ action: 'create', id: 'board1', kind: 'whiteboard', title: 'Design',
+    content: [rect('one', 0, 0)], actor: 'Alice', opId: 'create1' });
+  const peer = restore(Buffer.from(made.state.crdt, 'base64'));
+  try {
+    const vector = Y.encodeStateVector(peer);
+    const element = peer.getMap('elements').get('one');
+    element.set('strokeColor', '#ff0000');
+    const restored = await handle({ action: 'restore', state: made.state, actor: 'Host',
+      opId: 'restore1', target: made.state.crdt });
+    const merged = await handle({ action: 'update', state: restored.state, actor: 'Peer',
+      opId: 'peer1', update: Buffer.from(Y.encodeStateAsUpdate(peer, vector)).toString('base64') });
+    assert.equal(merged.result.content[0].strokeColor, '#ff0000');
+  } finally {
+    peer.destroy();
+  }
+});

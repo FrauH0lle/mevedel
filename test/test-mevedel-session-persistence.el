@@ -5797,5 +5797,12 @@
        (should-not (mevedel-session-persistence--change-lock path stale nil))
        (should (equal "resumed" (plist-get (mevedel-session-persistence--read-lock path) :buffer)))))))
 
+(mevedel-deftest mevedel-session-persistence--sidecar-summary
+  (:doc "retains attachment ids for workspace listing projections")
+  (let* ((sidecar (test-mevedel-session-persistence--complete-sidecar
+                   '(:attached-artifacts ("a" "b"))))
+         (summary (mevedel-session-persistence--sidecar-summary sidecar)))
+    (should (equal '("a" "b") (plist-get summary :attached-artifacts)))))
+
 (provide 'test-mevedel-session-persistence)
 ;;; test-mevedel-session-persistence.el ends here

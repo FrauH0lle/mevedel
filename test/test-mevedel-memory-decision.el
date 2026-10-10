@@ -275,8 +275,10 @@
     (should (equal claim (mevedel-journal-claim-current (plist-get claim :directory)))))
   :doc "activation waits for transport and cleans up a cancelled deferred callback"
   (let ((key (list 'memory-recovery (mevedel-memory-store--claim-directory workspace))))
+    ;; Let the initial opportunity reach the busy transport queue; a timer
+    ;; created inside a handler is held until that handler unwinds instead.
+    (mevedel-memory-decision-schedule-recovery workspace)
     (let ((mevedel-transport--depth 1))
-      (mevedel-memory-decision-schedule-recovery workspace)
       (let ((deadline (+ (float-time) 2)))
         (while (and (not (gethash key mevedel-transport--pending)) (< (float-time) deadline))
           (accept-process-output nil 0.01)))

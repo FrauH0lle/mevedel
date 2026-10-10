@@ -12,7 +12,8 @@
 ;; the relay ("peer-joined", "peer-left") carry no session data.
 ;;
 ;; This module knows nothing about rooms, guests, or the projection: it
-;; delivers decoded frames and control events to callbacks and reconnects
+;; delivers decoded frames and control events to callbacks in arrival order
+;; once remote I/O is idle, and reconnects
 ;; with bounded backoff when the relay connection drops.  It pings the relay
 ;; on its own interval and drops a connection that has carried nothing back
 ;; for longer than its liveness window, so a connection that died while this
@@ -26,6 +27,15 @@
   (require 'cl-lib))
 
 (require 'json)
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-cancel-pending "mevedel-transport" (&optional key))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel delay))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-cancel-pending "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `websocket'
 (declare-function make-websocket-frame "websocket"
@@ -344,6 +354,54 @@ The dial has `mevedel-collaboration--connect-timeout-seconds' to open."
     ;; A synchronous dial failure (DNS, refused) retries like a drop.
     (error (mevedel-collaboration--transport-down transport nil))))
 
+(defun mevedel-collaboration--transport-discard-input (transport)
+  "Forget TRANSPORT's queued callbacks and cancel their idle opportunity."
+  (plist-put transport :input-queue nil)
+  (plist-put transport :input-tail nil)
+  (when-let* ((key (plist-get transport :input-key)))
+    (mevedel-transport-cancel-pending key)))
+
+(defun mevedel-collaboration--transport-deliver (transport callback &rest args)
+  "Deliver CALLBACK with ARGS in TRANSPORT's input order when target I/O is idle.
+A callback may yield to another websocket filter during remote I/O; that
+filter appends its callback rather than nesting it.  Frames and peer controls
+share this queue so a departure cannot overtake an earlier hello."
+  (unless (memq (plist-get transport :state) '(down stopped))
+    (let ((cell (list (cons callback args))))
+      (if-let* ((tail (plist-get transport :input-tail)))
+          (setcdr tail cell)
+        (plist-put transport :input-queue cell))
+      (plist-put transport :input-tail cell))
+    (unless (plist-get transport :input-active)
+      (let ((key (or (plist-get transport :input-key)
+                     (let ((owner (make-symbol "collaboration-input")))
+                       (plist-put transport :input-key owner)
+                       owner))))
+        (cl-labels
+            ((discard () (mevedel-collaboration--transport-discard-input transport))
+             (drain ()
+               (plist-put transport :input-active t)
+               (unwind-protect
+                   (while (and (not (memq (plist-get transport :state) '(down stopped)))
+                               (plist-get transport :input-queue)
+                               (not (mevedel-transport-busy-p)))
+                     (let* ((queue (plist-get transport :input-queue))
+                            (entry (car queue)))
+                       (plist-put transport :input-queue (cdr queue))
+                       (unless (cdr queue) (plist-put transport :input-tail nil))
+                       ;; Preserve the existing per-frame failure isolation.
+                       (condition-case nil (apply (car entry) (cdr entry))
+                         (error nil))))
+                 (plist-put transport :input-active nil))
+               (when (plist-get transport :input-queue)
+                 ;; A callback can start asynchronous target work.  Re-admit
+                 ;; the remainder on another opportunity, without recursion.
+                 (unless (mevedel-transport-run-when-idle key nil #'drain #'discard 0)
+                   (discard)))))
+          (unless (mevedel-transport-run-when-idle key nil #'drain #'discard)
+            (discard)))))))
+
+
 (defun mevedel-collaboration--transport-receive (transport frame)
   "Decode websocket FRAME for TRANSPORT and dispatch it."
   (condition-case nil
@@ -355,7 +413,8 @@ The dial has `mevedel-collaboration--connect-timeout-seconds' to open."
                             (plist-get transport :key) (cdr envelope)))
                      (decoded (mevedel-collaboration--frame-decode text))
                      (callback (plist-get transport :on-frame)))
-           (funcall callback (car envelope) decoded)))
+           (mevedel-collaboration--transport-deliver
+            transport callback (car envelope) decoded)))
         ('text
          (when-let* ((control (mevedel-collaboration--frame-decode
                                (websocket-frame-text frame)))
@@ -363,7 +422,8 @@ The dial has `mevedel-collaboration--connect-timeout-seconds' to open."
                               ("peer-joined" 'peer-joined)
                               ("peer-left" 'peer-left)))
                      (callback (plist-get transport :on-control)))
-           (funcall callback event (plist-get control :peer)))))
+           (mevedel-collaboration--transport-deliver
+            transport callback event (plist-get control :peer)))))
     (error nil)))
 
 (defun mevedel-collaboration--transport-down (transport ws)
@@ -374,6 +434,7 @@ WS is nil when dialing failed before a connection was created."
     (mevedel-collaboration--transport-cancel-connect-timer transport)
     (plist-put transport :ws nil)
     (plist-put transport :state 'down)
+    (mevedel-collaboration--transport-discard-input transport)
     (when ws
       (ignore-errors (delete-process (websocket-conn ws))))
     (mevedel-collaboration--transport-notify transport 'down)
@@ -450,6 +511,7 @@ Return non-nil when the bounded JSON object was written."
 (defun mevedel-collaboration--transport-stop (transport)
   "Stop TRANSPORT: cancel retries and close the connection."
   (plist-put transport :state 'stopped)
+  (mevedel-collaboration--transport-discard-input transport)
   (dolist (key '(:reconnect-timer :connect-timer :keepalive-timer))
     (when-let* ((timer (plist-get transport key)))
       (cancel-timer timer)

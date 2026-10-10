@@ -70,7 +70,10 @@
                        (lambda (_runtime _job reply) (push reply replies))))
               (funcall filter process (substring line 0 12))
               (should-not replies)
-              (funcall filter process (concat (substring line 12) line))
+              (mevedel-transport-call-as-remote-operation
+               (lambda ()
+                 (let ((timer-list nil))
+                   (funcall filter process (concat (substring line 12) line)))))
               (sleep-for 0.01)
               (should (= (length replies) 2))
               (should (equal (plist-get (plist-get (car replies) :result) :title) "λ 🌱"))
@@ -93,7 +96,7 @@
                               :title "Architecture" :actor "Alice" :opId "one"))))
       (should-not (plist-get reply :error))
       (should (= 1 (plist-get (plist-get reply :result) :revision)))
-      (should (file-exists-p (file-name-concat root ".mevedel/artifacts/board1/state.json")))
+      (should (file-exists-p (file-name-concat root ".mevedel/artifacts/.state/board1/state.json")))
       (should (equal '(:kind whiteboard :title "Architecture" :file "state.json")
                      (cl-subseq (mevedel-artifact-store-meta workspace "board1") 0 6)))
       (should (eq 'owned (mevedel-artifact-lease-status workspace "board1")))
@@ -113,6 +116,60 @@
                              :error))
       (should (equal "Later" (plist-get (mevedel-artifact-store-meta workspace "board1")
                                         :title)))))
+
+  :doc "A request arriving inside TRAMP survives its temporary timer list"
+  (mevedel-shared-editing-test--with-workspace
+    (let (reply)
+      (mevedel-transport-call-as-remote-operation
+       (lambda ()
+         (let ((timer-list nil))
+           (mevedel-shared-editing-call
+            workspace '(:action "list") (lambda (value) (setq reply value))))))
+      (let ((deadline (+ (float-time) 1)))
+        (while (and (not reply) (< (float-time) deadline))
+          (accept-process-output nil 0.01)))
+      (should (equal reply '(:result [])))))
+
+  :doc "Exporting a historical document previews its saved content without a lease or mutation"
+  (mevedel-shared-editing-test--with-workspace
+    (should-not (plist-get
+                 (mevedel-shared-editing-test--call
+                  workspace '(:action "import" :id "doc" :format "markdown" :data "# First"
+                              :actor "Alice" :opId "one")) :error))
+    (mevedel-shared-editing-save-version workspace "doc")
+    (should-not (plist-get
+                 (mevedel-shared-editing-test--call
+                  workspace '(:action "rename" :id "doc" :title "Later"
+                              :actor "Alice" :opId "two")) :error))
+    (mevedel-artifact-lease-release workspace "doc")
+    (let* ((before (mevedel-shared-editing--read workspace "doc"))
+           (reply (mevedel-shared-editing-test--call
+                   workspace '(:action "export" :id "doc" :version 1 :format "native")))
+           (exported (mevedel-shared-editing--parse (plist-get (plist-get reply :result) :text))))
+      (should-not (plist-get reply :error))
+      (should (equal "Imported document" (plist-get exported :title)))
+      (should (equal before (mevedel-shared-editing--read workspace "doc")))
+      (should (eq 'available (mevedel-artifact-lease-status workspace "doc")))
+      (should (plist-get (mevedel-shared-editing-test--call
+                         workspace '(:action "export" :id "doc" :version 0 :format "html"))
+                        :error))))
+
+  :doc "Store observers see the committed state and title once per mutation"
+  (mevedel-shared-editing-test--with-workspace
+    (let* (observed
+           (mevedel-artifact-store-changed-functions
+            (list (lambda (changed)
+                    (should (eq workspace changed))
+                    (push (list (plist-get (mevedel-artifact-store-meta workspace "board") :title)
+                                (plist-get (mevedel-shared-editing--read workspace "board") :title))
+                          observed)))))
+      (mevedel-shared-editing-test--call
+       workspace '(:action "create" :id "board" :kind "whiteboard"
+                   :title "First" :actor "Alice" :opId "one"))
+      (mevedel-shared-editing-test--call
+       workspace '(:action "rename" :id "board" :title "Later"
+                   :actor "Alice" :opId "two"))
+      (should (equal '(("Later" "Later") ("First" "First")) observed))))
 
   :doc "Another Emacs's item is read-only here"
   (mevedel-shared-editing-test--with-workspace
@@ -208,8 +265,14 @@
                                         :title "Plan" :actor "Alice" :opId "one"))
                            :error))
     (should (mevedel-shared-editing--present-p workspace "board"))
-    ;; Any other directory is taken.
+    ;; Any authored directory or orphaned bookkeeping directory is taken.
     (make-directory (mevedel-artifact-store-artifact-directory workspace "page") t)
+    (make-directory (mevedel-artifact-store-bookkeeping-directory workspace "orphan") t)
+    (should (string-match-p "already exists"
+                            (plist-get (mevedel-shared-editing-test--call
+                                        workspace '(:action "create" :id "orphan" :kind "document"
+                                                    :title "P" :actor "Alice" :opId "three"))
+                                       :error)))
     (should (string-match-p "already exists"
                             (plist-get (mevedel-shared-editing-test--call
                                         workspace '(:action "create" :id "page" :kind "document"
@@ -217,7 +280,29 @@
                                        :error)))))
 
 (mevedel-deftest mevedel-shared-editing-stop
-  (:doc "Stopping during a commit settles it once and then stops the helper")
+  ()
+  ,test (test)
+  :doc "Stopping retires jobs before callbacks and ignores late replies"
+  (mevedel-shared-editing-test--with-workspace
+    (let* ((runtime (mevedel-shared-editing--runtime workspace))
+           (calls 0)
+           (job (list :args '(:id "board")
+                      :callback (lambda (reply)
+                                  (should (plist-get reply :error))
+                                  (cl-incf calls)
+                                  (when (= calls 1)
+                                    (mevedel-shared-editing-stop runtime))))))
+      (plist-put runtime :active job)
+      (mevedel-shared-editing-stop runtime)
+      (should (= calls 1))
+      (should-not (plist-get runtime :active))
+      ;; This reply was queued before timeout or explicit stop settled JOB.
+      (mevedel-shared-editing--accept
+       runtime job '(:state (:id "board" :kind "whiteboard" :title "Late")))
+      (should-not (file-exists-p (mevedel-artifact-store-directory workspace)))
+      (should (= calls 1))))
+
+  :doc "Stopping during a commit settles it once and then stops the helper"
   (mevedel-shared-editing-test--with-workspace
     (let* ((calls 0) reply runtime
            (mevedel-shared-editing-change-hook
@@ -275,6 +360,113 @@
                                    workspace '(:action "delete" :id "board"))
                                   :error)))))))
 
+(mevedel-deftest mevedel-shared-editing--commit
+  (:doc "A concurrent metadata edit prevents stale rename metadata from overwriting it")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (let ((run (symbol-function 'mevedel-artifact-lease-run))
+          (rename '(:action "rename" :id "board" :title "Later" :actor "Alice" :opId "two")))
+      (cl-letf (((symbol-function 'mevedel-artifact-lease-run)
+                 (lambda (owner id operations)
+                   (mevedel-artifact-store-update-meta owner id :dedicated-session "conversation")
+                   (funcall run owner id operations))))
+        (should (plist-get (mevedel-shared-editing-test--call workspace rename) :error)))
+      (should (equal "First" (plist-get (mevedel-shared-editing--read workspace "board") :title)))
+      (should-not (plist-get (mevedel-shared-editing-test--call workspace rename) :error))
+      (should (equal "conversation"
+                     (plist-get (mevedel-artifact-store-meta workspace "board") :dedicated-session)))
+      (should (equal "Later" (plist-get (mevedel-artifact-store-meta workspace "board") :title))))))
+
+(mevedel-deftest mevedel-shared-editing--commit-directory
+  (:doc "an authored directory replaced by a file cannot partially commit a new state")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard"
+                 :title "First" :actor "Alice" :opId "one"))
+    (let* ((state (mevedel-shared-editing--read workspace "board"))
+           (authored (mevedel-artifact-store-artifact-directory workspace "board")))
+      (delete-directory authored)
+      (with-temp-file authored (insert "occupied"))
+      (should-error (mevedel-shared-editing--commit
+                     workspace (plist-put (copy-sequence state) :title "Later")))
+      (should (equal state (mevedel-shared-editing--read workspace "board")))
+      (should (equal "occupied" (mevedel-artifact-store--read-bytes authored))))))
+
+(mevedel-deftest mevedel-shared-editing--read
+  (:doc "pinned reads and commits reject linked ancestors and leaves without repeated host walks")
+  (dolist (leaf '("meta.el" "state.json" nil))
+    (mevedel-shared-editing-test--with-workspace
+      (should-not (plist-get
+                   (mevedel-shared-editing-test--call
+                    workspace '(:action "create" :id "board" :kind "whiteboard"
+                                :title "Board" :actor "Alice" :opId "one")) :error))
+      (let* ((state (mevedel-shared-editing--read workspace "board"))
+             (directory (directory-file-name
+                         (file-name-directory (mevedel-shared-editing--state-path workspace "board"))))
+             (path (if leaf (file-name-concat directory leaf) directory))
+             (bytes (when leaf (mevedel-artifact-store--read-bytes path)))
+             (victim (file-name-concat root "outside")))
+        (cl-letf (((symbol-function 'mevedel-resource-within-root-p)
+                   (lambda (&rest _) (ert-fail "Repeated host path proof"))))
+          (should (equal state (mevedel-shared-editing--read workspace "board")))
+          (mevedel-shared-editing--commit workspace state))
+        (rename-file path victim)
+        (make-symbolic-link victim path)
+        (should-error (mevedel-shared-editing--read workspace "board"))
+        (should-error (mevedel-shared-editing--commit workspace state))
+        (if leaf
+            (should (equal bytes (mevedel-artifact-store--read-bytes victim)))
+          (should (file-exists-p (file-name-concat victim "state.json"))))))))
+
+(mevedel-deftest mevedel-shared-editing-list-batches
+  (:doc "catalog batches metadata only and skips linked metadata without hiding siblings")
+  (mevedel-shared-editing-test--with-workspace
+    (dotimes (index 35)
+      (let* ((id (format "doc%d" index))
+             (path (file-name-concat (mevedel-artifact-store-directory workspace)
+                                     ".state" id "meta.el")))
+        (make-directory (file-name-directory path) t)
+        (with-temp-file path
+          (prin1 (list :kind 'document :file "state.json" :title id :revision 7)
+                 (current-buffer)))))
+    (let* ((store (mevedel-artifact-store-directory workspace))
+           (linked (file-name-concat store ".state/doc3/meta.el"))
+           (victim (file-name-concat root "outside"))
+           (run (symbol-function 'mevedel-session-control-fs-run-program))
+           calls catalog)
+      (rename-file linked victim)
+      (make-symbolic-link victim linked)
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                 (lambda (operations &optional lock)
+                   (push operations calls)
+                   (funcall run operations lock))))
+        (setq catalog (mevedel-shared-editing-list workspace)))
+      (should (= 34 (length catalog)))
+      (should-not (cl-find "doc3" catalog :key (lambda (entry) (plist-get entry :id)) :test #'equal))
+      (should (= 2 (length calls)))
+      (should (cl-every
+               (lambda (batch)
+                 (and (<= (length batch) 32)
+                      (cl-every (lambda (operation)
+                                  (and (eq 'read (plist-get operation :op))
+                                       (string-suffix-p "/meta.el" (plist-get operation :path)))) batch)))
+               calls)))))
+
+(mevedel-deftest mevedel-shared-editing-list
+  (:doc "Catalogs read metadata without opening the full CRDT state or history")
+  (mevedel-shared-editing-test--with-workspace
+    (mevedel-shared-editing-test--call
+     workspace '(:action "create" :id "board" :kind "whiteboard" :title "First"
+                 :actor "Alice" :opId "one"))
+    (mevedel-shared-editing-test--call
+     workspace '(:action "rename" :id "board" :title "Later" :actor "Alice" :opId "two"))
+    (cl-letf (((symbol-function 'mevedel-shared-editing--read)
+               (lambda (&rest _) (ert-fail "Catalog opened full item state"))))
+      (should (equal '((:id "board" :kind "whiteboard" :title "Later" :revision 2))
+                     (mevedel-shared-editing-list workspace))))))
+
 (mevedel-deftest mevedel-shared-editing-save-version
   (:doc "Keeps versions without receipts or history, and restores one as an edit")
   (mevedel-shared-editing-test--with-workspace
@@ -315,6 +507,9 @@
                    (cl-subseq (mevedel-artifact-store-meta workspace "copy") 0 4)))
     (should (= 1 (length (mevedel-artifact-store-versions workspace "copy"))))
     (should-error (mevedel-shared-editing-duplicate workspace "board" "copy"))
+    (make-directory (mevedel-artifact-store-bookkeeping-directory workspace "orphan"))
+    (should-error (mevedel-shared-editing-duplicate workspace "board" "orphan"))
+    (should (file-directory-p (mevedel-artifact-store-bookkeeping-directory workspace "orphan")))
     (should-error (mevedel-shared-editing-duplicate workspace "board" "../x"))))
 
 (provide 'test-mevedel-shared-editing)

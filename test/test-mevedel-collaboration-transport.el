@@ -20,6 +20,8 @@
 (require 'cl-lib)
 (require 'websocket)
 (require 'mevedel-collaboration-transport)
+(require 'mevedel-session-control-fs)
+(require 'mevedel-transport)
 
 
 ;;
@@ -526,6 +528,123 @@ relay's room plist."
                        (lambda () (assq 'peer-left controls))))))
         (mevedel-collaboration--transport-stop transport)
         (should (memq 'stopped states))))))
+
+(mevedel-deftest mevedel-collaboration--transport-deliver ()
+  ,test
+  (test)
+  :doc "authenticated callbacks wait for a remote operation before reading target files"
+  (let* ((path (make-temp-file "mevedel-inbound-target-" nil nil "bytes"))
+         (key (make-string 32 5))
+         nested delivered
+         (transport (list :state 'open :key key
+                          :on-frame (lambda (_peer _frame)
+                                      (setq nested (mevedel-transport-nested-p))
+                                      (setq delivered (mevedel-session-control-fs-read-file path)))))
+         (frame (make-websocket-frame
+                 :opcode 'binary :completep t
+                 :payload (mevedel-collaboration--envelope-pack
+                           1 (mevedel-collaboration--seal key "{\"t\":\"store-list\"}")))))
+    (unwind-protect
+        (progn
+          (mevedel-transport--handler-advice
+           (lambda ()
+             (let (timer-list timer-idle-list)
+               (mevedel-collaboration--transport-receive transport frame))))
+          (should-not nested)
+          (should-not delivered)
+          (should (mevedel-test--pump (lambda () delivered)))
+          (should (equal "bytes" delivered)))
+      (mevedel-collaboration--transport-stop transport)
+      (delete-file path)))
+
+  :doc "queued frames, new arrivals and nested peer departure retain arrival order"
+  (let* ((key (make-string 32 5))
+         (transport (list :state 'open :key key))
+         seen)
+    (plist-put transport :on-control
+               (lambda (event _peer) (push event seen)))
+    (plist-put transport :on-frame
+               (lambda (_peer frame)
+                 (let ((number (plist-get frame :n)))
+                   (push number seen)
+                   (when (= number 1)
+                     (mevedel-collaboration--transport-receive
+                      transport (make-websocket-frame
+                                 :opcode 'text :completep t
+                                 :payload "{\"t\":\"peer-left\",\"peer\":1}"))
+                     (push 'first-returned seen))
+                   ;; A failed callback must not abandon later queued input.
+                   (when (= number 2) (error "One frame failed")))))
+    (unwind-protect
+        (cl-labels ((receive (number)
+                      (mevedel-collaboration--transport-receive
+                       transport (make-websocket-frame
+                                  :opcode 'binary :completep t
+                                  :payload (mevedel-collaboration--envelope-pack
+                                            1 (mevedel-collaboration--seal
+                                               key (json-encode (list :n number))))))))
+          (mevedel-transport--handler-advice
+           (lambda ()
+             (let (timer-list timer-idle-list)
+               (receive 1)
+               (receive 2))))
+          (should-not seen)
+          ;; An idle arrival must drain the older entries before itself.
+          (receive 3)
+          (should (equal '(1 first-returned 2 3 peer-left) (nreverse seen)))
+          (should-not (plist-get transport :input-queue))
+          (should-not (gethash (plist-get transport :input-key) mevedel-transport--pending)))
+      (mevedel-collaboration--transport-stop transport)))
+
+  :doc "a callback that starts target work defers the rest of the queue"
+  (let ((transport (list :state 'open)) busy seen)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                   (lambda (&optional _) busy)))
+          (mevedel-collaboration--transport-deliver
+           transport
+           (lambda ()
+             (push 'first seen)
+             (mevedel-collaboration--transport-deliver
+              transport (lambda () (push 'second seen)))
+             (setq busy t)))
+          (should (equal '(first) seen))
+          (should (gethash (plist-get transport :input-key) mevedel-transport--pending))
+          (setq busy nil)
+          (should (mevedel-test--pump (lambda () (= 2 (length seen)))))
+          (should (equal '(second first) seen)))
+      (mevedel-collaboration--transport-stop transport))))
+
+(mevedel-deftest mevedel-collaboration--transport-discard-input
+  (:doc "disconnect and stop discard queued callbacks and fence a late timer")
+  (dolist (action '(down stopped))
+    (let ((transport (list :state 'open :backoff 60)) delivered)
+      (unwind-protect
+          (progn
+            (mevedel-transport--handler-advice
+             (lambda ()
+               (let (timer-list timer-idle-list)
+                 (mevedel-collaboration--transport-deliver
+                  transport (lambda () (push 'old delivered))))))
+            (let* ((key (plist-get transport :input-key))
+                   (timer (car (gethash key mevedel-transport--pending)))
+                   (function (timer--function timer))
+                   (args (timer--args timer)))
+              (if (eq action 'down)
+                  (mevedel-collaboration--transport-down transport nil)
+                (mevedel-collaboration--transport-stop transport))
+              (should-not (gethash key mevedel-transport--pending))
+              (apply function args)
+              (mevedel-collaboration--transport-deliver
+               transport (lambda () (push 'closed delivered)))
+              (should-not delivered)
+              (should-not (plist-get transport :input-queue))
+              (when (eq action 'down)
+                (plist-put transport :state 'open)
+                (mevedel-collaboration--transport-deliver
+                 transport (lambda () (push 'new delivered)))
+                (should (equal '(new) delivered)))))
+        (mevedel-collaboration--transport-stop transport)))))
 
 (mevedel-deftest mevedel-collaboration--transport-send
   (:doc "drops a frame over the wire bound instead of sending it")

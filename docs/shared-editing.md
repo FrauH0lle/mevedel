@@ -557,20 +557,31 @@ typing, posting comments, and synchronization never start model turns automatica
 
 ## Durability and recovery
 
-An item is `<workspace>/.mevedel/artifacts/ID/state.json`, with `meta.el`
-naming its kind and title, and `versions/`. Emacs serializes operations per
+An item is `<workspace>/.mevedel/artifacts/.state/ID/state.json`, with `meta.el`
+naming its kind, title and revision, and `versions/`. Catalogs read these small
+metadata records without parsing the item's CRDT state or history.
+Emacs serializes operations per
 workspace in one queue, which every room and session of this Emacs shares,
 validates candidates in the helper, checks continuing authority, and commits
 before acknowledging Saved on host. Embedded images travel with their item's
 state. Ordinary read-only artifact addresses gain no new mutation capability.
+Requests and helper replies arriving during a remote file operation retain
+their continuations until the transport is idle, so TRAMP's temporary timer
+lists cannot strand the workspace queue.
 
 Across Emacs instances, an item lease decides who may commit
 (`mevedel-artifact-lease.el`). It lives outside the store, under
 `.mevedel/leases/artifacts/ID/`, so the store stays safe to commit. It uses
 the session lease's generation records, target clock and expiry
 (`mevedel-session-lease-seconds`): the first edit in an Emacs acquires it,
-a timer renews it, and every state write proves it in the same target
-program, so an Emacs that lost the lease cannot overwrite its successor.
+a timer renews it, and every state write proves ownership and expiry in the
+same target program. Lease transitions, state and metadata writes, and item
+deletion share a target-side `flock` on the stable
+`.mevedel/leases/artifacts/` directory, so a takeover cannot interleave with a
+commit. The execution target must provide `flock`.
+These file operations are serialized, but are not a crash-atomic multi-file
+transaction. A failed program reports a save failure and can leave an incomplete
+new item or state and catalog metadata at different revisions until retried.
 After `mevedel-artifact-lease-idle-seconds` without edits, or when Emacs
 exits, the lease is released. Another Emacs that tries to edit a held item
 gets a read-only refusal and asks the holder to hand it over; the holder
@@ -586,6 +597,9 @@ cockpit's `s`, or the store list in a room or the lobby). Restoring a version
 is one ordinary, attributed edit through the queue: lineage, comments and
 history stay, concurrent editors receive it as an update, and the restore can
 itself be reverted.
+Whiteboard restores update retained objects in place, so a pending browser
+edit to an unchanged object still merges. Removed objects retain the normal
+deletion-wins behavior.
 
 Sessions only attach to items, so Resume, Save As, Fork and Rewind neither
 copy nor roll them back. Closing a browser or ending the share leaves the host

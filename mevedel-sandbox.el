@@ -440,7 +440,10 @@ scratch the child already owns, a repository placed there is not protected,
 and walking all of it on every launch cost more than the protection was
 worth while surfacing transient trees that vanished before launch.
 SCAN-FUNCTION, when non-nil, receives ROOT, NAME, EXECUTABLE and MODE for
-each native directory scan and returns (PATH . BLOCKED) pairs."
+each native directory scan and returns (PATH . BLOCKED) pairs.
+Literal state roots carry `:create-parents' so preparation protects their
+leaf while retaining writable authored siblings.  These directories persist
+across launches, since another active sandbox may still mount them."
   (let* ((target-prefix (file-remote-p workdir))
          (exempt (and temporary-root
                       (mevedel-sandbox--canonical-directories
@@ -458,7 +461,7 @@ each native directory scan and returns (PATH . BLOCKED) pairs."
          target-home candidates)
     (cl-labels
         ((add-candidate
-          (path mode directory-p)
+          (path mode directory-p &optional create-parents)
           (let* ((path (directory-file-name (expand-file-name path)))
                  (existing
                   (cl-find path candidates
@@ -469,8 +472,11 @@ each native directory scan and returns (PATH . BLOCKED) pairs."
                   (when (eq mode 'inaccessible)
                     (plist-put existing :mode mode))
                   (when directory-p
-                    (plist-put existing :directory-p t)))
-              (push (list :path path :mode mode :directory-p directory-p)
+                    (plist-put existing :directory-p t))
+                  (when create-parents
+                    (plist-put existing :create-parents t)))
+              (push (append (list :path path :mode mode :directory-p directory-p)
+                            (when create-parents (list :create-parents t)))
                     candidates))))
          (glob-p (pattern)
            (cl-some (lambda (char) (memq char '(?* ?? ?\[)))
@@ -589,9 +595,13 @@ each native directory scan and returns (PATH . BLOCKED) pairs."
                            mevedel-sandbox--root-anchored-names)
                    (not (string-search "**" (substring root-pattern 3))))
               (dolist (root (delete-dups (copy-sequence discovery-roots)))
-                (dolist (path (file-expand-wildcards
-                               (file-name-concat root (substring root-pattern 3)) t))
-                  (add-candidate path mode directory-p))))
+                (let ((path (file-name-concat root (substring root-pattern 3))))
+                  (if (glob-p (substring root-pattern 3))
+                      (dolist (match (file-expand-wildcards path t))
+                        (add-candidate match mode directory-p))
+                    ;; Keep missing state roots protected without freezing
+                    ;; authored siblings when their shared parents are absent.
+                    (add-candidate path mode directory-p t)))))
              (t
               (let ((search-roots (copy-sequence discovery-roots)))
                 (when absolute-pattern
@@ -666,7 +676,9 @@ TEMPORARY-ROOT is exempt from glob discovery; see
 `mevedel-sandbox--protected-candidates'.  Return `:restrictions', each a
 `(:path :mode :directory-p)' plist ordered shallow to deep with one entry per
 path, plus the shared Git metadata directories and synthetic mount targets
-created for missing protected directories.
+created for missing protected directories.  Literal state roots and their
+parents persist; their mounts carry `:required', refusing launch if the
+source disappears.
 CANDIDATES, when supplied, wraps the invocation's discovered candidates in
 a one-element list; path and symlink checks still happen here."
   (let (restrictions cleanup-paths git-common-directories)
@@ -701,19 +713,29 @@ a one-element list; path and symlink checks still happen here."
                                      path)
                                     (string-prefix-p root-directory path))))
                             writable-roots))
-                  (setq path (or (mevedel-sandbox--first-missing-path path)
-                                 path))
-                  (make-directory path)
-                  (set-file-modes path #o700)
-                  (let ((attributes (file-attributes path 'string)))
-                    (push (list :path path
-                                :inode
-                                (file-attribute-inode-number attributes))
-                          cleanup-paths))))
+                  (let ((destination path))
+                    (unless (plist-get candidate :create-parents)
+                      (setq path (or (mevedel-sandbox--first-missing-path path)
+                                     path)
+                            destination path))
+                    (while (not (file-exists-p destination))
+                      (let ((missing (or (mevedel-sandbox--first-missing-path destination)
+                                         destination)))
+                        (make-directory missing)
+                        (set-file-modes missing #o700)
+                        ;; Removing a state root could detach another running
+                        ;; sandbox's mount and let it recreate a writable root.
+                        (unless (plist-get candidate :create-parents)
+                          (let ((attributes (file-attributes missing 'string)))
+                            (push (list :path missing
+                                        :inode (file-attribute-inode-number attributes))
+                                  cleanup-paths))))))))
               (when (file-exists-p path)
-                (push (list :path path
-                            :mode mode
-                            :directory-p (file-directory-p path))
+                (push (append (list :path path
+                                    :mode mode
+                                    :directory-p (file-directory-p path))
+                              (when (plist-get candidate :create-parents)
+                                (list :required t)))
                       restrictions)
                 (let ((targets (mevedel-sandbox--git-pointer-targets path)))
                   (setq git-common-directories
@@ -726,9 +748,11 @@ a one-element list; path and symlink checks still happen here."
                             restrictions))))
                 (let ((canonical (file-truename path)))
                   (unless (string-equal canonical path)
-                    (push (list :path canonical
-                                :mode mode
-                                :directory-p (file-directory-p canonical))
+                    (push (append (list :path canonical
+                                        :mode mode
+                                        :directory-p (file-directory-p canonical))
+                                  (when (plist-get candidate :create-parents)
+                                    (list :required t)))
                           restrictions))))))
           (let (resolved)
             (dolist (restriction restrictions)
@@ -744,8 +768,13 @@ a one-element list; path and symlink checks still happen here."
                      "Cannot enforce protected path %s across writable symlink %s"
                      path symlink))))
                 (if existing
-                    (when (eq (plist-get restriction :mode) 'inaccessible)
-                      (setcdr existing restriction))
+                    (progn
+                      (when (or (plist-get restriction :required)
+                                (plist-get (cdr existing) :required))
+                        (plist-put restriction :required t)
+                        (setcdr existing (plist-put (cdr existing) :required t)))
+                      (when (eq (plist-get restriction :mode) 'inaccessible)
+                        (setcdr existing restriction)))
                   (push (cons path restriction) resolved))))
             (list :restrictions
                   (mapcar #'cdr
@@ -756,7 +785,7 @@ a one-element list; path and symlink checks still happen here."
                   :git-common-directories (delete-dups git-common-directories)
                   :cleanup-paths (nreverse cleanup-paths))))
       (error
-       (mevedel-sandbox-cleanup (list :cleanup-paths cleanup-paths))
+       (mevedel-sandbox-cleanup (list :cleanup-paths (nreverse cleanup-paths)))
        (if (eq (car err) 'mevedel-sandbox-policy-error)
            (signal (car err) (cdr err))
          (signal 'mevedel-sandbox-policy-error

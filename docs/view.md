@@ -1144,21 +1144,24 @@ remote controls, notifications, and connection recovery.
 
 Artifacts live in the workspace artifact store,
 `<workspace>/.mevedel/artifacts/`, owned by `mevedel-artifact-store.el`.
-Each artifact is one directory whose name is its stable id. It holds the
-artifact file (an HTML mockup, a Markdown document, or an image the user is
-meant to open) or, for a whiteboard or document, its `state.json` (see
-[shared editing](shared-editing.md#durability-and-recovery)), plus host
-bookkeeping: `meta.el` (kind, title, primary file,
-dedicated session), `versions/` (numbered copies and `index.el`) and
-`comments.json` (the comment threads on an HTML artifact).
+Each artifact has a directory whose name is its stable id. Authored files
+(HTML mockups, Markdown, images and assets) stay in that directory. Host
+bookkeeping lives separately under `.state/ID/`: metadata, saved versions,
+comment threads, and whiteboard/document state (see
+[shared editing](shared-editing.md#durability-and-recovery)). The protected
+subtree keeps shell commands from creating or replacing bookkeeping, while
+allowing ordinary file creation and atomic replacement in authored directories.
+Discovery includes ids from both subtrees, so boards and documents remain
+visible after cloning a Git repository that omits their empty authored directories.
 
 ```
 .mevedel/artifacts/
   ID/
+    <name>           ; authored artifact file and optional assets
+  .state/ID/
     meta.el          ; kind, title, primary file, created, dedicated session
-    <name>           ; the artifact file the model writes, or
     state.json       ; a whiteboard's or document's state
-    versions/        ; NNNNNN.<ext> copies plus index.el
+    versions/        ; numbered copies plus index.el
     comments.json    ; comment threads, each naming its answering session
 ```
 
@@ -1199,6 +1202,14 @@ Versions are capped per artifact by `mevedel-artifact-store-max-versions`
 (default 20) and `mevedel-artifact-store-max-version-bytes` (default 64 MiB).
 The oldest are dropped first; the latest always stays. Restoring a version
 copies it back as a new version.
+
+The browser's **Versions** list offers read-only **View** previews to every
+link tier. File versions use the artifact panel; whiteboards render as SVG
+and documents as HTML from their saved state, without restoring or changing
+the live editor. Previews use the same 16 MiB transfer cap and fetch throttle
+as current artifacts. Full and owner lobby links can create **New whiteboard**
+and **New document** entries in the store, then open their dedicated editor
+rooms.
 
 The bundled `artifact` skill carries the conventions (start an artifact in a
 new id directory, self-contained, keep it small) and resolves the store

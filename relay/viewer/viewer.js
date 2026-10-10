@@ -218,7 +218,7 @@
     send, el, state, room: true, notice: flashNotice,
     open: record => {
       storeSheet.close();
-      if (record.item) editing.open(record.store);
+      if (record.item && !record.version) editing.open(record.store);
       else artifacts.open(record);
     },
     list: document.getElementById('store-list'),
@@ -230,12 +230,14 @@
   });
   const lobbyStore = window.mevedelStoreView.create({
     send, el, state, open: artifacts.open, notice: flashNotice,
+    creation: document.getElementById('lobby-store-create'),
     list: document.getElementById('lobby-store-list'),
     empty: document.getElementById('lobby-store-empty'),
   });
   const lobby = window.mevedelLobbyView.create(
     {state, send, el, notice: flashNotice, sessions, files, store: lobbyStore});
   const activeStore = () => (lobby.active() ? lobbyStore : roomStore);
+  let storeArtifacts = null;
 
   let executionResultSequence = 0;
   let pendingExecutionResult = null;
@@ -681,7 +683,9 @@
     if (!itemScope(scope)) return true;
     const id = scope.slice('item:'.length);
     if (!id.startsWith('artifact:')) return editing.present(id);
-    return cards().get(id.slice('artifact:'.length))?.missing !== true;
+    const artifact = id.slice('artifact:'.length);
+    if (storeArtifacts) return storeArtifacts.get(artifact)?.missing === false;
+    return cards().get(artifact)?.missing !== true;
   }
 
   // Send TEXT and attachment IMAGES into item ID's conversation; say why
@@ -1330,7 +1334,11 @@
       artifacts.storedComments(frame);
     } else if (frame.t === 'store-artifacts') {
       activeStore().show(frame);
-      if (!lobby.active()) artifacts.attachedRows(frame.artifacts);
+      if (!lobby.active()) {
+        storeArtifacts = new Map(activeStore().rows().map(row => [row.id, row]));
+        artifacts.attachedRows(frame.artifacts);
+        refreshFilter();
+      }
     } else if (frame.t === 'store-action') {
       activeStore().handle(frame);
     } else if (frame.t === 'ui-request') {

@@ -116,10 +116,7 @@ Example:
   '(("**/.git/**" . read-only)
     ;; The artifact store's bookkeeping changes through mevedel only, so an
     ;; edit cannot bypass item leases, versions and validation.
-    ("**/.mevedel/artifacts/*/meta.el" . read-only)
-    ("**/.mevedel/artifacts/*/state.json" . read-only)
-    ("**/.mevedel/artifacts/*/comments.json" . read-only)
-    ("**/.mevedel/artifacts/*/versions/**" . read-only)
+    ("**/.mevedel/artifacts/.state/**" . read-only)
     ("**/.mevedel/leases/**" . read-only)
     ("~/.ssh/**" . inaccessible)
     ("~/.gnupg/**" . inaccessible)

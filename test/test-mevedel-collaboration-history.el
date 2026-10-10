@@ -107,6 +107,53 @@
       (mevedel-collaboration--artifact-stat-invalidate)
       (delete-directory directory t))))
 
+(mevedel-deftest mevedel-collaboration--handle-history-get
+  (:doc "remote callback reads wait for transport and recheck room and guest authority")
+  (dolist (revocation '(nil guest room))
+    (let* ((session (mevedel-session--create :name "deferred-history"
+                                            :save-path temporary-file-directory :current-segment 2))
+           (guest (list :ready t))
+           (guests (make-hash-table :test #'eql))
+           (room (list :room-id "history" :session session :guests guests))
+           (live-room room)
+           (mevedel-transport--enabled-p t)
+           (mevedel-transport--pending (make-hash-table :test #'equal))
+           sent read)
+      (puthash 1 guest guests)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-collaboration--room-for-session)
+                     (lambda (_) live-room))
+                    ((symbol-function 'mevedel-collaboration--history-records)
+                     (lambda (&rest _)
+                       (should-not (mevedel-transport-nested-p))
+                       (setq read t)
+                       (list '(:id "saved" :text "Archived answer"))))
+                    ((symbol-function 'mevedel-collaboration--publish-history) #'ignore)
+                    ((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport _peer frame) (push frame sent))))
+            (mevedel-transport-call-as-remote-operation
+             (lambda ()
+               (let ((timer-list nil))
+                 (mevedel-collaboration--handle-history-get room 1 '(:reqId 1 :segment 1))
+                 ;; A second request admitted after the rate window must
+                 ;; retain its own reply while the same transport stays busy.
+                 (plist-put guest :last-history-fetch (- (float-time) 2))
+                 (mevedel-collaboration--handle-history-get room 1 '(:reqId 2 :segment 1)))))
+            (should-not read)
+            (should-not sent)
+            (pcase revocation ('guest (remhash 1 guests)) ('room (setq live-room nil)))
+            (let ((deadline (+ (float-time) 1)))
+              (while (and (> (hash-table-count mevedel-transport--pending) 0)
+                          (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should (= 0 (hash-table-count mevedel-transport--pending)))
+            (if revocation
+                (progn (should-not read) (should-not sent))
+              (should read)
+              (should (equal '(1 2) (sort (mapcar (lambda (frame) (plist-get frame :reqId)) sent) #'<)))
+              (should (cl-every (lambda (frame) (plist-get frame :final)) sent))))
+        (mevedel-transport-cancel-pending)))))
+
 (mevedel-deftest mevedel-collaboration--history-records-bash-completion
   (:doc "later hidden terminal evidence updates the original archived Bash row")
   (let* ((directory (make-temp-file "mevedel-history-bash-" t))

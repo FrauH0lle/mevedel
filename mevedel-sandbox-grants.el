@@ -231,7 +231,8 @@ When WORKDIR is remote, discover and launch the wrapper on that target."
 (defun mevedel-sandbox--mount-plan (restrictions grants)
   "Return the Bubblewrap mounts for protected RESTRICTIONS and GRANTS.
 
-RESTRICTIONS are `(:path :mode :directory-p)' plists ordered shallow to deep.
+RESTRICTIONS are `(:path :mode :directory-p)' plists ordered shallow to deep;
+`:required' means a missing read-only mount source must refuse launch.
 GRANTS are normalized filesystem grants.  A grant containing a protected path
 is bound before the protections so nested masks still apply inside it; every
 other grant is bound after them.  A protected path that is itself granted
@@ -279,12 +280,14 @@ backing private empty file masks."
              (writable-p (member path write-paths)))
         (pcase (plist-get restriction :mode)
           ('read-only
-           ;; A read-only source discovered under a writable root may vanish
-           ;; between planning and launch; the try variant keeps the launch
-           ;; confined.
+           ;; State roots protect future files too: their disappearance must
+           ;; refuse launch, not silently discard the boundary.
            (unless writable-p
              (setq protections
-                   (append protections (list "--ro-bind-try" path path)))))
+                   (append protections
+                           (list (if (plist-get restriction :required)
+                                     "--ro-bind" "--ro-bind-try")
+                                 path path)))))
           ('inaccessible
            (cond
             ((not (plist-get restriction :directory-p))

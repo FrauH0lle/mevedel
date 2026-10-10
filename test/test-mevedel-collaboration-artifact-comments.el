@@ -191,7 +191,7 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
     (mevedel-collaboration--artifact-comments-write
      workspace "schema" (list '(:id "c" :actor "Alice" :text "Hi" :resolved :json-false
                                 :replies [])))
-    (should (file-exists-p (file-name-concat directory ".mevedel/artifacts/schema/comments.json")))
+    (should (file-exists-p (file-name-concat directory ".mevedel/artifacts/.state/schema/comments.json")))
     (let ((comment (car (mevedel-collaboration--artifact-comments-read workspace "schema"))))
       (should (equal (plist-get comment :text) "Hi"))
       (should (eq (plist-get comment :resolved) :json-false)))
@@ -199,7 +199,7 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
     (should-not (mevedel-shared-editing-list workspace)))
   :doc "refuses a store that belongs to another artifact"
   (mevedel-test--with-artifact-comment-room
-    (let ((path (file-name-concat directory ".mevedel/artifacts/schema/comments.json")))
+    (let ((path (file-name-concat directory ".mevedel/artifacts/.state/schema/comments.json")))
       (write-region "{\"artifact\":\"other\",\"comments\":[]}" nil path nil 'silent)
       (should-error (mevedel-collaboration--artifact-comments-read workspace "schema")))))
 

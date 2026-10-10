@@ -6,6 +6,7 @@
   // store has none. ROOM is true in a session's room, where artifacts can be
   // attached to the session; the lobby has no session of its own.
   function create({send, el, list, empty, state, room = false, open, notice,
+                   creation = null,
                    navigate = link => window.location.replace(link),
                    ask = text => window.prompt(text),
                    confirm = text => window.confirm(text)}) {
@@ -65,8 +66,10 @@
         const item = el('li', 'store-version');
         const age = window.mevedelLobbyView ? window.mevedelLobbyView.age(version.time) : '';
         item.append(el('span', 'lobby-meta',
-                       `Version ${version.n}${index === 0 ? ' (current)' : ''} · ${age}`));
-        if (index > 0 && state.writable) {
+                       `Version ${version.n}${index === 0 ? ' (latest saved)' : ''} · ${age}`));
+        item.append(button('View', `Preview version ${version.n} without changing the artifact`,
+                           () => open({...record(row), version: version.n})));
+        if (state.writable) {
           item.append(button('Restore', `Make version ${version.n} the newest version`,
                              () => act('restore', row.id, {n: version.n})));
         }
@@ -117,10 +120,16 @@
       trigger.setAttribute('aria-label', `More actions for ${row.title || row.id}`);
       const menu = el('div', 'store-menu');
       menu.popover = 'auto';
+      menu.dataset.artifact = row.id;
       trigger.popoverTargetElement = menu;
       // The toggle event follows the opening by a task, so the menu stays
       // invisible until placed rather than flash at the window's corner.
-      menu.addEventListener('beforetoggle', () => delete menu.dataset.placed);
+      menu.addEventListener('beforetoggle', event => {
+        delete menu.dataset.placed;
+        // Track synchronously: a listing can arrive before the toggle task.
+        if (event.newState === 'open') shown = menu;
+        else if (shown === menu) shown = null;
+      });
       menu.addEventListener('toggle', event => {
         if (event.newState === 'open') {
           shown = menu;
@@ -159,10 +168,13 @@
         meta.push(window.mevedelLobbyView.age(row.modified));
       }
       if (room && row.attached === true) meta.push('in this session');
+      if (!room && Number.isInteger(row.attachedSessions)) {
+        meta.push(`${row.attachedSessions} session${row.attachedSessions === 1 ? '' : 's'}`);
+      }
       main.append(el('span', 'lobby-meta', meta.filter(Boolean).join(' · ')));
       if (expanded.has(row.id)) main.append(renderVersions(row));
       item.append(main);
-      if (row.missing !== true && (row.item !== true || room || state.writable)) {
+      if (row.missing !== true) {
         item.append(button('Open', `Open ${row.title || row.id}`, () => openRow(row)));
       }
       item.append(...actions(row));
@@ -170,7 +182,30 @@
     }
 
     function render() {
-      list.replaceChildren(...rows.map(renderRow));
+      const openId = shown && shown.dataset.artifact;
+      shown = null;
+      if (creation) {
+        creation.replaceChildren();
+        if (state.writable) {
+          for (const kind of ['whiteboard', 'document']) {
+            creation.append(button(`New ${kind}`, `Create a ${kind} in this project`, () => {
+              const title = ask(`Title of the new ${kind}:`);
+              if (title && title.trim()) act('create', null, {kind, title: title.trim()});
+            }));
+          }
+        }
+      }
+      const rendered = rows.map(renderRow);
+      list.replaceChildren(...rendered);
+      // Refreshing must not dismiss the action the user is choosing. Rebuild
+      // its menu from current permissions and retain it only while its row exists.
+      if (openId) {
+        const index = rows.findIndex(row => row.id === openId);
+        if (index >= 0) {
+          const children = rendered[index].children;
+          children[children.length - 1].showPopover();
+        }
+      }
       if (empty) empty.hidden = rows.length > 0;
     }
 
@@ -196,6 +231,8 @@
       if (request.action === 'versions' && Array.isArray(frame.versions)) {
         versions.set(request.id, frame.versions);
         render();
+      } else if (request.action === 'create' && typeof frame.id === 'string') {
+        act('conversation', frame.id);
       } else if (request.action === 'conversation' && typeof frame.link === 'string') {
         navigate(frame.link);
       } else if (request.action === 'duplicate') {

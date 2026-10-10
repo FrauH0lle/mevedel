@@ -161,7 +161,30 @@
         (should (eq workspace notified))
         (should (equal "old" (with-temp-buffer (insert-file-contents path)
                                                (buffer-string))))
-        (should (equal "3" (aref (cadar tabulated-list-entries) 3)))))))
+        (should (equal "3" (aref (cadar tabulated-list-entries) 3))))))
+
+  :doc "a queued restore refreshes its originating cockpit only on completion"
+  (mevedel-artifacts-list-test--with-store
+    (mevedel-artifacts-list-test--artifact session store "a" "x.md" "old")
+    (let ((cockpit (mevedel-artifacts-list-open
+                    (mevedel-artifacts-list-test--context session view data)))
+          finish refreshed)
+      (with-current-buffer cockpit
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt choices &rest _) (caar choices)))
+                  ((symbol-function 'read-multiple-choice)
+                   (lambda (&rest _) '(?r "restore")))
+                  ((symbol-function 'mevedel-artifact-store-restore-version)
+                   (lambda (_workspace _id _n _session callback)
+                     (setq finish callback))))
+          (mevedel-artifacts-list-versions)))
+      (cl-letf (((symbol-function 'mevedel-cockpit-surface-refresh)
+                 (lambda (&rest _) (setq refreshed (current-buffer)))))
+        (should-not refreshed)
+        (funcall finish '(:error "Refused"))
+        (should-not refreshed)
+        (funcall finish '(:n 2))
+        (should (eq cockpit refreshed))))))
 
 (mevedel-deftest mevedel-artifacts-list-duplicate (:quiet t)
   ,test
@@ -241,9 +264,9 @@
   :doc "saves a whiteboard's version and refuses file artifacts"
   (mevedel-artifacts-list-test--with-store
     (mevedel-artifacts-list-test--artifact session store "page" "index.html" "x")
-    (make-directory (file-name-concat store "board") t)
-    (write-region "{}" nil (file-name-concat store "board" "state.json") nil 'silent)
     (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+    (write-region "{}" nil (mevedel-artifact-store-primary-path workspace "board")
+                  nil 'silent)
     (let (saved)
       (with-current-buffer (mevedel-artifacts-list-open
                             (mevedel-artifacts-list-test--context session view data))
@@ -280,7 +303,23 @@
           (mevedel-artifacts-list-delete))
         (should-not (file-exists-p (file-name-concat store "mockup")))
         (should (eq workspace notified))
-        (should-not tabulated-list-entries)))))
+        (should-not tabulated-list-entries))))
+
+  :doc "deletes a shared item's identity through its queue despite its protected path"
+  (mevedel-artifacts-list-test--with-store
+    (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+    (write-region "{}" nil (mevedel-artifact-store-primary-path workspace "board")
+                  nil 'silent)
+    (let (queued)
+      (with-current-buffer (mevedel-artifacts-list-open
+                            (mevedel-artifacts-list-test--context session view data))
+        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+                  ((symbol-function 'mevedel-shared-editing-call)
+                   (lambda (seen args _callback)
+                     (should (eq workspace seen))
+                     (setq queued args))))
+          (mevedel-artifacts-list-delete)))
+      (should (equal queued '(:action "delete" :id "board" :actor "Host"))))))
 
 (mevedel-deftest mevedel-artifacts-list-quit ()
   ,test

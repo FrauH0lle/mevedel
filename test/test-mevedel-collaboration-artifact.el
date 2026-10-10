@@ -18,6 +18,7 @@
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
+(require 'mevedel-collaboration-lobby)
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-session-artifacts)
@@ -182,10 +183,16 @@
       (delete-directory save-path t))))
 
 
-(mevedel-deftest mevedel-collaboration-notify-artifacts-changed
-  (:doc "drops cached artifact stats and re-publishes the workspace's rooms")
+(mevedel-deftest mevedel-collaboration-notify-artifacts-changed ()
+  ,test
+  (test)
+  :doc "invalidates stats immediately and coalesces publication after the mutation"
   (let* ((data-buffer (generate-new-buffer " *collab-artifacts-data*"))
-         (workspace (mevedel-workspace--create :type 'project :id "w"))
+         (workspace (mevedel-workspace--create :type 'project :id "w"
+                                               :root (make-temp-file "mevedel-collab-observer-" t)))
+         (mevedel-collaboration--artifact-notifications (make-hash-table :test #'eq))
+         (mevedel-transport--enabled-p t)
+         (mevedel-transport--background-resume-at 0)
          (session (mevedel-session--create :name "artifacts" :workspace workspace))
          (room (list :session session :data-buffer data-buffer
                      :guests (make-hash-table :test #'eql)
@@ -202,17 +209,70 @@
                              (expand-file-name path)))))
           (delete-file path)
           (mevedel-collaboration-notify-artifacts-changed workspace)
-          (should (equal (list room) published))
+          (should-not published)
           (should (cdr (mevedel-collaboration--artifact-stat
                         (expand-file-name path))))
+          (let ((timer (gethash workspace mevedel-collaboration--artifact-notifications)))
+            (cancel-timer timer)
+            (apply (timer--function timer) (timer--args timer)))
+          (should (equal (list room) published))
           ;; A workspace without rooms still drops the cache, publishes
           ;; nothing, and does not error.
           (mevedel-collaboration-notify-artifacts-changed
            (mevedel-workspace--create :type 'project :id "other"))
           (should (= 1 (length published))))
+      (mevedel-transport-cancel-idle
+       mevedel-collaboration--artifact-notifications 'artifact-notifications)
+      (delete-directory (mevedel-workspace-root workspace) t)
       (mevedel-collaboration--artifact-stat-invalidate)
       (when (file-exists-p path) (delete-file path))
-      (kill-buffer data-buffer))))
+      (kill-buffer data-buffer)))
+
+  :doc "queued publication uses current rooms and state, skips closed rooms, and reports failures"
+  (let* ((workspace (mevedel-workspace--create :root temporary-file-directory))
+         (old (list :session (mevedel-session--create :workspace workspace)))
+         (new (list :session (mevedel-session--create :workspace workspace)))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry old))
+         (mevedel-collaboration--artifact-notifications (make-hash-table :test #'eq))
+         (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+         (mevedel-transport--enabled-p t)
+         (reads 0) published failures fail)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--store-snapshot)
+                   (lambda (&rest _)
+                     (cl-incf reads)
+                     (when fail (error "Store unavailable"))
+                     '(:artifacts nil)))
+                  ((symbol-function 'mevedel-collaboration--publish)
+                   (lambda (room) (push room published)))
+                  ((symbol-function 'mevedel-collaboration--broadcast) #'ignore)
+                  ((symbol-function 'mevedel-collaboration--observer-failure)
+                   (lambda (room err) (push (cons room err) failures))))
+          (cl-labels ((flush ()
+                        (let ((timer (gethash workspace mevedel-collaboration--artifact-notifications))
+                              (mevedel-transport--background-resume-at 0))
+                          (cancel-timer timer)
+                          (apply (timer--function timer) (timer--args timer)))))
+            (mevedel-collaboration-notify-artifacts-changed workspace)
+            (mevedel-collaboration-notify-artifacts-changed workspace)
+            (should (= 0 reads))
+            (setq mevedel-collaboration--rooms (mevedel-test-room-registry new))
+            (flush)
+            (should (= 1 reads))
+            (should (equal (list new) published))
+            (mevedel-collaboration-notify-artifacts-changed workspace)
+            (setq mevedel-collaboration--rooms (mevedel-test-room-registry))
+            (flush)
+            (should (= 1 reads))
+            (setq mevedel-collaboration--rooms (mevedel-test-room-registry new)
+                  fail t)
+            (mevedel-collaboration-notify-artifacts-changed workspace)
+            (flush)
+            (should (= 1 (length failures)))
+            (should (eq new (caar failures)))
+            (should (= 0 (hash-table-count mevedel-collaboration--artifact-notifications)))))
+      (mevedel-transport-cancel-idle
+       mevedel-collaboration--artifact-notifications 'artifact-notifications))))
 
 
 (defmacro mevedel-collaboration-artifact-test--with-store (&rest body)
@@ -232,6 +292,9 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
           (lobby (list :workspace workspace :transport 'lobby
                        :guests (make-hash-table :test #'eql)))
           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+          (mevedel-collaboration--artifact-notifications (make-hash-table :test #'eq))
+          (mevedel-transport--enabled-p t)
+          (mevedel-transport--background-resume-at 0)
           sent)
      (dolist (owner (list room lobby))
        (puthash 1 (list :name "viewer" :writable nil :ready t) (plist-get owner :guests))
@@ -254,6 +317,8 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                   (mevedel-session--create :workspace workspace))
                 (list (list :action 'write :path path)))))
            ,@body)
+       (mevedel-transport-cancel-idle
+        mevedel-collaboration--artifact-notifications 'artifact-notifications)
        (kill-buffer data-buffer)
        (mevedel-collaboration--artifact-stat-invalidate)
        (delete-directory root t))))
@@ -314,6 +379,29 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                    owner peer (append (list :reqId 5) frame))
                   (mevedel-collaboration-artifact-test--reply
                    sent (plist-get owner :transport))))
+      ;; Creation needs write authority, validates input, and reports the queue outcome.
+      (let (request queued)
+        (cl-letf (((symbol-function 'mevedel-shared-editing-call)
+                   (lambda (target args callback &rest _)
+                     (should (eq workspace target))
+                     (setq request args queued callback))))
+          (should (plist-get (act lobby 1 :action "create" :kind "document" :title "Notes") :error))
+          (should-not request)
+          (should (plist-get (act lobby 2 :action "create" :kind "file" :title "Notes") :error))
+          (should (plist-get (act lobby 2 :action "create" :kind "document" :title "") :error))
+          (should-not request)
+          (should-not (act lobby 2 :action "create" :kind "document" :title "Notes"))
+          (should (equal "create" (plist-get request :action)))
+          (should (equal "document" (plist-get request :kind)))
+          (should (equal "Notes" (plist-get request :title)))
+          (funcall queued '(:error "Node is unavailable"))
+          (should (equal "Node is unavailable"
+                         (plist-get (mevedel-collaboration-artifact-test--reply sent 'lobby) :error)))
+          (should-not (act room 2 :action "create" :kind "whiteboard" :title "Flow"))
+          (funcall queued '(:result (:revision 1)))
+          (should (equal (plist-get request :id)
+                         (plist-get (mevedel-collaboration-artifact-test--reply sent 'room) :id)))
+          (should (member (plist-get request :id) (mevedel-session-attached-artifacts session)))))
       (let ((versions (act lobby 1 :action "versions" :id "page")))
         (should (eq t (plist-get versions :ok)))
         (should (= 1 (plist-get (aref (plist-get versions :versions) 0) :n))))
@@ -323,6 +411,9 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
       (should (plist-get (act lobby 2 :action "versions" :id "../page") :error))
       ;; Restoring records a new version and tells every room.
       (should (= 2 (plist-get (act room 2 :action "restore" :id "page" :n 1) :n)))
+      (with-timeout (2 (ert-fail "Store fanout never completed"))
+        (while (gethash workspace mevedel-collaboration--artifact-notifications)
+          (accept-process-output nil 0.01)))
       (should (cl-find-if (lambda (entry)
                             (equal "store-artifacts" (plist-get (nth 2 entry) :t)))
                           sent))
@@ -347,18 +438,37 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
       (should (string-match-p "File artifacts"
                               (plist-get (act room 2 :action "save-version" :id "page") :error)))
       (make-directory (file-name-concat store "board") t)
-      (write-region "{}" nil (file-name-concat store "board" "state.json") nil 'silent)
       (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
-      (cl-letf (((symbol-function 'mevedel-shared-editing-save-version)
-                 (lambda (_workspace _id session-id)
-                   (should (equal "s1" session-id))
-                   4))
-                ((symbol-function 'mevedel-shared-editing-restore)
-                 (lambda (_workspace id n _actor _callback)
-                   (should (equal (list "board" 1) (list id n))))))
-        (should (= 4 (plist-get (act room 2 :action "save-version" :id "board") :n)))
-        (should (eq :json-false (plist-get (act room 2 :action "restore" :id "board" :n 1)
-                                           :n))))
+      (write-region "{}" nil (mevedel-artifact-store-primary-path workspace "board") nil 'silent)
+      (cl-letf (((symbol-function 'mevedel-collaboration--store-conversation-link)
+                 (lambda (guest _workspace id)
+                   (should-not (plist-get guest :writable))
+                   (concat "view-" id))))
+        (should (equal "view-board"
+                       (plist-get (act lobby 1 :action "conversation" :id "board") :link)))
+        (should (plist-get (act lobby 1 :action "conversation" :id "page") :error)))
+      (let (restored)
+        (cl-letf (((symbol-function 'mevedel-shared-editing-save-version)
+                   (lambda (_workspace _id session-id)
+                     (should (equal "s1" session-id))
+                     4))
+                  ((symbol-function 'mevedel-shared-editing-restore)
+                   (lambda (_workspace id n _actor callback)
+                     (should (equal (list "board" 1) (list id n)))
+                     (setq restored callback))))
+          (should (= 4 (plist-get (act room 2 :action "save-version" :id "board") :n)))
+          (should-not (act room 2 :action "restore" :id "board" :n 1))
+          (funcall restored '(:error "Held by another Emacs"))
+          (should (equal "Held by another Emacs"
+                         (plist-get (mevedel-collaboration-artifact-test--reply sent 'room)
+                                    :error)))
+          (should-not (act room 2 :action "restore" :id "board" :n 1))
+          (funcall restored '(:ok t))
+          (should (= 4 (plist-get (mevedel-collaboration-artifact-test--reply sent 'room) :n)))))
+      (dolist (action '("attach" "restore" "save-version" "duplicate" "delete"))
+        (should (string-match-p "not change"
+                                (plist-get (act lobby 1 :action action :id "board" :n 1)
+                                           :error))))
       ;; Its state never travels as a file.
       (setq sent nil)
       (mevedel-collaboration--handle-artifact-get lobby 1 '(:reqId 3 :id "artifact:board"))
@@ -381,6 +491,26 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
           (should (equal "Busy" (plist-get (mevedel-collaboration-artifact-test--reply
                                             sent 'lobby)
                                            :error))))))))
+
+(mevedel-deftest mevedel-collaboration--store-conversation-link
+  (:doc "opens editors in a room whose bearer never exceeds the guest's tier")
+  (mevedel-collaboration-artifact-test--with-store
+    (with-current-buffer data-buffer (setq-local mevedel--session session))
+    (make-directory (file-name-concat store "board") t)
+    (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+    (cl-letf (((symbol-function 'mevedel-artifact-store-conversation)
+               (lambda (_workspace _id) data-buffer))
+              ((symbol-function 'mevedel-collaboration--start)
+               (lambda (_session _buffer)
+                 '(:link-view "https://relay/#room.view"
+                   :link-full "https://relay/#room.full"
+                   :link-owner "https://relay/#room.owner"))))
+      (dolist (case '(((:writable nil) . "view")
+                      ((:writable t) . "full")
+                      ((:writable t :owner t) . "owner")))
+        (should (equal (format "https://relay/?shared=board#room.%s" (cdr case))
+                       (mevedel-collaboration--store-conversation-link
+                        (car case) workspace "board")))))))
 
 (mevedel-deftest mevedel-collaboration--handle-store-list ()
   ,test
@@ -414,7 +544,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                                                :root root :name "w"))
          (dir (expand-file-name (mevedel-artifact-store-directory workspace)))
          (path (file-name-concat dir "mockup" "index.html"))
-         (comments (file-name-concat dir "mockup" "comments.json"))
+         (comments (file-name-concat dir ".state" "mockup" "comments.json"))
          (other (file-name-concat dir "other" "page.html"))
          (session (mevedel-session--create :name "s" :workspace workspace
                                            :authority-mode 'pid-lock))
@@ -534,11 +664,17 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                           (mapconcat (lambda (entry)
                                        (plist-get (cdr entry) :data))
                                      sent))))
-          ;; A repeat inside the throttle window is dropped silently.
+          ;; A rapid current-file or version fetch settles with a refusal.
           (setq now (+ now 0.5) sent nil)
           (mevedel-collaboration--handle-artifact-get
            room 1 (list :reqId 8 :id "tool-1"))
-          (should-not sent)
+          (should (= 8 (plist-get (cdar sent) :reqId)))
+          (should (string-match-p "wait a moment" (plist-get (cdar sent) :error)))
+          (setq sent nil)
+          (mevedel-collaboration--handle-artifact-get
+           room 1 (list :reqId 13 :id "tool-1" :version 1))
+          (should (= 13 (plist-get (cdar sent) :reqId)))
+          (should (string-match-p "wait a moment" (plist-get (cdar sent) :error)))
           ;; Empty files still carry metadata and one final empty chunk.
           (write-region "" nil path nil 'silent)
           (setq now (+ now 2.0) sent nil)
@@ -598,6 +734,107 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
           (should-not sent))
       (delete-directory save-path t))))
 
+
+(mevedel-deftest mevedel-collaboration--artifact-send-content
+  (:doc "previews historical content through the bounded fetch interface without restoring it")
+  (mevedel-collaboration-artifact-test--with-store
+    (let ((mevedel-collaboration--artifact-fetch-window 0)
+          (path (file-name-concat store "page" "index.html")))
+      (write-region "<p>current</p>" nil path nil 'silent)
+      (mevedel-artifact-store-record-version workspace "page")
+      (setq sent nil)
+      (mevedel-collaboration--handle-artifact-get
+       lobby 1 '(:reqId 7 :id "artifact:page" :version 1))
+      (let ((reply (mevedel-collaboration-artifact-test--reply sent 'lobby)))
+        (should (equal "text/html" (plist-get reply :mime)))
+        (should (equal "<p>page</p>" (base64-decode-string (plist-get reply :data)))))
+      (should (equal "<p>current</p>"
+                     (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (should (= 2 (length (mevedel-artifact-store-versions workspace "page"))))
+      (dolist (version '(0 -1 "1" 99))
+        (mevedel-collaboration--handle-artifact-get
+         lobby 1 (list :reqId 8 :id "artifact:page" :version version))
+        (should (plist-get (mevedel-collaboration-artifact-test--reply sent 'lobby) :error)))
+      (let ((mevedel-collaboration--max-artifact-bytes 2))
+        (mevedel-collaboration--handle-artifact-get
+         lobby 1 '(:reqId 9 :id "artifact:page" :version 1))
+        (should (string-match-p "too large"
+                                (plist-get (mevedel-collaboration-artifact-test--reply sent 'lobby) :error))))
+      ;; Editor history uses the same read-only export and bounded transfer.
+      (make-directory (file-name-concat store "board") t)
+      (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Flow")
+      (write-region "{}" nil (mevedel-artifact-store-primary-path workspace "board") nil 'silent)
+      (mevedel-artifact-store-record-version workspace "board")
+      (let (queued)
+        (cl-letf (((symbol-function 'mevedel-shared-editing-call)
+                   (lambda (_workspace args callback &rest _)
+                     (should (equal '("export" "board" 1 "svg")
+                                    (list (plist-get args :action) (plist-get args :id)
+                                          (plist-get args :version) (plist-get args :format))))
+                     (setq queued callback))))
+          (mevedel-collaboration--handle-artifact-get
+           lobby 1 '(:reqId 10 :id "artifact:board" :version 1))
+          (funcall queued '(:result (:text "<svg/>" :mime "image/svg+xml")))
+          (let ((reply (mevedel-collaboration-artifact-test--reply sent 'lobby)))
+            (should (equal "image/svg+xml" (plist-get reply :mime)))
+            (should (equal "<svg/>" (base64-decode-string (plist-get reply :data))))))))))
+
+(mevedel-deftest mevedel-collaboration--store-action
+  (:doc "creates both editor kinds from the lobby and previews versions through the real helper")
+  (mevedel-collaboration-artifact-test--with-store
+    (let ((mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+          (mevedel-artifact-lease--held (make-hash-table :test #'equal))
+          (mevedel-collaboration--artifact-fetch-window 0))
+      (unwind-protect
+          (progn
+           (dolist (kind '("document" "whiteboard"))
+            (let (reply)
+              (funcall
+               (mevedel-collaboration--store-action
+                lobby (gethash 2 (plist-get lobby :guests))
+                (list :action "create" :kind kind :title "New item"))
+               (lambda (value) (setq reply value)))
+              (let ((deadline (+ (float-time) 15)))
+                (while (and (not reply) (< (float-time) deadline))
+                  (accept-process-output nil 0.05)))
+              (should reply)
+              (should-not (plist-get reply :error))
+              (let* ((id (plist-get reply :id))
+                     (path (mevedel-artifact-store-primary-path workspace id))
+                     (before (with-temp-buffer (insert-file-contents path) (buffer-string)))
+                     (n (mevedel-shared-editing-save-version workspace id)))
+                (should (eq (intern kind) (plist-get (mevedel-artifact-store-meta workspace id) :kind)))
+                (setq sent nil)
+                (mevedel-collaboration--handle-artifact-get
+                 lobby 1 (list :reqId 91 :id (concat "artifact:" id) :version n))
+                (let ((deadline (+ (float-time) 15)))
+                  (while (and (not sent) (< (float-time) deadline))
+                    (accept-process-output nil 0.05)))
+                (let ((preview (mevedel-collaboration-artifact-test--reply sent 'lobby)))
+                  (should preview)
+                  (should-not (plist-get preview :error))
+                  (should (equal (if (equal kind "document") "text/html" "image/svg+xml")
+                                 (plist-get preview :mime)))
+                  (should (plist-get preview :data)))
+                (should (equal before (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
+           ;; Losing the bearer before the queue runs cannot create an item.
+           (let ((before (mevedel-artifact-store-ids workspace)) reply)
+             (funcall
+              (mevedel-collaboration--store-action
+               lobby (gethash 2 (plist-get lobby :guests))
+               '(:action "create" :kind "document" :title "Revoked"))
+              (lambda (value) (setq reply value)))
+             (remhash 2 (plist-get lobby :guests))
+             (let ((deadline (+ (float-time) 5)))
+               (while (and (not reply) (< (float-time) deadline))
+                 (accept-process-output nil 0.05)))
+             (should (equal "Editing authority ended" (plist-get reply :error)))
+             (should (equal before (mevedel-artifact-store-ids workspace)))))
+        (mevedel-shared-editing-stop)
+        (maphash (lambda (_directory held)
+                   (when (timerp (plist-get held :timer))
+                     (cancel-timer (plist-get held :timer))))
+                 mevedel-artifact-lease--held)))))
 
 (provide 'test-mevedel-collaboration-artifact)
 ;;; test-mevedel-collaboration-artifact.el ends here
