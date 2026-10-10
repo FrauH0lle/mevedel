@@ -62,7 +62,7 @@
       (when (ert-test-boundp 'mevedel-test--nested-registry-case/test)
         (ert-delete-test 'mevedel-test--nested-registry-case/test)))))
 
-(mevedel-deftest mevedel-test--release-leaked-state
+(mevedel-deftest mevedel-test--cancel-stray-lease-timers
   (:doc "retires delayed store notifications before another test can observe them")
   (let* ((mevedel-artifact-store--content-changes (make-hash-table :test #'equal))
          (workspace (mevedel-workspace--create :root "/fixture/")))
@@ -71,7 +71,7 @@
       (unwind-protect
           (progn
             (should (memq timer timer-list))
-            (mevedel-test--release-leaked-state)
+            (mevedel-test--cancel-stray-lease-timers)
             (should-not (memq timer timer-list))
             (should (= 0 (hash-table-count mevedel-artifact-store--content-changes))))
         (cancel-timer timer)))))
