@@ -12,13 +12,15 @@ function build({writable = true, room = false} = {}) {
   const list = new Element('ul');
   const empty = new Element('p');
   const document = {createElement: tag => new Element(tag)};
-  const window = {mevedelTranscriptRenderer: {formatBytes: bytes => `${bytes} B`}};
+  const window = {mevedelTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
+                  addEventListener() {}};
   load('relay/viewer/viewer-store.js', {window, document, console, Date});
   const sent = [];
   const opened = [];
   const notices = [];
   const followed = [];
   const answer = {value: 'copy'};
+  const confirmed = {value: false};
   const store = window.mevedelStoreView.create({
     send: frame => sent.push(frame),
     el: (tag, className, text) => element(document, tag, className, text),
@@ -27,8 +29,9 @@ function build({writable = true, room = false} = {}) {
     notice: text => notices.push(text),
     navigate: link => followed.push(link),
     ask: () => answer.value,
+    confirm: () => confirmed.value,
   });
-  return {store, list, empty, sent, opened, notices, followed, answer};
+  return {store, list, empty, sent, opened, notices, followed, answer, confirmed};
 }
 
 const listing = {t: 'store-artifacts', artifacts: [
@@ -38,7 +41,14 @@ const listing = {t: 'store-artifacts', artifacts: [
    modified: 20, versions: 2, missing: false, attached: true},
 ]};
 
-const buttons = row => row.children.slice(1).map(textOf);
+// A row shows Open beside its name and the other actions in its menu.
+const menu = row => row.children.at(-1);
+const controls = row => [...row.children.slice(1, -2), ...menu(row).children];
+const buttons = row => controls(row).map(textOf);
+const press = (row, label) => {
+  menu(row).popoverOpen = true;
+  controls(row).find(child => textOf(child) === label).dispatch('click');
+};
 
 // Rows list newest first; Open hands the panel a store record.
 {
@@ -49,12 +59,14 @@ const buttons = row => row.children.slice(1).map(textOf);
   assert.equal(empty.hidden, false);
   store.show(listing);
   assert.equal(empty.hidden, true);
-  assert.match(textOf(list.children[0]), /index\.html.*flow · html · 9 B · 2 versions · in this session/);
-  assert.deepEqual(buttons(list.children[0]), ['Open', 'Versions', 'Duplicate', 'Conversation']);
+  assert.match(textOf(list.children[0]), /index\.html.*HTML · 9 B · 2 versions · in this session/);
+  assert.equal(list.children[0].children[0].children[0].title, 'flow');
+  assert.deepEqual(buttons(list.children[0]),
+                   ['Open', 'Versions', 'Duplicate', 'Conversation', 'Delete']);
   // Attaching is offered for an artifact the session does not have yet.
   assert.deepEqual(buttons(list.children[1]),
-                   ['Open', 'Versions', 'Attach', 'Duplicate', 'Conversation']);
-  list.children[0].children[1].dispatch('click');
+                   ['Open', 'Versions', 'Attach', 'Duplicate', 'Conversation', 'Delete']);
+  press(list.children[0], 'Open');
   assert.deepEqual(plain(opened), [{id: 'artifact:flow', artifact: 'flow/index.html',
                                     store: 'flow', size: 9, missing: false, item: false}]);
 }
@@ -67,14 +79,16 @@ const buttons = row => row.children.slice(1).map(textOf);
   const lobby = build();
   lobby.store.show(listing);
   assert.deepEqual(buttons(lobby.list.children[1]),
-                   ['Open', 'Versions', 'Duplicate', 'Conversation']);
+                   ['Open', 'Versions', 'Duplicate', 'Conversation', 'Delete']);
 }
 
 // Versions expand inline and restore older ones; actions report back.
 {
   const {store, list, sent, notices, followed, answer} = build({room: true});
   store.show(listing);
-  list.children[0].children[2].dispatch('click');
+  const versionsMenu = menu(list.children[0]);
+  press(list.children[0], 'Versions');
+  assert.equal(versionsMenu.popoverOpen, false);
   assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 1, action: 'versions',
                                         id: 'flow'});
   store.handle({t: 'store-action', reqId: 1, ok: true,
@@ -88,18 +102,29 @@ const buttons = row => row.children.slice(1).map(textOf);
   assert.deepEqual(notices, ['Restored as version 3.']);
   // Duplicating asks for the copy's name; a cancelled prompt sends nothing.
   answer.value = null;
-  list.children[0].children[3].dispatch('click');
+  press(list.children[0], 'Duplicate');
   assert.equal(sent.length, 2);
   answer.value = ' flow-2 ';
-  list.children[0].children[3].dispatch('click');
+  press(list.children[0], 'Duplicate');
   assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 3, action: 'duplicate',
                                         id: 'flow', newId: 'flow-2'});
   store.handle({t: 'store-action', reqId: 3, ok: false, error: 'Taken'});
   assert.deepEqual(notices.at(-1), 'Taken');
   // The conversation opens in its own room.
-  list.children[0].children[4].dispatch('click');
+  press(list.children[0], 'Conversation');
   store.handle({t: 'store-action', reqId: 4, ok: true, link: 'room-link'});
   assert.deepEqual(followed, ['room-link']);
+  // Deleting asks first; a declined confirmation sends nothing.
+  press(list.children[0], 'Delete');
+  assert.equal(sent.length, 4);
+  const deleting = build({room: true});
+  deleting.store.show(listing);
+  deleting.confirmed.value = true;
+  press(deleting.list.children[0], 'Delete');
+  assert.deepEqual(plain(deleting.sent.at(-1)), {t: 'store-action', reqId: 1,
+                                                 action: 'delete', id: 'flow'});
+  deleting.store.handle({t: 'store-action', reqId: 1, ok: true});
+  assert.deepEqual(deleting.notices, ['Deleted index.html.']);
   // Replies nobody asked for are ignored.
   store.handle({t: 'store-action', reqId: 99, ok: true, link: 'other'});
   assert.deepEqual(followed, ['room-link']);
@@ -114,17 +139,18 @@ const buttons = row => row.children.slice(1).map(textOf);
   const roomView = build({room: true});
   roomView.store.show(board);
   assert.deepEqual(buttons(roomView.list.children[0]),
-                   ['Open', 'Versions', 'Save version', 'Duplicate', 'Conversation']);
-  roomView.list.children[0].children[1].dispatch('click');
+                   ['Open', 'Versions', 'Save version', 'Duplicate', 'Conversation',
+                    'Delete']);
+  press(roomView.list.children[0], 'Open');
   assert.equal(roomView.opened[0].item, true);
-  roomView.list.children[0].children[3].dispatch('click');
+  press(roomView.list.children[0], 'Save version');
   assert.deepEqual(plain(roomView.sent.at(-1)), {t: 'store-action', reqId: 1,
                                                  action: 'save-version', id: 'plan'});
   roomView.store.handle({t: 'store-action', reqId: 1, ok: true, n: 2});
   assert.deepEqual(roomView.notices, ['Saved as version 2.']);
   const lobbyView = build();
   lobbyView.store.show(board);
-  lobbyView.list.children[0].children[1].dispatch('click');
+  press(lobbyView.list.children[0], 'Open');
   assert.deepEqual(lobbyView.opened, []);
   assert.deepEqual(plain(lobbyView.sent.at(-1)), {t: 'store-action', reqId: 1,
                                                   action: 'conversation', id: 'plan'});

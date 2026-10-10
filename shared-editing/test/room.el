@@ -14,6 +14,11 @@
 (require 'mevedel-pipeline)
 (require 'tramp-sh)
 
+;; Package setup registers the tools and defines the presets a new session,
+;; such as an artifact's own conversation, starts with.
+(mevedel-tools-register)
+(mevedel--define-presets)
+
 (defvar editing-test-root (getenv "MEVEDEL_EDITING_TEST_ROOT"))
 (when-let* ((config (getenv "MEVEDEL_TEST_SSH_CONFIG")))
   (setq tramp-use-connection-share t

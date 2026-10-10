@@ -246,7 +246,7 @@
 (mevedel-deftest mevedel-artifact-store-conversation (:quiet t)
   ,test
   (test)
-  :doc "creates a saved, attached, hidden session once, resumes it, and deletes it"
+  :doc "creates a saved, attached, hidden session once, resumes it, and closes and deletes it"
   (pcase-let* ((`(,workspace . ,root)
                 (test-mevedel-session-persistence--make-tempdir-workspace))
                (store (mevedel-artifact-store-directory workspace))
@@ -266,15 +266,17 @@
             (should (file-exists-p (mevedel-session-artifacts-sidecar-path
                                     (mevedel-session-save-path session))))
             (should (eq buffer (mevedel-artifact-store-conversation workspace "flow")))
-            ;; An open conversation keeps its artifact.
-            (should-error (mevedel-artifact-store-delete workspace "flow"))
+            ;; A running turn keeps its artifact.
+            (cl-letf (((symbol-function 'mevedel-turn-busy-p) (lambda (&rest _) t)))
+              (should-error (mevedel-artifact-store-delete workspace "flow")))
             (test-mevedel-session-persistence--release-and-kill buffer session)
             (setq buffer (mevedel-artifact-store-conversation workspace "flow"))
             (should (equal id (mevedel-session-session-id
                                (buffer-local-value 'mevedel--session buffer))))
-            (test-mevedel-session-persistence--release-and-kill
-             buffer (buffer-local-value 'mevedel--session buffer))
+            ;; An idle open conversation, as a room opens it from the lobby,
+            ;; closes with its artifact.
             (mevedel-artifact-store-delete workspace "flow")
+            (should-not (buffer-live-p buffer))
             (should-not (file-exists-p (file-name-concat store "flow")))
             (should-not (file-exists-p (file-name-concat
                                         (mevedel-session-artifacts-sessions-dir workspace)

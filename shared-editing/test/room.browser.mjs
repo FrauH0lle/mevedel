@@ -618,11 +618,11 @@ test(
       await frame(pages[0]).locator('#image-upload').setInputFiles({
         name:'diagram.png', mimeType:'image/png', buffer:Buffer.from(imageData.split(',')[1],'base64'),
       });
-      await frame(pages[1]).locator('.tiptap img').waitFor();
-      assert.equal(await frame(pages[1]).locator('.tiptap img').getAttribute('src'),imageData);
+      await frame(pages[1]).locator('.tiptap img:not(.ProseMirror-separator)').waitFor();
+      assert.equal(await frame(pages[1]).locator('.tiptap img:not(.ProseMirror-separator)').getAttribute('src'),imageData);
       await pages[1].reload();
-      await frame(pages[1]).locator('.tiptap img').waitFor();
-      assert.equal(await frame(pages[1]).locator('.tiptap img').getAttribute('src'),imageData);
+      await frame(pages[1]).locator('.tiptap img:not(.ProseMirror-separator)').waitFor();
+      assert.equal(await frame(pages[1]).locator('.tiptap img:not(.ProseMirror-separator)').getAttribute('src'),imageData);
       const illustrated = JSON.parse((await agent('ReadShared', {id:documentId})).result);
       assert.equal(illustrated.content.content.find(n=>n.type==='image').attrs.src,imageData);
       const downloadPromise = pages[2].waitForEvent('download');
@@ -1124,6 +1124,36 @@ test(
       await until(
         async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
       );
+      // A board opened in its own conversation's room, as the lobby opens
+      // it, can be deleted from there; that room then ends saying so.
+      const deleter = await browser.newPage();
+      deleter.on('pageerror', (error) => errors.push(error.message));
+      await deleter.goto(links.owner);
+      await deleter.waitForFunction(() => !document.getElementById('editing-box').hidden);
+      const before = new Set(JSON.parse((await agent('ReadShared')).result).map((i) => i.id));
+      await deleter.locator('#session-box').evaluate((e) => (e.open = true));
+      await deleter.locator('#editing-box').evaluate((e) => (e.open = true));
+      await deleter.locator('[data-create-editor="whiteboard"]').click();
+      const doomed = (await until(async () =>
+        JSON.parse((await agent('ReadShared')).result).find((i) => !before.has(i.id)))).id;
+      const storeRow = (page) =>
+        page.locator('#store-list li', { has: page.locator(`.lobby-name[title="${doomed}"]`) });
+      const storeMenu = async (page, action) => {
+        await page.locator('#store-button').click();
+        await storeRow(page).locator('.store-more').click();
+        await page.locator('.store-menu:popover-open').getByRole('button', { name: action }).click();
+      };
+      await storeMenu(deleter, 'Conversation');
+      await deleter.waitForURL((url) => url.searchParams.get('shared') === doomed);
+      await frame(deleter).locator('#canvas').waitFor({ state: 'visible' });
+      await deleter.locator('#editing-close').click();
+      deleter.once('dialog', (dialog) => dialog.accept());
+      await storeMenu(deleter, 'Delete');
+      await deleter.locator('#terminal-state').waitFor({ state: 'visible' });
+      assert.equal(await deleter.locator('#terminal-title').innerText(), 'Artifact deleted');
+      assert.equal(
+        JSON.parse((await agent('ReadShared')).result).some((i) => i.id === doomed), false);
+      await deleter.close();
       const beforeEnd = JSON.parse((await agent('ReadShared', { id: transferred.id })).result);
       await owner.setOffline(true);
       for (const socket of ownerSockets) await socket.close();

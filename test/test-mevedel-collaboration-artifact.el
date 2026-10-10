@@ -363,7 +363,24 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
       (setq sent nil)
       (mevedel-collaboration--handle-artifact-get lobby 1 '(:reqId 3 :id "artifact:board"))
       (should (stringp (plist-get (mevedel-collaboration-artifact-test--reply sent 'lobby)
-                                  :error))))))
+                                  :error)))
+      ;; Deleting: refused to view links, at once for a file, and once its
+      ;; editing queue answers for a whiteboard.
+      (should (string-match-p "not change" (plist-get (act lobby 1 :action "delete" :id "page")
+                                                      :error)))
+      (should (eq t (plist-get (act lobby 2 :action "delete" :id "page") :ok)))
+      (should-not (file-exists-p (file-name-concat store "page")))
+      (let (queued)
+        (cl-letf (((symbol-function 'mevedel-shared-editing-call)
+                   (lambda (_workspace request callback &rest _)
+                     (should (equal '("delete" "board")
+                                    (list (plist-get request :action) (plist-get request :id))))
+                     (setq queued callback))))
+          (should-not (act lobby 2 :action "delete" :id "board"))
+          (funcall queued '(:error "Busy"))
+          (should (equal "Busy" (plist-get (mevedel-collaboration-artifact-test--reply
+                                            sent 'lobby)
+                                           :error))))))))
 
 (mevedel-deftest mevedel-collaboration--handle-store-list ()
   ,test

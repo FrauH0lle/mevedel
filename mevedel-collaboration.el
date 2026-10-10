@@ -874,11 +874,17 @@ request or prompt transaction."
           (mevedel-collaboration--transport-stop transport)
         (error nil)))))
 
+(defvar mevedel-collaboration-stop-reason nil
+  "Why a data buffer is being killed, told to its room's guests.
+Nil reports `data-buffer-killed'; callers that kill a session for a
+reason guests should see bind it around `kill-buffer'.")
+
 (defun mevedel-collaboration--stop-for-buffer ()
   "Stop sharing when the owning data buffer is killed."
   (when-let* ((room (mevedel-collaboration--room-for-buffer
                      (current-buffer))))
-    (mevedel-collaboration--stop-internal room 'data-buffer-killed)))
+    (mevedel-collaboration--stop-internal
+     room (or mevedel-collaboration-stop-reason 'data-buffer-killed))))
 
 (defun mevedel-collaboration--stop-for-session ()
   "Stop sharing from a data buffer's SessionEnd hook.
