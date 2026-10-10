@@ -719,20 +719,23 @@ Read tools come from the selected agent's tool list.
 removes tools from the model and never denies unspecified tools.
 
 For command invocations, parsed entries become skill-scoped permission rules
-on the owned request or agent invocation. For instructions they exist only on
-the temporary preparation request and do not grant tools to the consuming
-request. These buckets outrank session and persistent rules for allow/ask
+on the owned request or agent invocation. For instructions they apply only
+while the skill prepares and do not grant tools to the consuming request. These buckets outrank session and persistent rules for allow/ask
 resolution, while deny remains absolute across all buckets. Plan mode applies its capability restriction before skill allow grants: only
 ApplyPatch to explicit session-owned `work://` descendants has a bounded write
 exception, and directive planning has no patch exception. Goal execution uses
 ordinary request permissions. See [Plan mode](plan-mode.md).
 
-The preparation request holds the buffer's request slot while preparation
-runs, and puts back the request it took the slot from when it settles, unless
-a request admitted meanwhile now owns the slot. A turn that ends while a
-preparation for its steering or `Skill` call holds the slot cannot settle
-against a slot it does not own: its settlement waits and resumes once its
-request is back, and only then ends that request.
+Preparation's `!` commands run through the tool pipeline under the buffer's
+request. Between turns a temporary preparation request holds that slot with
+the skill's rules and hooks and the caller's Plan limits, and is removed when
+preparation settles. A skill prepared during a turn, by steering or a `Skill`
+call, never takes the turn's slot: its rules and hooks join the turn's
+innermost scope, the agent invocation if any, until preparation settles. The
+turn keeps its own rules, Plan limits and cancellation, can end meanwhile, and
+an abort stops the skill's commands with the turn. A slot that changed hands
+mid-turn once let a turn end against a stand-in and be put back afterwards,
+reported as running forever, and made ACP turns stop as interrupted.
 
 ## ToolCall Primitives
 

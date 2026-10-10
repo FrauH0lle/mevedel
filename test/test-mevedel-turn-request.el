@@ -781,15 +781,24 @@
         (mevedel-request-end))
       (should (equal (list ws) offered))))
 
-  :doc "a teardown step that signals still clears the request"
+  :doc "a teardown step that signals still cancels and clears the request"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
                 'file "/tmp/p1/" "/tmp/p1/" "p1"))
-           (session (mevedel-session-create "main" ws)))
+           (session (mevedel-session-create "main" ws))
+           cancelled)
       (mevedel-request-begin session)
       (cl-letf (((symbol-function 'mevedel-request-cancel)
                  (lambda (&rest _) (error "Cancel failed"))))
         (should-error (mevedel-request-end)))
+      (should-not mevedel--current-request)
+      (mevedel-request-begin session)
+      (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                 (lambda (&rest _) (error "Telemetry failed")))
+                ((symbol-function 'mevedel-request-cancel)
+                 (lambda (&rest _) (setq cancelled t))))
+        (should-error (mevedel-request-end)))
+      (should cancelled)
       (should-not mevedel--current-request)
       (mevedel-request-begin session)
       (cl-letf (((symbol-function

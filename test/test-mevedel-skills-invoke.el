@@ -370,18 +370,15 @@ allowed-tools:
 (mevedel-deftest mevedel-skills--preparation-settler ()
   ,test
   (test)
-  :doc "installs temporary request, restores prior request, and settles once"
+  :doc "between turns, holds the slot with a preparation request and settles once"
   (let* ((session (mevedel-skills-test--make-session))
-         (previous (mevedel-request--create :session session))
          (rules '(("Read" :action allow)))
          (hooks '((PreToolUse nil)))
          outcomes)
     (with-temp-buffer
-      (setq-local mevedel--current-request previous)
       (let ((settle (mevedel-skills--preparation-settler
                      session rules hooks
                      (lambda (outcome) (push outcome outcomes)))))
-        (should-not (eq previous mevedel--current-request))
         (should (eq session
                     (mevedel-request-session mevedel--current-request)))
         (should (equal rules
@@ -390,9 +387,66 @@ allowed-tools:
         (should (equal hooks
                        (mevedel-request-hook-rules mevedel--current-request)))
         (funcall settle 'first)
-        (should (eq previous mevedel--current-request))
+        (should-not mevedel--current-request)
         (funcall settle 'second)
         (should (equal '(first) outcomes)))))
+
+  :doc "a request admitted after preparation teardown keeps the slot"
+  (let ((session (mevedel-skills-test--make-session))
+        (admitted (mevedel-request--create :id "admitted")))
+    (with-temp-buffer
+      (let ((settle (mevedel-skills--preparation-settler
+                     session nil nil #'ignore)))
+        (setq-local mevedel--current-request admitted)
+        (funcall settle 'done)
+        (should (eq admitted mevedel--current-request)))))
+
+  :doc "during a turn, lends the skill's rules to the turn's own request"
+  ;; Regression: preparation used to take the turn's slot, so a turn ending
+  ;; meanwhile ended nothing and was put back afterwards, running forever,
+  ;; and an ACP turn took the stand-in for a replacement and stopped.
+  (let* ((session (mevedel-skills-test--make-session))
+         (earlier '("Bash" :action allow))
+         (rules (list earlier '("Read" :action allow)))
+         (hooks '((PreToolUse nil)))
+         (turn (mevedel-request--create :session session
+                                        :skill-permission-rules (list earlier)))
+         outcomes)
+    (with-temp-buffer
+      (setq-local mevedel--current-request turn)
+      (let ((settle (mevedel-skills--preparation-settler
+                     session rules hooks
+                     (lambda (outcome) (push outcome outcomes)))))
+        (should (eq turn mevedel--current-request))
+        (should (equal (cons earlier rules)
+                       (mevedel-request-skill-permission-rules turn)))
+        (should (equal hooks (mevedel-request-hook-rules turn)))
+        ;; The turn ends while its skill prepares; nothing puts it back.
+        (setq-local mevedel--current-request nil)
+        (funcall settle 'first)
+        (funcall settle 'second)
+        (should-not mevedel--current-request)
+        (should (equal (list earlier) (mevedel-request-skill-permission-rules turn)))
+        (should-not (mevedel-request-hook-rules turn))
+        (should (equal '(first) outcomes)))))
+
+  :doc "during an agent's turn, lends the rules to its invocation"
+  (let* ((session (mevedel-skills-test--make-session))
+         (rules '(("Read" :action allow)))
+         (turn (mevedel-request--create :session session))
+         (invocation (mevedel-agent-invocation--create
+                      :path "/root/explore" :parent-session session)))
+    (with-temp-buffer
+      (setq-local mevedel--current-request turn)
+      (setq-local mevedel--agent-invocation invocation)
+      (let ((settle (mevedel-skills--preparation-settler
+                     session rules nil #'ignore)))
+        (should (eq invocation mevedel--agent-invocation))
+        (should (equal rules (mevedel-agent-invocation-skill-permission-rules
+                              invocation)))
+        (should-not (mevedel-request-skill-permission-rules turn))
+        (funcall settle 'done)
+        (should-not (mevedel-agent-invocation-skill-permission-rules invocation)))))
 
   :doc "keeps the caller's Plan read-only authority for preparation commands"
   (let ((session (mevedel-skills-test--make-session)))
@@ -420,44 +474,7 @@ allowed-tools:
       (setf (mevedel-session-plan-mode session) nil)
       (mevedel-skills--preparation-settler session nil nil #'ignore)
       (should-not (mevedel-request-plan-read-only
-                   mevedel--current-request))))
-
-  :doc "a turn finishing during preparation ends its request once restored"
-  ;; Regression: the turn used to read the preparation request as a newer
-  ;; one, settle nothing, and get restored into the slot after it finished:
-  ;; a session that reported a running turn forever.
-  (let ((session (mevedel-skills-test--make-session))
-        (turn (mevedel-request--create :id "turn"))
-        ended-with)
-    (with-temp-buffer
-      (setq-local mevedel--current-request turn)
-      (let ((fsm (gptel-make-fsm
-                  :info (list :buffer (current-buffer) :mevedel-request-id "turn")))
-            (settle (mevedel-skills--preparation-settler
-                     session nil nil #'ignore)))
-        (cl-letf (((symbol-function 'mevedel--turn-commit) #'ignore)
-                  ((symbol-function 'mevedel--defer-turn-steps)
-                   (lambda (machine &rest _)
-                     (setq ended-with mevedel--current-request)
-                     (mevedel--turn-end-request machine))))
-          (mevedel--complete-turn fsm)
-          (should-not ended-with)
-          (funcall settle 'done)
-          (should (eq turn ended-with))
-          (should-not mevedel--current-request)
-          (should (mevedel-request-cancelled-p turn))))))
-
-  :doc "a request admitted after preparation teardown keeps the slot"
-  (let ((session (mevedel-skills-test--make-session))
-        (previous (mevedel-request--create :id "previous"))
-        (admitted (mevedel-request--create :id "admitted")))
-    (with-temp-buffer
-      (setq-local mevedel--current-request previous)
-      (let ((settle (mevedel-skills--preparation-settler
-                     session nil nil #'ignore)))
-        (setq-local mevedel--current-request admitted)
-        (funcall settle 'done)
-        (should (eq admitted mevedel--current-request))))))
+                   mevedel--current-request)))))
 
 (mevedel-deftest mevedel-skills--preparation-success-outcome ()
   ,test

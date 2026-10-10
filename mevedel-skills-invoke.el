@@ -159,8 +159,6 @@
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-begin "mevedel-turn"
                   (session &optional directive-uuid))
-(declare-function mevedel-turn-resume-displaced "mevedel-turn" (buffer))
-(autoload 'mevedel-turn-resume-displaced "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -753,48 +751,70 @@ ROOTS is a list of plists containing :skill, :arguments, :role, and
                   (setf (plist-get node :root) root))))))
         (list :status 'ok :roots roots :nodes (nreverse order))))))
 
+(defun mevedel-skills--without-added (list added)
+  "Return LIST without the last occurrence of each element of ADDED."
+  (dolist (item added list)
+    (setq list (cl-remove item list :test #'eq :count 1 :from-end t))))
+
 (defun mevedel-skills--preparation-settler
     (session rules hooks callback)
-  "Install a temporary preparation request and return its settlement closure.
-The returned function restores the previous request and calls CALLBACK with
-its outcome exactly once.  A request admitted after the preparation request
-was torn down keeps the slot.  A turn whose settlement waited for the
-restore resumes it after CALLBACK."
+  "Scope preparation's commands and return its settlement closure.
+While a turn holds the buffer's request slot, preparation runs under that
+turn: the slot never changes hands, so the turn settles, aborts and reads
+as running as it would without a preparation.  RULES and HOOKS join its
+innermost scope, the agent invocation if any, until the closure runs.
+Otherwise a temporary preparation request holds the slot, keeping the
+caller's Plan limits.  The closure undoes either and calls CALLBACK with
+its outcome exactly once."
   (let ((origin-buffer (current-buffer))
-        (origin (mevedel-current-origin))
-        ;; Preparation runs `!' commands through the tool pipeline; it must
-        ;; keep the caller's Plan limits after the invocation is unbound.
-        (plan-read-only (mevedel-plan-read-only-p session))
-        (previous-request (and (boundp 'mevedel--current-request)
-                               mevedel--current-request))
-        (invocation-local-p
-         (local-variable-p 'mevedel--agent-invocation))
-        (previous-invocation
-         mevedel--agent-invocation)
+        (turn (and (boundp 'mevedel--current-request) mevedel--current-request))
+        (invocation mevedel--agent-invocation)
         settled)
-    (setq-local mevedel--current-request
-                (mevedel-request--create
-                 :session session
-                 :displaced previous-request
-                 :origin origin
-                 :file-snapshots (make-hash-table :test #'equal)
-                 :skill-permission-rules rules
-                 :hook-rules hooks
-                 :plan-read-only (and plan-read-only t)))
-    (setq-local mevedel--agent-invocation nil)
-    (let ((request mevedel--current-request))
-      (lambda (outcome)
-        (unless settled
-          (setq settled t)
-          (when (buffer-live-p origin-buffer)
-            (with-current-buffer origin-buffer
-              (when (memq mevedel--current-request (list request nil))
-                (setq-local mevedel--current-request previous-request))
-              (if invocation-local-p
-                  (setq-local mevedel--agent-invocation previous-invocation)
-                (kill-local-variable 'mevedel--agent-invocation))))
-          (unwind-protect (funcall callback outcome)
-            (mevedel-turn-resume-displaced origin-buffer)))))))
+    (if turn
+        (cl-flet ((adjust (function)
+                    (if invocation
+                        (setf (mevedel-agent-invocation-skill-permission-rules invocation)
+                              (funcall function
+                                       (mevedel-agent-invocation-skill-permission-rules
+                                        invocation)
+                                       rules)
+                              (mevedel-agent-invocation-hook-rules invocation)
+                              (funcall function
+                                       (mevedel-agent-invocation-hook-rules invocation)
+                                       hooks))
+                      (setf (mevedel-request-skill-permission-rules turn)
+                            (funcall function (mevedel-request-skill-permission-rules turn)
+                                     rules)
+                            (mevedel-request-hook-rules turn)
+                            (funcall function (mevedel-request-hook-rules turn) hooks)))))
+          (adjust #'append)
+          (lambda (outcome)
+            (unless settled
+              (setq settled t)
+              (adjust #'mevedel-skills--without-added)
+              (funcall callback outcome))))
+      (let ((invocation-local-p (local-variable-p 'mevedel--agent-invocation))
+            (request (mevedel-request--create
+                      :session session
+                      :origin (mevedel-current-origin)
+                      :file-snapshots (make-hash-table :test #'equal)
+                      :skill-permission-rules rules
+                      :hook-rules hooks
+                      :plan-read-only (and (mevedel-plan-read-only-p session) t))))
+        (setq-local mevedel--current-request request)
+        (setq-local mevedel--agent-invocation nil)
+        (lambda (outcome)
+          (unless settled
+            (setq settled t)
+            (when (buffer-live-p origin-buffer)
+              (with-current-buffer origin-buffer
+                ;; A request admitted after this one was torn down keeps the slot.
+                (when (eq mevedel--current-request request)
+                  (setq-local mevedel--current-request nil))
+                (if invocation-local-p
+                    (setq-local mevedel--agent-invocation invocation)
+                  (kill-local-variable 'mevedel--agent-invocation))))
+            (funcall callback outcome)))))))
 
 (defun mevedel-skills--preparation-success-outcome
     (metadata original expanded decision)
