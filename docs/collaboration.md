@@ -790,7 +790,9 @@ open the artifact in the panel, and keeps its other actions in a `⋯` menu. Any
 link can list an artifact's **Versions** there. Full and owner links also act
 through `store-action` frames:
 
-- **Restore** makes an older version the newest;
+- **Restore** makes an older version the newest. A whiteboard or document
+  restores as the guest's edit through its editing queue, and the answer
+  waits until it is saved, or says why it was not;
 - **Save version**, for a whiteboard or document, keeps its current state as a
   version;
 - **Attach**, in a room, attaches the artifact to the room's session;

@@ -125,6 +125,15 @@ const press = (row, label) => {
                                                  action: 'delete', id: 'flow'});
   deleting.store.handle({t: 'store-action', reqId: 1, ok: true});
   assert.deepEqual(deleting.notices, ['Deleted index.html.']);
+  // A whiteboard or document answers once restored, without a number.
+  const restoring = build({room: true});
+  restoring.store.show(listing);
+  press(restoring.list.children[0], 'Versions');
+  restoring.store.handle({t: 'store-action', reqId: 1, ok: true,
+                          versions: [{n: 2, time: 20, bytes: 9}, {n: 1, time: 10, bytes: 5}]});
+  restoring.list.children[0].children[0].children.at(-1).children[1].children[1].dispatch('click');
+  restoring.store.handle({t: 'store-action', reqId: 2, ok: true});
+  assert.deepEqual(restoring.notices, ['Restored.']);
   // Replies nobody asked for are ignored.
   store.handle({t: 'store-action', reqId: 99, ok: true, link: 'other'});
   assert.deepEqual(followed, ['room-link']);
