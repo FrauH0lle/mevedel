@@ -33,6 +33,17 @@
 (autoload 'mevedel--ensure-chat-preset "mevedel-chat")
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
 
+;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing-duplicate
+                  "mevedel-shared-editing" (workspace id new-id))
+(declare-function mevedel-shared-editing-restore
+                  "mevedel-shared-editing" (workspace id n actor callback))
+(declare-function mevedel-shared-editing-save-version
+                  "mevedel-shared-editing" (workspace id &optional session-id))
+(autoload 'mevedel-shared-editing-duplicate "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-restore "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-save "mevedel-session-artifacts"
                   (session buffer &optional settled force))
@@ -70,7 +81,8 @@ even when it alone exceeds this size."
   :type 'natnum
   :group 'mevedel)
 
-(defconst mevedel-artifact-store--bookkeeping '("meta.el" "versions" "comments.json")
+(defconst mevedel-artifact-store--bookkeeping
+  '("meta.el" "versions" "comments.json" "state.json")
   "Top-level names in an artifact directory that belong to the host.")
 
 (defun mevedel-artifact-store-directory (workspace)
@@ -128,10 +140,18 @@ Reads directory names only, so it stays cheap enough for a menu redraw."
     ((or "png" "jpg" "jpeg" "gif" "svg" "webp") 'image)
     (_ 'file)))
 
-(defun mevedel-artifact-store--create-meta (workspace id file)
-  "Write the metadata of new artifact ID whose primary file is FILE."
-  (let ((meta (list :kind (mevedel-artifact-store--kind file)
-                    :title (file-name-nondirectory file)
+(defconst mevedel-artifact-store-item-kinds '(whiteboard document)
+  "Kinds of artifact edited live through shared editing, not by file.")
+
+(defun mevedel-artifact-store-item-p (meta)
+  "Return non-nil when META describes a whiteboard or document."
+  (memq (plist-get meta :kind) mevedel-artifact-store-item-kinds))
+
+(defun mevedel-artifact-store-create-meta (workspace id file &optional kind title)
+  "Write the metadata of new artifact ID whose primary file is FILE.
+KIND and TITLE default to what FILE's name says."
+  (let ((meta (list :kind (or kind (mevedel-artifact-store--kind file))
+                    :title (or title (file-name-nondirectory file))
                     :file file
                     :created (format-time-string "%FT%T%z"))))
     (mevedel-artifact-store--write
@@ -169,10 +189,11 @@ since the epoch), :session and :bytes."
       (setq versions (cdr versions)))
     versions))
 
-(defun mevedel-artifact-store-record-version (workspace id &optional session-id)
+(defun mevedel-artifact-store-record-version (workspace id &optional session-id content)
   "Record the current primary file of artifact ID as a new version.
-SESSION-ID names the session whose write this is.  Return the version
-number."
+SESSION-ID names the session whose write this is.  CONTENT, a string,
+is recorded instead of the file, for an artifact whose version is a
+reduced copy of its state.  Return the version number."
   (let* ((meta (or (mevedel-artifact-store-meta workspace id)
                    (error "Artifact %s has no metadata" id)))
          (source (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
@@ -183,14 +204,17 @@ number."
          (name (format "%06d%s" n (or (file-name-extension source t) "")))
          (kept nil))
     (make-directory directory t)
-    (copy-file source (file-name-concat directory name) t)
+    (if content
+        (mevedel--write-file-atomically (file-name-concat directory name) content)
+      (copy-file source (file-name-concat directory name) t))
     (setq versions
           (append versions
                   (list (list :n n :file name
                               :time (truncate (float-time))
                               :session session-id
                               :bytes (file-attribute-size
-                                      (file-attributes source))))))
+                                      (file-attributes
+                                       (file-name-concat directory name)))))))
     (setq kept (mevedel-artifact-store--prune versions))
     (mevedel-artifact-store--write (file-name-concat directory "index.el") kept)
     ;; Index first: a crash leaves an orphan copy, never a dangling entry.
@@ -203,17 +227,39 @@ number."
 (defun mevedel-artifact-store-restore-version (workspace id n &optional session-id)
   "Restore version N of artifact ID as its newest version.
 SESSION-ID is recorded as the restoring session.  Return the new version
-number."
+number.  A whiteboard or document restores through its editing queue as one
+revertible edit; that returns nil, and the version follows once it is
+saved."
   (let ((meta (mevedel-artifact-store-meta workspace id)))
-    (copy-file (mevedel-artifact-store-version-path workspace id n)
-               (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
-                                 (plist-get meta :file))
-               t)
-    (mevedel-artifact-store-record-version workspace id session-id)))
+    (if (mevedel-artifact-store-item-p meta)
+        (progn
+          (mevedel-shared-editing-restore
+           workspace id n "Host"
+           (lambda (reply)
+             (if (plist-get reply :error)
+                 (message "mevedel: %s was not restored: %s" id (plist-get reply :error))
+               (mevedel-shared-editing-save-version workspace id session-id))))
+          nil)
+      (mevedel-artifact-store--restore-file workspace id n meta session-id))))
+
+(defun mevedel-artifact-store--restore-file (workspace id n meta session-id)
+  "Copy version N of file artifact ID, described by META, back as newest.
+SESSION-ID is recorded as the restoring session."
+  (copy-file (mevedel-artifact-store-version-path workspace id n)
+             (file-name-concat (mevedel-artifact-store-artifact-directory workspace id)
+                               (plist-get meta :file))
+             t)
+  (mevedel-artifact-store-record-version workspace id session-id))
 
 (defun mevedel-artifact-store-duplicate (workspace id new-id)
   "Copy artifact ID to the new, independent artifact NEW-ID.
 The copy starts with one version and its own metadata."
+  (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+      (mevedel-shared-editing-duplicate workspace id new-id)
+    (mevedel-artifact-store--duplicate-files workspace id new-id)))
+
+(defun mevedel-artifact-store--duplicate-files (workspace id new-id)
+  "Copy file artifact ID's directory to the new artifact NEW-ID."
   (let ((source (mevedel-artifact-store-artifact-directory workspace id))
         (target (mevedel-artifact-store-artifact-directory workspace new-id))
         (meta (or (mevedel-artifact-store-meta workspace id)
@@ -222,7 +268,8 @@ The copy starts with one version and its own metadata."
       (error "Artifact %s already exists" new-id))
     (copy-directory source target nil t t)
     (delete-directory (mevedel-artifact-store--versions-dir workspace new-id) t)
-    (mevedel-artifact-store--create-meta workspace new-id (plist-get meta :file))
+    (mevedel-artifact-store-create-meta workspace new-id (plist-get meta :file)
+                                        (plist-get meta :kind) (plist-get meta :title))
     (mevedel-artifact-store-record-version workspace new-id)
     new-id))
 
@@ -350,7 +397,7 @@ artifact's primary file records a version.  Either attaches SESSION."
                      (not (member (car (split-string file "/"))
                                   mevedel-artifact-store--bookkeeping)))
             (let ((meta (or (mevedel-artifact-store-meta workspace id)
-                            (mevedel-artifact-store--create-meta
+                            (mevedel-artifact-store-create-meta
                              workspace id file))))
               (when (equal file (plist-get meta :file))
                 (mevedel-artifact-store-record-version

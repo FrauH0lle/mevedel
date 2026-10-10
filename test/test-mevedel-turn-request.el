@@ -738,6 +738,24 @@
       (should (eq 'idle
                   (mevedel-session-agent-root-activity session)))))
 
+  :doc "saves a version of each shared item the request edited"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           saved messages)
+      (cl-letf (((symbol-function 'mevedel-shared-editing-save-version)
+                 (lambda (workspace id session-id)
+                   (when (equal id "gone") (error "This item no longer exists"))
+                   (push (list workspace id session-id) saved))))
+        (mevedel-request-begin session)
+        (setf (mevedel-request-edited-items mevedel--current-request)
+              (list (cons ws "board") (cons ws "gone")))
+        (mevedel-test--with-captured-messages messages
+          (mevedel-request-end)))
+      (should (equal (list (list ws "board" (mevedel-session-session-id session))) saved))
+      (should (string-match-p "no version of gone" messages))))
+
   :doc "offers the workspace an expiry sweep when a root turn ends"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create

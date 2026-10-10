@@ -56,7 +56,7 @@ const buttons = row => row.children.slice(1).map(textOf);
                    ['Open', 'Versions', 'Attach', 'Duplicate', 'Conversation']);
   list.children[0].children[1].dispatch('click');
   assert.deepEqual(plain(opened), [{id: 'artifact:flow', artifact: 'flow/index.html',
-                                    store: 'flow', size: 9, missing: false}]);
+                                    store: 'flow', size: 9, missing: false, item: false}]);
 }
 
 // A view link lists and opens; the lobby never attaches.
@@ -103,6 +103,35 @@ const buttons = row => row.children.slice(1).map(textOf);
   // Replies nobody asked for are ignored.
   store.handle({t: 'store-action', reqId: 99, ok: true, link: 'other'});
   assert.deepEqual(followed, ['room-link']);
+}
+
+// Whiteboards and documents open in their editor and keep manual versions;
+// from the lobby they open in their conversation's room.
+{
+  const board = {t: 'store-artifacts', artifacts: [
+    {id: 'plan', title: 'Plan', kind: 'whiteboard', artifact: 'plan/state.json', size: 9,
+     modified: 30, versions: 1, missing: false, attached: true, item: true}]};
+  const roomView = build({room: true});
+  roomView.store.show(board);
+  assert.deepEqual(buttons(roomView.list.children[0]),
+                   ['Open', 'Versions', 'Save version', 'Duplicate', 'Conversation']);
+  roomView.list.children[0].children[1].dispatch('click');
+  assert.equal(roomView.opened[0].item, true);
+  roomView.list.children[0].children[3].dispatch('click');
+  assert.deepEqual(plain(roomView.sent.at(-1)), {t: 'store-action', reqId: 1,
+                                                 action: 'save-version', id: 'plan'});
+  roomView.store.handle({t: 'store-action', reqId: 1, ok: true, n: 2});
+  assert.deepEqual(roomView.notices, ['Saved as version 2.']);
+  const lobbyView = build();
+  lobbyView.store.show(board);
+  lobbyView.list.children[0].children[1].dispatch('click');
+  assert.deepEqual(lobbyView.opened, []);
+  assert.deepEqual(plain(lobbyView.sent.at(-1)), {t: 'store-action', reqId: 1,
+                                                  action: 'conversation', id: 'plan'});
+  // A view link cannot start the conversation an item would open in.
+  const viewer = build({writable: false});
+  viewer.store.show(board);
+  assert.deepEqual(buttons(viewer.list.children[0]), ['Versions']);
 }
 
 console.log('viewer store passed');

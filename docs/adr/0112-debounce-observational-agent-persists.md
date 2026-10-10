@@ -23,7 +23,7 @@ acknowledged answer. Pending settlement still checkpoints synchronously, and
 explicit saves and teardown flush deferred text normally.
 
 The registry save does not save the root transcript, rebuild its prompt index,
-scan snapshots, or read the artifact folder. Portable publication overlays the
+or scan snapshots. Portable publication overlays the
 sidecar while retaining other committed artifacts. A session without a committed
 sidecar waits for its next critical commit. Synchronous commit absorbs a pending
 save; active publication defers it; Emacs exit flushes retained transcripts

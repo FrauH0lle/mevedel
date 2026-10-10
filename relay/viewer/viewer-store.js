@@ -26,7 +26,14 @@
 
     function record(row) {
       return {id: `artifact:${row.id}`, artifact: row.artifact, store: row.id,
-              size: row.size, missing: row.missing === true};
+              size: row.size, missing: row.missing === true, item: row.item === true};
+    }
+
+    // A whiteboard or document opens in its editor: in a room directly, from
+    // the lobby in the room of its own conversation.
+    function openRow(row) {
+      if (row.item === true && !room) act('conversation', row.id);
+      else open(record(row));
     }
 
     function button(label, title, handler, danger = false) {
@@ -72,8 +79,8 @@
       main.append(el('span', 'lobby-meta', meta.filter(Boolean).join(' · ')));
       if (expanded.has(row.id)) main.append(renderVersions(row));
       item.append(main);
-      if (row.missing !== true) {
-        item.append(button('Open', `Open ${row.title || row.id}`, () => open(record(row))));
+      if (row.missing !== true && (row.item !== true || room || state.writable)) {
+        item.append(button('Open', `Open ${row.title || row.id}`, () => openRow(row)));
       }
       item.append(button(expanded.has(row.id) ? 'Hide versions' : 'Versions',
                          'List this artifact\'s versions', () => {
@@ -85,6 +92,10 @@
         render();
       }));
       if (state.writable) {
+        if (row.item === true) {
+          item.append(button('Save version', 'Keep the current state as a version',
+                             () => act('save-version', row.id)));
+        }
         if (room && row.attached !== true) {
           item.append(button('Attach', 'Let this session work on the artifact',
                              () => act('attach', row.id)));
@@ -131,7 +142,10 @@
       } else if (request.action === 'duplicate') {
         notice(`Copied as ${frame.id}.`);
       } else if (request.action === 'restore') {
-        notice(`Restored as version ${frame.n}.`);
+        notice(typeof frame.n === 'number' ? `Restored as version ${frame.n}.`
+          : 'Restoring; the editor shows it once saved.');
+      } else if (request.action === 'save-version') {
+        notice(`Saved as version ${frame.n}.`);
       }
     }
 

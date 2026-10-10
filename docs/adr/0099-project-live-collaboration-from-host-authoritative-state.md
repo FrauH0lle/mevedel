@@ -147,8 +147,8 @@ The following changes belong to ADR 0099 unless another ID is named.
   Markdown. Relay-side file hosting was rejected because it added content trust,
   storage, quotas, and independently leaking URLs. Selected-only ApplyPatch
   records establish what actually applied, while the host serves bounded bytes
-  on demand. Existing portable manifests carry artifacts through resume and
-  forks; Rewind preserves the current free-form artifact folder.
+  on demand. Artifacts then lived in the session; ADR 0124 moved them into a
+  workspace store that sessions attach to.
 - **Owner authority, 2026-09-02:** daily phone control still required returning to
   Emacs to change mode or create separate work. A third bearer tier grants those
   two typed authorities, without broadening browser access to durable session

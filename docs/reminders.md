@@ -286,9 +286,10 @@ writes back as external edits for the rest of the session, and let a
 multi-megabyte telemetry log evict every cache entry describing real work.
 Sibling sessions under the same sessions root are excluded too — reading a
 second live session's files churns identically — each confirmed by its
-sidecar rather than assumed from its location. The `artifacts` subtree stays
-watched: those are authored deliverables, and an outside edit to one is worth
-reporting. The interaction record is still written for an excluded path.
+sidecar rather than assumed from its location. The workspace artifact store
+lies outside session directories and stays watched: its files are authored
+deliverables, and an outside edit to one is worth reporting. The interaction
+record is still written for an excluded path.
 
 Content is bounded twice. A file the filesystem reports as larger than
 `mevedel-file-cache-max-file-bytes` is cached as a fingerprint — timestamps

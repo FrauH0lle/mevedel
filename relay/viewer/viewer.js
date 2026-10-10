@@ -214,7 +214,8 @@
   // The workspace artifact store: the room's Project artifacts section
   // and the lobby's Artifacts tab; one is active at a time.
   const roomStore = window.mevedelStoreView.create({
-    send, el, state, room: true, open: artifacts.open, notice: flashNotice,
+    send, el, state, room: true, notice: flashNotice,
+    open: record => (record.item ? editing.open(record.store) : artifacts.open(record)),
     list: document.getElementById('store-list'),
     empty: document.getElementById('store-empty'),
   });

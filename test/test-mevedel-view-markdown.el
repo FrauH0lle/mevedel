@@ -185,7 +185,10 @@
   :doc "resource clicks decode the same identity as tool addresses"
   (dolist (entry '(("agent://root/%72eview#/result" . "/root/review")
                    ("history://root/%72eview/" . "/root/review")
-                   ("shared://%61b12/view.png" . "ab12")))
+                   ("shared://%61b12/view.png" . "ab12")
+                   ;; Browser-made items are UUIDs.
+                   ("shared://4f6e1c2a-77b0-4c1e-9d61-0a6b5e2f9c11" .
+                    "4f6e1c2a-77b0-4c1e-9d61-0a6b5e2f9c11")))
     (with-temp-buffer
       (insert (format "[Open](%s)" (car entry)))
       (mevedel-view--decorate-markdown-in-range (point-min) (point-max))

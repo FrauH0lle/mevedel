@@ -616,7 +616,7 @@ present."
                     "not current instructions or permission to resume work.")
             lines))
     (when (plist-get metadata :shared-items)
-      (push (concat "- `shared://` - this session's shared whiteboards and documents. "
+      (push (concat "- `shared://` - the project's shared whiteboards and documents, marking those attached to this session. "
                     "Read `shared://` to list them and `shared://ID` for one line per "
                     "element or block, each with the hash SharedEdit names it by; Grep "
                     "searches them. `shared://library` lists whiteboard element libraries.")

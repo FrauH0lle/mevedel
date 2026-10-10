@@ -176,7 +176,13 @@
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
 
+;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing-save-version
+                  "mevedel-shared-editing" (workspace id &optional session-id))
+(autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
+
 ;; `mevedel-structs'
+(declare-function mevedel-request-edited-items "mevedel-structs" (cl-x))
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-request-origin "mevedel-structs" (cl-x))
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x))
@@ -504,6 +510,14 @@ is returned here."
       ;; Cancelling interactions invokes callbacks; do not erase a request
       ;; installed by one of them while the old teardown was on the stack.
       (when (eq request mevedel--current-request)
+        ;; A turn that edited shared items leaves a version of each.
+        (pcase-dolist (`(,workspace . ,id) (mevedel-request-edited-items request))
+          (condition-case err
+              (mevedel-shared-editing-save-version
+               workspace id (mevedel-session-session-id
+                             (mevedel-request-session request)))
+            (error (message "mevedel: no version of %s was saved: %s"
+                            id (error-message-string err)))))
         (when (equal (mevedel-request-origin request) "/root")
           (setf (mevedel-session-agent-root-activity
                  (mevedel-request-session request))

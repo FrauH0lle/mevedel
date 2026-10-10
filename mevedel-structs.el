@@ -760,7 +760,10 @@ Created at request start, cleared in the termination handler."
   (ptc-primitives :unrestricted)
   ;; User-attached `mevedel-skill-invocation-record' structs.
   attached-skill-records
-  hook-rules)
+  hook-rules
+  ;; (WORKSPACE . ID) of the shared items this request edited; each gets a
+  ;; version when the request settles.
+  edited-items)
 
 (defun mevedel-request-set-active-work-paused (request paused &optional now)
   "Set whether REQUEST active-work timing is PAUSED at NOW."

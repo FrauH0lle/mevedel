@@ -143,7 +143,7 @@ Chat / view
   mevedel-collaboration-history.el archived browser segments and artifact metadata
   mevedel-collaboration-editing.el browser shared editing and selection questions
   mevedel-shared-conversation.el item-scoped request history from canonical live/archive turns
-  mevedel-shared-editing.el   private editor engine queue and durable session commits
+  mevedel-shared-editing.el   private editor engine queue and leased store commits
   mevedel-shared-library.el   host whiteboard element library and public Excalidraw collection
   mevedel-collaboration-projection.el canonical browser transcript projection
   mevedel-collaboration-task.el browser task projection and publication
@@ -171,7 +171,8 @@ Chat / view
   mevedel-persistence.el      save/load instructions
   mevedel-session-codec.el    closed session sidecar codec and validation
   mevedel-session-artifacts.el  paths, artifacts, snapshots, and segment writes
-  mevedel-artifact-store.el   workspace artifact store: metadata, versions, attachment
+  mevedel-artifact-store.el   workspace artifact store: metadata, versions, attachment, conversations
+  mevedel-artifact-lease.el   cross-Emacs leases on store whiteboards and documents
   mevedel-session-durability.el lease and storage primitives
   mevedel-session-recovery.el  specialized recovery protocol and markers
   mevedel-session-transfer.el  durable cooperative control transfer protocol

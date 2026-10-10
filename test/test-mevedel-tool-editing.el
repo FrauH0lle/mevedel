@@ -14,6 +14,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-editing)
+(require 'mevedel-shared-editing)
 (require 'mevedel-shared-library)
 
 (mevedel-deftest mevedel-tool-editing--call
@@ -24,6 +25,8 @@
 							  :workspace workspace :working-directory directory
 							  :permission-mode 'full-auto :authority-mode 'pid-lock))
 			(buffer (generate-new-buffer " *editing-tools-test*"))
+			(mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+			(mevedel-artifact-lease--held (make-hash-table :test #'equal))
 			(mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
 		   (unwind-protect
 		       (with-current-buffer buffer
@@ -36,13 +39,13 @@
 			     tool (lambda (value) (cl-incf calls) (setq reply value))
 			     '(:kind "whiteboard" :title "Cancelled")))
 			   (let ((deadline (+ (float-time) 10)))
-			     (while (and (or (plist-get mevedel-shared-editing--runtime :active)
-					     (plist-get mevedel-shared-editing--runtime :queue))
+			     (while (and (or (plist-get (mevedel-shared-editing--runtime workspace) :active)
+					     (plist-get (mevedel-shared-editing--runtime workspace) :queue))
 					 (< (float-time) deadline))
 			       (accept-process-output nil 0.05)))
 			   (should (eq 'cancelled (plist-get reply :reason)))
 			   (should (= calls 1))
-			   (should-not (mevedel-shared-editing-list session))
+			   (should-not (mevedel-shared-editing-list workspace))
 			   (setq reply nil)
 			   (mevedel-pipeline-run-tool-outcome
 			    tool (lambda (value) (setq reply value))
@@ -51,7 +54,10 @@
 			     (while (and (not reply) (< (float-time) deadline))
 			       (accept-process-output nil 0.05)))
 			   (should (eq 'success (plist-get reply :status)))
-			   (should (= 1 (length (mevedel-shared-editing-list session))))
+			   (should (= 1 (length (mevedel-shared-editing-list workspace))))
+			   ;; The model's item is attached to its session.
+			   (should (equal (mevedel-shared-editing-ids workspace)
+					  (mevedel-session-attached-artifacts session)))
 			   (let (cancel
 				 (mevedel-shared-editing-change-hook nil))
 			     (setq reply nil calls 0
@@ -66,8 +72,9 @@
 				 (accept-process-output nil 0.05)))
 			     (should (eq 'success (plist-get reply :status)))
 			     (should (= 1 calls))
-			     (should (= 2 (length (mevedel-shared-editing-list session)))))
-			   (dolist (restriction '(plan deny read-only))
+			     (should (= 2 (length (mevedel-shared-editing-list workspace)))))
+			   ;; Item leases, not the session's buffer, decide who may edit.
+			   (dolist (restriction '(plan deny))
 			     (setq reply nil)
 			     (setf (mevedel-session-plan-mode session) (eq restriction 'plan)
 				   (mevedel-session-permission-rules session)
@@ -79,11 +86,11 @@
 			       (while (and (not reply) (< (float-time) deadline))
 				 (accept-process-output nil 0.05)))
 			     (should (memq (plist-get reply :status) '(error denied)))
-			     (should (= 2 (length (mevedel-shared-editing-list session)))))
+			     (should (= 2 (length (mevedel-shared-editing-list workspace)))))
 			   (setq buffer-read-only nil)))
-		     (when (buffer-live-p buffer)
-		       (with-current-buffer buffer (mevedel-shared-editing-stop))
-		       (kill-buffer buffer))
+		     (mevedel-shared-editing-stop)
+		     (mevedel-artifact-lease-release-all)
+		     (when (buffer-live-p buffer) (kill-buffer buffer))
 		     (delete-directory directory t))))
 
 (defmacro mevedel-tool-editing-test--with-session (&rest body)
@@ -95,6 +102,8 @@
                                             :workspace workspace :working-directory directory
                                             :permission-mode 'full-auto :authority-mode 'pid-lock))
           (buffer (generate-new-buffer " *editing-tools-test*"))
+          (mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+          (mevedel-artifact-lease--held (make-hash-table :test #'equal))
           (mevedel-shared-library-directory (file-name-concat directory "libraries"))
           (mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
      (unwind-protect
@@ -122,9 +131,9 @@
                            (if (stringp result) result (format "%S" result))))
                        (parse (reply) (mevedel-shared-editing--parse (plist-get reply :result))))
              ,@body)))
-       (when (buffer-live-p buffer)
-         (with-current-buffer buffer (mevedel-shared-editing-stop))
-         (kill-buffer buffer))
+       (mevedel-shared-editing-stop)
+       (mevedel-artifact-lease-release-all)
+       (when (buffer-live-p buffer) (kill-buffer buffer))
        (delete-directory directory t))))
 
 (mevedel-deftest mevedel-tool-editing--edit

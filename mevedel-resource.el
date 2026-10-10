@@ -101,8 +101,8 @@
 (autoload 'mevedel-skills-scan "mevedel-skills-core")
 
 ;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (session))
-(declare-function mevedel-shared-editing-list "mevedel-shared-editing" (session))
+(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (workspace))
+(declare-function mevedel-shared-editing-list "mevedel-shared-editing" (workspace))
 (autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
 
@@ -112,6 +112,7 @@
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-attached-artifacts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
@@ -687,7 +688,8 @@ SCHEME is nil, include metadata for every scheme."
                             (mevedel-resource--memory-roots context session)))
          (shared-items (and (memq scheme '(nil shared))
                             session
-                            (mevedel-shared-editing-list session)))
+                            (mevedel-shared-editing-list
+                             (mevedel-session-workspace session))))
          (servers (and (memq scheme '(nil mcp))
                        (fboundp 'mcp-hub-get-servers)
                        (condition-case nil
@@ -1051,25 +1053,31 @@ library by name, each with a `sheet.png'."
       (`(,id ,(or "elements" "images") ,name) (and (id-p id) (id-p name))))))
 
 (defun mevedel-resource--shared-available-p (components session)
-  "Return non-nil when shared COMPONENTS resolve in SESSION.
+  "Return non-nil when shared COMPONENTS resolve in SESSION's workspace.
 Item addresses need an existing item; listings and libraries always resolve."
   (or (null components)
       (equal (car components) "library")
       (and session
-           (member (car components) (mevedel-shared-editing-ids session))
+           (member (car components)
+                   (mevedel-shared-editing-ids (mevedel-session-workspace session)))
            t)))
 
 (defun mevedel-resource--shared-list-result (session)
-  "Return SESSION's shared item listing for a bare `shared://' Read."
-  (let ((items (and session (mevedel-shared-editing-list session))))
+  "Return the workspace's shared item listing for a bare `shared://' Read.
+Items attached to SESSION are marked."
+  (let ((items (and session (mevedel-shared-editing-list
+                             (mevedel-session-workspace session))))
+        (attached (and session (mevedel-session-attached-artifacts session))))
     (concat
      (if items
          (mapconcat (lambda (item)
-                      (format "shared://%s\t%s %S · revision %s"
+                      (format "shared://%s\t%s %S · revision %s%s"
                               (plist-get item :id) (plist-get item :kind)
-                              (plist-get item :title) (plist-get item :revision)))
+                              (plist-get item :title) (plist-get item :revision)
+                              (if (member (plist-get item :id) attached)
+                                  " · attached" "")))
                     items "\n")
-       "No shared whiteboards or documents in this session; SharedCreate starts one.")
+       "No shared whiteboards or documents in this project; SharedCreate starts one.")
      "\nshared://library\tWhiteboard element libraries for SharedEdit insert")))
 
 (defun mevedel-resource--mcp-servers ()
@@ -1537,7 +1545,7 @@ the union index read, which already tolerates missing roots."
       ('shared
        (if (and (null components) (eq operation 'read))
            (mevedel-resource--shared-list-result session)
-         ;; Everything else is computed by the session's editing host, which
+         ;; Everything else is computed by the workspace's editing host, which
          ;; answers asynchronously; Read and Grep fetch it themselves.
          (list :shared-view components)))
       ('mcp
@@ -1858,7 +1866,7 @@ errors before any content or handler is reached."
        ((eq scheme 'shared)
         (unless (mevedel-resource--shared-shape-p components)
           (signal 'mevedel-resource-error
-                  (list "Unknown shared:// address; Read shared:// for this session's items")))
+                  (list "Unknown shared:// address; Read shared:// for this project's items")))
         (setq logical-p t)
         (unless (mevedel-resource--shared-available-p components session)
           (setq data (plist-put data :unavailable-p t)))))
@@ -1923,7 +1931,7 @@ errors before any content or handler is reached."
      ((eq scheme 'memory)
       "Memory root is not configured; Read memory://root to discover configured roots")
      ((eq scheme 'shared)
-      "Shared item not found; Read shared:// to list this session's whiteboards and documents")
+      "Shared item not found; Read shared:// to list this project's whiteboards and documents")
      (t "Internal resource error: availability failure has no reason"))))
 
 (defun mevedel-resource-attempt-address (attempt)

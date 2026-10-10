@@ -341,7 +341,28 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                  (lambda (_guest _workspace id) (concat "link-" id))))
         (should (equal "link-page"
                        (plist-get (act lobby 2 :action "conversation" :id "page") :link))))
-      (should (plist-get (act lobby 2 :action "evil" :id "page") :error)))))
+      (should (plist-get (act lobby 2 :action "evil" :id "page") :error))
+      ;; Whiteboards and documents keep manual versions and restore as edits.
+      (should (string-match-p "File artifacts"
+                              (plist-get (act room 2 :action "save-version" :id "page") :error)))
+      (make-directory (file-name-concat store "board") t)
+      (write-region "{}" nil (file-name-concat store "board" "state.json") nil 'silent)
+      (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+      (cl-letf (((symbol-function 'mevedel-shared-editing-save-version)
+                 (lambda (_workspace _id session-id)
+                   (should (equal "s1" session-id))
+                   4))
+                ((symbol-function 'mevedel-shared-editing-restore)
+                 (lambda (_workspace id n _actor _callback)
+                   (should (equal (list "board" 1) (list id n))))))
+        (should (= 4 (plist-get (act room 2 :action "save-version" :id "board") :n)))
+        (should (eq :json-false (plist-get (act room 2 :action "restore" :id "board" :n 1)
+                                           :n))))
+      ;; Its state never travels as a file.
+      (setq sent nil)
+      (mevedel-collaboration--handle-artifact-get lobby 1 '(:reqId 3 :id "artifact:board"))
+      (should (stringp (plist-get (mevedel-collaboration-artifact-test--reply sent 'lobby)
+                                  :error))))))
 
 (mevedel-deftest mevedel-collaboration--handle-store-list ()
   ,test
@@ -392,7 +413,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
           (dolist (file (list path comments other))
             (make-directory (file-name-directory file) t)
             (with-temp-file file (insert "x")))
-          (mevedel-artifact-store--create-meta workspace "other" "page.html")
+          (mevedel-artifact-store-create-meta workspace "other" "page.html")
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport peer frame) (push (cons peer frame) sent) t))
                     ((symbol-function 'mevedel-collaboration--publish) #'ignore))

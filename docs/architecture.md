@@ -299,8 +299,8 @@ cannot be set from userland and so moves anyway. A rewrite that restores
 all three is the remaining blind spot, and the cache does not detect such a rewrite without a fresh content read. A file over
 `mevedel-file-cache-max-file-bytes` is cached as a fingerprint with no
 content, and mevedel's own session directories are refused outright
-(`mevedel-session-file-cache-excluded-p`) apart from their `artifacts`
-subtree; see [`docs/reminders.md`](reminders.md) for what the resulting
+(`mevedel-session-file-cache-excluded-p`); the workspace artifact store is
+cached like ordinary files; see [`docs/reminders.md`](reminders.md) for what the resulting
 `edited-file` reminder reports.
 
 `mevedel-execution-target.el` binds each session to one local or TRAMP target,

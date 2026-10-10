@@ -25,7 +25,8 @@
 (declare-function mevedel-pipeline-handler-resumable "mevedel-pipeline" (function))
 
 ;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (session))
+(declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (workspace))
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
 
 ;; `mevedel-tool-editing'
@@ -129,7 +130,8 @@ then searched as virtual documents whose results CALLBACK receives."
          (views (cond
                  ((null components)
                   (mapcar (lambda (id) (cons id (list id)))
-                          (mevedel-shared-editing-ids mevedel--session)))
+                          (mevedel-shared-editing-ids
+                           (mevedel-session-workspace mevedel--session))))
                  ((or (equal (car (last components)) "view.png")
                       (equal (car (last components)) "sheet.png")
                       (equal (cadr components) "images"))

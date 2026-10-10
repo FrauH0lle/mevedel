@@ -218,8 +218,13 @@ request-scoped delegated rules may still authorize ordinary operations but
 never broaden the child sandbox.
 
 `mevedel-protected-paths` is an alist from glob to `read-only` or
-`inaccessible`. The default `.git` glob is read-only; the default SSH, GnuPG,
-AWS, Azure, Google Cloud, and Kubernetes credential globs are inaccessible. On
+`inaccessible`. The default `.git` glob is read-only, and so is the
+[artifact store](view.md#artifact-store)'s bookkeeping -- each artifact's
+`meta.el`, `state.json`, `comments.json` and `versions/` -- and
+`.mevedel/leases/`, so a model write cannot bypass an item's lease, versions
+and validation; the artifact files themselves stay writable. The default SSH,
+GnuPG, AWS, Azure, Google Cloud, and Kubernetes credential globs are
+inaccessible. On
 a trailing `/**`, policy covers both the directory and its descendants. On a
 remote session, leading `~` uses the target user's probed home; a
 client-absolute custom pattern stays in the client path domain and therefore
@@ -239,6 +244,10 @@ Managed Bash and one-shot helpers run native scans asynchronously under their
 execution owner. Cancellation, owner teardown or changed launch authority prevents
 the pending command from starting. Results are never reused across launches.
 A failed or truncated native scan refuses preparation; it does not discard missing protection.
+Patterns below `**/.mevedel/`, mevedel's own state directory, which exists only
+at a workspace root, are expanded at each discovery root without a walk; a
+`.mevedel` nested deeper in a root is covered by native tool checks, which match
+at any depth, but not by the Bash sandbox.
 Other patterns and targets retain the Lisp walker. Canonical target checks and
 final confinement validation remain unchanged.
 

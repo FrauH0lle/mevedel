@@ -44,6 +44,11 @@
                   "mevedel-collaboration-agent" (room))
 (autoload 'mevedel-collaboration--publish-agents "mevedel-collaboration-agent")
 
+;; `mevedel-collaboration-artifact'
+(declare-function mevedel-collaboration-item-link
+                  "mevedel-collaboration-artifact" (link id))
+(autoload 'mevedel-collaboration-item-link "mevedel-collaboration-artifact")
+
 ;; `mevedel-collaboration-artifact-projection'
 (declare-function mevedel-collaboration--artifact-stat-invalidate
                   "mevedel-collaboration-artifact-projection" ())
@@ -1015,18 +1020,14 @@ Without a room, start one after the user consents; STARTED is then t."
          (mevedel-collaboration--current-data-buffer)))))
 
 (defun mevedel-collaboration-open-shared-item (data-buffer id)
-  "Open shared item ID of DATA-BUFFER's session in a web browser.
+  "Open the workspace's shared item ID in DATA-BUFFER's room in a web browser.
 The editor exists only in a room, so without one this asks to start
 sharing the session first.  The browser joins with the full-control
 link, as the host itself."
-  (pcase-let* ((`(,room . ,started)
-                (mevedel-collaboration--room-or-start data-buffer))
-               (link (plist-get room :link-full))
-               (hash (string-search "#" link)))
+  (pcase-let ((`(,room . ,started)
+               (mevedel-collaboration--room-or-start data-buffer)))
     ;; The viewer opens `?shared=ID' directly as that item's editor tab.
-    (browse-url (concat (substring link 0 hash)
-                        "?shared=" (url-hexify-string id)
-                        (substring link hash)))
+    (browse-url (mevedel-collaboration-item-link (plist-get room :link-full) id))
     (when started
       (message "mevedel: sharing %s; /collab stop ends the room"
                (plist-get room :session-label)))))

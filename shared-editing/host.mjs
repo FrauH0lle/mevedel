@@ -265,7 +265,7 @@ export async function handle(request) {
   }
   if (action === 'library-view') return { result: await libraryView(request.libraries, request.part, request.at) };
   check(
-    ['create', 'import', 'read', 'view', 'update', 'patch', 'insert', 'rename', 'background', 'revert', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
+    ['create', 'import', 'read', 'view', 'update', 'patch', 'insert', 'rename', 'background', 'revert', 'restore', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
     'Unknown editing action',
   );
   let state = request.state,
@@ -538,6 +538,34 @@ export async function handle(request) {
       else {
         check(validBackground(request.background), 'Canvas background must be an opaque #rrggbb colour, or empty for the theme');
         doc.getMap('meta').set('background', request.background);
+      }
+    } else if (action === 'restore') {
+      // A saved version's content becomes the item's content as one ordinary
+      // attributed change: lineage, comments and history stay, and the
+      // restore itself can be reverted.
+      const source = restore(bytes(request.target));
+      try {
+        const target = inspect(source);
+        check(target.kind === before.kind, 'A version restores into its own kind of item');
+        doc.transact(() => {
+          const meta = doc.getMap('meta');
+          meta.set('title', target.title);
+          if (target.background) meta.set('background', target.background);
+          else meta.delete('background');
+          if (before.kind === 'whiteboard') {
+            for (const [id, file] of Object.entries(filesOf(source))) putFile(doc, id, file);
+            const elements = doc.getMap('elements');
+            for (const id of [...elements.keys()]) elements.delete(id);
+            for (const e of target.content) putElement(doc, e);
+          } else {
+            const root = doc.getXmlFragment('document');
+            root.delete(0, root.length);
+          }
+        });
+        if (before.kind === 'document') initializeDocument(doc, target.content);
+        validate(doc);
+      } finally {
+        source.destroy();
       }
     } else if (action === 'rename') {
       check(
