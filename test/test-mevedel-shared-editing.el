@@ -651,6 +651,28 @@
       (should-not (mevedel-shared-editing--live-p runtime))
       (should (equal "Kept" (plist-get (mevedel-shared-editing--read workspace "board") :title))))))
 
+(mevedel-deftest mevedel-shared-editing--finish
+  (:doc "waits for a busy store before committing a pending batch")
+  (mevedel-shared-editing-test--with-workspace
+    (let* ((runtime (mevedel-shared-editing--runtime workspace))
+           (job (list :callback #'ignore))
+           (busy t)
+           flushed)
+      (plist-put runtime :active job)
+      (plist-put runtime :batch (list (cons (list :callback #'ignore) nil)))
+      (cl-letf (((symbol-function 'mevedel-shared-editing--store-busy-p)
+                 (lambda (_runtime) busy))
+                ((symbol-function 'mevedel-shared-editing--flush-batch)
+                 (lambda (runtime)
+                   (setq flushed t)
+                   (plist-put runtime :batch nil))))
+        (mevedel-shared-editing--finish runtime job '(:result t))
+        (should-not flushed)
+        (should (eq job (plist-get runtime :active)))
+        (setq busy nil)
+        (mevedel-test--await 2 "finish retries" flushed)
+        (should-not (plist-get runtime :active))))))
+
 (mevedel-deftest mevedel-shared-editing--commit-directory
   (:doc "an authored directory replaced by a file cannot partially commit a new state")
   (mevedel-shared-editing-test--with-workspace

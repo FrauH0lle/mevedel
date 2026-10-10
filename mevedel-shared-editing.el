@@ -377,7 +377,14 @@ A held item lease is neither released nor handed over while it does."
 
 (defun mevedel-shared-editing--finish (runtime job reply)
   "Settle JOB with REPLY and continue RUNTIME's editing queue."
-  (when (eq job (plist-get runtime :active))
+  (cond
+   ((not (eq job (plist-get runtime :active))))
+   ;; Settling first commits a pending batch, which waits for the store.
+   ((and (plist-get runtime :batch) (mevedel-shared-editing--store-busy-p runtime))
+    (plist-put runtime :timer
+               (mevedel-transport-run-at-time 0.05 #'mevedel-shared-editing--finish
+                                              runtime job reply)))
+   (t
     (when-let* ((timer (plist-get runtime :timeout)))
       (cancel-timer timer))
     (plist-put runtime :timeout nil)
@@ -389,7 +396,7 @@ A held item lease is neither released nor handed over while it does."
                         (funcall (plist-get job :callback) reply))
         (when (mevedel-shared-editing--live-p runtime)
           (plist-put runtime :timer
-                     (mevedel-transport-run-at-time 0 #'mevedel-shared-editing--drain runtime)))))))
+                     (mevedel-transport-run-at-time 0 #'mevedel-shared-editing--drain runtime))))))))
 
 (defun mevedel-shared-editing--store-busy-p (runtime)
   "Return non-nil when RUNTIME's store must not be touched now."
