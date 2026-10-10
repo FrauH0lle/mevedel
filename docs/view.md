@@ -1184,14 +1184,17 @@ tool. After a settled ApplyPatch, `mevedel-tool-patch-apply` reports its
 writes to the store:
 
 - a write into a new id directory creates the artifact; the host writes its
-  `meta.el`, with the kind from the file type and the title from the file name;
-- each write of an artifact's primary file records a version;
-- either attaches the writing session.
+  `meta.el`, with the kind from the file type and the id as its title;
+- a turn that wrote an artifact's primary file records one version of it when
+  the turn settles, as for whiteboards and documents, so the version before
+  the turn survives its many small patches; a write outside a turn records
+  one at once;
+- any write attaches the writing session.
 
 ApplyPatch matches hunks against current content, so a write planned on an
 older copy fails and the model rereads; that is the store's concurrency
-check, without a lease. Writes that bypass ApplyPatch (Bash) change the file
-but record no version until the next settled write. Only the primary file, the
+check, without a lease. Bash cannot write in the store: the sandbox mounts it
+read-only. Only the primary file, the
 first written into the id directory, is versioned; other files there (assets)
 change without versions.
 

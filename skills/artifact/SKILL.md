@@ -16,7 +16,7 @@ An artifact is a file the user can open and look at: an HTML mockup, an
 interactive prototype, a Markdown document, a diagram image. Artifacts live
 in the project's artifact store, one directory per artifact; the directory
 name is the artifact's id. Any session of the project can open and edit
-them, and every settled write of the artifact file records a version.
+them, and each turn that writes the artifact file records a version.
 
 This project's artifact store:
 
@@ -34,16 +34,17 @@ This project's artifact store:
 
 - Start a new artifact with ApplyPatch: Add File at
   `<store>/<id>/<name>`, where `<id>` is a new directory named for what the
-  artifact shows (`checkout-flow/`, not `test/`) and `<name>` its file
-  (`index.html`, `notes.md`). If the Add fails because the file exists, the
-  id is taken: pick another id, or read and update that artifact if it is
-  the one you meant.
+  artifact shows (`checkout-flow/`, not `test/`; letters, digits, `-` and
+  `_`) and `<name>` its file (`index.html`, `notes.md`). An existing
+  directory means the id is taken, even by another file name: list the
+  store first, then pick another id, or update that artifact if it is the
+  one you meant.
 - Update an existing artifact with ApplyPatch on its file. Another session
   may have changed it since you read it; a failed hunk means reread and
   patch again. Writing an artifact attaches it to this session, and a
   successful write also publishes its card to a live collaboration room.
 - The first file written into an id directory is the artifact; only it is
-  versioned. Never write `meta.el` or `versions/`: the host keeps them.
+  versioned.
 - **Self-contained, always.** No CDN scripts or stylesheets, no external
   fonts, no runtime `fetch`, no remote images. In the browser the
   artifact renders inside a sandbox whose Content-Security-Policy blocks

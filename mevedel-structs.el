@@ -761,9 +761,9 @@ Created at request start, cleared in the termination handler."
   ;; User-attached `mevedel-skill-invocation-record' structs.
   attached-skill-records
   hook-rules
-  ;; (WORKSPACE . ID) of the shared items this request edited; each gets a
-  ;; version when the request settles.
-  edited-items)
+  ;; (WORKSPACE . ID) of the store artifacts this request edited; each gets
+  ;; one version when the request settles.
+  edited-artifacts)
 
 (defun mevedel-request-set-active-work-paused (request paused &optional now)
   "Set whether REQUEST active-work timing is PAUSED at NOW."

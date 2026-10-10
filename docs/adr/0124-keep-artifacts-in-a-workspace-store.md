@@ -28,8 +28,8 @@ it duplicates the artifact, or when the user adds it (cockpit `a`, the room's
 **HTML, Markdown and images** change in discrete model writes with ApplyPatch.
 ApplyPatch matches its hunks against current content, so a write planned on an
 older copy fails and the model rereads: the concurrency check, without a
-lease. A write into a new id directory creates the artifact; every settled
-write of its primary file records a version.
+lease. A write into a new id directory creates the artifact; a turn that
+wrote its primary file records one version when it settles.
 
 **Whiteboards and documents** are one live object edited continuously by
 people and the model, so they are edited in place in the store. One editing
@@ -54,6 +54,7 @@ leases therefore live outside it, under `.mevedel/leases/`. The store's
 bookkeeping -- metadata, item state, comments, versions -- and the leases are
 read-only to model tools by default, so edits cannot bypass leases, versions
 and validation; only an artifact's own files are written with ApplyPatch.
+Bash cannot write in the store at all.
 
 **Dedicated session.** Each artifact may have one dedicated session, created
 on first use for conversation started outside any chat. It is an ordinary
@@ -112,9 +113,14 @@ waiting on each other.
 
 Protected globs for the store's bookkeeping would each have cost a full
 workspace walk before every Bash launch. Patterns below `**/.mevedel/`, which
-exists only at a workspace root, are therefore expanded at each discovery root
-without a walk; a `.mevedel` nested deeper is covered by native tool checks but
-not by the Bash sandbox.
+exists only at a workspace root, therefore protect in the Bash sandbox the
+whole directory their literal part names (`.mevedel/artifacts`,
+`.mevedel/leases`) at each discovery root, without a walk; a `.mevedel` nested
+deeper is covered by native tool checks but not by the Bash sandbox.
+
+Versions are recorded once per turn, for files as for whiteboards and
+documents. Recording one per ApplyPatch let a turn of twenty small patches
+push out every earlier version, including the state before the turn.
 
 ## Consequences
 

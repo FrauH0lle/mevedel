@@ -21,8 +21,8 @@
                   "mevedel-artifact-store" (session id &optional buffer))
 (declare-function mevedel-artifact-store-conversation
                   "mevedel-artifact-store" (workspace id))
-(declare-function mevedel-artifact-store-directory
-                  "mevedel-artifact-store" (workspace))
+(declare-function mevedel-artifact-store-delete
+                  "mevedel-artifact-store" (workspace id &optional actor callback))
 (declare-function mevedel-artifact-store-duplicate
                   "mevedel-artifact-store" (workspace id new-id))
 (declare-function mevedel-artifact-store-ids
@@ -37,7 +37,7 @@
                   "mevedel-artifact-store" (workspace id))
 (autoload 'mevedel-artifact-store-attach "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-conversation "mevedel-artifact-store")
-(autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-delete "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-duplicate "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-ids "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-list "mevedel-artifact-store")
@@ -84,25 +84,14 @@
 (autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
 (autoload 'mevedel-cockpit-workspace-context "mevedel-cockpit")
 
-;; `mevedel-collaboration-artifact'
-(declare-function mevedel-collaboration-delete-artifact
-                  "mevedel-collaboration-artifact" (workspace name &optional callback))
-(declare-function mevedel-collaboration-notify-artifacts-changed
-                  "mevedel-collaboration-artifact" (workspace))
-(autoload 'mevedel-collaboration-delete-artifact "mevedel-collaboration-artifact")
-(autoload 'mevedel-collaboration-notify-artifacts-changed
-  "mevedel-collaboration-artifact")
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration-open-shared-item
                   "mevedel-collaboration" (data-buffer id))
 (autoload 'mevedel-collaboration-open-shared-item "mevedel-collaboration")
 
 ;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
-                  (workspace args callback &optional authorize commit))
 (declare-function mevedel-shared-editing-save-version
                   "mevedel-shared-editing" (workspace id &optional session-id))
-(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
 
 ;; `mevedel-structs'
@@ -210,13 +199,9 @@
          (list :id 'location :title "Location"
                :body (mevedel-report-fields (list "Path" (plist-get item :path)))))))
 
-(defun mevedel-artifacts-list--selected-artifact ()
-  "Return the selected store artifact row."
-  (mevedel-cockpit-surface-selected))
-
 (defun mevedel-artifacts-list--selected-path ()
   "Return the selected artifact's still-existing path."
-  (let ((item (mevedel-artifacts-list--selected-artifact)))
+  (let ((item (mevedel-cockpit-surface-selected)))
     (when (plist-get item :item)
       (user-error "Whiteboards and documents open in their editor; use o"))
     (unless (and (plist-get item :path) (file-exists-p (plist-get item :path)))
@@ -230,12 +215,6 @@ The local browser cannot read a remote target's filesystem."
   (if (file-remote-p path)
       (find-file path)
     (browse-url-of-file path)))
-
-(defun mevedel-artifacts-list--changed (workspace &optional selected)
-  "Refresh after a change to WORKSPACE's store, keeping SELECTED.
-The store itself tells the workspace's rooms."
-  (ignore workspace)
-  (mevedel-cockpit-surface-refresh selected))
 
 (defun mevedel-artifacts-list-open-browser ()
   "Open the selected artifact in a web browser.
@@ -263,7 +242,7 @@ session it opens in the room of the item's own conversation."
   (let* ((context (mevedel-cockpit-surface-context))
          (session (or (mevedel-cockpit-context-session context)
                       (user-error "Attaching needs a session; open the cockpit from one")))
-         (id (plist-get (mevedel-artifacts-list--selected-artifact) :id)))
+         (id (plist-get (mevedel-cockpit-surface-selected) :id)))
     (mevedel-artifact-store-attach
      session id (mevedel-cockpit-context-data-buffer context))
     (mevedel-cockpit-surface-refresh id)
@@ -283,7 +262,7 @@ Restoring copies the version over the artifact as a new version."
   (let* ((context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
-         (id (plist-get (mevedel-artifacts-list--selected-artifact) :id))
+         (id (plist-get (mevedel-cockpit-surface-selected) :id))
          (choices
           (mapcar (lambda (row)
                     (cons (format "%d  %s  %s" (plist-get row :n)
@@ -292,10 +271,12 @@ Restoring copies the version over the artifact as a new version."
                                   (file-size-human-readable (plist-get row :bytes)))
                           (plist-get row :n)))
                   (reverse (mevedel-artifact-store-versions workspace id))))
-         (n (cdr (assoc (completing-read (format "Version of %s: " id)
-                                         choices nil t)
-                        choices))))
-    (pcase (if (plist-get (mevedel-artifacts-list--selected-artifact) :item)
+         (n (if choices
+                (cdr (assoc (completing-read (format "Version of %s: " id)
+                                             choices nil t)
+                            choices))
+              (user-error "%s has no versions yet" id))))
+    (pcase (if (plist-get (mevedel-cockpit-surface-selected) :item)
                ;; A whiteboard's or document's version opens only by restoring.
                (and (y-or-n-p (format "Restore version %d of %s? " n id)) ?r)
              (car (read-multiple-choice
@@ -309,7 +290,7 @@ Restoring copies the version over the artifact as a new version."
                       (and session (mevedel-session-session-id session)))))
             (if (not new)
                 (message "mevedel: restoring %s to version %d" id n)
-              (mevedel-artifacts-list--changed workspace id)
+              (mevedel-cockpit-surface-refresh id)
               (message "mevedel: %s restored from version %d as version %d"
                        id n new)))))))
 
@@ -319,11 +300,11 @@ Restoring copies the version over the artifact as a new version."
   (let* ((context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
-         (id (or (plist-get (mevedel-artifacts-list--selected-artifact) :item)
+         (id (or (plist-get (mevedel-cockpit-surface-selected) :item)
                  (user-error "File artifacts keep a version of every saved change")))
          (n (mevedel-shared-editing-save-version
              workspace id (and session (mevedel-session-session-id session)))))
-    (mevedel-artifacts-list--changed workspace id)
+    (mevedel-cockpit-surface-refresh id)
     (message "mevedel: saved %s as version %d" id n)))
 
 (defun mevedel-artifacts-list-duplicate ()
@@ -332,25 +313,25 @@ Restoring copies the version over the artifact as a new version."
   (let* ((context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
-         (id (plist-get (mevedel-artifacts-list--selected-artifact) :id))
+         (id (plist-get (mevedel-cockpit-surface-selected) :id))
          (new-id (read-string "New artifact id: " (concat id "-copy"))))
     (mevedel-artifact-store-duplicate workspace id new-id)
     (when session
       (mevedel-artifact-store-attach
        session new-id (mevedel-cockpit-context-data-buffer context)))
-    (mevedel-artifacts-list--changed workspace new-id)
+    (mevedel-cockpit-surface-refresh new-id)
     (message "mevedel: %s duplicated as %s" id new-id)))
 
 (defun mevedel-artifacts-list-conversation ()
   "Open the selected artifact's own conversation, creating it on first use."
   (interactive)
   (let ((workspace (mevedel-artifacts-list--workspace))
-        (id (plist-get (mevedel-artifacts-list--selected-artifact) :id)))
+        (id (plist-get (mevedel-cockpit-surface-selected) :id)))
     (mevedel--display-chat-buffer
      (mevedel-artifact-store-conversation workspace id))))
 
 (defun mevedel-artifacts-list-delete ()
-  "Delete the selected artifact with its versions, which also unpublishes it.
+  "Delete the selected artifact with its versions, comments and conversation.
 A whiteboard or document is deleted as a shared item, after any save in
 progress, together with its comments and history."
   (interactive)
@@ -361,10 +342,8 @@ progress, together with its comments and history."
          (buffer (current-buffer)))
     (when (yes-or-no-p (format "Delete %s with its versions, comments and conversation? "
                                name))
-      (mevedel-collaboration-delete-artifact
-       workspace
-       (file-relative-name (plist-get item :path)
-                           (mevedel-artifact-store-directory workspace))
+      (mevedel-artifact-store-delete
+       workspace (plist-get item :id) nil
        (lambda (failure)
          (if failure
              (message "mevedel: %s was not deleted: %s" name failure)
@@ -410,7 +389,7 @@ progress, together with its comments and history."
             mevedel-artifacts-list-conversation)
            ("s" "Save the selected whiteboard or document as a version"
             mevedel-artifacts-list-save-version)
-           ("d" "Delete (and unpublish) the selected artifact"
+           ("d" "Delete the selected artifact"
             mevedel-artifacts-list-delete)))
   "Cockpit surface spec for the artifact store.")
 

@@ -303,6 +303,7 @@ registry, creating one lazily if needed."
   '("/.mevedel/sessions/"
     "/.mevedel/tool-results/"
     "/.mevedel/input-history.el"
+    "/.mevedel/leases/"
     "/.mevedel/state/")
   "Root-anchored generated state entries for `.git/info/exclude'.")
 

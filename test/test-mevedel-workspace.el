@@ -439,6 +439,7 @@
               (dolist (entry '("/.mevedel/sessions/"
                                "/.mevedel/tool-results/"
                                "/.mevedel/input-history.el"
+                               "/.mevedel/leases/"
                                "/.mevedel/state/"))
                 (goto-char (point-min))
                 (should (re-search-forward
