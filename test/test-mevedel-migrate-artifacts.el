@@ -25,6 +25,7 @@
                                       :workspace-id (make-string 64 ?a)
                                       :target-native-root "/tmp/" :name "w")))))
     (cl-remf data :attached-artifacts)
+    (cl-remf data :dedicated-artifact)
     data))
 
 (defconst mevedel-migrate-artifacts-test--board

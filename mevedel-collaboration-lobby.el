@@ -32,13 +32,9 @@
 (require 'mevedel-collaboration)
 (require 'mevedel-workspace)
 
-;; `mevedel-artifact-store'
-(declare-function mevedel-artifact-store-dedicated-ids
-                  "mevedel-artifact-store" (workspace))
-(autoload 'mevedel-artifact-store-dedicated-ids "mevedel-artifact-store")
-
 ;; `mevedel-chat'
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
+(declare-function mevedel-session-dedicated-artifact "mevedel-structs" (cl-x))
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
 
 ;; `mevedel-collaboration-artifact'
@@ -306,8 +302,9 @@ gone, in which case it is forgotten."
 Live sessions that were never saved lead; saved ones follow in their
 own order, marked live or shared when they are open here.  A row's
 `:updated' is in seconds since the epoch."
-  (let* ((dedicated (mevedel-artifact-store-dedicated-ids workspace))
-         (live (cl-remove-if (lambda (entry) (member (car entry) dedicated))
+  (let* ((live (cl-remove-if (lambda (entry)
+                               (mevedel-session-dedicated-artifact
+                                (buffer-local-value 'mevedel--session (cddr entry))))
                              (mevedel-collaboration-lobby--live-sessions workspace)))
          (saved (mevedel-session-persistence-without-dedicated
                  workspace (mevedel-session-persistence-list-sessions workspace)))

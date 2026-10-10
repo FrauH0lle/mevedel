@@ -126,7 +126,8 @@ It updates the persisted name and buffer/view presentation, without moving files
 Save As creates a new identity with the explicitly supplied display name.
 
 The closed sidecar schema is `v0.5.11`, including recovery issues, retained input and pause state,
-and the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`).
+the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
+and, for an artifact's own conversation, that artifact's id (`:dedicated-artifact`).
 Other schemas are rejected by the runtime loader; older sessions are converted
 only by the [explicit migration](#explicit-migration-to-v0511). Recovery records
 contain issue messages, never credentials.

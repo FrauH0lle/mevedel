@@ -94,9 +94,11 @@ ATTACHED lists the store artifact ids a legacy session starts attached to."
              (setq data (plist-put data key value))))
   (unless (equal (plist-get data :version) "v0.5.11")
     ;; Older formats predate the artifact store: no session is attached yet.
-    (when (plist-member data :attached-artifacts)
-      (error "Unexpected attached artifacts in legacy sidecar"))
+    (when (or (plist-member data :attached-artifacts)
+              (plist-member data :dedicated-artifact))
+      (error "Unexpected artifact store fields in legacy sidecar"))
     (setq data (plist-put data :attached-artifacts attached))
+    (setq data (plist-put data :dedicated-artifact nil))
     (setq data (plist-put data :version "v0.5.11")))
   (mevedel-session-codec-validate-current-sidecar data))
 

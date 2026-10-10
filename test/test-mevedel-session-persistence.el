@@ -4124,13 +4124,17 @@
 (mevedel-deftest mevedel-session-persistence-without-dedicated ()
   ,test
   (test)
-  :doc "drops artifact conversations from a listing by session directory"
-  (cl-letf (((symbol-function 'mevedel-artifact-store-dedicated-ids)
-             (lambda (_workspace) '("b"))))
-    (should (equal '((:save-path "/s/a/") (:save-path "/s/c"))
-                   (mevedel-session-persistence-without-dedicated
-                    'workspace '((:save-path "/s/a/") (:save-path "/s/b/")
-                                 (:save-path "/s/c")))))))
+  :doc "drops a conversation only when it and its artifact name each other"
+  (cl-letf (((symbol-function 'mevedel-artifact-store-dedicated-p)
+             (lambda (_workspace session-id id)
+               (equal (list session-id id) '("b" "board")))))
+    (let ((a '(:summary (:session-id "a")))
+          (b '(:summary (:session-id "b" :dedicated-artifact "board")))
+          ;; A copied artifact does not name this one back.
+          (c '(:summary (:session-id "c" :dedicated-artifact "board"))))
+      (should (equal (list a c)
+                     (mevedel-session-persistence-without-dedicated
+                      'workspace (list a b c)))))))
 
 (mevedel-deftest mevedel-session-persistence-cleanup-expired (:quiet t)
   ,test
@@ -4183,9 +4187,15 @@
             (test-mevedel-session-persistence--expire-session session)
             (mevedel-session-persistence-lock-release
              (mevedel-session-save-path session) session)
-            (cl-letf (((symbol-function 'mevedel-artifact-store-dedicated-ids)
-                       (lambda (_workspace)
-                         (list (mevedel-session-session-id session)))))
+            (let* ((sidecar (mevedel-session-artifacts-sidecar-path
+                             (mevedel-session-save-path session)))
+                   (metadata (mevedel-session-codec-read sidecar)))
+              (mevedel-session-codec-write
+               sidecar (plist-put metadata :dedicated-artifact "flow")))
+            (cl-letf (((symbol-function 'mevedel-artifact-store-dedicated-p)
+                       (lambda (_workspace session-id id)
+                         (equal (list session-id id)
+                                (list (mevedel-session-session-id session) "flow")))))
               (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t))))
             (should (file-directory-p (mevedel-session-save-path session)))
             (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t))))

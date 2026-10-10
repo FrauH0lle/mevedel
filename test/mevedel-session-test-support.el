@@ -365,6 +365,7 @@ publication."
                :plan-metadata nil
                :goal nil
                :attached-artifacts nil
+               :dedicated-artifact nil
                :messages nil)))
     (let ((overrides plist))
       (while plist

@@ -270,7 +270,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     worktree-branch worktree-base-commit prompt-index file-snapshots
     ptc-checkpoints persisted-first-user-message durable-tree-ensured
     agent-transcripts invoked-skills permission-queue pending-plan-approval
-    plan-metadata goal attached-artifacts)
+    plan-metadata goal attached-artifacts dedicated-artifact)
   "Every `mevedel-session' slot decided by the logical clone constructor.")
 
 (defun mevedel-session-fork--assert-clone-slot-completeness ()
@@ -453,7 +453,9 @@ The identity and timestamp keywords describe the new materialized child."
                    (copy-tree (mevedel-session-goal session) t))
            ;; Forks share the attached artifacts by reference.
            :attached-artifacts
-           (copy-sequence (mevedel-session-attached-artifacts session)))))
+           (copy-sequence (mevedel-session-attached-artifacts session))
+           ;; A fork is the user's own chat, never the artifact's conversation.
+           :dedicated-artifact nil)))
     (when (and fork-p turn)
       (setf (mevedel-session-agent-transcripts child)
             (mevedel-session-rewind-reduce-agent-transcripts

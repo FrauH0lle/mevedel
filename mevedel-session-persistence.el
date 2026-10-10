@@ -43,9 +43,9 @@
 (autoload 'mevedel-agent-persistence-restore-tree "mevedel-agent-persistence")
 
 ;; `mevedel-artifact-store'
-(declare-function mevedel-artifact-store-dedicated-ids
-                  "mevedel-artifact-store" (workspace))
-(autoload 'mevedel-artifact-store-dedicated-ids "mevedel-artifact-store")
+(declare-function mevedel-artifact-store-dedicated-p
+                  "mevedel-artifact-store" (workspace session-id id))
+(autoload 'mevedel-artifact-store-dedicated-p "mevedel-artifact-store")
 
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer-disable-org-element-cache "mevedel-chat" nil)
@@ -1888,6 +1888,7 @@ mentions-shown reset to empty hash tables on load."
         :forked-from-fork-point-id
         (plist-get sidecar :forked-from-fork-point-id)
         :worktree-source-root (plist-get sidecar :worktree-source-root)
+        :dedicated-artifact (plist-get sidecar :dedicated-artifact)
         :worktree-directory (plist-get sidecar :worktree-directory)
         :worktree-branch (plist-get sidecar :worktree-branch)
         :worktree-base-commit (plist-get sidecar :worktree-base-commit)))
@@ -2385,17 +2386,22 @@ at `size unavailable' rather than hiding the chooser."
           (mevedel-session-persistence--incompatible-reason entry)
           (plist-get entry :save-path)))
 
+(defun mevedel-session-persistence--dedicated-p (workspace sidecar)
+  "Return non-nil when SIDECAR, or its summary, is an artifact's conversation.
+The session records its artifact and the artifact names it back; one
+whose artifact is gone is an ordinary session again."
+  (when-let* ((id (plist-get sidecar :dedicated-artifact)))
+    (mevedel-artifact-store-dedicated-p
+     workspace (plist-get sidecar :session-id) id)))
+
 (defun mevedel-session-persistence-without-dedicated (workspace entries)
   "Return listing ENTRIES of WORKSPACE without artifact conversations.
 An artifact's dedicated session is reached from its artifact, not listed
 among the user's chats."
-  (if-let* ((dedicated (mevedel-artifact-store-dedicated-ids workspace)))
-      (cl-remove-if (lambda (entry)
-                      (member (file-name-nondirectory
-                               (directory-file-name (plist-get entry :save-path)))
-                              dedicated))
-                    entries)
-    entries))
+  (cl-remove-if (lambda (entry)
+                  (mevedel-session-persistence--dedicated-p
+                   workspace (plist-get entry :summary)))
+                entries))
 
 (defun mevedel-session-persistence-choose-entry (workspace)
   "Choose a persisted WORKSPACE session or return `new'.
@@ -2847,14 +2853,11 @@ workspace was swept too recently."
         (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
               (now            (float-time))
               (deleted        0)
-              (candidates     nil)
-              ;; An artifact's conversation lives as long as the artifact.
-              (dedicated      (mevedel-artifact-store-dedicated-ids workspace)))
+              (candidates     nil))
           (dolist (save-path
                    (and (file-directory-p sessions-dir)
                         (directory-files sessions-dir t "\\`[^.]")))
-            (when (and (file-directory-p save-path)
-                       (not (member (file-name-nondirectory save-path) dedicated)))
+            (when (file-directory-p save-path)
               (let* ((sidecar-path
                       (mevedel-session-artifacts-sidecar-path save-path))
                      (sidecar
@@ -2865,10 +2868,12 @@ workspace was swept too recently."
                       (mevedel-session-persistence--observed-update-time
                        (plist-get sidecar :updated-at)
                        sidecar-path save-path)))
-                (push (list save-path
-                            (and parsed-time (float-time parsed-time))
-                            (plist-get sidecar :session-id))
-                      candidates))))
+                ;; An artifact's conversation lives as long as the artifact.
+                (unless (mevedel-session-persistence--dedicated-p workspace sidecar)
+                  (push (list save-path
+                              (and parsed-time (float-time parsed-time))
+                              (plist-get sidecar :session-id))
+                        candidates)))))
           ;; The newest sessions are exempt regardless of age: the chooser
           ;; sweeps before any lock is taken, so without this floor a
           ;; 30-day absence would delete the session the user came back to

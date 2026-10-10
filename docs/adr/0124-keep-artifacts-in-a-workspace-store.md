@@ -57,8 +57,9 @@ and validation; only an artifact's own files are written with ApplyPatch.
 Bash cannot write in the store at all.
 
 **Dedicated session.** Each artifact may have one dedicated session, created
-on first use for conversation started outside any chat. It is an ordinary
-session, hidden from session lists and the default chat target, reachable from
+on first use for conversation started outside any chat; the two name each
+other, and only while they agree does the session count as the artifact's.
+It is an ordinary session, hidden from session lists and the default chat target, reachable from
 the artifact as its conversation, and exempt from expiry while the artifact
 exists. Deleting the artifact closes and deletes it, unless a turn is running
 there; one that cannot be deleted yet stays as an ordinary session.
@@ -157,3 +158,10 @@ push out every earlier version, including the state before the turn.
   finishes, which blocked the artifact too. Deletion now closes an idle open
   conversation and keeps one it cannot delete yet as an ordinary session; only
   a running turn still refuses it.
+- **Who records the conversation.** At first only `meta.el` named its
+  dedicated session, and finding the dedicated sessions meant reading every
+  artifact's metadata -- on each default-chat lookup, lobby listing and
+  session chooser, 0.4 s at 50 artifacts over TRAMP. A `meta.el` copied
+  outside mevedel also made deleting the copy delete the original's
+  conversation. The session now records its artifact too, and only a pair
+  that agrees counts.
