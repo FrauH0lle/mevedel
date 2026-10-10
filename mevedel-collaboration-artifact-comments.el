@@ -457,7 +457,17 @@ action is refused."
                       (mapcar (lambda (c) (if (equal (plist-get c :id) (plist-get comment :id))
                                               comment c))
                               comments)))
-           (to-assistant (eq (plist-get frame :toAssistant) t)))
+           (to-assistant (eq (plist-get frame :toAssistant) t))
+           ;; Queue TEXT for the answering session, which the thread records.
+           (send (lambda (question-id text comment)
+                   (let* ((answer (mevedel-collaboration--artifact-ask
+                                   room guest record question-id text comment))
+                          (answered (mevedel-collaboration--artifact-comment-answered
+                                     comment answer)))
+                     (when answered
+                       (mevedel-collaboration--artifact-comments-update
+                        workspace id (funcall replace answered)))
+                     answer))))
       (pcase action
         ("list"
          (list :artifact id
@@ -490,17 +500,12 @@ action is refused."
                                (when-let* ((context (mevedel-collaboration--artifact-comment-context
                                                      (plist-get frame :context))))
                                  (list :context context))))))
-                answer answered)
+                answer)
            (unless existing
              (setq comments (append comments (list comment)))
              (mevedel-collaboration--artifact-comments-update workspace id comments))
            (when to-assistant
-             (setq answer (mevedel-collaboration--artifact-ask
-                           room guest record comment-id (plist-get comment :text) comment))
-             (when (setq answered (mevedel-collaboration--artifact-comment-answered
-                                   comment answer))
-               (mevedel-collaboration--artifact-comments-update
-                workspace id (funcall replace answered))))
+             (setq answer (funcall send comment-id (plist-get comment :text) comment)))
            (append (list :commentId comment-id) answer)))
         ("reply"
          (let* ((comment (or (funcall find (plist-get frame :commentId))
@@ -515,7 +520,7 @@ action is refused."
                                  :actor (mevedel-collaboration--artifact-comment-actor guest)
                                  :text (mevedel-collaboration--artifact-comment-message
                                         (plist-get frame :text)))))
-                answer answered)
+                answer)
            (when (eq (plist-get comment :resolved) t)
              (error "Reopen this comment before replying"))
            (unless existing
@@ -527,12 +532,7 @@ action is refused."
              (setq comments (funcall replace comment))
              (mevedel-collaboration--artifact-comments-update workspace id comments))
            (when to-assistant
-             (setq answer (mevedel-collaboration--artifact-ask
-                           room guest record reply-id (plist-get reply :text) comment))
-             (when (setq answered (mevedel-collaboration--artifact-comment-answered
-                                   comment answer))
-               (mevedel-collaboration--artifact-comments-update
-                workspace id (funcall replace answered))))
+             (setq answer (funcall send reply-id (plist-get reply :text) comment)))
            (append (list :commentId (plist-get comment :id) :replyId reply-id)
                    answer)))
         ("resolve"
