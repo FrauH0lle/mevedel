@@ -1588,7 +1588,8 @@ leave an older retained manifest naming data files it removed, and older
 generations may hold sidecars older than v0.5.6; the copy drops such a
 manifest, and a portable session's stale fixed sidecar, while keeping their
 data files. The published head itself must be complete and convertible. A
-failed conversion removes only its new copy. The runtime loader continues to
+released lease naming no head is a session closed before it ever saved; it has
+no metadata to convert. A failed conversion removes only its new copy. The runtime loader continues to
 accept only the current schema.
 
 The converter keeps the session ID, so never leave both copies in the sessions
@@ -1618,7 +1619,8 @@ comments move with their file, and each thread keeps answering in the session
 that discussed it. Every new artifact starts with one version. The session is
 then converted as above into the destination, attached to the artifacts it
 held; it is not made their dedicated session. A session no converter accepts,
-such as one older than v0.5.6, is copied unchanged. The script prints each
+such as one older than v0.5.6 or one closed before it ever saved, is copied
+unchanged. The script prints each
 session's artifacts.
 
 Nothing in the original sessions changes, and their old `artifacts/` entries
