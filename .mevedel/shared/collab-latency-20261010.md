@@ -186,6 +186,12 @@ about 75 ms plus rendering; the browser no longer waits up to 300 ms.
 | Edit seen, 20 guests, 5 writers | 259 ms | **103–109 ms** (p95 ~220) |
 | Edit seen, 20 guests, 10 writers every 100 ms | — | 201 ms |
 
+Review note: `loadbot.mjs` measured `joinMs` until each guest's `welcome`
+frame, which the host sends before the snapshot chunks, so the join rows
+above are time to welcome, not to a loaded transcript. The bot now waits
+for the final snapshot chunk; re-measure before comparing new join times
+with these.
+
 Every edit reached every guest in every run. A join now spends ~200 ms
 encoding the snapshot once and ~40 ms per 400 KB chunk per guest
 (masking, sealing, TLS write). Every commit republishes the workspace's

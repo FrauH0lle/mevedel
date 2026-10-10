@@ -62,8 +62,10 @@ class Guest {
     this.key = await crypto.subtle.importKey('raw', this.creds.key, 'AES-GCM', false, ['encrypt', 'decrypt']);
     this.ws = new WebSocket(this.creds.ws);
     this.ws.binaryType = 'arraybuffer';
-    const welcome = new Promise((resolve, reject) => {
-      const off = this.on((f) => { if (f.t === 'welcome') { off(); resolve(f); } });
+    // Joined once the snapshot's final chunk arrived, as the viewer leaves
+    // its loading state then; the welcome precedes every chunk.
+    const joined = new Promise((resolve, reject) => {
+      const off = this.on((f) => { if (f.t === 'snapshot-chunk' && f.final === true) { off(); resolve(f); } });
       this.ws.addEventListener('close', (e) => reject(new Error(`closed ${e.code}`)), { once: true });
     });
     this.ws.addEventListener('message', (event) => {
@@ -84,7 +86,7 @@ class Guest {
     this.send({ t: 'hello', proto: 3, name: `bot-${this.index}`, guestId: `bot-${this.index}-${process.pid}`,
                 writeToken: Buffer.from(this.creds.write).toString('base64url') });
     this.on((frame, at) => this.editingFrame(frame, at));
-    return welcome;
+    return joined;
   }
   on(handler) {
     this.handlers.add(handler);
