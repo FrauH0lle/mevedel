@@ -19,6 +19,14 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Lobby: let a lobby open a session whose same-host lock is provably stale
   (dead PID or PID reuse) without the Emacs prompt; today a crash leaves such
   sessions refusable only from the keyboard. See `docs/collaboration.md#the-lobby`.
+- Collaboration publishes while a reply streams still scan the whole
+  transcript's segments (`mevedel-transcript-segments`, about two thirds of a
+  retained publish: 8 of 12.5 ms at 1,001 records on the desktop). Resume the
+  scan from the last closed control before the first change. Evidence:
+  `.mevedel/shared/collab-latency-20261010.md`.
+- A guest prompt waits ~120 ms on the deployed host for the synchronous
+  session-transfer control programs in prompt admission before it is
+  inserted. Same evidence.
 
 ## Editor CPU
 
