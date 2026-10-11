@@ -73,13 +73,29 @@ are not urgent.")
 
 (defun mevedel-session-collection--arm (session job &optional wait)
   "Schedule the next idle slice for SESSION and JOB after WAIT idle seconds.
-WAIT defaults to `mevedel-session-collection--slice-interval'."
-  (when-let* ((timer (plist-get job :timer))) (cancel-timer timer))
-  (setf (plist-get job :timer)
-        (run-with-idle-timer
-         (+ (or wait mevedel-session-collection--slice-interval)
-            (if-let* ((idle (current-idle-time))) (float-time idle) 0))
-         nil #'mevedel-session-collection--step session job)))
+WAIT defaults to `mevedel-session-collection--slice-interval'.  An idle
+timer armed while the editor is already idle fires at once unless its
+time includes the idleness so far, and after input that sum must elapse
+again: one armed during a long absence then waited as long again once
+the user returned.  Already idle, WAIT therefore runs on an ordinary
+timer, and the slice falls back to an idle timer if input interrupted it."
+  (let ((wait (or wait mevedel-session-collection--slice-interval)))
+    (when-let* ((timer (plist-get job :timer))) (cancel-timer timer))
+    (setf (plist-get job :timer)
+          (if (current-idle-time)
+              (run-with-timer wait nil #'mevedel-session-collection--waited
+                              session job wait)
+            (run-with-idle-timer wait nil #'mevedel-session-collection--step
+                                 session job)))))
+
+(defun mevedel-session-collection--waited (session job wait)
+  "Step SESSION's JOB if the editor stayed idle for WAIT seconds.
+Otherwise wait for WAIT seconds of the current or next idle period."
+  (if (>= (if-let* ((idle (current-idle-time))) (float-time idle) 0) wait)
+      (mevedel-session-collection--step session job)
+    (setf (plist-get job :timer)
+          (run-with-idle-timer wait nil #'mevedel-session-collection--step
+                               session job))))
 
 (defun mevedel-session-collection--retry (session job)
   "Retry JOB for SESSION later, waiting twice as long as last time.

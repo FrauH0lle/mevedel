@@ -86,6 +86,39 @@
       (should-not (memq old timer-idle-list))
       (should (memq (plist-get job :timer) timer-idle-list)))))
 
+(mevedel-deftest mevedel-session-collection--waited (:quiet t)
+  ,test
+  (test)
+  :doc "after a long absence the returning user waits only the ordinary time"
+  (test-mevedel-collection--with-session
+    (mevedel-session-collection-schedule session)
+    (let ((job (gethash session mevedel-session-collection--jobs))
+          (idle 3600.0)
+          steps)
+      (cl-letf (((symbol-function 'current-idle-time)
+                 (lambda () (seconds-to-time idle)))
+                ((symbol-function 'mevedel-session-collection--step)
+                 (lambda (&rest args) (push args steps))))
+        (mevedel-session-collection--arm session job 8.0)
+        (let ((timer (plist-get job :timer)))
+          ;; The user returns before the wait elapses.
+          (setq idle 2.0)
+          (cancel-timer timer)
+          (apply (timer--function timer) (timer--args timer)))
+        (should-not steps)
+        (let ((timer (plist-get job :timer)))
+          (should (memq timer timer-idle-list))
+          (should (= 8.0 (float-time (timer--time timer)))))
+        ;; Still idle when the wait elapses: the slice runs.
+        (setq idle 3608.0)
+        (mevedel-session-collection--arm session job 8.0)
+        (let ((timer (plist-get job :timer)))
+          (should (memq timer timer-list))
+          (should (> (float-time (timer--time timer)) 8.0))
+          (cancel-timer timer)
+          (apply (timer--function timer) (timer--args timer)))
+        (should (equal (list (list session job)) steps))))))
+
 (mevedel-deftest mevedel-session-collection--retry (:quiet t)
   ,test
   (test)

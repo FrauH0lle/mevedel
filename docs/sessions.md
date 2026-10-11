@@ -1254,7 +1254,10 @@ without scanning history on the foreground path. The coalesced job reads at
 most eight generations per idle slice, yielding after 50 ms between reads.
 Slices run one idle second apart: each is a wakeup, and at 0.2 s a job that
 deleted a few files woke the editor three or four times a second for fifteen
-seconds after every turn.
+seconds after every turn. A wait armed while the editor is already idle is
+counted from then, and input during it restarts the count at the next idle
+period. Counting it on top of the idleness so far meant a slice armed during a
+long absence needed that much idle time again once the user returned.
 A single target read can exceed that budget. For local Linux sessions with more
 than sixteen uncached generations, a batch Emacs child prepares the compact
 immutable generation and sidecar observations. The editor caches those answers
