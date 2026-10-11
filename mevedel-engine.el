@@ -17,7 +17,9 @@
 
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
+(declare-function mevedel-auth-unready-reason "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
+(autoload 'mevedel-auth-unready-reason "mevedel-auth")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
@@ -142,22 +144,37 @@ Continuation must reconcile divergence instead of resuming hidden history."
               (when found (plist-put record :state 'diverged)))))))))
 
 (cl-defgeneric mevedel-engine-request-text
-    (backend prompt system callback &optional stream context)
+    (backend prompt system callback &optional stream context ready)
   "Generate isolated text through BACKEND in the current request buffer.
 PROMPT and SYSTEM are explicit strings; no conversation or tools are selected.
 CALLBACK follows gptel's text response/INFO convention.  STREAM selects chunk
-delivery.  CONTEXT carries workload telemetry ownership.  Return a canceller.
+delivery.  CONTEXT carries workload telemetry ownership.  READY, a
+zero-argument function, runs at most once, after the provider started and the
+prompt was submitted, so callers can time the response alone.  CALLBACK may
+settle before READY runs, or without it.  Return a canceller.
 Callers configure model/effort on the request buffer and own output validation,
 timeouts and buffer cleanup.")
 
 (cl-defmethod mevedel-engine-request-text
-  ((_backend gptel-backend) prompt system callback &optional stream context)
+  ((_backend gptel-backend) prompt system callback &optional stream context ready)
   (when gptel-tools (error "Isolated text requests cannot use tools"))
   (let ((buffer (current-buffer)))
     (mevedel-auth-assert-ready gptel-backend)
     (gptel-request prompt :buffer buffer :system system :stream stream
 		   :transforms nil :context context :callback callback)
+    (when ready (funcall ready))
     (lambda () (when (buffer-live-p buffer) (gptel-abort buffer)))))
+
+(cl-defgeneric mevedel-engine-text-unavailable (_backend)
+  "Return why BACKEND cannot answer an isolated text request now, or nil.
+A reason is a credential-free diagnostic and positive knowledge that the
+provider is unusable here: missing sign-in, credentials or runtime.  Nil
+promises nothing; the request itself can still fail.  Checking may begin
+asynchronous credential renewal."
+  nil)
+
+(cl-defmethod mevedel-engine-text-unavailable ((backend gptel-backend))
+  (mevedel-auth-unready-reason backend))
 
 (provide 'mevedel-engine)
 ;;; mevedel-engine.el ends here

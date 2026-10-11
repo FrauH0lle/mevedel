@@ -9,19 +9,23 @@
 
 (require 'mevedel-acp)
 
-(defun mevedel-acp-text-request (launch prompt callback &optional stream)
+(defun mevedel-acp-text-request (launch prompt callback &optional stream ready)
   "Generate isolated text for PROMPT using ACP LAUNCH; return a canceller.
 CALLBACK receives RESPONSE and an info plist, using gptel's text callback
 convention: streamed strings followed by t, one collected string otherwise,
 nil on failure or `abort' on cancellation.  INFO contains :stream, available
-:tokens and :error.  The current buffer owns the request; killing it cancels.
+:tokens and :error.  Terminal INFO also has :stage, `startup' before the
+prompt was submitted and `response' after, and the failure's structured :code
+\(see `mevedel-acp-open').  READY, a zero-argument function, runs once when
+startup succeeded and the prompt is submitted; a failed startup never calls it.
+The current buffer owns the request; killing it cancels.
 LAUNCH may specify :response-timeout in seconds after startup.
 LAUNCH must have no retained session.  Supplied MCP servers remain caller-owned."
   (when (plist-get launch :session-id)
     (error "Isolated text requests cannot use retained history"))
   (unless (and (stringp prompt) (functionp callback))
     (error "Isolated text requests require text and a callback"))
-  (let ((buffer (current-buffer)) connection finished chunks timer)
+  (let ((buffer (current-buffer)) connection finished chunks timer prompted)
     (cl-labels
         ((finish (outcome)
            (unless finished
@@ -37,7 +41,9 @@ LAUNCH must have no retained session.  Supplied MCP servers remain caller-owned.
                       ('interrupted 'abort)))
                    (info (list :buffer buffer :stream stream
                                :tokens (plist-get outcome :tokens)
-                               :error (plist-get outcome :message))))
+                               :error (plist-get outcome :message)
+                               :code (plist-get outcome :code)
+                               :stage (if prompted 'response 'startup))))
                (setq chunks nil)
                (with-current-buffer (if (buffer-live-p buffer) buffer (current-buffer))
                  (funcall callback response info)))))
@@ -75,10 +81,14 @@ LAUNCH must have no retained session.  Supplied MCP servers remain caller-owned.
                             timeout
                             (lambda ()
                               (finish '(:status error :message "ACP inspection response timed out"))))))
+                   (setq prompted t)
                    (mevedel-acp-prompt
                     active (vector `((type . "text") (text . ,prompt)))
-                    #'event #'finish))
-                 (lambda (message) (finish (list :status 'error :message message)))))
+                    #'event #'finish)
+                   (when (and ready (not finished))
+                     (with-current-buffer buffer (funcall ready))))
+                 (lambda (message code)
+                   (finish (list :status 'error :code code :message message)))))
         (error (finish (list :status 'error :message (error-message-string err))))
         (quit (cancel) (signal (car err) (cdr err))))
       #'cancel)))

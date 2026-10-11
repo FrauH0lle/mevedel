@@ -376,6 +376,7 @@ it read-only instead of corrupting the writer's transcript.
 | `mevedel-refresh-session`| Re-read the owner's newest published state now.                     |
 | `mevedel-save-session`   | Force a save; with prefix arg, save a copy under a fresh id.        |
 | `mevedel-rename-session` | Rename the current session without changing its ID or directory.              |
+| `mevedel-retry-session-naming` | Request a new automatic title, e.g. after a failed one; prefix arg asks for a description. |
 | `mevedel-rewind`         | Pick a previous prompt in the current session and rewind to it.    |
 
 | Custom Variable                          | Variable Description                                  |
@@ -673,7 +674,7 @@ the patch before applying it.
   `mevedel-request-directive-changes` / `mevedel-retry-directive`
 - `mevedel`
 - `mevedel-rewind` / `mevedel-redo` / `mevedel-save-session` /
-  `mevedel-rename-session`
+  `mevedel-rename-session` / `mevedel-retry-session-naming`
 - `mevedel-take-control` / `mevedel-release-control` /
   `mevedel-toggle-follow` / `mevedel-refresh-session`
 - `mevedel-process-directives`, `mevedel-next/previous-instruction`
@@ -777,8 +778,11 @@ capability remain intact.
 Unnamed sessions initially display their stable timestamp/random ID. The first
 prompt generates a descriptive title in the background through the `naming`
 workload (`fast` tier by default). Explicit names are preserved; failed title
-requests leave the ID displayed. `M-x mevedel-rename-session` changes the name
-without moving the session directory. Forks receive their own IDs and titles.
+requests leave the ID displayed and a notice naming the provider and cause. An
+unavailable naming provider (for example an expired login) falls back once to
+the session's own model. `M-x mevedel-retry-session-naming` tries again from the
+recorded prompt, and `M-x mevedel-rename-session` changes the name without
+moving the session directory. Forks receive their own IDs and titles.
 
 Named model tiers and workload assignments live in the current session preset.
 The global `mevedel-model-tiers` and `mevedel-model-workloads` values are the

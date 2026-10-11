@@ -596,6 +596,24 @@
         (plist-put plist :naming-state state))))
     (cl-remf plist :naming-state)
     (should-error (mevedel-session-codec-validate-current-sidecar plist)))
+  :doc "requires bounded plain naming input only for a consumed automatic attempt"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (dolist (state '(pending attempted explicit))
+      (should (mevedel-session-codec-validate-current-sidecar
+               (plist-put (plist-put plist :naming-state state) :naming-input nil))))
+    (setq plist (plist-put plist :naming-state 'attempted))
+    (should (mevedel-session-codec-validate-current-sidecar
+             (plist-put plist :naming-input (make-string 2000 ?x))))
+    (dolist (input (list "" "  \n" (make-string 2001 ?x) 'text 42
+                         (propertize "styled" 'face 'bold)))
+      (should-error (mevedel-session-codec-validate-current-sidecar
+                     (plist-put plist :naming-input input))))
+    (dolist (state '(pending explicit))
+      (should-error (mevedel-session-codec-validate-current-sidecar
+                     (plist-put (plist-put plist :naming-state state)
+                                :naming-input "Fix this"))))
+    (cl-remf plist :naming-input)
+    (should-error (mevedel-session-codec-validate-current-sidecar plist)))
   :doc "accepts only canonical persisted permission modes"
   (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
     (dolist (mode '(ask edits full-auto))
@@ -660,6 +678,8 @@
     (unwind-protect
         (let* ((source (test-mevedel-session-persistence--make-session root))
                (_ (setf (mevedel-session-plan-mode source) t
+                        (mevedel-session-naming-state source) 'attempted
+                        (mevedel-session-naming-input source) "Fix the chooser"
                         (mevedel-session-preset-name source) 'test-preset
                         (mevedel-session-model-provider source)
                         "Test:test-model"
@@ -694,6 +714,8 @@
                (session (plist-get result :session)))
           (should (mevedel-session-p session))
           (should (equal "main" (mevedel-session-name session)))
+          (should (eq 'attempted (mevedel-session-naming-state session)))
+          (should (equal "Fix the chooser" (mevedel-session-naming-input session)))
           (should (equal (file-name-as-directory
                           (file-name-concat root "packages" "api"))
                          (mevedel-session-working-directory session)))

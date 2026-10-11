@@ -150,11 +150,14 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.11"
+(defconst mevedel-session-codec-format-version "v0.5.12"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
 value and intentionally do not migrate older sidecars.")
+
+(defconst mevedel-session-codec-naming-input-limit 2000
+  "Maximum characters of authored naming input a session retains.")
 
 (defconst mevedel-session-codec--allowed-permission-actions
   '(allow deny ask)
@@ -163,7 +166,7 @@ Rules with other actions are dropped on load (a future version may
 add more, and we don't want to act on actions we don't understand).")
 
 (defconst mevedel-session-codec--required-sidecar-keys
-  '(:version :session-id :session-name :naming-state :workspace :working-directory
+  '(:version :session-id :session-name :naming-state :naming-input :workspace :working-directory
     :authority-mode :target-incarnation
     :created-at :updated-at :current-segment :total-turn-count
     :last-task-write-turn :task-status-notes :first-user-message
@@ -560,11 +563,14 @@ The resulting plist is round-trippable via
       (error "Invalid persisted permission mode: %S" permission-mode))
     (unless (memq sandbox-mode '(best-effort required off))
       (error "Invalid persisted sandbox mode: %S" sandbox-mode))
+    (mevedel-session-codec--check-naming (mevedel-session-naming-state session)
+                                         (mevedel-session-naming-input session))
     (list
    :version                mevedel-session-codec-format-version
    :session-id             (mevedel-session-session-id session)
    :session-name           (mevedel-session-name session)
    :naming-state           (mevedel-session-naming-state session)
+   :naming-input           (mevedel-session-naming-input session)
    :workspace              workspace-plist
    :authority-mode         authority-mode
    :working-directory
@@ -685,6 +691,21 @@ session's sidecar, rewritten by every save."
                  :result result
                  :render-data (copy-tree render-data t))))
 
+(defun mevedel-session-codec--check-naming (state input)
+  "Signal unless naming STATE and recorded INPUT form a valid pair.
+Only a consumed automatic attempt (`attempted') may retain INPUT: a
+nonblank property-free string of at most 2,000 characters, or nil when the
+authored prompt was never recorded."
+  (unless (memq state '(pending attempted explicit))
+    (error "Invalid persisted naming state: %S" state))
+  (unless (or (null input)
+              (and (eq state 'attempted) (stringp input)
+                   (<= (length input) mevedel-session-codec-naming-input-limit)
+                   (string-match-p "\\S-" input)
+                   (null (text-properties-at 0 input))
+                   (null (next-property-change 0 input))))
+    (error "Invalid persisted naming input for state %S" state)))
+
 (defun mevedel-session-codec-validate-current-sidecar (plist)
   "Return PLIST when it contains every current-version sidecar key."
   (unless (proper-list-p plist)
@@ -724,8 +745,8 @@ session's sidecar, rewritten by every save."
                  (string-match-p "\\S-" incarnation))
       (error "Invalid persisted target incarnation: %S" incarnation))
     incarnation)
-  (unless (memq (plist-get plist :naming-state) '(pending attempted explicit))
-    (error "Invalid persisted naming state: %S" (plist-get plist :naming-state)))
+  (mevedel-session-codec--check-naming (plist-get plist :naming-state)
+                                       (plist-get plist :naming-input))
   (unless (memq (plist-get plist :permission-mode) '(ask edits full-auto))
     (error "Invalid persisted permission mode: %S"
            (plist-get plist :permission-mode)))
@@ -879,6 +900,7 @@ their hygiene filters."
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
                      :naming-state     (plist-get plist :naming-state)
+                     :naming-input     (plist-get plist :naming-input)
                      :workspace        workspace
                      :execution-target execution-target
                      :authority-mode  (plist-get plist :authority-mode)

@@ -184,15 +184,22 @@ Never expose HTTP bodies in errors."
                               "Codex credential store is unavailable or locked; check host access and retry")
        (user-error "Codex credential store is unavailable or locked; check host access and retry")))))
 
-(defun mevedel-auth-assert-ready (backend)
-  "Reject stale Codex BACKEND credentials before gptel can prompt or block.
-Begin asynchronous renewal; callers retain their ordinary failure lifecycle."
+(defun mevedel-auth-unready-reason (backend)
+  "Return why Codex BACKEND credentials cannot be used now, or nil.
+Stale credentials begin asynchronous renewal, which can itself refuse a locked
+credential store.  The reason is a credential-free diagnostic."
   (setq-local mevedel-auth--managed t)
   (when (and (gptel-openai-oauth-p backend)
              (not (mevedel-auth-codex-ready-p backend)))
     (setq mevedel-auth--waiting-backend backend)
     (mevedel-auth-refresh backend)
-    (user-error "Codex login needs renewal; sign in or retry after refresh")))
+    "Codex login needs renewal; sign in or retry after refresh"))
+
+(defun mevedel-auth-assert-ready (backend)
+  "Reject stale Codex BACKEND credentials before gptel can prompt or block.
+Begin asynchronous renewal; callers retain their ordinary failure lifecycle."
+  (when-let* ((reason (mevedel-auth-unready-reason backend)))
+    (user-error "%s" reason)))
 
 (defun mevedel-auth--dispatch (original fsm)
   "Guard every managed FSM sample before ORIGINAL constructs OAuth headers."
@@ -341,7 +348,7 @@ Claude Code 2.1.295 prints it under `claude.com/cai'.")
                                                   (mevedel-claude-code--prepare-launch
                                                    nil cli environment
                                                    (lambda () (mevedel-auth--publish backend "ready" "Claude subscription login ready"))
-                                                   (lambda (_message) (mevedel-auth--publish backend "required" "Claude subscription login is required; check the selected account")))))
+                                                   (lambda (_message &optional _code) (mevedel-auth--publish backend "required" "Claude subscription login is required; check the selected account")))))
                                    (fail))))))
             (plist-put op :process process))
         (error (fail))))))

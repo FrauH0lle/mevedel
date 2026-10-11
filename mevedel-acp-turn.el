@@ -486,7 +486,8 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                                   (lambda () (finish '(:status interrupted))))
                                                (finish '(:status interrupted)))
                                            (error (finish (list :status 'error :message (error-message-string err))))))
-                                       (lambda (message) (finish (list :status 'error :message message)))))))
+                                       (lambda (message code)
+                                         (finish (list :status 'error :code code :message message)))))))
                           (error (finish (list :status 'error :message (error-message-string err))))
                           (quit (finish '(:status interrupted)) (signal (car err) (cdr err))))))))
         (condition-case err

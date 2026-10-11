@@ -96,10 +96,39 @@ and a 60-character display limit. These limits do not apply to manual names.
 The title request inherits the session's streaming choice and collects streamed
 chunks until it completes, so a backend that rejects a non-streaming request can
 still answer it.
-Inference has a 30-second timeout. The sidecar's `:naming-state` is `pending`,
-`attempted`, or `explicit`. An automatic attempt changes `pending` to `attempted`
-before inference; a saved consumed attempt is not retried on resume.
-Explicit creation, manual rename, and Save As establish `explicit` ownership.
+The provider has 30 seconds to reply, counted from submission of the prompt.
+Provider startup is bounded separately by its own lifecycle (30 seconds for a
+Claude native conversation), so a slow start does not consume the reply time;
+the deadline stops when the reply arrives, even if the title then waits for
+publication. The sidecar's `:naming-state` is `pending`, `attempted`, or
+`explicit`. An automatic attempt changes `pending` to `attempted` and records
+its bounded, property-free authored input in `:naming-input` before inference;
+a saved consumed attempt is not retried on resume. Only `attempted` may carry
+input, and it may be `nil` when none was recorded, as in migrated sessions.
+Explicit creation, manual rename, and Save As establish `explicit` ownership
+and drop the input. Fork children start `pending` without input; compaction
+keeps it.
+
+When the configured `naming` provider is positively unavailable, the title
+request falls back once to the root session's own backend and model, with the
+session's reasoning effort when that model supports it. Unavailability is
+established only by structured evidence: the provider's own readiness check
+(stale Codex credentials, a missing Claude runtime), a Claude launch check
+(missing subscription sign-in or an outdated executable), HTTP 401/403, the
+provider codes `invalid_api_key` and `model_not_available`, or ACP's
+authentication-required error during startup (its code is also JSON-RPC's
+generic server error, so it does not count once the prompt was sent). A
+timeout, cancellation, unusable reply, unknown model or other configuration
+error, or publication failure never falls back, and nothing
+falls back to an identical provider. The fallback changes neither the session's
+provider nor its preset.
+
+`M-x mevedel-retry-session-naming` repeats a title request from a chat or view
+buffer, using the recorded input. When no input was recorded it asks for a
+description; a prefix argument always asks. It never substitutes the session
+picker's first-message preview or conversation history. Retry replaces a title
+request in flight, requires session mutation authority, and refuses explicit
+names and transient conversations.
 
 A successful `/clear` cancels the old segment's naming operation and persists
 `pending` for automatically managed names with the new segment. The existing
@@ -112,24 +141,33 @@ separate a durable commit from its bookkeeping; target I/O can delay cancellatio
 An explicit name, manual rename, or root-buffer teardown also cancels pending naming.
 Every terminal attempt is one `session-naming` telemetry event: `renamed` on
 success, otherwise the failure outcome with a categorical `:error-class`
-(`provider`, `aborted`, `validation`, `timeout`, `cancelled`, or the local error
-symbol). `cancelled` reports an attempt dropped before dispatch because the
-transport was unavailable; an attempt the user ends by renaming the session or
-closing its root buffer records nothing. Provider failures add the provider's
-status, structured error type, and error code; provider message text is never
-recorded. Failures keep the previous title (initially the ID) and record that diagnostic without interrupting
-the conversation.
+(`provider`, `unavailable`, `aborted`, `validation`, `timeout`, `cancelled`, or
+the local error symbol). The event covers the whole operation, including a
+fallback: `:fallback t` marks one, and the outcome is the last provider's.
+`:trigger` is `automatic` or `retry`, and a failure adds its `:stage` (`start`,
+`startup`, or `response`). `cancelled` reports an attempt dropped before
+dispatch because the transport was unavailable; an attempt the user ends by
+renaming the session, retrying, or closing its root buffer records nothing.
+Provider failures add the provider's status, structured error type, and error
+code; provider message text is never recorded. Failures keep the previous title
+(initially the ID) without interrupting the conversation and leave a
+`session-naming` recovery notice. For the host and owners it names each
+attempted provider, the stage, a bounded cause, and the retry command; an HTTP
+provider's message text is never shown, as it can echo credentials. Other
+collaboration readers see only "Automatic session naming failed". A successful
+title, manual rename, or Save As name clears the notice.
 Transport and publication scheduling defer metadata work until it can run safely.
 
 `mevedel-rename-session` accepts readable Unicode names and normalizes whitespace.
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.11`, including recovery issues, retained input and pause state,
+The closed sidecar schema is `v0.5.12`, including recovery issues, retained input and pause state,
+naming input,
 the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
 and, for an artifact's own conversation, that artifact's id (`:dedicated-artifact`).
 Other schemas are rejected by the runtime loader; older sessions are converted
-only by the [explicit migration](#explicit-migration-to-v0511). Recovery records
+only by the [explicit migration](#explicit-migration-to-v0512). Recovery records
 contain issue messages, never credentials.
 Queued follow-ups retain text, attribution, scope and attachment grants. Live
 submission objects are excluded. Undelivered steering reloads as requiring review,
@@ -649,10 +687,10 @@ confirmation; declining aborts resume, while accepting binds the conversation
 to the opened workspace and discards copied session permission rules, resource
 grants, and additional roots.  The next save records the opened workspace's
 identity. Superseded sidecar shapes are not migrated during resume; the
-[explicit migration](#explicit-migration-to-v0511) runs separately.
+[explicit migration](#explicit-migration-to-v0512) runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.11`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.12`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions
@@ -1561,10 +1599,12 @@ An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
 
-### Explicit migration to v0.5.11
+### Explicit migration to v0.5.12
 
 The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-session-v0.5.6.el) converts
-v0.5.6, v0.5.9 and v0.5.10 sessions to v0.5.11. Close the source session first, then run
+v0.5.6, v0.5.9, v0.5.10 and v0.5.11 sessions to v0.5.12; a v0.5.12 session is
+only validated. Other versions, including v0.5.7 and v0.5.8, are not read.
+Close the source session first, then run
 from the repository root with a new destination outside the source directory:
 
 ```bash
@@ -1580,7 +1620,12 @@ conversion instead of being dropped silently by the runtime loader. New recovery
 formats did not persist queued input; previously unsaved queues cannot be recovered.
 Existing v0.5.10 sidecars retain their recovery state. A converted session
 starts with no attached artifacts unless the artifact migration below attaches
-the ones it moved. Restoring an interrupted
+the ones it moved; v0.5.11 sessions keep their attachments, and one that still
+holds legacy `artifacts/` is refused rather than having them moved without
+being attached. Titles and naming states are kept. No older format recorded
+naming input, so a converted session has none: an `attempted` title can still
+be retried, and `mevedel-retry-session-naming` asks for a description instead
+of guessing it from history. Conversion makes no model requests. Restoring an interrupted
 native conversation still requires explicit continuation through the current
 reader's recovery rules.
 

@@ -494,7 +494,8 @@ Routes through the lifecycle-aware permission transition path."
       (when (bound-and-true-p mevedel--session)
         (mevedel-session-naming-cancel)
         (unless (eq (mevedel-session-naming-state mevedel--session) 'explicit)
-          (setf (mevedel-session-naming-state mevedel--session) 'pending))
+          (setf (mevedel-session-naming-state mevedel--session) 'pending
+                (mevedel-session-naming-input mevedel--session) nil))
         (mevedel--run-session-start-hooks "clear"))
       (message "mevedel: cleared chat buffer")))))
 

@@ -248,7 +248,7 @@ lock.  A forced check reports a running check and its result in the echo area."
                                        (if (eq t (alist-get 'loadSession (mevedel-acp-capabilities checked)))
                                            (finish nil)
                                          (finish "Adapter cannot retain conversations; previous runtime remains selected")))
-                                     (lambda (_message)
+                                     (lambda (_message _code)
                                        (finish "Adapter protocol validation failed; previous runtime remains selected"))))))))))
                (check-cli (next)
                  (run (list candidate "--version")

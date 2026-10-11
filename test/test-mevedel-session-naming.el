@@ -68,6 +68,41 @@ same shape the real filter persists."
             (end-of-file))
           (nreverse entries))))))
 
+(defmacro test-mevedel-session-naming--with-engine (calls &rest body)
+  "Run BODY recording isolated title requests into CALLS, newest first.
+Each call is a plist of :backend, :model, :effort, :prompt, :callback,
+:ready and :buffer; its canceller adds :cancelled."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'mevedel-engine-request-text)
+              (lambda (backend prompt _system callback &optional _stream _context ready)
+                (let ((call (list :backend backend :model gptel-model
+                                  :effort gptel-reasoning-effort :prompt prompt
+                                  :callback callback :ready ready
+                                  :buffer (current-buffer) :cancelled nil)))
+                  (push call ,calls)
+                  (lambda () (plist-put call :cancelled t))))))
+     ,@body))
+
+(defmacro test-mevedel-session-naming--with-primary (primary &rest body)
+  "Run BODY with the naming workload resolved to a distinct PRIMARY backend."
+  (declare (indent 1))
+  `(let ((,primary (gptel--make-backend :name "naming-primary")))
+     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                (lambda (&rest _)
+                  (list :backend ,primary :model 'naming-model :effort nil))))
+       ,@body)))
+
+(defmacro test-mevedel-session-naming--await (calls count)
+  "Wait until CALLS holds COUNT title requests."
+  `(with-timeout (3 (ert-fail "Title request did not start"))
+     (while (< (length ,calls) ,count)
+       (accept-process-output nil 0.01))))
+
+(defun test-mevedel-session-naming--issue (session)
+  "Return SESSION's retained naming-failure notice, or nil."
+  (cl-find "session-naming" (mevedel-session-recovery-issues session)
+           :key (lambda (issue) (plist-get issue :id)) :test #'equal))
+
 (mevedel-deftest mevedel-session-naming-normalize ()
   ,test (test)
   :doc "preserves readable Unicode and collapses whitespace"
@@ -259,8 +294,10 @@ same shape the real filter persists."
         (funcall reply "Old task" nil)
         (let ((id (mevedel-session-session-id session))
               (path (mevedel-session-save-path session)))
+          (should (equal "Fix old task" (mevedel-session-naming-input session)))
           (mevedel-cmd--clear nil)
           (should (eq 'pending (mevedel-session-naming-state session)))
+          (should-not (mevedel-session-naming-input session))
           (should (equal "Old task" (mevedel-session-name session)))
           (test-mevedel-session-persistence--release-and-kill buffer session)
           (setq buffer (mevedel-session-persistence-restore path nil nil workspace)
@@ -327,20 +364,25 @@ same shape the real filter persists."
   :doc "cancelled and confirmed nonmaterialized clear preserve manual ownership"
   (dolist (state '(pending attempted explicit))
     (test-mevedel-session-naming--with-session
-      (setf (mevedel-session-naming-state session) state)
+      (setf (mevedel-session-naming-state session) state
+            (mevedel-session-naming-input session) (and (eq state 'attempted) "Old input"))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
         (mevedel-cmd--clear nil))
       (should (eq state (mevedel-session-naming-state session)))
+      (should (equal (and (eq state 'attempted) "Old input")
+                     (mevedel-session-naming-input session)))
       (should (equal "Fix the session chooser\n" (buffer-string)))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
         (mevedel-cmd--clear nil))
       (should (eq (if (eq state 'explicit) 'explicit 'pending)
                   (mevedel-session-naming-state session)))
+      (should-not (mevedel-session-naming-input session))
       (should-not (mevedel-session-save-path session))))
   :doc "failed sidecar publication preserves the old segment and naming attempt"
   (test-mevedel-session-naming--with-session
     (mevedel-session-artifacts-save session buffer)
-    (setf (mevedel-session-naming-state session) 'attempted)
+    (setf (mevedel-session-naming-state session) 'attempted
+          (mevedel-session-naming-input session) "Old input")
     (mevedel-session-artifacts-save session buffer)
     (let ((text (buffer-string))
           (path buffer-file-name)
@@ -357,12 +399,16 @@ same shape the real filter persists."
       (should (equal path buffer-file-name))
       (should (equal text (buffer-string)))
       (should (eq 'attempted (mevedel-session-naming-state session)))
+      (should (equal "Old input" (mevedel-session-naming-input session)))
       (should (eq 'attempted
-                  (plist-get (mevedel-session-codec-read sidecar) :naming-state)))))
+                  (plist-get (mevedel-session-codec-read sidecar) :naming-state)))
+      (should (equal "Old input"
+                     (plist-get (mevedel-session-codec-read sidecar) :naming-input)))))
   :doc "a post-commit presentation error cannot roll back the new naming state"
   (test-mevedel-session-naming--with-session
     (mevedel-session-artifacts-save session buffer)
-    (setf (mevedel-session-naming-state session) 'attempted)
+    (setf (mevedel-session-naming-state session) 'attempted
+          (mevedel-session-naming-input session) "Old input")
     (let ((notify (symbol-function 'mevedel-session-persistence-notify-session-event)))
       (cl-letf (((symbol-function 'mevedel-session-persistence-notify-session-event)
                  (lambda (owner event &rest args)
@@ -372,6 +418,7 @@ same shape the real filter persists."
         (should-error (mevedel-cmd--clear nil))))
     (should (= 2 (mevedel-session-current-segment session)))
     (should (eq 'pending (mevedel-session-naming-state session)))
+    (should-not (mevedel-session-naming-input session))
     (let ((sidecar (mevedel-session-codec-read
                     (mevedel-session-artifacts-sidecar-path
                      (mevedel-session-save-path session)))))
@@ -595,6 +642,7 @@ same shape the real filter persists."
   (dolist (in-flight '(nil t))
     (test-mevedel-session-naming--with-session
       (let ((old-id (mevedel-session-session-id session)) reply request-buffer)
+        (mevedel-recovery-report session "session-naming" 'request "Naming failed" nil)
         (cl-letf (((symbol-function 'gptel-request)
                    (lambda (_prompt &rest options)
                      (setq reply (plist-get options :callback)
@@ -610,12 +658,16 @@ same shape the real filter persists."
           (should (equal "My saved session" (mevedel-session-name session)))
           (should-not (equal old-id (mevedel-session-session-id session)))
           (should (eq 'explicit (mevedel-session-naming-state session)))
+          (should-not (mevedel-session-naming-input session))
+          (should-not (test-mevedel-session-naming--issue session))
           (should-not mevedel-session-naming--cancel)
           (should-not (buffer-live-p request-buffer))
           (let ((sidecar (mevedel-session-codec-read
                           (mevedel-session-artifacts-sidecar-path
                            (mevedel-session-save-path session)))))
             (should (equal "My saved session" (plist-get sidecar :session-name)))
+            (should (plist-member sidecar :naming-input))
+            (should-not (plist-get sidecar :naming-input))
             (should (eq 'explicit (plist-get sidecar :naming-state)))))))))
 
 (mevedel-deftest mevedel-session-naming-cancel (:quiet t)
@@ -961,6 +1013,336 @@ same shape the real filter persists."
         (delete-directory tempdir t)
         (mevedel-workspace-clear-registry)))))
 
+
+(mevedel-deftest mevedel-retry-session-naming (:quiet t)
+  ,test (test)
+  :doc "retries a failed title after resume from the recorded input and clears its notice"
+  (test-mevedel-session-naming--with-session
+    (let (calls)
+      (test-mevedel-session-naming--with-engine calls
+        (setf (mevedel-session-persisted-first-user-message session) "Preview only")
+        (mevedel-session-naming-consider session "  Fix the session chooser\n  ")
+        (test-mevedel-session-naming--await calls 1)
+        (should (equal "Fix the session chooser" (plist-get (car calls) :prompt)))
+        (should (equal "Fix the session chooser" (mevedel-session-naming-input session)))
+        (funcall (plist-get (car calls) :callback) nil '(:status "HTTP/2 500"))
+        (let ((notice (plist-get (test-mevedel-session-naming--issue session) :message)))
+          (should (string-search "M-x mevedel-retry-session-naming" notice)))
+        (mevedel-session-artifacts-save session buffer)
+        (let ((path (mevedel-session-save-path session)))
+          (should (equal "Fix the session chooser"
+                         (plist-get (mevedel-session-codec-read
+                                     (mevedel-session-artifacts-sidecar-path path))
+                                    :naming-input)))
+          (test-mevedel-session-persistence--release-and-kill buffer session)
+          (setq buffer (mevedel-session-persistence-restore path nil nil workspace)
+                session (buffer-local-value 'mevedel--session buffer)))
+        (with-current-buffer buffer
+          (should (eq 'attempted (mevedel-session-naming-state session)))
+          (should (equal "Fix the session chooser" (mevedel-session-naming-input session)))
+          (should (test-mevedel-session-naming--issue session))
+          (mevedel-retry-session-naming)
+          (test-mevedel-session-naming--await calls 2)
+          (should (equal "Fix the session chooser" (plist-get (car calls) :prompt)))
+          (funcall (plist-get (car calls) :callback) "Chooser fix" nil)
+          (should (equal "Chooser fix" (mevedel-session-name session)))
+          (should (eq 'attempted (mevedel-session-naming-state session)))
+          (should-not (test-mevedel-session-naming--issue session))
+          (should-not (test-mevedel-session-naming--issue
+                       (plist-get (mevedel-session-codec-deserialize
+                                   (mevedel-session-codec-read
+                                    (mevedel-session-artifacts-sidecar-path
+                                     (mevedel-session-save-path session)))
+                                   workspace)
+                                  :session)))))))
+  :doc "a view retry names its root session from supplied input"
+  (test-mevedel-session-naming--with-session
+    (let ((view (mevedel-view--ensure buffer)) calls)
+      (unwind-protect
+          (test-mevedel-session-naming--with-engine calls
+            (with-current-buffer view (mevedel-retry-session-naming "Name from the view"))
+            (test-mevedel-session-naming--await calls 1)
+            (should (equal "Name from the view" (plist-get (car calls) :prompt)))
+            (should (equal "Name from the view" (mevedel-session-naming-input session)))
+            (funcall (plist-get (car calls) :callback) "View title" nil)
+            (should (equal "View title" (mevedel-session-name session))))
+        (when (buffer-live-p view) (kill-buffer view)))))
+  :doc "asks for input when none was recorded instead of using the preview"
+  (test-mevedel-session-naming--with-session
+    (let (calls asked)
+      (setf (mevedel-session-naming-state session) 'attempted
+            (mevedel-session-persisted-first-user-message session) "Preview only")
+      (test-mevedel-session-naming--with-engine calls
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _) (setq asked t) "  ")))
+          (should-error (mevedel-retry-session-naming) :type 'user-error))
+        (should asked)
+        (should-not (mevedel-session-naming-input session))
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _) (propertize "Described task" 'face 'bold))))
+          (mevedel-retry-session-naming))
+        (test-mevedel-session-naming--await calls 1)
+        (should (= 1 (length calls)))
+        (should (equal "Described task" (plist-get (car calls) :prompt)))
+        (should-not (text-properties-at 0 (mevedel-session-naming-input session))))))
+  :doc "explicit names, transient conversations and refused authority start nothing"
+  (test-mevedel-session-naming--with-session
+    (let (calls)
+      (test-mevedel-session-naming--with-engine calls
+        (setf (mevedel-session-naming-state session) 'explicit)
+        (should-error (mevedel-retry-session-naming "Replace it") :type 'user-error)
+        (setf (mevedel-session-naming-state session) 'attempted
+              (mevedel-session-audit-session session) (mevedel-session-create "parent" workspace))
+        (should-error (mevedel-retry-session-naming "Replace it") :type 'user-error)
+        (setf (mevedel-session-audit-session session) nil)
+        (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+                   (lambda (&rest _) (user-error "Another client owns this session"))))
+          (should-error (mevedel-retry-session-naming "Replace it") :type 'user-error))
+        (accept-process-output nil 0.05)
+        (should-not calls)
+        (should-not mevedel-session-naming--cancel)
+        (should-not (mevedel-session-naming-input session)))))
+  :doc "supersedes a running title silently and records only the retry"
+  (test-mevedel-session-naming--with-session
+    (let (calls events)
+      (test-mevedel-session-naming--with-telemetry events
+        (test-mevedel-session-naming--with-engine calls
+          (mevedel-session-naming-consider session "First task")
+          (test-mevedel-session-naming--await calls 1)
+          (let ((old (car calls)))
+            (mevedel-retry-session-naming "Second task")
+            (should (plist-get old :cancelled))
+            (should-not (buffer-live-p (plist-get old :buffer)))
+            (test-mevedel-session-naming--await calls 2)
+            (funcall (plist-get old :callback) "Stale title" nil)
+            (funcall (plist-get (car calls) :callback) "Second title" nil))))
+      (should (equal "Second title" (mevedel-session-name session)))
+      (let ((event (test-mevedel-session-naming--naming-props events)))
+        (should (eq 'renamed (plist-get event :outcome)))
+        (should (eq 'retry (plist-get event :trigger))))))
+  :doc "a manual rename drops the recorded input and the failure notice"
+  (test-mevedel-session-naming--with-session
+    (let (calls)
+      (test-mevedel-session-naming--with-engine calls
+        (mevedel-session-naming-consider session "Fix this")
+        (test-mevedel-session-naming--await calls 1)
+        (funcall (plist-get (car calls) :callback) nil '(:status "HTTP/2 500"))
+        (should (test-mevedel-session-naming--issue session))
+        (mevedel-rename-session "Manual name")
+        (should (eq 'explicit (mevedel-session-naming-state session)))
+        (should-not (mevedel-session-naming-input session))
+        (should-not (test-mevedel-session-naming--issue session))))))
+
+(mevedel-deftest mevedel-session-naming-fallback (:quiet t)
+  ,test (test)
+  :doc "an unavailable naming provider falls back once to the session's own provider"
+  (dolist (mode '(checked reported))
+    (test-mevedel-session-naming--with-session
+      (test-mevedel-session-naming--with-primary primary
+        (let ((root-backend gptel-backend) (root-model gptel-model) calls events)
+          (cl-letf (((symbol-function 'mevedel-engine-text-unavailable)
+                     (lambda (backend)
+                       (and (eq mode 'checked) (eq backend primary)
+                            "Codex login needs renewal; sign in or retry after refresh"))))
+            (test-mevedel-session-naming--with-telemetry events
+              (test-mevedel-session-naming--with-engine calls
+                (mevedel-session-naming-consider session "Fix this")
+                (when (eq mode 'reported)
+                  (test-mevedel-session-naming--await calls 1)
+                  (should (eq primary (plist-get (car calls) :backend)))
+                  (funcall (plist-get (car calls) :callback) nil
+                           '(:status "HTTP/2 401" :error (:code 401 :message "expired"))))
+                (test-mevedel-session-naming--await calls (if (eq mode 'reported) 2 1))
+                (let ((call (car calls)))
+                  (should (eq root-backend (plist-get call :backend)))
+                  (should (eq root-model (plist-get call :model)))
+                  (funcall (plist-get call :callback) "Fallback title" nil)))))
+          (should (equal "Fallback title" (mevedel-session-name session)))
+          (should (eq root-backend gptel-backend))
+          (should (eq root-model gptel-model))
+          (let ((event (test-mevedel-session-naming--naming-props events)))
+            (should (eq 'renamed (plist-get event :outcome)))
+            (should (plist-get event :fallback)))))))
+  :doc "other failures and an equal provider never fall back"
+  (dolist (mode '(error timeout invalid aborted same-provider))
+    (test-mevedel-session-naming--with-session
+      (test-mevedel-session-naming--with-primary primary
+        (let ((timer-function (symbol-function 'run-at-time)) timeout calls events)
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (time repeat function &rest args)
+                       (if (equal time 30)
+                           (progn (setq timeout function) (timer-create))
+                         (apply timer-function time repeat function args))))
+                    ((symbol-function 'mevedel-model-resolve-workload)
+                     (if (eq mode 'same-provider)
+                         (lambda (&rest _) (list :backend gptel-backend :model gptel-model))
+                       (symbol-function 'mevedel-model-resolve-workload))))
+            (test-mevedel-session-naming--with-telemetry events
+              (test-mevedel-session-naming--with-engine calls
+                (mevedel-session-naming-consider session "Fix this")
+                (test-mevedel-session-naming--await calls 1)
+                (funcall (plist-get (car calls) :ready))
+                (let ((reply (plist-get (car calls) :callback)))
+                  (pcase mode
+                    ('error (funcall reply nil '(:status "HTTP/2 400" :error (:code "bad_request"))))
+                    ('timeout (funcall timeout))
+                    ('invalid (funcall reply " " nil))
+                    ('aborted (funcall reply 'abort nil))
+                    ('same-provider (funcall reply nil '(:status "HTTP/2 401")))))
+                (accept-process-output nil 0.05))))
+          (should (= 1 (length calls)))
+          (let ((event (test-mevedel-session-naming--naming-props events)))
+            (should-not (plist-get event :fallback))
+            (should-not (eq 'renamed (plist-get event :outcome))))))))
+  :doc "a failed fallback ends the operation and names both attempts"
+  (test-mevedel-session-naming--with-session
+    (test-mevedel-session-naming--with-primary primary
+      (let (calls events)
+        (cl-letf (((symbol-function 'mevedel-engine-text-unavailable)
+                   (lambda (backend) (and (eq backend primary) "Install the provider runtime"))))
+          (test-mevedel-session-naming--with-telemetry events
+            (test-mevedel-session-naming--with-engine calls
+              (mevedel-session-naming-consider session "Fix this")
+              (test-mevedel-session-naming--await calls 1)
+              (funcall (plist-get (car calls) :ready))
+              (funcall (plist-get (car calls) :callback) nil
+                       '(:status "HTTP/2 401" :error (:message "Incorrect key sk-secret-123")))
+              (accept-process-output nil 0.05))))
+        (should (= 1 (length calls)))
+        (let ((notice (plist-get (test-mevedel-session-naming--issue session) :message))
+              (event (test-mevedel-session-naming--naming-props events)))
+          (should (string-search "naming-primary:naming-model failed before sending: Install the provider runtime" notice))
+          (should (string-search "fallback to" notice))
+          (should (string-search "waiting for the reply" notice))
+          (should (string-search "HTTP/2 401" notice))
+          (should-not (string-search "sk-secret" notice))
+          (should (equal "Automatic session naming failed"
+                         (mevedel-recovery-public-message
+                          (test-mevedel-session-naming--issue session))))
+          (should (eq 'provider-error (plist-get event :outcome)))
+          (should (eq 'unavailable (plist-get event :error-class)))
+          (should (eq 'response (plist-get event :stage)))
+          (should (plist-get event :fallback))
+          (should-not (string-search "sk-secret" (format "%S" event)))))))
+  :doc "the fallback keeps the session's effort only when its model supports it"
+  (with-temp-buffer
+    (let ((primary (mevedel-session-naming--candidate
+                    (gptel--make-backend :name "naming-primary") 'naming-model nil))
+          (model (make-symbol "effort-model")))
+      (put model :reasoning-effort '(member low high))
+      (setq-local gptel-backend (gptel--make-backend :name "root")
+                  gptel-model model
+                  gptel-reasoning-effort 'high)
+      (should (eq 'high (mevedel-session-naming--candidate-effort
+                         (mevedel-session-naming--fallback (current-buffer) primary))))
+      (setq-local gptel-reasoning-effort 'max)
+      (should-not (mevedel-session-naming--candidate-effort
+                   (mevedel-session-naming--fallback (current-buffer) primary))))))
+
+(mevedel-deftest mevedel-session-naming--unavailable-p ()
+  ,test (test)
+  :doc "only structured availability evidence classifies a failure"
+  (dolist (info '((:status "HTTP/2 401") (:status "HTTP/1.1 403 Forbidden")
+                  (:error (:code 401)) (:error (:code "invalid_api_key"))
+                  (:error (:code "model_not_available"))
+                  (:code unavailable :stage startup :error "Sign in")
+                  (:code -32000 :stage startup :error "Authentication required")))
+    (should (mevedel-session-naming--unavailable-p info)))
+  (dolist (info '((:status "HTTP/2 400") (:status "HTTP/2 500")
+                  (:error (:code "model_not_found"))
+                  (:error (:message "unauthorized: please log in"))
+                  ;; JSON-RPC's generic server error after the prompt was sent.
+                  (:code -32000 :stage response :error "Internal error")
+                  (:stage startup :error "ACP startup timed out")
+                  nil))
+    (should-not (mevedel-session-naming--unavailable-p info))))
+
+(mevedel-deftest mevedel-session-naming-deadline (:quiet t)
+  ,test (test)
+  :doc "a title published before a presentation failure counts as renamed"
+  (test-mevedel-session-naming--with-session
+    (let ((notify (symbol-function 'mevedel-session-persistence-notify-session-event))
+          calls events)
+      (test-mevedel-session-naming--with-telemetry events
+        (test-mevedel-session-naming--with-engine calls
+          (mevedel-session-naming-consider session "Fix this")
+          (test-mevedel-session-naming--await calls 1)
+          (cl-letf (((symbol-function 'mevedel-session-persistence-notify-session-event)
+                     (lambda (owner event &rest args)
+                       (if (eq event 'rename)
+                           (error "Injected presentation failure")
+                         (apply notify owner event args)))))
+            (funcall (plist-get (car calls) :callback) "Committed title" nil))))
+      (should (equal "Committed title" (mevedel-session-name session)))
+      (should (eq 'renamed (plist-get (test-mevedel-session-naming--naming-props events)
+                                      :outcome)))
+      (should-not (test-mevedel-session-naming--issue session))))
+  :doc "the reply deadline starts once after submission and ends with the reply"
+  (test-mevedel-session-naming--with-session
+    (let ((timer-function (symbol-function 'run-at-time))
+          (mevedel-transport-retry-seconds 0.01)
+          deadlines calls events)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (time repeat function &rest args)
+                   (if (equal time 30)
+                       (progn (push function deadlines) (timer-create))
+                     (apply timer-function time repeat function args)))))
+        (test-mevedel-session-naming--with-telemetry events
+          (test-mevedel-session-naming--with-engine calls
+            (mevedel-session-naming-consider session "Fix this")
+            (test-mevedel-session-naming--await calls 1)
+            ;; Slow startup: nothing is timed before the prompt is submitted.
+            (accept-process-output nil 0.05)
+            (should-not deadlines)
+            (funcall (plist-get (car calls) :ready))
+            (funcall (plist-get (car calls) :ready))
+            (should (= 1 (length deadlines)))
+            (unwind-protect
+                (progn
+                  (setf (mevedel-session-publication-active-p session) t)
+                  (funcall (plist-get (car calls) :callback) "Deferred title" nil)
+                  ;; The reply arrived; a late deadline is stale.
+                  (funcall (car deadlines))
+                  (should mevedel-session-naming--cancel))
+              (setf (mevedel-session-publication-active-p session) nil))
+            (with-timeout (3 (ert-fail "Title did not apply after publication"))
+              (while mevedel-session-naming--cancel (accept-process-output nil 0.01))))))
+      (should (equal "Deferred title" (mevedel-session-name session)))
+      (should (eq 'renamed (plist-get (test-mevedel-session-naming--naming-props events)
+                                      :outcome)))))
+  :doc "a synchronous reply settles without starting a deadline"
+  (test-mevedel-session-naming--with-session
+    (let ((timer-function (symbol-function 'run-at-time)) deadline)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (time repeat function &rest args)
+                   (if (equal time 30) (setq deadline t)
+                     (apply timer-function time repeat function args))))
+                ((symbol-function 'mevedel-engine-request-text)
+                 (lambda (_backend _prompt _system callback &optional _stream _context ready)
+                   (funcall callback "Quick title" nil)
+                   (funcall ready)
+                   (lambda () (ert-fail "A finished request was cancelled")))))
+        (mevedel-session-naming-consider session "Fix this")
+        (with-timeout (3 (ert-fail "Title did not apply"))
+          (while (not (equal "Quick title" (mevedel-session-name session)))
+            (accept-process-output nil 0.01)))
+        (should-not deadline)
+        (should-not mevedel-session-naming--cancel))))
+  :doc "cancellation during submission cancels once the canceller exists"
+  (test-mevedel-session-naming--with-session
+    (let (cancelled request)
+      (cl-letf (((symbol-function 'mevedel-engine-request-text)
+                 (lambda (&rest _)
+                   (setq request (current-buffer))
+                   (with-current-buffer buffer (mevedel-session-naming-cancel))
+                   (should (buffer-live-p request))
+                   (lambda () (setq cancelled t)))))
+        (mevedel-session-naming-consider session "Fix this")
+        (with-timeout (3 (ert-fail "Title request did not start"))
+          (while (not request) (accept-process-output nil 0.01)))
+        (should cancelled)
+        (should-not (buffer-live-p request))
+        (should-not mevedel-session-naming--cancel)))))
 
 (provide 'test-mevedel-session-naming)
 ;;; test-mevedel-session-naming.el ends here

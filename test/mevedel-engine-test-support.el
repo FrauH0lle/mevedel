@@ -84,15 +84,17 @@ Fail when BODY leaves a timer the fixture does not own."
 (defmacro mevedel-engine-test--with-claude-session (&rest body)
   "Run BODY in `mevedel-engine-test--with-session' on Claude Code's sonnet.
 Claude's backend is registered in an otherwise empty catalog and keeps its
-state under the fixture root."
+state under the fixture root.  Like `mevedel-engine-test--claude-launch',
+the installation probe is skipped: fixture launches need no Claude runtime."
   (declare (indent 0) (debug t))
   `(mevedel-engine-test--with-session
      (let ((gptel--known-backends nil)
            (mevedel-claude-code-directory (file-name-concat root "claude")))
-       (mevedel-claude-code-register)
-       (mevedel-model-set-session-provider
-        session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-       ,@body)))
+       (cl-letf (((symbol-function 'mevedel-claude-code-unavailable-reason) #'ignore))
+         (mevedel-claude-code-register)
+         (mevedel-model-set-session-provider
+          session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+         ,@body))))
 
 (defun mevedel-engine-test--session-info (model)
   "Return the capabilities Claude's adapter reports for MODEL."

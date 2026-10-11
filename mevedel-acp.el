@@ -132,7 +132,8 @@ acp.el's sentinel ignores stop and continue events."
       (acp-shutdown :client (mevedel-acp-client connection))
       (cond
        (starting (funcall (mevedel-acp-failure connection)
-                          (or (plist-get outcome :message) "ACP connection closed")))
+                          (or (plist-get outcome :message) "ACP connection closed")
+                          (plist-get outcome :code)))
        ((mevedel-acp-active connection)
         (mevedel-acp--finish connection (mevedel-acp-active connection) outcome))))))
 
@@ -254,8 +255,9 @@ prompt starts, otherwise through the prompt's completion."
   "Open an external conversation described by LAUNCH.
 LAUNCH has :command, :args, absolute local :cwd, optional full :environment,
 :mcp server vector, agent-specific :meta, and optional :session-id to resume.
-Optional :prepare-launch receives zero-argument READY and error-string FAILURE
-callbacks and returns a canceller.  It runs while the agent process starts,
+Optional :prepare-launch receives zero-argument READY and FAILURE callbacks and
+returns a canceller; FAILURE takes an error string and an optional CODE, as
+below.  It runs while the agent process starts,
 and READY waits for it, so no prompt is sent before it succeeds; its failure,
 cancellation or the startup timeout closes the connection and retires late
 callbacks.
@@ -269,7 +271,10 @@ Optional :compaction advertises support for retained session summaries.
 Optional :normalize-outcome translates adapter-specific terminal metadata and
 usage into an outcome plist; generic ACP cannot infer its accounting scope.
 READY receives this connection after admission; FAILURE receives an error
-string if startup fails.  Return the runtime connection immediately."
+string and a CODE if startup fails.  CODE is the agent's JSON-RPC error code,
+the symbol `unavailable' when a launch check found the provider unusable
+\(missing sign-in or runtime), or nil.  Return the runtime connection
+immediately."
   (let ((cwd (plist-get launch :cwd)))
     (unless (and (stringp cwd) (file-name-absolute-p cwd)
                  (not (file-remote-p cwd)) (file-directory-p cwd))
@@ -378,11 +383,13 @@ string if startup fails.  Return the runtime connection immediately."
                                (setf (mevedel-acp-prepare-cancel connection) nil
                                      (mevedel-acp-checked connection) t)
                                (mevedel-acp--ready connection)))
-                           (lambda (message)
+                           (lambda (message &optional code)
                              (unless done
                                (setq done t)
                                (setf (mevedel-acp-prepare-cancel connection) nil)
-                               (mevedel-acp--fail connection message)))))
+                               (mevedel-acp--fail
+                                connection (if code `((message . ,message) (code . ,code))
+                                             message))))))
                     (when (and pending-cancel cancel) (funcall cancel)))
                 (error (mevedel-acp--fail connection (error-message-string err)))))
           (setf (mevedel-acp-checked connection) t)))

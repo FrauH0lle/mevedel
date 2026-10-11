@@ -12,6 +12,7 @@
 
 (autoload 'mevedel-claude-code-request-text "mevedel-claude-code")
 (autoload 'mevedel-claude-code-request-workload "mevedel-claude-code")
+(autoload 'mevedel-claude-code-unavailable-reason "mevedel-claude-code")
 (autoload 'mevedel-claude-code-setup "mevedel-claude-code" nil t)
 (autoload 'mevedel-claude-code-install-adapter "mevedel-claude-code" nil t)
 
@@ -61,8 +62,11 @@ Keep this location stable to resume the installed CLI's retained histories."
 (cl-defmethod mevedel-engine-external-p ((_backend mevedel-claude-code-backend)) t)
 
 (cl-defmethod mevedel-engine-request-text
-  ((_backend mevedel-claude-code-backend) prompt system callback &optional stream _context)
-  (mevedel-claude-code-request-text prompt system callback stream))
+  ((_backend mevedel-claude-code-backend) prompt system callback &optional stream _context ready)
+  (mevedel-claude-code-request-text prompt system callback stream ready))
+
+(cl-defmethod mevedel-engine-text-unavailable ((_backend mevedel-claude-code-backend))
+  (mevedel-claude-code-unavailable-reason))
 
 (defun mevedel-claude-code--model (name &optional existing)
   "Return a backend-owned model named NAME, reusing EXISTING when possible.

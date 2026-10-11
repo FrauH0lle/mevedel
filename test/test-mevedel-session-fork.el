@@ -17,7 +17,7 @@
 (mevedel-deftest mevedel-session-fork-clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-		   (should (= 90
+		   (should (= 91
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -1010,6 +1010,8 @@
           (write-region "current checkout\n" nil source-file nil 'silent)
           (setf (mevedel-session-model-provider session)
                 "test-backend:test-model"
+                (mevedel-session-naming-state session) 'attempted
+                (mevedel-session-naming-input session) "Source naming input"
                 (mevedel-session-permission-mode session)
                 'full-auto
                 (mevedel-session-sandbox-mode session)
@@ -1046,6 +1048,7 @@
             (should (string= (mevedel-session-session-id child)
                              (mevedel-session-name child)))
             (should (eq 'pending (mevedel-session-naming-state child)))
+            (should-not (mevedel-session-naming-input child))
             (should (equal (mevedel-session-working-directory session)
                            (mevedel-session-working-directory child)))
             (should (eq 'conversation
@@ -1646,6 +1649,7 @@
                 (should (string= (mevedel-session-session-id child)
                                  (mevedel-session-name child)))
                 (should (eq 'pending (mevedel-session-naming-state child)))
+                (should-not (mevedel-session-naming-input child))
                 (should (eq 'worktree
                             (mevedel-session-fork-type child)))
                 (should (equal source-root

@@ -173,7 +173,7 @@ profile file larger and cost a little more per sample."
     :dirty-content-hash :dirty-file-count :dirty-state-hash :duration-ms
     :effective-wait-ms :effort :emacs-version :enqueue-goal-id
     :error-class :estimate :estimate-source :eval-mode :execution-id :exit-code
-    :exit-status :failure-class :failure-stage :filesystem :first-byte-seen
+    :exit-status :failure-class :failure-stage :fallback :filesystem :first-byte-seen
     :fresh-visible-prompt-estimate
     :gc-count :gc-ms :git-head :goal-id
     :gptel-commit :gptel-file-hash :gptel-version :handler-count

@@ -57,6 +57,10 @@
                   "mevedel-session-fork"
                   (session policy &rest keys))
 
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-adopt-explicit "mevedel-session-naming" (session name))
+(autoload 'mevedel-session-naming-adopt-explicit "mevedel-session-naming")
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-lock-acquire
                   "mevedel-session-persistence"
@@ -93,8 +97,6 @@
 (declare-function mevedel-session-lease
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-naming-state
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-publication
                   "mevedel-structs" (cl-x) t)
@@ -345,9 +347,6 @@ parent identity."
             (mevedel-session-durability-adopt-owned-lease session child)
             (setf (mevedel-session-session-id session)
                   (plist-get transaction :new-id)
-                  (mevedel-session-name session)
-                  (plist-get transaction :new-name)
-                  (mevedel-session-naming-state session) 'explicit
                   ;; The saved copy is the user's own chat.
                   (mevedel-session-dedicated-artifact session) nil
                   (mevedel-session-forked-from-session-id session)
@@ -358,6 +357,7 @@ parent identity."
                   (mevedel-session-updated-at child)
                   (mevedel-session-publication session)
                   (plist-get transaction :publication))
+            (mevedel-session-naming-adopt-explicit session (plist-get transaction :new-name))
             (with-current-buffer buffer
               (setq buffer-file-name
                     (and (plist-get transaction :old-buffer-file)

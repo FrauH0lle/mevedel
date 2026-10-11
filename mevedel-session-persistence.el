@@ -197,9 +197,11 @@
 
 ;; `mevedel-session-naming'
 (declare-function mevedel-rename-session "mevedel-session-naming" (new-name))
+(declare-function mevedel-session-naming-adopt-explicit "mevedel-session-naming" (session name))
 (declare-function mevedel-session-naming-cancel "mevedel-session-naming" ())
 (declare-function mevedel-session-naming-normalize "mevedel-session-naming" (name))
 (autoload 'mevedel-rename-session "mevedel-session-naming" nil t)
+(autoload 'mevedel-session-naming-adopt-explicit "mevedel-session-naming")
 (autoload 'mevedel-session-naming-cancel "mevedel-session-naming")
 (autoload 'mevedel-session-naming-normalize "mevedel-session-naming")
 
@@ -2688,13 +2690,12 @@ their directory.  Repoint DATA-BUF at the child after it commits."
                        :forked-from-session-id old-id)))
               (setf (mevedel-session-save-path session) new-save-path
                     (mevedel-session-session-id session) new-id
-                    (mevedel-session-name session) display-name
-                    (mevedel-session-naming-state session) 'explicit
                     ;; The saved copy is the user's own chat.
                     (mevedel-session-dedicated-artifact session) nil
                     (mevedel-session-forked-from-session-id session) old-id
                     (mevedel-session-forked-from-turn session)
                     (mevedel-session-turn-count session))
+              (mevedel-session-naming-adopt-explicit session display-name)
               (with-current-buffer data-buf
                 (when buffer-file-name
                   (setq buffer-file-name

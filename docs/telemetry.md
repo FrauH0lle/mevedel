@@ -232,11 +232,16 @@ cancellation releases the fence and leaves the machine retryable.
 - compaction threshold inputs, hook work, segment-save stages, publication,
   and total duration, plus context-summary purpose, provider/model/effort,
   outcome, and token usage without raw evidence, focus data, or generated text;
-- one terminal `session-naming` event per background title attempt: `renamed` on
+- one terminal `session-naming` event per background title operation, with
+  `:trigger` `automatic` or `retry`: `renamed` on
   success, otherwise `provider-error`, `aborted`, `invalid-response`, `timeout`,
   `cancelled`, or `error`, each with a categorical `:error-class`. `cancelled`
   covers an attempt the transport refused to schedule, and an attempt the user
-  ends by renaming the session or closing its root buffer records nothing.
+  ends by renaming the session, retrying, or closing its root buffer records
+  nothing. A positively unavailable provider has error class `unavailable`; a
+  one-time fallback to the session's own provider stays inside the same event,
+  marked `:fallback t`, whose outcome is the last provider's. Failures carry
+  their `:stage` (`start`, `startup`, or `response`).
   Provider failures also carry `:provider-status` and, when the provider
   structured its error, `:provider-error-type` and `:provider-error-code`;
   provider message text is never recorded, so a refusal is attributable to its

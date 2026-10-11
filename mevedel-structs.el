@@ -200,6 +200,7 @@ Each chat buffer has exactly one session. Multiple sessions can share a
 workspace."
   name              ; readable display name, initially the session id
   (naming-state 'explicit) ; `pending', `attempted', or user-owned `explicit'
+  naming-input      ; bounded authored prompt of an `attempted' automatic title, or nil
   workspace         ; mevedel-workspace struct (shared by reference)
   (execution-target nil :read-only t) ; immutable filesystem/process authority
   authority-mode    ; `portable' for project sessions, `pid-lock' for file sessions

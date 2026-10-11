@@ -42,7 +42,7 @@
 ;; `mevedel-engine'
 (declare-function mevedel-engine-external-p "mevedel-engine" (backend))
 (declare-function mevedel-engine-request-text "mevedel-engine"
-                  (backend prompt system callback &optional stream context))
+                  (backend prompt system callback &optional stream context ready))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload

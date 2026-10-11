@@ -147,11 +147,12 @@ describes transient overload."
 
 (defun mevedel-recovery-public-message (issue)
   "Return ISSUE's message for readers other than the host and owners.
-Readiness and runtime issues carry host diagnostics, which can name local
-paths; other readers see their category instead."
-  (if (member (plist-get issue :id) '("authentication" "runtime"))
-      (mevedel-recovery-message (plist-get issue :category))
-    (plist-get issue :message)))
+Readiness, runtime and session-naming issues carry host diagnostics, which
+can name local paths or providers; other readers see their category instead."
+  (pcase (plist-get issue :id)
+    ("session-naming" "Automatic session naming failed")
+    ((or "authentication" "runtime") (mevedel-recovery-message (plist-get issue :category)))
+    (_ (plist-get issue :message))))
 
 (defconst mevedel-recovery--input-keys
   '(:id :category :input :guest-name :guest-id :guest-paths :guest-invoke

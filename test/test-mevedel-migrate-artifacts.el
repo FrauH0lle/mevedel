@@ -26,6 +26,7 @@
                                       :target-native-root "/tmp/" :name "w")))))
     (cl-remf data :attached-artifacts)
     (cl-remf data :dedicated-artifact)
+    (cl-remf data :naming-input)
     data))
 
 (defconst mevedel-migrate-artifacts-test--board
@@ -287,6 +288,27 @@
                               (file-name-concat destination "s0" "artifacts" "shared-editing" "board-1.json"))
                              (buffer-string))))
             (should (member "mockup" (cdr (assoc "s1" report))))))
+      (delete-directory root t)))
+
+  :doc "refuses legacy artifacts in a store-aware session instead of dropping its attachments"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-aware-" t)))
+         (destination (file-name-concat root "converted")))
+    (unwind-protect
+        (let* ((directory (mevedel-migrate-artifacts-test--pid-session root "s1"))
+               (sidecar (file-name-concat directory "session.meta.el"))
+               (data (test-mevedel-session-persistence--complete-sidecar
+                      (list :version "v0.5.11" :session-id "s1" :session-name "Chat s1"
+                            :authority-mode 'pid-lock :attached-artifacts '("kept")
+                            :workspace (list :type 'file :workspace-id (make-string 64 ?a)
+                                             :target-native-root "/tmp/" :name "w")))))
+          (cl-remf data :naming-input)
+          (mevedel-migrate-session--write sidecar data)
+          (let ((report (mevedel-migrate-artifacts root destination)))
+            (should (eq :failed (cadr (assoc "s1" report))))
+            (should (equal (mevedel-migrate-session--hash sidecar)
+                           (mevedel-migrate-session--hash
+                            (file-name-concat destination "s1" "session.meta.el"))))
+            (should (file-exists-p (file-name-concat destination "s1" "artifacts" "mockup.html")))))
       (delete-directory root t)))
 
   :doc "fails a session holding a link, without copying what it points to"

@@ -27,5 +27,38 @@
       (should-not (mevedel-engine-steerable-p request))))
   (should-not (mevedel-engine-steerable-p (mevedel-request--create :id "plain"))))
 
+(mevedel-deftest mevedel-engine-request-text ()
+  ,test
+  (test)
+  :doc "a gptel request notifies readiness once, after the request is submitted"
+  (with-temp-buffer
+    (let ((gptel-backend (gptel--make-backend :name "engine-test"))
+          (gptel-tools nil)
+          events)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&rest _) (push 'submitted events))))
+        (should (functionp (mevedel-engine-request-text
+                            gptel-backend "prompt" "system" #'ignore nil nil
+                            (lambda () (push 'ready events))))))
+      (should (equal '(submitted ready) (reverse events)))))
+  :doc "a refused submission never reports readiness"
+  (with-temp-buffer
+    (let ((gptel-backend (gptel--make-backend :name "engine-test"))
+          (gptel-tools nil))
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&rest _) (user-error "Refused"))))
+        (should-error (mevedel-engine-request-text
+                       gptel-backend "prompt" "system" #'ignore nil nil
+                       (lambda () (ert-fail "Readiness after refusal")))
+                      :type 'user-error)))))
+
+(mevedel-deftest mevedel-engine-text-unavailable ()
+  ,test
+  (test)
+  :doc "a ready API-key backend reports no unavailability"
+  (with-temp-buffer
+    (should-not (mevedel-engine-text-unavailable
+                 (gptel--make-backend :name "engine-test")))))
+
 (provide 'test-mevedel-engine)
 ;;; test-mevedel-engine.el ends here

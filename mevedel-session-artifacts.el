@@ -3038,6 +3038,7 @@ absolute path on success, nil if SESSION is not yet materialized."
             (old-point (point))
             (old-modified-p (buffer-modified-p))
             (old-naming-state (mevedel-session-naming-state session))
+            (old-naming-input (mevedel-session-naming-input session))
             (old-prompt-index (copy-tree (mevedel-session-prompt-index session)))
             (old-head (plist-get (mevedel-session-publication session) :head))
             capture committed
@@ -3070,7 +3071,9 @@ absolute path on success, nil if SESSION is not yet materialized."
                          buffer-file-coding-system session old-current-segment))
                   (when (and clear
                              (not (eq (mevedel-session-naming-state session) 'explicit)))
-                    (setf (mevedel-session-naming-state session) 'pending))
+                    ;; Old history is never naming input for the new segment.
+                    (setf (mevedel-session-naming-state session) 'pending
+                          (mevedel-session-naming-input session) nil))
                   (cl-incf (mevedel-session-current-segment session))
                   (setq new-segment
                         (mevedel-session-artifacts-segment-path
@@ -3127,6 +3130,7 @@ absolute path on success, nil if SESSION is not yet materialized."
                          old-current-segment)
                    (setf (mevedel-session-updated-at session) old-updated-at
                          (mevedel-session-naming-state session) old-naming-state
+                         (mevedel-session-naming-input session) old-naming-input
                          (mevedel-session-prompt-index session) old-prompt-index)
                    (mevedel-session-artifacts--restore-segment-file
                     old-segment old-file-bytes)

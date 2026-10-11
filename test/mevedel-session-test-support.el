@@ -316,6 +316,7 @@ publication."
                :session-id "test-session"
                :session-name "x"
                :naming-state 'explicit
+               :naming-input nil
                :workspace '(:type project
                             :workspace-id
                             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

@@ -245,7 +245,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
              collect entry)))
 
 (defconst mevedel-session-fork--clone-slot-names
-  '(name naming-state workspace execution-target authority-mode working-directory
+  '(name naming-state naming-input workspace execution-target authority-mode working-directory
     tasks task-status-notes last-task-write-turn touched-files
     permission-rules resource-grants permission-mode sandbox-mode plan-mode
     directive-planning preset-name model-provider external-conversations
@@ -307,6 +307,9 @@ The identity and timestamp keywords describe the new materialized child."
           (mevedel-session--create
            :name (if fork-p session-id name)
            :naming-state (if fork-p 'pending 'explicit)
+           ;; A child's title is its own: Fork names from its next prompt, and
+           ;; Save As establishes an explicit name.
+           :naming-input nil
            :workspace (mevedel-session-workspace session)
            :execution-target (mevedel-session-execution-target session)
            :authority-mode (mevedel-session-authority-mode session)

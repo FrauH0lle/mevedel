@@ -95,7 +95,7 @@ turn startup's; a check already in flight is kept."
           (operation (list :key (mevedel-readiness--key) :state 'checking)))
       (setq mevedel-readiness--claude operation)
       (add-hook 'kill-buffer-hook #'mevedel-readiness-stop nil t)
-      (cl-flet ((settle (failure)
+      (cl-flet ((settle (failure &optional _code)
                   (when (buffer-live-p buffer)
                     (with-current-buffer buffer
                       (when (eq operation mevedel-readiness--claude)

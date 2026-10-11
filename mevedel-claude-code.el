@@ -28,7 +28,7 @@
 
 ;; `mevedel-acp-text'
 (declare-function mevedel-acp-text-request "mevedel-acp-text"
-                  (launch prompt callback &optional stream))
+                  (launch prompt callback &optional stream ready))
 (autoload 'mevedel-acp-text-request "mevedel-acp-text")
 
 ;; `mevedel-acp-workload'
@@ -71,13 +71,14 @@
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
-(defun mevedel-claude-code-request-text (prompt system callback &optional stream)
-  "Request isolated text for PROMPT and SYSTEM via CALLBACK, optionally STREAM."
+(defun mevedel-claude-code-request-text (prompt system callback &optional stream ready)
+  "Request isolated text for PROMPT and SYSTEM via CALLBACK, optionally STREAM.
+READY runs once the native conversation started and the prompt is submitted."
   (when gptel-tools (error "Isolated text requests cannot use tools"))
   (mevedel-acp-text-request
    (mevedel-claude-code-launch system [] (gptel--model-name gptel-model)
                                (bound-and-true-p gptel-reasoning-effort))
-   prompt callback stream))
+   prompt callback stream ready))
 
 (defun mevedel-claude-code-request-workload (prompt system tools callback before-tool boundary)
   "Run PROMPT with SYSTEM and TOOLS via CALLBACK, BEFORE-TOOL and BOUNDARY."
@@ -236,14 +237,15 @@ The package manifest detects npm updates whose launcher file is unchanged."
   "Check executable CHECKS and current CLI login before READY.
 Each check is (COMMAND MINIMUM LABEL). Cache only successful stable versions;
 authentication always runs with the captured isolated ENVIRONMENT.
-FAILURE receives a safe diagnostic. Return a cancellation function."
+FAILURE receives a safe diagnostic and, for a missing sign-in or an outdated
+executable, the code `unavailable'.  Return a cancellation function."
   (let (cancel-command finished)
     (cl-labels
         ((cancel ()
            (setq finished t)
            (when cancel-command (funcall cancel-command)))
-         (fail (message)
-           (unless finished (cancel) (funcall failure message)))
+         (fail (message &optional code)
+           (unless finished (cancel) (funcall failure message code)))
          (next ()
            (unless finished
              (condition-case err
@@ -263,7 +265,8 @@ FAILURE receives a safe diagnostic. Return a cancellation function."
                                       (condition-case err
                                           (let ((version (mevedel-claude-code--version output minimum)))
                                             (if (not version)
-                                                (fail (format "%s %s or newer is required" label minimum))
+                                                (fail (format "%s %s or newer is required" label minimum)
+                                                      'unavailable)
                                               (when (equal key (mevedel-claude-code--version-key command))
                                                 (puthash key version mevedel-claude-code--version-cache))
                                               (next)))
@@ -283,7 +286,8 @@ FAILURE receives a safe diagnostic. Return a cancellation function."
                                                (equal "firstParty" (plist-get status :apiProvider))
                                                (member (plist-get status :subscriptionType) '("pro" "max" "team" "enterprise")))
                                           (progn (setq finished t) (funcall ready))
-                                        (fail "Claude subscription login required; run `claude auth login' and select your Claude account"))))))
+                                        (fail "Claude subscription login required; run `claude auth login' and select your Claude account"
+                                              'unavailable))))))
                             #'fail t))))
                (error (fail (error-message-string err)))))))
       (next)
@@ -296,7 +300,7 @@ Return the success value; signal the failure diagnostic as a `user-error'."
   (let (done value failure)
     (let ((cancel (funcall start
                            (lambda (&optional result) (setq value result done t))
-                           (lambda (message) (setq failure message done t)))))
+                           (lambda (message &optional _code) (setq failure message done t)))))
       (unwind-protect
           (progn
             (while (not done) (accept-process-output nil 0.02))
@@ -503,6 +507,40 @@ rows include internal work and are not another copy of these prompt totals."
     (when (natnump cache) (setq tokens (append tokens (list :cache cache))))
     (plist-put outcome :tokens tokens)))
 
+(defun mevedel-claude-code--runtime-commands (runtime)
+  "Return the local executables a Claude launch needs, given maintained RUNTIME.
+The plist has :cli, :adapter, :node and :python.  Every refusal is a
+`user-error' naming the missing or outdated runtime piece."
+  (let ((cli (or (and (plist-get runtime :cli) (file-executable-p (plist-get runtime :cli))
+                      (plist-get runtime :cli))
+                 (executable-find mevedel-claude-code-executable)
+                 (user-error "Install Claude Code and run `claude auth login'")))
+        (adapter
+         (or (and mevedel-claude-code-adapter-executable
+                  (executable-find mevedel-claude-code-adapter-executable))
+             (and (not mevedel-claude-code-adapter-executable)
+                  (or (and (plist-get runtime :adapter) (file-executable-p (plist-get runtime :adapter))
+                           (plist-get runtime :adapter))
+                      (executable-find "claude-agent-acp")))
+             (user-error "Run M-x mevedel-claude-code-install-adapter to install the Claude connection adapter"))))
+    (unless (version<= "0.15.2" acp-package-version)
+      (user-error "Upgrade the Emacs acp package to 0.15.2 or newer"))
+    (list :cli cli :adapter adapter
+          :node (or (executable-find "node") (user-error "Install Node.js 22 or newer on the Emacs host"))
+          :python (or (executable-find "python3") (user-error "Install Python 3.8 or newer on the Emacs host")))))
+
+(defun mevedel-claude-code-unavailable-reason ()
+  "Return why no Claude conversation can start on this host, or nil.
+Only a missing or outdated local runtime is reported here; sign-in is checked
+asynchronously by each launch."
+  ;; A remote state directory is a configuration error the launch reports.
+  (unless (file-remote-p mevedel-claude-code-directory)
+    (let ((default-directory temporary-file-directory))
+      (condition-case err
+          (progn (mevedel-claude-code--runtime-commands (mevedel-claude-code-maintenance-state))
+                 nil)
+        (user-error (error-message-string err))))))
+
 (defun mevedel-claude-code-launch (system mcp model effort &optional session-id hook-command)
   "Prepare an authenticated Claude ACP launch for SYSTEM and MCP servers.
 MODEL is the explicit Claude model name.  EFFORT is a supported effort symbol
@@ -518,18 +556,9 @@ Return the generic ACP launch plist; no model request is made here."
   (mevedel-claude-code-maintenance-check)
   (let* ((runtime (mevedel-claude-code-maintenance-state))
          (directory (expand-file-name mevedel-claude-code-directory))
-         (cli (or (and (plist-get runtime :cli) (file-executable-p (plist-get runtime :cli))
-                       (plist-get runtime :cli))
-                  (executable-find mevedel-claude-code-executable)
-                  (user-error "Install Claude Code and run `claude auth login'")))
-         (adapter
-          (or (and mevedel-claude-code-adapter-executable
-                   (executable-find mevedel-claude-code-adapter-executable))
-              (and (not mevedel-claude-code-adapter-executable)
-                   (or (and (plist-get runtime :adapter) (file-executable-p (plist-get runtime :adapter))
-                            (plist-get runtime :adapter))
-                       (executable-find "claude-agent-acp")))
-              (user-error "Run M-x mevedel-claude-code-install-adapter to install the Claude connection adapter")))
+         (commands (mevedel-claude-code--runtime-commands runtime))
+         (cli (plist-get commands :cli))
+         (adapter (plist-get commands :adapter))
          (process-environment (copy-sequence process-environment))
          (default-directory temporary-file-directory))
     (dolist (name mevedel-claude-code--api-environment) (setenv name nil))
@@ -539,13 +568,9 @@ Return the generic ACP launch plist; no model request is made here."
     (setenv "ANTHROPIC_MODEL" model)
     ;; Configure effort only after discovery, including an explicit default.
     (setenv "CLAUDE_CODE_EFFORT_LEVEL" nil)
-    (unless (version<= "0.15.2" acp-package-version)
-      (user-error "Upgrade the Emacs acp package to 0.15.2 or newer"))
     (let* ((checks (list
-                    (list (or (executable-find "node") (user-error "Install Node.js 22 or newer on the Emacs host"))
-                          "22.0.0" "Node.js")
-                    (list (or (executable-find "python3") (user-error "Install Python 3.8 or newer on the Emacs host"))
-                          "3.8.0" "Python")
+                    (list (plist-get commands :node) "22.0.0" "Node.js")
+                    (list (plist-get commands :python) "3.8.0" "Python")
                     (list cli mevedel-claude-code--cli-version "Claude Code")
                     (list adapter mevedel-claude-code--adapter-version "Claude ACP adapter")))
            (environment process-environment)

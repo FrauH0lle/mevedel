@@ -35,6 +35,20 @@
            ,@body)
        (delete-directory directory t))))
 
+(defun mevedel-claude-code-test--launch-failure (model)
+  "Run MODEL's launch preparation and return its (MESSAGE CODE) failure, or nil."
+  (let (done result)
+    (let ((cancel (funcall (plist-get (mevedel-claude-code-launch "system" [] model 'low)
+                                      :prepare-launch)
+                           (lambda () (setq done t))
+                           (lambda (message &optional code)
+                             (setq result (list message code) done t)))))
+      (unwind-protect
+          (with-timeout (10 (ert-fail "Launch preparation did not settle"))
+            (while (not done) (accept-process-output nil 0.02)))
+        (funcall cancel)))
+    result))
+
 (mevedel-deftest mevedel-claude-code-usage-launch ()
   (mevedel-claude-code-test--with-cli
     (setenv "ANTHROPIC_API_KEY" "not-a-real-key")
@@ -157,6 +171,16 @@
       (should (string-search "node --version" (error-message-string failure)))
       (should-not (string-search "PRIVATE-DIAGNOSTIC" (error-message-string failure))))))
 
+(mevedel-deftest mevedel-claude-code-unavailable-reason ()
+  ,test
+  (test)
+  :doc "an installed runtime is available and a missing one names its installation"
+  (mevedel-claude-code-test--with-cli
+    (should-not (mevedel-claude-code-unavailable-reason))
+    (let ((mevedel-claude-code-executable (file-name-concat directory "missing-claude")))
+      (should (string-search "Install Claude Code"
+                             (mevedel-claude-code-unavailable-reason))))))
+
 (mevedel-deftest mevedel-claude-code-setup (:quiet t)
   ,test
   (test)
@@ -254,7 +278,7 @@
           (progn
             (setq connection
                   (mevedel-acp-open launch (lambda (_) (setq ready t))
-                                    (lambda (message) (setq failure message))))
+                                    (lambda (message _code) (setq failure message))))
             (mevedel-test--await 5 "Model discovery did not settle" (or ready failure))
             (should-not failure)
             ;; Session initialization discovers choices without any prompt.
@@ -479,6 +503,20 @@
 (mevedel-deftest mevedel-claude-code--prepare-launch ()
   ,test
   (test)
+  :doc "a missing sign-in or outdated runtime is reported as unavailable"
+  (progn
+    (mevedel-claude-code-test--with-cli
+      (setenv "MEVEDEL_TEST_LOGGED_OUT" "1")
+      (should (eq 'unavailable (cadr (mevedel-claude-code-test--launch-failure "sonnet")))))
+    (mevedel-claude-code-test--with-cli
+      (setenv "MEVEDEL_TEST_CLAUDE_VERSION" "2.1.292")
+      (should (eq 'unavailable (cadr (mevedel-claude-code-test--launch-failure "haiku"))))))
+  :doc "an unclassified prerequisite failure carries no availability code"
+  (mevedel-claude-code-test--with-cli
+    (setenv "MEVEDEL_TEST_NODE_FAILURE" "1")
+    (let ((failure (mevedel-claude-code-test--launch-failure "sonnet")))
+      (should (string-search "node --version" (car failure)))
+      (should-not (cadr failure))))
   :doc "unchanged versions are cached while every dispatch rechecks subscription login"
   (mevedel-claude-code-test--with-cli
     (let ((log (file-name-concat directory "checks.log")))
@@ -522,7 +560,7 @@
                          (push (alist-get :method (plist-get args :request)) methods)
                          (apply send args))))
               (setq connection (mevedel-acp-open launch (lambda (_) (setq ready t))
-                                                  (lambda (text) (setq failure text))))
+                                                  (lambda (text _code) (setq failure text))))
               (mevedel-test--await 2 "Authentication failure did not settle" failure))
             (should-not ready)
             (should-not (member "session/prompt" methods))
@@ -542,7 +580,7 @@
                        (push (alist-get :method (plist-get args :request)) methods)
                        (apply send args))))
             (setq connection (mevedel-acp-open launch (lambda (_) (ert-fail "Cancelled readiness started"))
-                                                (lambda (_) (cl-incf failures))))
+                                                (lambda (_message _code) (cl-incf failures))))
             (mevedel-acp-close connection)
             (accept-process-output nil 0.3)
             (should (eq 'closed (mevedel-acp-state connection)))

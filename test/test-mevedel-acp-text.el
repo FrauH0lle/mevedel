@@ -43,6 +43,36 @@
         (funcall cancel)
         (should (equal '("answer:hello") responses)))))
 
+  :doc "notifies readiness once, before the prompt's response, and marks its stage"
+  (with-temp-buffer
+    (let (events)
+      (mevedel-acp-text-request
+       (list :command (executable-find "python3")
+             :args (list mevedel-test--acp-peer) :cwd temporary-file-directory)
+       "hello"
+       (lambda (response info) (push (list response (plist-get info :stage)) events))
+       nil (lambda () (push 'ready events)))
+      (mevedel-test--await 5 "ACP text did not finish" (cl-find-if #'consp events))
+      (should (equal '(ready ("answer:hello" response)) (reverse events)))))
+
+  :doc "a startup failure reports its stage and structured code without readiness"
+  (with-temp-buffer
+    (let (result)
+      (mevedel-acp-text-request
+       (list :command (executable-find "python3")
+             :args (list mevedel-test--acp-peer) :cwd temporary-file-directory
+             :prepare-launch (lambda (_ready failure)
+                               (funcall failure "Sign in to continue" 'unavailable)
+                               #'ignore))
+       "hello"
+       (lambda (response info) (setq result (list response info)))
+       nil (lambda () (ert-fail "A failed startup reported readiness")))
+      (mevedel-test--await 5 "ACP startup failure was not delivered" result)
+      (should-not (car result))
+      (should (eq 'startup (plist-get (cadr result) :stage)))
+      (should (eq 'unavailable (plist-get (cadr result) :code)))
+      (should (equal "Sign in to continue" (plist-get (cadr result) :error)))))
+
   :doc "killing the owning workload buffer cancels its live prompt once"
   (let ((buffer (generate-new-buffer " *acp-text-owner*")) responses cancel)
     (unwind-protect
