@@ -43,8 +43,6 @@ open:
   another native backend. They keep the accepted 8-fps breathe/bounce and
   half-speed glyph cadences; native surfaces cover PGTK/Wayland only.
   Burst-and-pause glyph variants were rejected.
-- The 2-Hz telemetry heartbeat still incurs presentation work during
-  requests; lower that cost while keeping useful lag detection.
 - `mevedel-view--status-strip` still evaluates its cache key from several
   live lookups on every redisplay.
 - The whole-surface repaint itself is an Emacs pgtk behavior worth reporting
@@ -65,9 +63,6 @@ open:
 
 ### Animation and native presenter follow-ups
 
-- Freezing (input pause, zero fps) during a shimmer sweep holds the faded
-  band for the whole pause. Consider snapping a frozen shimmer to its rest
-  frame.
 - The native surface paints the frame's default background, ignoring
   buffer-local face remapping, `hl-line` and `alpha-background`; such rows
   show a mismatched box.
