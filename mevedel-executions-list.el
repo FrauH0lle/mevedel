@@ -97,19 +97,31 @@
    (mevedel-executions-list--session context)))
 
 (defun mevedel-executions-list--entry (item _context)
-  "Return tabulated row for execution ITEM."
-  (let ((id (plist-get item :execution-id)))
+  "Return tabulated row for execution ITEM.
+Numeric cells carry their number for `mevedel-executions-list--by-number'."
+  (let ((id (plist-get item :execution-id))
+        (seconds (or (plist-get item :wall-time-seconds) 0))
+        (bytes (or (plist-get item :output-bytes) 0)))
     (list
      id
      (vector
       id
       (or (plist-get item :owner) "")
       (if (plist-get item :tty) "PTY" "pipe")
-      (mevedel--duration-label
-       (or (plist-get item :wall-time-seconds) 0))
-      (number-to-string (or (plist-get item :output-bytes) 0))
+      (propertize (mevedel--duration-label seconds)
+                  'mevedel-executions-list-number seconds)
+      (propertize (number-to-string bytes)
+                  'mevedel-executions-list-number bytes)
       (format "%s" (or (plist-get item :sandbox-state) 'pending))
       (mevedel--truncate-display (or (plist-get item :command) "") 60 "…")))))
+
+(defun mevedel-executions-list--by-number (column)
+  "Return a predicate ordering rows by the number behind COLUMN's cells.
+The default predicate compares the displayed text, so 1m 05s sorted
+before 9s."
+  (lambda (a b)
+    (< (get-text-property 0 'mevedel-executions-list-number (aref (cadr a) column))
+       (get-text-property 0 'mevedel-executions-list-number (aref (cadr b) column)))))
 
 (defun mevedel-executions-list--header (items context)
   "Return cockpit header for execution ITEMS and CONTEXT."
@@ -200,8 +212,8 @@
     :format [("Execution" 15 t)
              ("Owner" 20 t)
              ("Mode" 6 t)
-             ("Elapsed" 9 t)
-             ("Bytes" 10 t)
+             ("Elapsed" 9 ,(mevedel-executions-list--by-number 3))
+             ("Bytes" 10 ,(mevedel-executions-list--by-number 4))
              ("Sandbox" 12 t)
              ("Command" 0 t)]
     :sort-key ("Execution" . nil)

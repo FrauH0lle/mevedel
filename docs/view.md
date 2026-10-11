@@ -1151,7 +1151,7 @@ directive, historical, agent, and side scopes cannot create one.
 While managed Bash work is live, the status zone shows its session-wide count
 as an `Executions` fragment. Activating it opens the execution cockpit. The
 main cockpit exposes the same surface as `Executions`, and `/ps` opens it
-directly. Execution start and settlement reconcile this fragment through the
+directly. Its Elapsed and Bytes columns sort by their numbers, not their text. Execution start and settlement reconcile this fragment through the
 normal managed-zone path, preserving composer text, point, and windows.
 
 ## Live browser collaboration

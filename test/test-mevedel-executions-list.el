@@ -84,6 +84,32 @@
       (when (buffer-live-p data) (kill-buffer data))
       (when (file-exists-p artifact) (delete-file artifact))))))
 
+(mevedel-deftest mevedel-executions-list--by-number
+  (:doc "sorts Elapsed and Bytes by their numbers, not their text")
+  (let* ((session (mevedel-session--create :name "main"))
+         (view (generate-new-buffer " *execution-list-view*"))
+         (data (generate-new-buffer " *execution-list-data*"))
+         (items (list (list :execution-id "long" :wall-time-seconds 65.2
+                            :output-bytes 20)
+                      (list :execution-id "short" :wall-time-seconds 9
+                            :output-bytes 100))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-execution-list-user)
+                   (lambda (_session) items)))
+          (with-current-buffer
+              (mevedel-executions-list-open
+               (mevedel-executions-list-test--context session view data))
+            (pcase-dolist (`(,column . ,first) '(("Elapsed" . "short")
+                                                 ("Bytes" . "long")))
+              (setq tabulated-list-sort-key (cons column nil))
+              (tabulated-list-print)
+              (goto-char (point-min))
+              (should (equal first (tabulated-list-get-id))))))
+      (when-let* ((buffer (get-buffer mevedel-executions-list-buffer-name)))
+        (kill-buffer buffer))
+      (kill-buffer view)
+      (kill-buffer data))))
+
 (mevedel-deftest mevedel-executions-list-send-input ()
   ,test
   (test)
