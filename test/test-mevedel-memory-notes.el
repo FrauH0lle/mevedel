@@ -78,6 +78,27 @@
                    (mevedel-memory-notes--ancestors "/w/.mevedel/shared/a/b/c.md" "/w/.mevedel/shared/")))
     (should-not (mevedel-memory-notes--ancestors "/w/.mevedel/shared/c.md" "/w/.mevedel/shared"))))
 
+(mevedel-deftest mevedel-memory-notes-workspace-busy-p
+    (:vars* ((workspace (mevedel-workspace--create :root "/tmp/mevedel-busy-ws/"))
+             (buffers nil))
+     :after-each ((mapc #'kill-buffer buffers)))
+  ,test
+  (test)
+  :doc "returns t, never the live request, and skips sessions without a root"
+  (cl-flet ((session-buffer (root request)
+              (let ((buffer (generate-new-buffer " *busy-probe*")))
+                (push buffer buffers)
+                (with-current-buffer buffer
+                  (setq-local mevedel--session
+                              (mevedel-session--create :workspace (mevedel-workspace--create :root root)))
+                  (setq-local mevedel--current-request request))
+                buffer)))
+    (session-buffer nil (list :request 'other-workspace))
+    (session-buffer "/tmp/elsewhere/" (list :request 'elsewhere))
+    (should-not (mevedel-memory-notes-workspace-busy-p workspace))
+    (session-buffer "/tmp/mevedel-busy-ws" (list :request 'live))
+    (should (eq t (mevedel-memory-notes-workspace-busy-p workspace)))))
+
 (mevedel-deftest mevedel-memory-notes-same-p ()
   ,test
   (test)

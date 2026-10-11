@@ -208,7 +208,7 @@ plain bullets. Conflicting file operations make the entire reply invalid."
                 (setq no-action (string-trim (buffer-substring-no-properties start (point))))))
              ((looking-at "- none\n")
               (when (and (eq (cdr section) 'notes) notes)
-		(error "Every admitted note requires a disposition"))
+                (error "Every admitted note requires a disposition"))
               (forward-line 1))
              (t
               (let ((count 0))

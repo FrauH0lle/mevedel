@@ -23,7 +23,8 @@ Evaluate one Elisp form and return its value and printed output.
 - `mode="batch"` runs a child `emacs --batch -Q` with the current `load-path` and
   session working directory. It does not inherit live buffers, variable values,
   or loaded packages. Require libraries needed by the check.
-- Evaluation uses the session working directory. Values print with `%S`; `print`,
+- Evaluation uses the session working directory. Values print with `%S`, with
+  shared and circular structure shown once as `#N=`/`#N#`; `print`,
   `prin1`, and `princ` output is returned as STDOUT. `message` is not captured.
   Errors can include output produced before failure. Large results have a bounded
   preview and retrieval address.

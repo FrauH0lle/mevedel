@@ -590,24 +590,29 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 
 (defun mevedel-tool-exec--eval-format-result
     (result output result-format)
-  "Format Eval RESULT and captured OUTPUT for RESULT-FORMAT."
-  (if (equal result-format "injection")
+  "Format Eval RESULT and captured OUTPUT for RESULT-FORMAT.
+Shared and circular structure prints once with #N= labels: live objects
+such as requests share so much structure that plain printing grows without
+bound and exhausted memory."
+  (let ((print-circle t))
+    (if (equal result-format "injection")
+        (concat
+         (format "%S" result)
+         (and (not (string-empty-p (or output "")))
+              (format "\n\nSTDOUT:\n%s" output)))
       (concat
-       (format "%S" result)
+       (format "Result:\n%S" result)
        (and (not (string-empty-p (or output "")))
-            (format "\n\nSTDOUT:\n%s" output)))
-    (concat
-     (format "Result:\n%S" result)
-     (and (not (string-empty-p (or output "")))
-          (format "\n\nSTDOUT:\n%s" output)))))
+            (format "\n\nSTDOUT:\n%s" output))))))
 
 (defun mevedel-tool-exec--eval-format-error (err output)
   "Format Eval error ERR and captured OUTPUT."
-  (concat
-   (format "Error: Eval failed with error %S: %S"
-           (car err) (cdr err))
-   (and (not (string-empty-p (or output "")))
-        (format "\n\nSTDOUT:\n%s" output))))
+  (let ((print-circle t))
+    (concat
+     (format "Error: Eval failed with error %S: %S"
+             (car err) (cdr err))
+     (and (not (string-empty-p (or output "")))
+          (format "\n\nSTDOUT:\n%s" output)))))
 
 (defun mevedel-tool-exec--eval-live (callback expression result-format preserve-ui)
   "Evaluate EXPRESSION in the live Emacs process.
@@ -659,6 +664,7 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
            (result-file ,result-file)
            (result-format ',result-format)
            (stdout-buffer (generate-new-buffer " *mevedel-eval-batch-stdout*"))
+           (print-circle t)
            result output)
        (unwind-protect
            (let ((standard-output stdout-buffer))

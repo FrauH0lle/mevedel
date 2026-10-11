@@ -109,14 +109,17 @@ whose contents it deletes."
           (mapconcat #'mevedel-resource-encode-component (split-string relative "/") "/")))
 
 (defun mevedel-memory-notes-workspace-busy-p (workspace)
-  "Return non-nil while a conversation in WORKSPACE runs or settles a turn."
+  "Return t while a conversation in WORKSPACE runs or settles a turn.
+Return a plain boolean, never the live request it observed."
   (let ((root (file-name-as-directory (expand-file-name (mevedel-workspace-root workspace)))))
-    (cl-some (lambda (buffer)
-               (when-let* ((session (buffer-local-value 'mevedel--session buffer))
-                           (other (mevedel-session-workspace session)))
-                 (and (equal root (file-name-as-directory (expand-file-name (mevedel-workspace-root other))))
-                      (mevedel-turn-busy-p buffer))))
-             (buffer-list))))
+    (and (cl-some (lambda (buffer)
+                    (when-let* ((session (buffer-local-value 'mevedel--session buffer))
+                                (other (mevedel-session-workspace session))
+                                (other-root (mevedel-workspace-root other)))
+                      (and (equal root (file-name-as-directory (expand-file-name other-root)))
+                           (mevedel-turn-busy-p buffer))))
+                  (buffer-list))
+         t)))
 
 
 ;;

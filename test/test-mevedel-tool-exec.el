@@ -1245,6 +1245,20 @@ the execution boundary owns the session's single unavailable warning"
            :mode "live"))
     (should (string-search (make-string 100 ?t) result))
     (should-not (string-search "Output truncated" result)))
+  :doc "prints shared structure once in live and batch results"
+  (dolist (mode '("live" "batch"))
+    (let (result)
+      (mevedel-tool-exec--eval
+       (lambda (r)
+         (setq result (mevedel-tool-exec-test--handler-result r)))
+       ;; Without shared-structure notation this prints 2^22 leaves.
+       (list :expression "(let ((x 1)) (dotimes (_ 22) (setq x (cons x x))) x)"
+             :mode mode))
+      (let ((deadline (+ (float-time) 30)))
+        (while (and (not result) (< (float-time) deadline))
+          (accept-process-output nil 0.05)))
+      (should (string-search "#1=" result))
+      (should (< (length result) 4096))))
   :doc "reports eval errors"
   (let (result)
     (mevedel-tool-exec--eval
