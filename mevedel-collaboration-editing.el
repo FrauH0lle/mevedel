@@ -270,10 +270,38 @@ retracted or never-delivered queue entry can be explicitly submitted again."
       (error "This question was already sent; start a new question for changed context"))
     receipt))
 
+(defun mevedel-collaboration-editing--selection-request (kind)
+  "Return the message standing for a selection sent without one, for item KIND.
+The sender chose to send only the selected content, so what is written in it
+is their request.  The snapshot that follows is labelled as data, which this
+line overrides for the selection itself.  A document's instruction text is
+removed afterwards, where it would pollute the content; a board's stays
+unless the sender asks otherwise."
+  (if (equal kind "document")
+      (concat "The sender sent only the selected passage, with no message: "
+              "carry out the instructions written in it, then remove that "
+              "instruction text from the document and keep the content it "
+              "applies to.  If the passage holds no instruction, ask what "
+              "the sender wants.")
+    (concat "The sender sent only the selected objects, with no message: "
+            "carry out the instructions written in them and leave those "
+            "objects on the board unless they say otherwise.  If the "
+            "selection holds no instruction, ask what the sender wants.")))
+
 (defun mevedel-collaboration-editing--ask (room guest args result)
-  "Queue an explicit question about committed RESULT, using guest ARGS."
+  "Queue an explicit question about committed RESULT, using guest ARGS.
+A selection may be sent without a message; see
+`mevedel-collaboration-editing--selection-request'."
   (or (mevedel-collaboration-editing--find-question room args)
-      (let* ((text (mevedel-collaboration--guest-text (plist-get args :text)))
+      (let* ((text (or (mevedel-collaboration--guest-text (plist-get args :text))
+                       (and (let ((raw (plist-get args :text)))
+                              (or (null raw) (and (stringp raw) (string-blank-p raw))))
+                            (not (plist-get args :commentId))
+                            (equal "selection"
+                                   (plist-get (plist-get result :snapshot) :scope))
+                            (mevedel-collaboration-editing--selection-request
+                             (or (plist-get result :kind)
+                                 (plist-get (plist-get result :snapshot) :kind))))))
              ;; The host renders the reviewed content within its question budget.
              (context (plist-get result :prompt))
              (data-buffer (mevedel-collaboration--room-data-buffer room))

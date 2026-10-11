@@ -462,6 +462,26 @@ blocking recovery of document content or posted discussions.
 attached. **Use whole document** explicitly changes its scope. The attached quote
 stays fixed when focus or the document selection moves elsewhere.
 
+### Sending a selection without a message
+
+A selection can be sent with no message, on a board or in a document: what is
+written in the selected content is then the request, for example a handwritten
+“draw it” beside a formula, or “Rephrase this paragraph” typed above the
+paragraph. The composer says so in its placeholder, and the whole board or
+document still needs a message, because it has no instruction of its own.
+
+The browser sends the empty message and the host words it, so the room sees,
+and the model receives, the same line in place of a message. It says the
+sender sent only the selection, tells the model to carry out the instructions
+written in it and, when there are none, to ask what the sender wants. This
+overrides the “user-provided data” label of the snapshot for the selection
+itself; the unselected content in the snapshot stays data, so another
+participant's text becomes an instruction only when someone selects and sends
+it. Afterwards the instruction text is removed from a document, where it would
+pollute the content, and left on a board unless it says otherwise. A written
+message always replaces the host's line, and a discussion thread always has
+one. Posting a comment still needs text.
+
 A request submits the posted human thread and its passage, without changing the
 assistant composer or including unposted reply text. The thread's latest human
 message is the visible request in the room and to the model; the whole thread

@@ -217,6 +217,10 @@ export class AssistantPanel {
     $('selected-question').setAttribute('aria-pressed', String(a?.snapshot.scope === 'selection'));
     $('selected-question').disabled = !this.draft.selectionAttachment && a?.snapshot.scope !== 'selection';
     $('selected-question').title = $('selected-question').disabled ? 'Select content and choose Ask about selection first.' : 'Use the passage or objects already attached to this question.';
+    $('question').placeholder = a?.snapshot.scope === 'selection'
+      ? (documentItem ? 'Add a message, or leave empty to send the selected passage as your request…'
+        : 'Add a message, or leave empty to send the selected objects as your request…')
+      : 'Ask a question or give an instruction…';
     $('ask').hidden = $('context-scope').hidden = this.state().readOnly;
     $('comment-form').hidden = this.drafts.view !== 'comments' || !this.drafts.comment.attachment || this.state().readOnly;
     $('comment-post').disabled = this.sendingComments.has('new');
@@ -224,7 +228,13 @@ export class AssistantPanel {
     this.changed();
   }
   async submit() {
-    if (this.sending || this.state().readOnly || !this.draft.text.trim()) return;
+    // Selected content may be sent alone: what is written in it is the request.
+    const alone = this.draft.attachment?.snapshot.scope === 'selection';
+    if (this.sending || this.state().readOnly) return;
+    if (!this.draft.text.trim() && !alone) {
+      this.notice('Write a question, or select content to send it alone.', true);
+      return;
+    }
     if (!this.draft.attachment) { this.begin('whole'); return; }
     this.sending = true;
     $('question-send').disabled = true;

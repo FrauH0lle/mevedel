@@ -521,6 +521,38 @@ test('editor interaction regressions', async (t) => {
         'switching scopes retains the captured area');
       await page.close();
     });
+    await t.test('a selection is sent without a message, a whole-board question is not', async () => {
+      const {page, frame} = await open({content:[
+        ...shape('a', 'rectangle', [0,0,100,100], 'A'),
+        ...shape('b', 'rectangle', [300,0,100,100], 'B'),
+      ]});
+      const [x0, y0, x1, y1] = await frame.locator('#canvas').evaluate(canvas => {
+        const at = (x, y) => new DOMPoint(x, y).matrixTransform(canvas.getScreenCTM());
+        const a = at(-20, -20), b = at(220, 140);
+        return [a.x, a.y, b.x, b.y];
+      });
+      const offset = await page.locator('iframe').boundingBox();
+      await page.mouse.move(offset.x + x0, offset.y + y0);
+      await page.mouse.down();
+      await page.mouse.move(offset.x + x1, offset.y + y1, {steps: 4});
+      await page.mouse.up();
+      await frame.locator('#selection-question').click();
+      assert.match(await frame.locator('#question').getAttribute('placeholder'), /leave empty to send the selected objects/);
+      assert.equal(await frame.locator('#question').inputValue(), '');
+      await frame.locator('#question-send').click();
+      await page.waitForFunction(() => window.messages.some(m => m.args?.action === 'ask'));
+      const ask = await page.evaluate(() => window.messages.find(m => m.args?.action === 'ask').args);
+      assert.equal(ask.text, '', 'the host, not the browser, words a selection sent alone');
+      assert.deepEqual(ask.selection, ['a']);
+      // The whole board has nothing of its own to say: it needs a message.
+      await page.evaluate(() => { window.messages.length = 0; });
+      await frame.locator('#whole-question').click();
+      await frame.locator('#question-send').click();
+      assert.match(await frame.locator('#assistant-notice').innerText(), /Write a question, or select content/);
+      assert.equal(await page.evaluate(() => window.messages.filter(m => m.args?.action === 'ask').length), 0);
+      assert.match(await frame.locator('#question').getAttribute('placeholder'), /Ask a question/);
+      await page.close();
+    });
     await t.test('board comments: comment tool, numbered markers, hover card, threads and resolution', async () => {
       const {page, frame} = await open({content:[
         ...shape('a', 'rectangle', [0,0,100,100], 'A'),

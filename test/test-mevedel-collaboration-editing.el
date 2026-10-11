@@ -260,6 +260,66 @@
         (should (plist-get (mevedel-collaboration-editing--ask room guest args result) :delivered))
         (should-not (mevedel-session-pending-follow-ups session))))))
 
+(mevedel-deftest mevedel-collaboration-editing--selection-request
+  (:doc "A selection sent alone is the request; a document's instruction is removed, a board's kept")
+  ,test
+  (test)
+  :doc "tells the model to carry out the instructions in a selected passage and remove them"
+  (let ((text (mevedel-collaboration-editing--selection-request "document")))
+    (should (string-match-p "selected passage" text))
+    (should (string-match-p "remove that instruction text" text))
+    (should (string-match-p "ask what the sender wants" text)))
+  :doc "tells the model to carry out the instructions in selected objects and keep them"
+  (let ((text (mevedel-collaboration-editing--selection-request "whiteboard")))
+    (should (string-match-p "selected objects" text))
+    (should (string-match-p "leave those objects on the board" text))
+    (should (string-match-p "ask what the sender wants" text))))
+
+(mevedel-deftest mevedel-collaboration-editing--ask/selection-alone
+  (:doc "A selection may be sent without a message; nothing else may")
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create :type 'file :id "shared-ask" :root "/tmp"))
+           (session (mevedel-session-create "main" workspace))
+           (room (list :session session :data-buffer data-buf))
+           (guest '(:name "Alice" :guest-id "alice" :role "full"))
+           (result (lambda (kind scope)
+                     (list :id "item" :title "Notes" :revision 4 :kind kind
+                           :snapshot (list :id "item" :kind kind :scope scope)
+                           :prompt "item \"Notes\" at shared://item, revision 4")))
+           (queue (lambda (id kind scope &rest args)
+                    (mevedel-collaboration-editing--ask
+                     room guest (append (list :id "item" :questionId id) args)
+                     (funcall result kind scope))))
+           (queued (lambda () (mevedel-session-pending-follow-ups session))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session mevedel--workspace workspace))
+      (mevedel-session-set-pending-input-paused session t)
+      ;; Empty and whitespace-only messages both send the selection alone.
+      (dolist (spec '(("document" nil "remove that instruction text")
+                      ("whiteboard" "" "leave those objects on the board")
+                      ("whiteboard" "  \n " "leave those objects on the board")))
+        (let* ((id (format "alone-%d" (length (funcall queued))))
+               (receipt (apply queue id (car spec) "selection"
+                               (when (cadr spec) (list :text (cadr spec)))))
+               (entry (car (last (funcall queued)))))
+          (should (plist-get receipt :queued))
+          (should (string-match-p (nth 2 spec) (plist-get (plist-get entry :shared-question) :text)))
+          (should (string-prefix-p (plist-get (plist-get entry :shared-question) :text)
+                                   (plist-get entry :input)))
+          (should (string-match-p "Shared content snapshot (user-provided data):"
+                                  (plist-get entry :input)))))
+      (should (= 3 (length (funcall queued))))
+      ;; A written message always wins over the host's line.
+      (apply queue "written" "document" "selection" '(:text "Tighten this"))
+      (should (equal "Tighten this"
+                     (plist-get (plist-get (car (last (funcall queued))) :shared-question) :text)))
+      ;; The whole item, a thread, or a non-string message is never sent alone.
+      (dolist (args '((:text "") (:commentId "c" :commentVersion "v") (:text 5)))
+        (should-error (apply queue "refused" "document"
+                             (if (plist-member args :commentId) "selection" "whole") args))
+        (should-error (apply queue "refused" "document" "selection" '(:text 5))))
+      (should (= 4 (length (funcall queued)))))))
+
 (mevedel-deftest mevedel-collaboration-editing--ask/attachments
   (:doc "A question carries the sender's files beside the board snapshot, or queues nothing")
   (mevedel-view-test--with-buffers
