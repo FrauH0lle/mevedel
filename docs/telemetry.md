@@ -139,18 +139,24 @@ cancellation releases the fence and leaves the machine retryable.
   request runs and for two minutes after it settles, since journal,
   collection and publication work follows settlement. Every timer delivered
   meanwhile reports how late it ran, since a stall delays every timer due
-  during it; a 500 ms heartbeat samples quiet stretches without other timers
-  and reports the worst delay since the previous heartbeat, once. A stall
-  shorter than the heartbeat with no timer due during it can go unseen. This
-  heartbeat shares a host wakeup with due GC maintenance, process-exit
-  recovery and quiet progress/metadata updates. Each callback retains its own
-  timing attribution; the shared dispatcher does not replace callback names.
-  Disabling telemetry stops the heartbeat at its next tick, since requests
-  no longer report settling to close their windows. Lateness the
-  previous heartbeat already saw is not counted again, and idle timers do not
-  count. The heartbeat was 100 ms until each wakeup was measured to repaint a
-  whole pgtk frame: on a 2x-scaled frame it cost 23% editor CPU on its own.
-  The event carries the delay, whether input was pending, whether the request
+  during it. A 100 ms heartbeat in its own Lisp thread samples the rest and
+  reports the worst delay since the previous heartbeat, once. The thread
+  needs the global lock, which the main thread releases only while it waits,
+  so busy Lisp, redisplay or collection makes it late. Its wakeups do not
+  redisplay: a timer heartbeat redisplayed the whole frame on every wakeup,
+  which pgtk presents in full (a 100 ms timer cost 23% editor CPU on a
+  2x-scaled frame, and the later 500 ms timer still cost a wakeup a
+  half-second). It runs with the timer lists unbound, since `sleep-for` would
+  otherwise run the editor's timers in it, and records its events itself. A
+  blocking remote operation releases the lock while it waits, so the
+  outermost one on the main thread counts as late as it took. Each callback
+  retains its own timing attribution; the shared timer dispatcher does not
+  replace callback names. Disabling telemetry stops the heartbeat at its next
+  sample, since requests no longer report settling to close their windows.
+  Lateness the previous heartbeat already saw is not counted again, and idle
+  timers do not count. The event carries the delay, whether input arrived
+  since the previous heartbeat (the main thread has handled it by the time
+  the heartbeat runs), whether the request
   had settled, the running command's name, and the name and duration of
   the slowest timer callback since the previous heartbeat. `:gc-count` and
   `:gc-ms` report garbage collection anywhere since the previous heartbeat;

@@ -148,8 +148,9 @@ uses the destination palette or the portable multi-frame fallback.
 Periodic housekeeping and metadata share host wakeups. Aligning separate timer
 deadlines alone still allowed redisplay between their callbacks on PGTK, so one
 UI-host timer now dispatches due callbacks together. GC maintenance, process-exit
-recovery and quiet progress retain whole-second updates; telemetry retains its
-half-second heartbeat and attributes each callback separately. Metadata-only
+recovery and quiet progress retain whole-second updates; telemetry attributes
+each callback separately. Its lag heartbeat is not a timer: a Lisp thread
+samples every 100 ms without redisplaying. Metadata-only
 views join the whole-second clock. Decorative Lisp animation and output-driven
 progress retain their natural deadlines. Missing execution rows trigger recovery
 only when their source, or a compound ancestor's source, is in the transcript;
@@ -1407,3 +1408,26 @@ the build is first attempted inside animation scheduling, where prompting is
 unsafe. A local end-to-end check with compilation disabled installed the
 container-built module from a local server and animated a request natively.
 
+### October 2026: a lag heartbeat that does not redisplay
+
+The half-second telemetry heartbeat was the last request-long timer that
+existed only to observe. Emacs redisplays after every timer it runs
+(`wait_reading_process_output`), and pgtk's `frame_up_to_date` hook flips and
+queues a draw of the whole frame after every redisplay; X builds flip only a
+frame that needs it. On the desktop (Emacs 31.1 pgtk, KDE Wayland), an
+`emacs -Q` frame of 1536x888 logical pixels used 1.7% CPU idle, 15.6% with a
+no-op 100 ms timer (216 redisplays in 15 s) and 0.9% with a Lisp thread waking
+every 100 ms in `sleep-for` (7 redisplays). A thread wakes without redisplay
+because `sleep-for` does not display, and it needs the global lock, which the
+main thread releases only while it waits: a busy loop makes it late, exactly
+what the heartbeat measures. It now samples every 100 ms instead of 500, so
+stalls shorter than the old interval are seen too.
+
+`sleep-for` runs due timers in whichever thread waits, so the heartbeat binds
+the timer lists to nil; a test fails without that binding. It records its own
+events, so their time is the stall's, and reports input that arrived since the
+previous sample rather than calling `input-pending-p`, which would read
+display events in that thread. A blocking remote operation waits with the lock
+released, so the thread runs on time through it; the outermost operation on
+the main thread is counted as late as it took. The timer heartbeat saw only
+the part of such a wait during which TRAMP had unbound the timer list.

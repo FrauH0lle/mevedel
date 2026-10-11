@@ -89,6 +89,9 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
+;; `mevedel-transport'
+(defvar mevedel-transport--depth)
+
 ;; `mevedel-utilities'
 (declare-function mevedel-library-source-directory "mevedel-utilities" (file))
 (autoload 'mevedel-library-source-directory "mevedel-utilities")
@@ -582,13 +585,13 @@ the `event-loop-lag-summary' each settled request records."
   :type 'number
   :group 'mevedel)
 
-(defconst mevedel-telemetry--lag-interval 0.5
+(defconst mevedel-telemetry--lag-interval 0.1
   "Seconds between heartbeats.
-Every wakeup costs a redisplay, and a pgtk frame repaints its whole surface
-on each one: a 100 ms heartbeat alone held a 2x-scaled 1536x888 frame at
-23% CPU and its compositor at 12%, for every request and its two-minute
-tail.  Ordinary timers already report their own lateness, so the heartbeat
-only samples quiet stretches in which no other timer is due.")
+The heartbeat runs in its own thread, which takes the global lock only
+while the editor's loop is waiting, so a busy loop makes it late.  Its
+wakeups do not redisplay: a timer at this rate redisplayed ten times a
+second, and a pgtk frame presents its whole surface on each redisplay
+\(15.6% editor CPU on a 1536x888 frame, against 0.9% for the thread).")
 
 (defconst mevedel-telemetry--lag-count-threshold 0.2
   "Event-loop delay, in seconds, counted in a request's lag summary.")
@@ -598,8 +601,9 @@ only samples quiet stretches in which no other timer is due.")
 Journal, collection and publication work follows settlement and can stall
 the editor as much as the request did.")
 
-(defvar mevedel-telemetry--lag-timer nil
-  "Repeating heartbeat timer, or nil while no session is watched.")
+(defvar mevedel-telemetry--lag-thread nil
+  "Heartbeat thread, or nil while no session is watched.
+A thread that finds itself replaced or cleared exits.")
 
 (defvar mevedel-telemetry--lag-due nil
   "Float time the next heartbeat is due.")
@@ -621,6 +625,9 @@ and COUNT being the collection time and count inside that callback.")
 
 (defvar mevedel-telemetry--lag-cpu nil
   "Emacs CPU seconds when the previous heartbeat ran.")
+
+(defvar mevedel-telemetry--lag-input nil
+  "`num-nonmacro-input-events' when the previous heartbeat ran.")
 
 (defun mevedel-telemetry--cpu-seconds ()
   "Return the CPU seconds this Emacs has used."
@@ -708,36 +715,76 @@ not the clock, and are not counted."
                         :gc-seconds (- gc-elapsed gc-seconds)
                         :gc-count (- gcs-done gc-count)))))))))
 
+(defun mevedel-telemetry--lag-time-remote (original &rest arguments)
+  "Apply ORIGINAL to ARGUMENTS, counting a blocking remote operation as lag.
+TRAMP waits for a remote command in `accept-process-output' and `sit-for',
+releasing the global lock, so the heartbeat runs on time while the editor
+cannot run a command.  The outermost operation on the main thread is
+therefore counted as late as it took, once it returns."
+  (if (or (> mevedel-transport--depth 0)
+          (not (eq (current-thread) main-thread)))
+      (apply original arguments)
+    (let ((start (float-time)))
+      (unwind-protect (apply original arguments)
+        (setq mevedel-telemetry--lag-late
+              (max mevedel-telemetry--lag-late (- (float-time) start)))))))
+
+(defun mevedel-telemetry--lag-watch ()
+  "Run heartbeats until this thread stops being the heartbeat thread.
+Timers stay unbound here: `sleep-for' would otherwise run the editor's
+timers in this thread.  An error stops watching rather than repeating."
+  (let ((timer-list nil)
+        (timer-idle-list nil)
+        (thread (current-thread)))
+    (condition-case err
+        (while (eq thread mevedel-telemetry--lag-thread)
+          (sleep-for (max 0 (- mevedel-telemetry--lag-due (float-time))))
+          (when (eq thread mevedel-telemetry--lag-thread)
+            (mevedel-telemetry--lag-tick)))
+      (error
+       (when (eq thread mevedel-telemetry--lag-thread)
+         (mevedel-telemetry--lag-stop)
+         (message "mevedel: event-loop lag watching stopped: %s"
+                  (error-message-string err)))))))
+
 (defun mevedel-telemetry--lag-start ()
   "Start the heartbeat and callback timing unless they already run."
-  (unless mevedel-telemetry--lag-timer
+  (unless mevedel-telemetry--lag-thread
     (setq mevedel-telemetry--lag-since (float-time)
+          mevedel-telemetry--lag-due (+ (float-time) mevedel-telemetry--lag-interval)
           mevedel-telemetry--lag-late 0
           mevedel-telemetry--lag-slowest nil
           mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
           mevedel-telemetry--lag-cpu (mevedel-telemetry--cpu-seconds)
-          mevedel-telemetry--lag-timer
-          (mevedel--run-periodic-timer mevedel-telemetry--lag-interval
-                                      #'mevedel-telemetry--lag-tick)
-          mevedel-telemetry--lag-due
-          (float-time (timer--time mevedel-telemetry--lag-timer)))
+          mevedel-telemetry--lag-input num-nonmacro-input-events
+          mevedel-telemetry--lag-thread
+          (make-thread #'mevedel-telemetry--lag-watch "mevedel-lag-heartbeat"))
     (advice-add 'timer-event-handler :around
                 #'mevedel-telemetry--lag-time-callback)
     (advice-add 'mevedel--coalesced-timer-call :around
-                #'mevedel-telemetry--lag-time-callback)))
+                #'mevedel-telemetry--lag-time-callback)
+    (advice-add 'mevedel-transport-call-as-remote-operation :around
+                #'mevedel-telemetry--lag-time-remote)))
 
 (defun mevedel-telemetry--lag-stop ()
-  "Stop the heartbeat and callback timing."
-  (when (timerp mevedel-telemetry--lag-timer)
-    (mevedel--ui-timer-cancel mevedel-telemetry--lag-timer))
-  (setq mevedel-telemetry--lag-timer nil
-        mevedel-telemetry--lag-since nil
+  "Stop the heartbeat and callback timing.
+A heartbeat sleeping in another thread is woken and has exited on return."
+  (let ((thread mevedel-telemetry--lag-thread))
+    (setq mevedel-telemetry--lag-thread nil)
+    (when (and (threadp thread) (thread-live-p thread)
+               (not (eq thread (current-thread))))
+      (thread-signal thread 'error '("Heartbeat stopped"))
+      (ignore-errors (thread-join thread))))
+  (setq mevedel-telemetry--lag-since nil
         mevedel-telemetry--lag-late 0
         mevedel-telemetry--lag-gc nil
         mevedel-telemetry--lag-cpu nil
+        mevedel-telemetry--lag-input nil
         mevedel-telemetry--lag-windows nil)
   (advice-remove 'timer-event-handler #'mevedel-telemetry--lag-time-callback)
-  (advice-remove 'mevedel--coalesced-timer-call #'mevedel-telemetry--lag-time-callback))
+  (advice-remove 'mevedel--coalesced-timer-call #'mevedel-telemetry--lag-time-callback)
+  (advice-remove 'mevedel-transport-call-as-remote-operation
+                 #'mevedel-telemetry--lag-time-remote))
 
 (defun mevedel-telemetry--lag-request (session event request-id)
   "Open or close SESSION's lag window for request EVENT with REQUEST-ID."
@@ -777,8 +824,11 @@ not the clock, and are not counted."
 
 (defun mevedel-telemetry--lag-tick ()
   "Record the loop's worst delay since the previous heartbeat.
-The delay is the later of this heartbeat's own and any timer's since then,
-once per heartbeat for every watched session.  Disabling telemetry stops
+The delay is the later of this heartbeat's own, any timer's and any
+blocking remote operation's since then, once per heartbeat for every
+watched session.  The heartbeat thread calls this whenever it gets the
+global lock, after the main thread has handled input that arrived while it
+was late; that input is reported as pending.  Disabling telemetry stops
 watching: the request it would close never reports settling."
   (if (not mevedel-telemetry-enabled)
       (mevedel-telemetry--lag-stop)
@@ -788,10 +838,10 @@ watching: the request it would close never reports settling."
            (slowest mevedel-telemetry--lag-slowest)
            (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)))
            (cpu (mevedel-telemetry--cpu-seconds))
-           (cpu-before (or mevedel-telemetry--lag-cpu cpu)))
-      (setq mevedel-telemetry--lag-due
-            ;; The dispatcher has already moved the timer to its next tick.
-            (float-time (timer--time mevedel-telemetry--lag-timer))
+           (cpu-before (or mevedel-telemetry--lag-cpu cpu))
+           (input-before (or mevedel-telemetry--lag-input num-nonmacro-input-events)))
+      (setq mevedel-telemetry--lag-due (+ now mevedel-telemetry--lag-interval)
+            mevedel-telemetry--lag-input num-nonmacro-input-events
             mevedel-telemetry--lag-since now
             mevedel-telemetry--lag-late 0
             mevedel-telemetry--lag-slowest nil
@@ -803,7 +853,8 @@ watching: the request it would close never reports settling."
                             (or (null until) (< now until))))
                         mevedel-telemetry--lag-windows))
       (when (> delay mevedel-telemetry--lag-count-threshold)
-        (let ((input-pending (and (input-pending-p) t)))
+        ;; `input-pending-p' would read display events in this thread.
+        (let ((input-pending (> num-nonmacro-input-events input-before)))
           (dolist (entry mevedel-telemetry--lag-windows)
             (let ((window (cdr entry)))
               (unless (plist-get window :until)
