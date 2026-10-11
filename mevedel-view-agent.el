@@ -8,6 +8,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-structs)
 (require 'mevedel-view-zone)
 
 ;; `cl-extra'
@@ -217,9 +218,6 @@ badges promptly."
 ;;
 ;;; Presentation state
 
-
-(defvar-local mevedel-view--agent-transcript-p nil
-  "Non-nil when this view buffer renders an agent transcript for inspection.")
 
 (defvar-local mevedel-view--agent-path nil
   "Canonical agent path rendered by an agent transcript inspection view.")

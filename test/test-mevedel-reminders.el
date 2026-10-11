@@ -79,6 +79,41 @@ this collapses both shapes to the delivered text."
 
 
 ;;
+;;; Turn ownership
+
+(mevedel-deftest mevedel-reminders-turn-owner ()
+  ,test
+  (test)
+  :doc "returns the request in a fresh Emacs that has not loaded agents"
+  (with-temp-buffer
+    (should
+     (zerop
+      (call-process
+       (expand-file-name invocation-name invocation-directory) nil t nil
+       "--batch" "-Q" "--eval"
+       (prin1-to-string
+        `(progn
+           (setq load-path ',load-path)
+           (require 'mevedel-reminders)
+           (with-temp-buffer
+             (setq-local mevedel--current-request 'request)
+             (unless (eq 'request (mevedel-reminders-turn-owner))
+               (error "Lost the request owner")))
+           (when (featurep 'mevedel-agents)
+             (error "Loaded the agents module")))))))
+    (should (equal "" (buffer-string))))
+
+  :doc "prefers an unsettled agent invocation over the request"
+  (with-temp-buffer
+    (let ((invocation (mevedel-agent-invocation--create)))
+      (setq-local mevedel--current-request (mevedel-request--create :id "owner")
+                  mevedel--agent-invocation invocation)
+      (should (eq invocation (mevedel-reminders-turn-owner)))
+      (setf (mevedel-agent-invocation-runtime-settled-p invocation) t)
+      (should (eq mevedel--current-request (mevedel-reminders-turn-owner))))))
+
+
+;;
 ;;; Struct creation
 
 (mevedel-deftest mevedel-reminder-create

@@ -1619,6 +1619,23 @@ TIMERS is a cons cell whose car holds captured `(FUNCTION . ARGS)' entries."
 (mevedel-deftest mevedel-view--interaction-offer-idle-work ()
   ,test
   (test)
+  :doc "runs in a fresh Emacs that has not loaded the agent transcript view"
+  (with-temp-buffer
+    (should
+     (zerop
+      (call-process
+       (expand-file-name invocation-name invocation-directory) nil t nil
+       "--batch" "-Q" "-L"
+       (file-name-directory (locate-library "mevedel-view-interaction"))
+       "--eval"
+       (prin1-to-string
+        '(progn
+           (require 'mevedel-view-interaction)
+           (with-temp-buffer (mevedel-view--interaction-offer-idle-work))
+           (when (featurep 'mevedel-view-agent)
+             (error "Loaded the agent transcript view")))))))
+    (should (equal "" (buffer-string))))
+
   :doc "a Goal held by a child agent's permission card continues once it is decided"
   (mevedel-view-test--with-buffers
     (let* ((goal (mevedel-goal--create

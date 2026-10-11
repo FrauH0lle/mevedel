@@ -540,7 +540,9 @@ the current chat buffer has no request-local agent roster yet."
 (defun mevedel-reminders-turn-owner (&optional buffer)
   "Return the active model-turn owner for BUFFER."
   (with-current-buffer (or buffer (current-buffer))
-    (or (and (mevedel-agent-invocation-p mevedel--agent-invocation)
+    ;; Only `mevedel-agents' creates an invocation, so test for one first.
+    (or (and mevedel--agent-invocation
+             (mevedel-agent-invocation-p mevedel--agent-invocation)
              (not (mevedel-agent-invocation-runtime-settled-p
                    mevedel--agent-invocation))
              mevedel--agent-invocation)

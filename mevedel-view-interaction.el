@@ -10,6 +10,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-structs)
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-block-turn
@@ -83,9 +84,6 @@
 (declare-function mevedel-view--status-anchor "mevedel-view" nil)
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
 (defvar mevedel-view--interaction-marker)
-
-;; `mevedel-view-agent'
-(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position

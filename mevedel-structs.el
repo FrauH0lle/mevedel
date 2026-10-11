@@ -484,6 +484,11 @@ no view buffer exists yet.")
 
 (put 'mevedel--view-buffer 'permanent-local t)
 
+(defvar-local mevedel-view--agent-transcript-p nil
+  "Non-nil when this view buffer renders an agent transcript for inspection.
+Root view, interaction and persistence code read it whether or not
+`mevedel-view-agent' has loaded.")
+
 
 ;;
 ;;; Session buffer-local
