@@ -141,7 +141,9 @@ is the default."
   "Stop counting TRAMP handler frames and cancel deferred work.
 Paced processes continue."
   (mevedel-transport-resume-paused)
-  (remove-hook 'kill-emacs-hook #'mevedel-transport-resume-paused)
+  (when mevedel-transport--pause-guard
+    (delete-process mevedel-transport--pause-guard)
+    (setq mevedel-transport--pause-guard nil))
   (setq mevedel-transport--enabled-p nil)
   (mevedel-transport--detach)
   (when (boundp 'tramp-unload-hook)
@@ -360,6 +362,44 @@ must check that its work is still current."
 (defvar mevedel-transport--paused nil
   "Local processes stopped by `mevedel-transport-pause-process'.")
 
+(defvar mevedel-transport--pause-guard nil
+  "Process that continues paused processes once this Emacs is gone.")
+
+(defconst mevedel-transport--pause-guard-script
+  "trap '' HUP; echo; while read -r pids; do last=$pids; done; kill -CONT $last 2>/dev/null"
+  "Shell program of `mevedel-transport--pause-guard'.
+Each line it reads lists the process IDs stopped at that moment.  Emacs
+starts every child in its own session, so no kernel rule continues a
+stopped child when Emacs dies, however it dies; the guard's input pipe
+closes then, and it continues the last listed set.  Emacs hangs up its
+children on a normal exit, so the guard ignores SIGHUP and announces
+that with an empty line: hung up before that, it would die first.")
+
+(defun mevedel-transport--report-paused ()
+  "Hand the paused process IDs to the guard, starting it on first use.
+Return nil when the guard cannot be reached: nothing may stop then."
+  (condition-case nil
+      (let ((guard mevedel-transport--pause-guard))
+        (unless (process-live-p guard)
+          (setq guard (let ((default-directory "/"))
+                        (make-process
+                         :name "mevedel-pause-guard"
+                         :command (list "/bin/sh" "-c"
+                                        mevedel-transport--pause-guard-script)
+                         :connection-type 'pipe :noquery t
+                         :filter #'ignore :sentinel #'ignore))
+                mevedel-transport--pause-guard guard)
+          (unless (accept-process-output guard 1 nil 1)
+            (delete-process guard)
+            (error "Pause guard did not start")))
+        (process-send-string
+         guard (concat (mapconcat (lambda (process)
+                                    (number-to-string (process-id process)))
+                                  mevedel-transport--paused " ")
+                       "\n"))
+        t)
+    (error nil)))
+
 (defconst mevedel-transport--max-pause 0.5
   "Longest pause, whatever its caller's batch delay.
 A long display batch must not stall the producing process.")
@@ -370,25 +410,26 @@ Emacs redisplays after every read of process output, and a pgtk frame
 repaints its whole surface each time, so a stream's cost follows its
 chunk rate.  Stopped, the process leaves its input waiting -- in a socket
 or another process's pipe -- and Emacs reads what accumulated at once.
-Only a real subprocess is stopped, on a system with job control.  The
-caller resumes it early with `mevedel-transport-resume-process' before
-writing to it or when its output is complete.  Return non-nil when
-PROCESS was stopped."
+Only a real subprocess is stopped, on a system with job control, and
+only once `mevedel-transport--pause-guard' knows it: a stopped child
+outlives a crashed Emacs.  The caller resumes it early with
+`mevedel-transport-resume-process' before writing to it or when its
+output is complete.  Return non-nil when PROCESS was stopped."
   (when (and (numberp seconds) (> seconds 0)
              (not (memq system-type '(windows-nt ms-dos)))
              (eq (process-type process) 'real)
              (eq (process-status process) 'run)
              (not (mevedel--timer-pending-p
                    (process-get process 'mevedel-transport--resume-timer))))
-    (signal-process process 'SIGSTOP)
     (push process mevedel-transport--paused)
-    ;; A stopped child outlives Emacs; continued, it sees the closed pipe.
-    (add-hook 'kill-emacs-hook #'mevedel-transport-resume-paused)
-    (process-put process 'mevedel-transport--resume-timer
-                 (mevedel-transport-run-at-time
-                  (min seconds mevedel-transport--max-pause)
-                  #'mevedel-transport-resume-process process))
-    t))
+    (if (not (mevedel-transport--report-paused))
+        (progn (pop mevedel-transport--paused) nil)
+      (signal-process process 'SIGSTOP)
+      (process-put process 'mevedel-transport--resume-timer
+                   (mevedel-transport-run-at-time
+                    (min seconds mevedel-transport--max-pause)
+                    #'mevedel-transport-resume-process process))
+      t)))
 
 (defun mevedel-transport-process-paused-p (process)
   "Return non-nil while `mevedel-transport-pause-process' holds PROCESS."
@@ -401,8 +442,11 @@ PROCESS was stopped."
     (process-put process 'mevedel-transport--resume-timer nil))
   (when (memq process mevedel-transport--paused)
     (setq mevedel-transport--paused (delq process mevedel-transport--paused))
-    (when (eq (process-status process) 'stop)
-      (signal-process process 'SIGCONT))))
+    ;; Not by status: a stop Emacs has yet to notice still needs it.
+    (when (process-live-p process)
+      (signal-process process 'SIGCONT))
+    ;; A stale ID could name an unrelated process by the time Emacs dies.
+    (mevedel-transport--report-paused)))
 
 (defun mevedel-transport-resume-paused ()
   "Continue every paced process."

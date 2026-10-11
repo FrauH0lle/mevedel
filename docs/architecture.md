@@ -543,8 +543,10 @@ a read of 4 KiB or more means curl has a backlog, so reading continues. gptel's
 sentinel never sees the stop and continue events. A response that has
 finished (a stop reason new to this tool round, or an OpenAI-compatible
 `data: [DONE]`) continues at once, so curl exits and gptel settles the
-request. Paused processes continue on exit and uninstall; an Emacs crash
-leaves one stopped. Pacing needs a real local subprocess on a system with job
+request. Paused processes continue on uninstall, and a guard process
+continues them whenever Emacs ends, including a crash: Emacs starts children
+in their own sessions, so the kernel would leave them stopped. A process stops
+only once the guard knows it. Pacing needs a real local subprocess on a system with job
 control; other transports keep batching alone. `mevedel-acp.el` paces Claude
 Code's adapter the same way during a turn, but only in a steady text stream
 (three reads in a row holding only text chunks and the SDK's matching

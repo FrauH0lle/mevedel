@@ -58,6 +58,9 @@
 (declare-function mevedel--read-hook-audit-record "mevedel-transcript-audit"
                   (text))
 
+;; `mevedel-transport'
+(defvar mevedel-transport--pause-guard)
+
 ;; `mevedel-utilities'
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
@@ -406,7 +409,11 @@ target is gone, which is slow, noisy, and order dependent."
   (when (fboundp 'mevedel-view--release-markdown-fontify-buffer)
     (mevedel-view--release-markdown-fontify-buffer))
   (when (boundp 'mevedel-skills--frontmatter-cache)
-    (clrhash mevedel-skills--frontmatter-cache)))
+    (clrhash mevedel-skills--frontmatter-cache))
+  ;; A paced stream starts the Emacs-wide pause guard on first use.
+  (when (bound-and-true-p mevedel-transport--pause-guard)
+    (delete-process mevedel-transport--pause-guard)
+    (setq mevedel-transport--pause-guard nil)))
 
 ;; A publication staging directory belongs to the session that staged it and
 ;; lives until that session commits, abandons, or releases its lease.  Tests

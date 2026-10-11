@@ -45,7 +45,7 @@
                     (not (memq system-type '(windows-nt ms-dos)))))
   (let* ((mevedel-gptel-stream-bridge-insert-batch-delay 30)
          (mevedel-transport--paused nil)
-         (kill-emacs-hook nil)
+         (mevedel-transport--pause-guard nil)
          (process (make-process :name "mevedel-test-acp-pace" :command '("sleep" "30")
                                 :connection-type 'pipe :noquery t))
          (connection (mevedel-acp--create :client (list (cons :process process))
@@ -75,7 +75,9 @@
           (setf (mevedel-acp-state connection) 'idle)
           (mevedel-acp--pace connection process text)
           (should-not mevedel-transport--paused))
-      (delete-process process))))
+      (delete-process process)
+      (when mevedel-transport--pause-guard
+        (delete-process mevedel-transport--pause-guard)))))
 
 (mevedel-deftest mevedel-acp-prompt ()
   ,test

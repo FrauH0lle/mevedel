@@ -886,40 +886,123 @@
           (should (zerop (hash-table-count table))))
       (mevedel-transport-cancel-idle table 'test-input))))
 
+;; A test that pauses binds its own guard and removes it on exit.
+(defmacro mevedel-transport-test--with-guard (&rest body)
+  "Run BODY with a private pause guard, deleted afterwards."
+  (declare (indent 0) (debug t))
+  `(let ((mevedel-transport--paused nil)
+         (mevedel-transport--pause-guard nil))
+     (unwind-protect (progn ,@body)
+       (when mevedel-transport--pause-guard
+         (delete-process mevedel-transport--pause-guard)))))
+
+(defun mevedel-transport-test--state (pid)
+  "Return PID's scheduler state character, or nil once it is gone."
+  (let ((stat (format "/proc/%d/stat" pid)))
+    (when (file-readable-p stat)
+      (with-temp-buffer
+        (ignore-errors (insert-file-contents stat))
+        (when (re-search-forward ") \\(.\\)" nil t)
+          (string-to-char (match-string 1)))))))
+
 (mevedel-deftest mevedel-transport-pause-process ()
   ,test
   (test)
-  :doc "stops a local child until resumed, and continues it on exit"
-  (skip-unless (and (executable-find "sleep")
-                    (not (memq system-type '(windows-nt ms-dos)))))
-  (let ((mevedel-transport--paused nil)
-        (kill-emacs-hook nil)
-        (process (make-process :name "mevedel-test-pause" :command '("sleep" "30")
-                               :connection-type 'pipe :noquery t)))
+  :doc "stops a local child until resumed"
+  (mevedel-transport-test--with-guard
+    (skip-unless (and (executable-find "sleep")
+                      (not (memq system-type '(windows-nt ms-dos)))))
+    (let ((process (make-process :name "mevedel-test-pause" :command '("sleep" "30")
+                                 :connection-type 'pipe :noquery t)))
+      (unwind-protect
+          (progn
+            (should (mevedel-transport-pause-process process 30))
+            (should (mevedel-transport-process-paused-p process))
+            (should (process-live-p mevedel-transport--pause-guard))
+            ;; Long batches are capped so the producer never stalls.
+            (should (< (float-time (time-subtract
+                                    (timer--time (process-get process 'mevedel-transport--resume-timer))
+                                    nil))
+                       0.6))
+            (with-timeout (2 nil)
+              (while (not (eq 'stop (process-status process)))
+                (accept-process-output nil 0.01)))
+            (should (eq 'stop (process-status process)))
+            ;; Already paused: no second stop or timer.
+            (should-not (mevedel-transport-pause-process process 30))
+            (mevedel-transport-resume-paused)
+            (should-not (mevedel-transport-process-paused-p process))
+            (should-not (process-get process 'mevedel-transport--resume-timer))
+            (with-timeout (2 nil)
+              (while (not (eq 'run (process-status process)))
+                (accept-process-output nil 0.01)))
+            (should (eq 'run (process-status process))))
+        (delete-process process))))
+
+  :doc "continues a stop Emacs has not noticed yet"
+  (mevedel-transport-test--with-guard
+    (skip-unless (and (executable-find "sleep")
+                      (not (memq system-type '(windows-nt ms-dos)))))
+    (let ((process (make-process :name "mevedel-test-pause-race" :command '("sleep" "30")
+                                 :connection-type 'pipe :noquery t)))
+      (unwind-protect
+          (progn
+            (should (mevedel-transport-pause-process process 30))
+            (mevedel-transport-resume-process process)
+            (accept-process-output nil 0.2)
+            (should (eq 'run (process-status process))))
+        (delete-process process))))
+
+  :doc "continues a paused child however its Emacs exits"
+  (let ((file (make-temp-file "mevedel-test-pause-exit-"))
+        (pids nil))
     (unwind-protect
         (progn
-          (should (mevedel-transport-pause-process process 30))
-          (should (mevedel-transport-process-paused-p process))
-          ;; Long batches are capped so the producer never stalls.
-          (should (< (float-time (time-subtract
-                                  (timer--time (process-get process 'mevedel-transport--resume-timer))
-                                  nil))
-                     0.6))
-          (with-timeout (2 nil)
-            (while (not (eq 'stop (process-status process)))
-              (accept-process-output nil 0.01)))
-          (should (eq 'stop (process-status process)))
-          ;; Already paused: no second stop or timer.
-          (should-not (mevedel-transport-pause-process process 30))
-          (should (memq #'mevedel-transport-resume-paused kill-emacs-hook))
-          (run-hooks 'kill-emacs-hook)
-          (should-not (mevedel-transport-process-paused-p process))
-          (should-not (process-get process 'mevedel-transport--resume-timer))
-          (with-timeout (2 nil)
-            (while (not (eq 'run (process-status process)))
-              (accept-process-output nil 0.01)))
-          (should (eq 'run (process-status process))))
-      (delete-process process)))
+          (skip-unless (and (executable-find "cat")
+                            (file-directory-p "/proc/self")))
+          ;; A crash runs no hook; a normal exit hangs up every child.
+          (dolist (exit '((signal-process (emacs-pid) 'SIGKILL) (kill-emacs 0)))
+            (write-region "" nil file nil 'silent)
+            (call-process
+             (expand-file-name invocation-name invocation-directory) nil nil nil
+             "--batch" "-Q" "--eval"
+             (prin1-to-string
+              `(progn
+                 (setq load-path ',load-path)
+                 (require 'mevedel-transport)
+                 (let ((process (make-process :name "cat" :command '("cat")
+                                              :connection-type 'pipe :noquery t)))
+                   (when (mevedel-transport-pause-process process 30)
+                     (write-region (number-to-string (process-id process))
+                                   nil ,file nil 'silent))
+                   ,exit))))
+            (let ((pid (string-to-number
+                        (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+              (push pid pids)
+              (ert-info ((format "Exit: %S" exit))
+                (should (> pid 0))
+                ;; Continued, cat reads the end of its input and exits.
+                (mevedel-test--await 5 "The paused child outlived its Emacs stopped"
+                  (memq (mevedel-transport-test--state pid) '(nil ?Z ?X)))))))
+      (dolist (pid pids)
+        (when (and (> pid 0) (eq ?T (mevedel-transport-test--state pid)))
+          (signal-process pid 'SIGKILL)))
+      (delete-file file)))
+
+  :doc "never stops a child the guard cannot learn about"
+  (mevedel-transport-test--with-guard
+    (skip-unless (and (executable-find "sleep")
+                      (not (memq system-type '(windows-nt ms-dos)))))
+    (let ((process (make-process :name "mevedel-test-pause-unguarded" :command '("sleep" "30")
+                                 :connection-type 'pipe :noquery t)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'process-send-string)
+                     (lambda (&rest _) (error "Guard gone"))))
+            (should-not (mevedel-transport-pause-process process 30))
+            (should-not mevedel-transport--paused)
+            (accept-process-output nil 0.1)
+            (should (eq 'run (process-status process))))
+        (delete-process process))))
 
   :doc "never stops a connection that is not a subprocess"
   (let ((mevedel-transport--paused nil)

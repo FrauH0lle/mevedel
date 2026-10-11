@@ -279,7 +279,7 @@ gptel's sentinel through the cleanup advice."
                        (not (memq system-type '(windows-nt ms-dos)))))
      (let* ((mevedel-gptel-stream-bridge-insert-batch-delay 0.2)
             (mevedel-transport--paused nil)
-            (kill-emacs-hook nil)
+            (mevedel-transport--pause-guard nil)
             (sentinel-calls nil)
             (buffer (generate-new-buffer " *mevedel-test-stream-pace*"))
             (process (make-process
@@ -297,6 +297,8 @@ gptel's sentinel through the cleanup advice."
            (progn ,@body)
          (when (process-live-p process)
            (delete-process process))
+         (when mevedel-transport--pause-guard
+           (delete-process mevedel-transport--pause-guard))
          (kill-buffer buffer)))))
 
 (mevedel-deftest mevedel-gptel-stream-bridge--pace-reading ()
@@ -356,12 +358,11 @@ gptel's sentinel through the cleanup advice."
     (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
     (should-not (process-get process 'mevedel-transport--resume-timer)))
 
-  :doc "continues paused streams on exit and uninstall"
+  :doc "continues paused streams on uninstall"
   (mevedel-gptel-stream-bridge-test--with-paced-stream
     (mevedel-gptel-stream-bridge--note-stream-start process)
     (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
     (should (eq 'stop (mevedel-gptel-stream-bridge-test--await-status process 'stop)))
-    (should (memq #'mevedel-transport-resume-paused kill-emacs-hook))
     (let ((mevedel-gptel-stream-bridge--gptel-stream-advice-installed t))
       (cl-letf (((symbol-function 'mevedel-gptel-stream-bridge--uninstall-advice) #'ignore))
         (mevedel-gptel-stream-bridge-uninstall)))

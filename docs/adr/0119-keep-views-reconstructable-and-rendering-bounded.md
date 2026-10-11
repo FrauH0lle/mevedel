@@ -1323,8 +1323,9 @@ final burst. The isolated loading test caught the delay: its Emacs exited
 while curl was still stopped. Review measured two more costs and both were
 fixed: pausing after every read capped a 1.1 MB stream at one pipe read per
 pause (15.6 s instead of 0.02 s), so only reads under 4 KiB pause (0.42 s);
-and a stopped curl outlived `kill-emacs`, so paused processes continue on exit
-and uninstall. Pacing applies only to mevedel's own streams. An end-of-stream
+and a stopped curl outlived `kill-emacs`, so paused processes continued from
+`kill-emacs-hook` and on uninstall (the hook was later replaced by a guard
+process, below). Pacing applies only to mevedel's own streams. An end-of-stream
 experiment (100 small events) now finishes 0.18 s after the unpaced run,
 against 0.56 s before. Reading the resumed burst inside
 the resume timer saved only 6 of 94 redisplays and was not kept.
@@ -1395,6 +1396,50 @@ instead of 74.5%; compositor CPU fell from 36.9% to 13.8%. The same prompt
 through gptel's ChatGPT (Codex) backend cost 28.9% unpaced and 25.3% paced: that
 endpoint delivers about five reads a second of 2.6 KB, so the mock's 32
 chunks a second overstated gptel's real cost and its pacing gain.
+
+### October 2026: continue paced processes after a crash
+
+The exit hook ran only on a normal exit. An Emacs killed by SIGKILL or a
+crash left a paused process stopped forever, holding its socket. Emacs 31
+starts every child, pipe or pty, in its own session (`setsid`; `ps` shows
+PGID = SID = child PID), so the kernel's orphaned-process-group rule, which
+sends SIGHUP and SIGCONT only when a group's parent is in the same session,
+never applies. Killing a disposable batch Emacs confirmed it: a stopped
+`curl` streaming from a local server (still holding its socket) and a stopped
+`node` child stayed in state `T`, reparented to the user's subreaper. A pty
+child is continued by the terminal hangup, but gptel's curl and acp.el's
+adapter both use pipes, and a remote adapter's local process is an ssh client
+on a pipe.
+
+`mevedel-transport.el` now starts one guard per Emacs on the first pause: a
+`/bin/sh` loop that reads, one line per pause or resume, the IDs paused at
+that moment. Whenever Emacs ends, its pipe closes and the guard continues the
+last set; continued, curl and the adapter find their pipes closed and exit.
+The guard ignores SIGHUP, because a normal exit hangs up every child, and
+announces that with a line Emacs waits for: a guard hung up during its first
+millisecond died first and left the child stopped in an isolated test. A
+process stops only after the guard has its ID, so a failed guard disables
+pacing instead of risking a stuck child. Resuming lists only what is still
+paused, so a stale ID that the system later reuses is never continued. The
+exit hook was redundant and is gone.
+
+Resume now continues a live process regardless of its recorded status. Emacs
+records a stop only after its SIGCHLD handling, and a resume in the same Lisp
+execution as its pause skipped the continue in 199 of 200 trials, leaving the
+child stopped with no pause recorded.
+
+Stopping reading instead (`set-process-filter` to t removes the descriptor
+from Emacs's wait set) would have left nothing to continue, but Emacs neither
+reads nor drains a process whose filter is t when it exits: a child that
+wrote its last line and exited during such a pause lost that line before the
+sentinel ran. A stream ends exactly that way. A kernel-side continuation
+(`PR_SET_PDEATHSIG`, a shared session) needs control over the spawn, which
+gptel and acp.el own.
+
+Pacing is unchanged: a 160-event stream at 32 events a second took 160 reads
+unpaced and 19-24 paced, before and after. A pause and resume costs about
+50 microseconds instead of about 6 for the two signals; the guard starts in
+about 1 ms.
 
 ### October 2026: prebuilt native module
 
