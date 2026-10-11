@@ -962,9 +962,15 @@ surfaces such as top, mode, model, and tools. The request state is
 plain status text. The view must not copy or proxy gptel's clickable
 data-buffer header line; gptel-owned header controls stay in the raw
 data buffer. The request state is `settling` while a lost turn's deferred
-terminal work still owns the session. Header construction is cached by its semantic fields and display
-width, so spinner redisplay reuses the same propertized strip until one of
-those inputs changes.
+terminal work still owns the session. The tab line is evaluated on every
+redisplay, so the strip is cached by its raw inputs: session name, root,
+target identity, publication and lease state, permission and Plan mode,
+directive scope, request state, model, Goal status and turns, preset, tool
+count, width, display type and selected window. Each redisplay reads them
+without entering the transcript buffer and formats labels only when one
+changes. Entering an Org transcript buffer swaps its many buffer-local
+variables; the five lookups that did so cost 26 µs per redisplay, and
+reading the bindings directly costs under 2 µs with no string allocation.
 
 The session cockpit is the normal control surface from the view. It resolves
 the live view/data pair once and routes each action to the owner buffer. The

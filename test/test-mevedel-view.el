@@ -1138,6 +1138,104 @@
         (should-not (eq second changed))
         (should (string-match-p "1 tool" changed)))))
 
+  :doc "status strip reflects each input changed in place in one view"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project :id "strip-inputs"
+                       :root "/tmp/strip-inputs/" :name "strip-inputs"))
+           (session (mevedel-session--create
+                     :name "main" :workspace workspace
+                     :permission-mode 'ask))
+           (goal (mevedel-goal--create :status 'active :turns-run 1))
+           (width 120))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    gptel-model 'gpt-5.5
+                    gptel-tools nil))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--status-strip-width)
+                   (lambda () width)))
+          (let ((line (mevedel-view--status-strip)))
+            (cl-flet ((changes (pattern mutate)
+                        (funcall mutate)
+                        (let ((next (mevedel-view--status-strip)))
+                          (should-not (equal line next))
+                          (should (string-match-p pattern next))
+                          (setq line next))))
+              (should (eq line (mevedel-view--status-strip)))
+              (changes "\\`renamed"
+                       (lambda () (setf (mevedel-session-name session) "renamed")))
+              (changes "strip-moved/"
+                       (lambda () (setf (mevedel-workspace-root workspace)
+                                        "/tmp/strip-moved/")))
+              ;; A session's target is immutable; the view's data buffer
+              ;; can still change sessions.
+              (changes "ssh:user@host"
+                       (lambda ()
+                         (setq session
+                               (mevedel-session--create
+                                :name "renamed" :workspace workspace
+                                :permission-mode 'ask
+                                :execution-target
+                                (mevedel-execution-target-create
+                                 "/ssh:user@host:/srv/project/")))
+                         (with-current-buffer data-buf
+                           (setq-local mevedel--session session))))
+              (changes "publication pending"
+                       (lambda ()
+                         (setf (mevedel-session-pending-publication session)
+                               '(:reason "remote write failed"))))
+              (changes "lease lost"
+                       (lambda ()
+                         (setf (mevedel-session-lease session) '(:state lost))))
+              (changes "edits ·"
+                       (lambda ()
+                         (setf (mevedel-session-permission-mode session) 'edits)))
+              (changes "Plan/edits"
+                       (lambda () (setf (mevedel-session-plan-mode session) t)))
+              (changes "directive 01234567/discuss"
+                       (lambda ()
+                         (setq mevedel-view--composer-scope
+                               (list :directive-id "0123456789"
+                                     :action 'discuss))))
+              (changes "directive 01234567/retry"
+                       (lambda ()
+                         (plist-put mevedel-view--composer-scope
+                                    :action 'retry)))
+              (changes "· running ·"
+                       (lambda ()
+                         (with-current-buffer data-buf
+                           (setq-local mevedel--current-request
+                                       (mevedel-request--create :id "strip"
+                                                                :session session)))))
+              (changes "· settling ·"
+                       (lambda ()
+                         (with-current-buffer data-buf
+                           (setq-local mevedel--current-request nil
+                                       mevedel--turn-settlements-pending '(fsm)))))
+              (changes "gpt-5.6-sol"
+                       (lambda ()
+                         (with-current-buffer data-buf
+                           (setq-local gptel-model 'gpt-5.6-sol))))
+              (changes "active · 1 turns · gpt-5.6-sol"
+                       (lambda () (setf (mevedel-session-goal session) goal)))
+              (changes "complete · 1 turns"
+                       (lambda () (setf (mevedel-goal-status goal) 'complete)))
+              (changes "complete · 2 turns"
+                       (lambda () (setf (mevedel-goal-turns-run goal) 2)))
+              (changes "preset team"
+                       (lambda () (setf (mevedel-session-preset-name session) 'team)))
+              (changes "1 tool\\'"
+                       (lambda ()
+                         (with-current-buffer data-buf
+                           (setq-local gptel-tools '(read)))))
+              (changes "\\`renamed  /srv/project/"
+                       (lambda () (setq width 400)))
+              (with-current-buffer data-buf
+                (setq-local mevedel--turn-settlements-pending nil))))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session nil))))
+
   :doc "status strip shows Plan together with its permission policy"
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create

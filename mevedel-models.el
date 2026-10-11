@@ -560,11 +560,8 @@ the workload's tier, exact provider and effort, followed by explicit overrides."
 
 (defun mevedel-model-current-label (&optional buffer)
   "Return BUFFER's current model label, or \"none\"."
-  (with-current-buffer (or buffer (current-buffer))
-    (cond
-     ((not (bound-and-true-p gptel-model)) "none")
-     ((fboundp 'gptel--model-name) (gptel--model-name gptel-model))
-     (t (format "%s" gptel-model)))))
+  (let ((model (buffer-local-value 'gptel-model (or buffer (current-buffer)))))
+    (if model (gptel--model-name model) "none")))
 
 (defun mevedel-model-current-provider-label (&optional buffer)
   "Return BUFFER's current backend:model label, or \"none\"."

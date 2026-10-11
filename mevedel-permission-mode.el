@@ -128,17 +128,18 @@ DATA-BUFFER, the current buffer is used."
          (global-mode (and (boundp 'mevedel-permission-mode)
                            (default-toplevel-value
                             'mevedel-permission-mode))))
+    ;; Read bindings without switching buffers: status lines call this on
+    ;; every redisplay.
     (or (and session (mevedel-session-permission-mode session))
         (and (buffer-live-p data-buffer)
-             (with-current-buffer data-buffer
-               (and (boundp 'mevedel--session)
-                    mevedel--session
-                    (mevedel-session-permission-mode mevedel--session))))
+             (boundp 'mevedel--session)
+             (when-let* ((data-session
+                          (buffer-local-value 'mevedel--session data-buffer)))
+               (mevedel-session-permission-mode data-session)))
         (and surface-local surface-mode)
         (and (buffer-live-p data-buffer)
-             (with-current-buffer data-buffer
-               (and (boundp 'mevedel-permission-mode)
-                    mevedel-permission-mode)))
+             (boundp 'mevedel-permission-mode)
+             (buffer-local-value 'mevedel-permission-mode data-buffer))
         global-mode
         'ask)))
 

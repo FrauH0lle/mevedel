@@ -249,19 +249,20 @@
   "FSMs whose terminal settlement is waiting for transport or its next step.")
 
 (defun mevedel-request-active-p (&optional buffer)
-  "Return non-nil when BUFFER has an active request."
+  "Return non-nil when BUFFER has an active request.
+Status lines ask on every redisplay; reading the binding avoids the
+buffer switch, which costs microseconds in a buffer with many locals."
   (let ((buffer (or buffer (current-buffer))))
     (and (buffer-live-p buffer)
-         (with-current-buffer buffer
-           (bound-and-true-p mevedel--current-request)))))
+         (buffer-local-value 'mevedel--current-request buffer))))
 
 (defun mevedel-turn-busy-p (&optional buffer)
   "Return non-nil when BUFFER has a request or pending settlement."
   (let ((buffer (or buffer (current-buffer))))
     (and (buffer-live-p buffer)
-         (with-current-buffer buffer
-           (or (bound-and-true-p mevedel--current-request)
-               mevedel--turn-settlements-pending)))))
+         (or (buffer-local-value 'mevedel--current-request buffer)
+             (buffer-local-value 'mevedel--turn-settlements-pending
+                                 buffer)))))
 
 ;;;###autoload
 (defun mevedel-busy-p ()

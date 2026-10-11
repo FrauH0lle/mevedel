@@ -120,8 +120,7 @@
   "Return the number of active gptel tools in BUFFER."
   (let ((buffer (or buffer (current-buffer))))
     (if (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (length (and (boundp 'gptel-tools) gptel-tools)))
+        (length (buffer-local-value 'gptel-tools buffer))
       0)))
 
 (defun mevedel-tools--request-data-set-tools (info)

@@ -1334,17 +1334,16 @@ changes: size, wrapping, text scale, line spacing or font."
                  (and archived (plist-get pinned :segment))))))))
 
 (defun mevedel-view--status-strip ()
-  "Return a mevedel-owned clickable status strip for the view buffer."
-  (when (and (boundp 'mevedel--data-buffer)
-             (buffer-live-p mevedel--data-buffer))
-    (let* ((data-buffer mevedel--data-buffer)
-           (session (with-current-buffer data-buffer
-                      (and (boundp 'mevedel--session) mevedel--session)))
+  "Return a mevedel-owned clickable status strip for the view buffer.
+This runs on every redisplay of the view, so the cache key holds the raw
+inputs, read without switching buffers, and labels are formatted only
+when one of them changes."
+  (when-let* ((data-buffer (bound-and-true-p mevedel--data-buffer))
+              ((buffer-live-p data-buffer)))
+    (let* ((session (buffer-local-value 'mevedel--session data-buffer))
            (workspace (and session (mevedel-session-workspace session)))
            (target (and session
                         (mevedel-session-execution-target session)))
-           (target-label
-            (and target (mevedel-execution-target-label target)))
            ;; Read the two facts directly: the full publication status also
            ;; resolves a state directory, through TRAMP on a remote target,
            ;; and this runs on every redisplay of the view.
@@ -1356,45 +1355,52 @@ changes: size, wrapping, text scale, line spacing or font."
                              (plist-get (mevedel-session-lease session) :state)))
            (session-name (or (and session (mevedel-session-name session))
                              "unknown"))
-           (root (mevedel-view--status-strip-abbreviated
-                  (or (and target
-                           (mevedel-execution-target-native-root target))
-                      (and workspace (mevedel-workspace-root workspace))
-                      (with-current-buffer data-buffer default-directory))))
-           (permission-label
-            (car (mevedel-view--permission-mode-display
-                  (mevedel-view--effective-permission-mode))))
-           (mode (if (and session (mevedel-session-plan-mode session))
-                     (format "Plan/%s" permission-label)
-                   permission-label))
-           (scope (mevedel-view-composer-scope-label))
+           (directory (or (and target
+                               (mevedel-execution-target-native-root target))
+                          (and workspace (mevedel-workspace-root workspace))
+                          (buffer-local-value 'default-directory data-buffer)))
+           (permission-mode (mevedel-view--effective-permission-mode))
+           (plan-mode (and session (mevedel-session-plan-mode session)))
            (state (mevedel-request-state-label data-buffer))
-           (model-label (mevedel-model-current-label data-buffer))
-           (model (if (string= model-label "none")
-                      "model none"
-                    model-label))
+           (model (buffer-local-value 'gptel-model data-buffer))
            (goal (and session (mevedel-session-goal session)))
-           (phase-model
-            (if goal
-                (format "%s · %d turns · %s"
-                        (mevedel-goal-status goal)
-                        (mevedel-goal-turns-run goal)
-                        model)
-              model))
+           (goal-status (and goal (mevedel-goal-status goal)))
+           (goal-turns (and goal (mevedel-goal-turns-run goal)))
            (preset-name (and session (mevedel-session-preset-name session)))
            (tool-count (mevedel-tools-active-count data-buffer))
-           (tools (format "%d tool%s"
-                          tool-count
-                          (if (= tool-count 1) "" "s")))
            (width (mevedel-view--status-strip-width))
            (cache-key
-            (list data-buffer session-name root target-label
-                  pending-publication lease-state mode scope state phase-model
-                  (and goal t) preset-name tools width (display-graphic-p)
-                  (selected-window))))
+            (vector data-buffer session-name directory
+                    (and target (mevedel-execution-target-identity target))
+                    pending-publication lease-state permission-mode plan-mode
+                    (plist-get mevedel-view--composer-scope :directive-id)
+                    (plist-get mevedel-view--composer-scope :action)
+                    state model (and goal t) goal-status goal-turns
+                    preset-name tool-count width
+                    (display-graphic-p) (selected-window))))
       (if (equal cache-key mevedel-view--status-strip-cache-key)
           mevedel-view--status-strip-cache-value
-        (let* ((rhs
+        (let* ((target-label
+                (and target (mevedel-execution-target-label target)))
+               (root (mevedel-view--status-strip-abbreviated directory))
+               (permission-label
+                (car (mevedel-view--permission-mode-display permission-mode)))
+               (mode (if plan-mode
+                         (format "Plan/%s" permission-label)
+                       permission-label))
+               (scope (mevedel-view-composer-scope-label))
+               (model-label (mevedel-model-current-label data-buffer))
+               (model (if (string= model-label "none")
+                          "model none"
+                        model-label))
+               (phase-model
+                (if goal
+                    (format "%s · %d turns · %s" goal-status goal-turns model)
+                  model))
+               (tools (format "%d tool%s"
+                              tool-count
+                              (if (= tool-count 1) "" "s")))
+               (rhs
                 (mapconcat
                  #'identity
                  (delq nil
