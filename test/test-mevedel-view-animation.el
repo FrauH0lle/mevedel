@@ -109,6 +109,20 @@
   (should-not (mevedel-view-animation-sweep-phase 4.5))
   (should (mevedel-view-animation-sweep-phase 4.7)))
 
+(mevedel-deftest mevedel-view-animation-rest-seconds ()
+  ,test
+  (test)
+  :doc "moves a shimmer to the end of its sweep and a breathe to its cycle start"
+  (should (= 0.5 (mevedel-view-animation-rest-seconds 'shimmer 0.5)))
+  (should-not (mevedel-view-animation-sweep-phase
+               (mevedel-view-animation-rest-seconds 'shimmer 0.8)))
+  (should (< (abs (- 1.6 (mevedel-view-animation-rest-seconds 'shimmer 0.8))) 1e-5))
+  (should (< (abs (- 5.6 (mevedel-view-animation-rest-seconds 'shimmer 4.7))) 1e-5))
+  (should (= 3.6 (mevedel-view-animation-rest-seconds 'breathe 5.0)))
+  (should (= 0.0 (mevedel-view-animation-rest-seconds 'breathe 1.0)))
+  (should (= 1.3 (mevedel-view-animation-rest-seconds 'braille 1.3)))
+  (should (= 1.3 (mevedel-view-animation-rest-seconds 'bounce 1.3))))
+
 (mevedel-deftest mevedel-view-animation-next-delay ()
   ,test
   (test)

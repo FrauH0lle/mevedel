@@ -200,7 +200,8 @@ October 2026 measurement below records why. `full` forces the normal ceiling; `s
 ceiling. The lower ceiling never speeds up a naturally slower animation or
 changes its cycle duration. A saving ceiling of zero freezes decorative
 motion while active elapsed time and status remain current. While the request
-waits for user input, every indicator holds its phase and no frame is
+waits for user input, every indicator holds its phase (shimmer and breathe at
+their rest) and no frame is
 scheduled. A shared battery
 observer consumes existing notifications and uses a deferred, at-most-minute
 fallback query while subscribed views exist; animation callbacks never query
@@ -1431,3 +1432,15 @@ display events in that thread. A blocking remote operation waits with the lock
 released, so the thread runs on time through it; the outermost operation on
 the main thread is counted as late as it took. The timer heartbeat saw only
 the part of such a wait during which TRAMP had unbound the timer list.
+
+### October 2026: frozen color styles rest
+
+Freezing for input or a zero saving ceiling kept the last displayed sample of
+every style. A shimmer frozen during its one-second sweep therefore held the
+faded band, and a breathe its dimmed shade, for the whole pause; the sweep had
+been designed to end at the normal foreground. Freezing now moves the label's
+and the tool rows' retained phases to the end of the sweep (shimmer) or the
+start of the cycle (breathe) and repaints spans already drawn mid-motion.
+Glyph styles and bounce keep their phase, which shows a glyph or a band by
+design. Resuming continues from the clock, as before.
+

@@ -336,9 +336,21 @@ The underlying phase continues to advance and resumes without restarting."
     (mevedel-view--capture-native-animation))
   (if (mevedel-view--animation-frozen-p)
       (or mevedel-view--spinner-frozen-seconds
-          (setq mevedel-view--spinner-frozen-seconds
-                (or mevedel-view--spinner-last-sample-seconds
-                    (mevedel-view--animation-seconds))))
+          (progn
+            ;; Rest instead of holding a faded band for the whole pause, and
+            ;; repaint spans already drawn mid-sweep at the next rearm.
+            (setq mevedel-view--spinner-tool-samples
+                  (mapcar (lambda (sample)
+                            (cons (car sample)
+                                  (mevedel-view-animation-rest-seconds
+                                   mevedel-view-tool-spinner-style (cdr sample))))
+                          mevedel-view--spinner-tool-samples)
+                  mevedel-view--spinner-theme-stale-p t)
+            (setq mevedel-view--spinner-frozen-seconds
+                  (mevedel-view-animation-rest-seconds
+                   mevedel-view-spinner-style
+                   (or mevedel-view--spinner-last-sample-seconds
+                       (mevedel-view--animation-seconds))))))
     (setq mevedel-view--spinner-frozen-seconds nil)
     (setq mevedel-view--spinner-last-sample-seconds
           (mevedel-view--animation-seconds))))
@@ -1064,7 +1076,10 @@ rechecked without changing the displayed animation phase."
   ;; Latch on a zero-fps transition even when the next redraw is delayed.
   ;; An ordinary rearm must not record the clock phase as a displayed sample.
   (if (mevedel-view--animation-frozen-p)
-      (mevedel-view--animation-display-seconds)
+      (progn
+        (mevedel-view--animation-display-seconds)
+        ;; Move spans drawn before the freeze to their resting phase.
+        (mevedel-view--refresh-themed-status))
     (setq mevedel-view--spinner-frozen-seconds nil))
   (let* ((paused (and-let* ((request (mevedel-view--spinner-request)))
                     (mevedel-request-active-work-pause-started-at request)))

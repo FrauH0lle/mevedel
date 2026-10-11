@@ -366,7 +366,9 @@ queuing overdue repeats
 after a stall. Static or frozen indicators require no decorative timer,
 although a visible active request can still update elapsed text once a second
 without advancing a frozen indicator. Freezing keeps the last displayed
-sample, including an existing tool row's glyph across option changes and
+sample, except that a shimmer frozen mid-sweep moves to the end of its sweep
+and a breathe frozen mid-fade to its normal foreground, so a pause never holds
+a faded band. The kept sample includes an existing tool row's glyph across option changes and
 pending-tool row rebuilds, incremental projection, and full rerenders of the
 same transcript; a scheduling-only rearm does not sample the next
 clock phase. A subsequent resume clears the old freeze latch without

@@ -4652,6 +4652,61 @@
                                       'display))))
             (should (= phase mevedel-view--spinner-phase-start))))))))
 
+;; A freeze mid-sweep used to keep the faded band for the whole pause.
+(mevedel-deftest mevedel-view-animation-freeze-rests
+  (:doc "Freezing a color label or tool row mid-motion repaints it at rest.")
+  (dolist (style '(shimmer breathe))
+    (let ((mevedel-view-animation--cache nil))
+      (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                 (lambda (_face _frame) (cons "#ffffff" "#000000"))))
+        (mevedel-view-stream-test--with-buffers
+          (mevedel-view-stream-test--with-visible-view
+            (let ((mevedel-view-spinner-style style)
+                  (mevedel-view-tool-spinner-style 'shimmer)
+                  (mevedel-view-native-enabled nil)
+                  (mevedel-view-spinner-power-policy 'full)
+                  (mevedel-view-spinner-battery-framerate 0)
+                  (mevedel-view--pending-tool-calls
+                   '(("call-1" . "Calling Read...")))
+                  ;; Inside the first shimmer sweep and the breathe fade.
+                  (seconds 1.0))
+              (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                         (lambda () seconds)))
+                (mevedel-view--start-spinner "Working...")
+                (mevedel-view--refresh-pending-tool-lines)
+                (mevedel-view--spinner-tick)
+                (let* ((label (marker-position
+                               (car mevedel-view--spinner-label-target)))
+                       (tool (marker-position
+                              (caar mevedel-view--spinner-tool-targets)))
+                       (moving-label (get-text-property label 'display))
+                       (moving-tool (get-text-property tool 'display))
+                       (rest-label (mevedel-view-animation-frame
+                                    style "Working..."
+                                    (mevedel-view-animation-rest-seconds style 1.0)
+                                    'mevedel-view-spinner (selected-frame)))
+                       (rest-tool (mevedel-view-animation-frame
+                                   'shimmer (mevedel-view--tool-animation-label
+                                             (car mevedel-view--spinner-tool-targets))
+                                   (mevedel-view-animation-rest-seconds 'shimmer 1.0)
+                                   'mevedel-view-ephemeral (selected-frame))))
+                  (should-not (equal-including-properties moving-label rest-label))
+                  (should-not (equal-including-properties moving-tool rest-tool))
+                  (setq mevedel-view-spinner-power-policy 'save)
+                  (mevedel-view--refresh-animation-options)
+                  (should (equal-including-properties
+                           rest-label (get-text-property label 'display)))
+                  (should (equal-including-properties
+                           rest-tool (get-text-property tool 'display)))
+                  ;; Resuming continues from the clock, not from rest.
+                  (setq mevedel-view-spinner-power-policy 'full)
+                  (mevedel-view--refresh-animation-options)
+                  (mevedel-view--spinner-tick)
+                  (should (equal-including-properties
+                           moving-label (get-text-property label 'display)))
+                  (should (equal-including-properties
+                           moving-tool (get-text-property tool 'display))))))))))))
+
 (mevedel-deftest mevedel-view-animation-freeze-tool-row
   (:doc "Power changes keep the last displayed tool glyph, not its initial frame.")
   (mevedel-view-stream-test--with-buffers

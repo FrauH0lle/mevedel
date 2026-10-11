@@ -125,6 +125,22 @@ also retries a fallback bank when a frame gains color support."
       (let ((into (mod since mevedel-view-animation--sweep-interval)))
         (and (< into mevedel-view-animation--sweep-duration) into)))))
 
+(defun mevedel-view-animation-rest-seconds (style seconds)
+  "Return SECONDS moved to where STYLE rests, for a display that stops moving.
+A shimmer frozen mid-sweep, or a breathe frozen mid-fade, would hold its
+faded shade for the whole pause.  Shimmer moves to the end of its sweep and
+breathe to the start of its cycle, both at the normal foreground; other
+styles keep their phase."
+  (pcase style
+    ('shimmer
+     (if-let* ((into (mevedel-view-animation-sweep-phase seconds)))
+         (+ (- seconds into) mevedel-view-animation--sweep-duration 1e-6)
+       seconds))
+    ('breathe
+     (* mevedel-view-animation--cycle
+        (ffloor (/ seconds mevedel-view-animation--cycle))))
+    (_ seconds)))
+
 (defun mevedel-view-animation-next-delay (style seconds period)
   "Return seconds until STYLE next changes after animation SECONDS.
 PERIOD is the frame period to use while STYLE moves.  Shimmer moves only
