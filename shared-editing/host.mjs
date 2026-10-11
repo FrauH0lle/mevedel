@@ -180,7 +180,9 @@ function resolveChanges(id, kind, content, changes) {
       'Each change needs a distinct id');
     seen.add(change.id);
     const unknown = Object.keys(change).find((key) => !CHANGE_FIELDS.includes(key));
-    check(!unknown, `Unknown change field ${String(unknown).slice(0, 40)}`);
+    check(!unknown, `Unknown change field ${String(unknown).slice(0, 40)}: a change is ` +
+      `{id, hash, after, afterId} or {id, hash, set, unset}; put the element's own fields in after, ` +
+      `or in set to change some of them`);
     const current = nodes.find((n) => nodeId(kind, n) === change.id) || null;
     const hash = current && contentHash(current);
     if ((change.hash ?? null) !== hash) {

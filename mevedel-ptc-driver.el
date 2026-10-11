@@ -102,10 +102,33 @@ unquote forms, far from where the mistake shows."
            (if json "JSON {...} with commas" "this value")
            (truncate-string-to-width (prin1-to-string value) 80 nil nil "..."))))
 
+(defun mevedel-ptc-driver--check-data (value)
+  "Signal when guest VALUE holds JSON written as dialect data, else return VALUE.
+Data no schema describes passes to the tool as written, so JSON habits
+would otherwise fail far from the script: a comma reads as an unquote
+form, so [[0,0],[6,29.6]] becomes [[0 (\\, 0)] ...], and bare true, false
+and null read as ordinary symbols that no JSON encoder accepts."
+  (cl-labels
+      ((walk (v)
+         (cond
+          ((vectorp v) (mapc #'walk v))
+          ((consp v)
+           (when (and (symbolp (car v)) (member (symbol-name (car v)) '("," ",@")))
+             (error "Separate list and vector elements with spaces, not JSON commas: \
+write [[0 0] [6 29.6]], not [[0,0],[6,29.6]]"))
+           (while (consp v) (walk (pop v)))
+           (when v (walk v)))
+          ((and (symbolp v) (member (symbol-name v) '("true" "false" "null")))
+           (error "Write :json-false or nil for false, t for true and :null for null, \
+not the bare symbol %s" v)))))
+    (walk value))
+  value)
+
 (defun mevedel-ptc-driver--argument-value (value schema)
   "Convert guest VALUE using the trusted argument SCHEMA.
 Declared object keys become host keywords; undeclared keys remain private.
-JSON booleans and null use the same representations as native tool calls."
+JSON booleans and null use the same representations as native tool calls.
+Data no schema describes is checked by `mevedel-ptc-driver--check-data'."
   (cond
    ((and (symbolp value) (member (symbol-name value) '(":null" ":json-false")))
     (intern (symbol-name value)))
@@ -131,7 +154,7 @@ JSON booleans and null use the same representations as native tool calls."
     (vconcat (mapcar (lambda (item)
                       (mevedel-ptc-driver--argument-value item (plist-get schema :items)))
                     value)))
-   (t value)))
+   (t (mevedel-ptc-driver--check-data value))))
 
 (defun mevedel-ptc-driver--convert-args (tool guest-args)
   "Convert GUEST-ARGS into a host keyword plist validated against TOOL.

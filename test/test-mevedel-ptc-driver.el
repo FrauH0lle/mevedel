@@ -206,6 +206,25 @@ With RAW-P, retain the full pipeline result including hidden render data."
         (should (string-match-p "nonesuch" message))
         (should (string-match-p "file_path" message)))))
 
+:doc "refuses JSON commas and bare true, false or null in data no schema describes"
+  (let* ((universe (obarray-make))
+         (tool (mevedel-tool--create
+                :name "Probe" :args '((payload object :required "Payload"))))
+         (key (intern ":payload" universe))
+         (refused (lambda (value)
+                    (error-message-string
+                     (should-error (mevedel-ptc-driver--convert-args tool (list key value)))))))
+    (should (string-match-p "not JSON commas"
+                            (funcall refused (list (intern ":points" universe)
+                                                   (vector (vector 0 (list (intern "," universe) 1)))))))
+    (dolist (name '("true" "false" "null"))
+      (should (string-match-p (format "not the bare symbol %s" name)
+                              (funcall refused (list (intern ":flag" universe) (intern name universe))))))
+    ;; Keywords, t, nil, strings and other symbols pass unchanged.
+    (let ((value (list (intern ":a" universe) t (intern ":b" universe) nil
+                       (intern ":c" universe) "false" (intern ":d" universe) (intern "falsey" universe))))
+      (should (equal value (plist-get (mevedel-ptc-driver--convert-args tool (list key value)) :payload)))))
+
   :doc "rejects arguments that are not keyword and value pairs"
   (progn
     (mevedel-tool-fs--register)
@@ -332,7 +351,28 @@ With RAW-P, retain the full pipeline result including hidden render data."
                   (accept-process-output nil 0.01)))
               (should (string-search "Objects are keyword plists such as (:id \"a\" :after nil)"
                                      (plist-get reply :result)))
-              (should (string-search (cdr case) (plist-get reply :result)))))))
+              (should (string-search (cdr case) (plist-get reply :result)))))
+          ;; The mistakes a model made drawing a graph: JSON commas between
+          ;; points, a bare false, and element fields beside the change.
+          (dolist (case '(("[(:id \"g\" :after (:id \"g\" :type \"line\" :x 0 :y 0 :width 10 :height 10 :points [[0.0,0.0],[6.0,29.6]]))]"
+                           . "Separate list and vector elements with spaces, not JSON commas")
+                          ("[(:id \"g\" :after (:id \"g\" :type \"freedraw\" :x 0 :y 0 :width 10 :height 10 :simulatePressure false :points [[0 0] [6 29.6]]))]"
+                           . "Write :json-false or nil for false")
+                          ("[(:id \"g\" :type \"line\" :x 0 :y 0 :points [[0 0] [6 29.6]])]"
+                           . "put the element's own fields in after")))
+            (let (reply)
+              (with-current-buffer buffer
+                (mevedel-ptc-driver-run
+                 (lambda (value) (setq reply value))
+                 (format "(SharedEdit :id %S :action \"patch\" :changes %s)" id (car case))
+                 '("SharedEdit") '("SharedEdit")))
+              (let ((deadline (+ (float-time) 10)))
+                (while (and (not reply) (< (float-time) deadline))
+                  (accept-process-output nil 0.01)))
+              (should (eq 'error (plist-get reply :status)))
+              (should (string-search (cdr case) (plist-get reply :result)))))
+          (should (= 4 (plist-get (mevedel-shared-editing--read (mevedel-session-workspace session) id)
+                                  :revision)))))
     (with-current-buffer buffer (mevedel-shared-editing-stop)))
 
   :doc "indirect argument calls finish before the outer call and retain both audits"

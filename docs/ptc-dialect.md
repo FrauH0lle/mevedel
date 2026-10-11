@@ -29,6 +29,9 @@ JSON object syntax is not part of the dialect: its braces read as symbols and
 its commas as unquote forms. A value that is not a keyword plist where an
 object is expected is refused with the expected form, the value, and a note
 when it looks like JSON.
+Data no schema describes, such as an element inside a change's `after`, is
+refused when it holds a comma or a bare `true`, `false` or `null`, with the
+dialect spelling: `[[0 0] [6 29.6]]`, `t`, `:json-false` or `nil`, `:null`.
 Wrapped tools use the qualified `category/name` shown by ToolSearch; this
 prevents collisions across servers. The installed MCP text adapter exposes
 text content only. ToolCall cannot recover media or error metadata discarded
