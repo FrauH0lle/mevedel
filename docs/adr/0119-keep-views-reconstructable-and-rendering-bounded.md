@@ -57,7 +57,9 @@ fallback. One scheduler coalesces redraws;
 unattended views (unfocused, or shown in no window of an interactive editor)
 arm no render timers and defer visual work, retaining changed tool IDs rather
 than forcing a full rebuild on focus return. Incremental projection also drains
-those row updates; full projection subsumes them. Retained-agent metadata
+those row updates; full projection subsumes them. A settling or stopped turn
+projects only its own range, so it keeps them: clearing them there left an older
+row, such as a background execution's, showing stale progress. Retained-agent metadata
 replacements refresh source-backed handles, with full projection as the fallback
 for unavailable source or generic rows without retained-agent metadata. Distinct
 agent paths share a per-view queue, drained one path per callback; duplicate paths

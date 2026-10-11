@@ -1489,14 +1489,24 @@ refresh; a full request upgrades a pending incremental refresh."
   :type 'number
   :group 'mevedel)
 
-(defun mevedel-view--cancel-scheduled-render ()
-  "Cancel the current view buffer's pending transcript render."
-  (when (timerp mevedel-view--render-timer)
-    (cancel-timer mevedel-view--render-timer))
-  (setq mevedel-view--render-timer nil
-        mevedel-view--pending-render-kind nil
-        mevedel-view--pending-tool-rows nil
-        mevedel-view--pending-render-data-buffer nil))
+(defun mevedel-view--cancel-scheduled-render (&optional keep-tool-rows)
+  "Cancel the current view buffer's pending transcript render.
+KEEP-TOOL-ROWS keeps the tool rows an unattended view retained, as a
+`tools' render of their own.  A settling or stopped turn projects only
+its own range, so an older row, such as a background execution's, would
+otherwise keep stale progress until something else redrew it."
+  (let ((rows mevedel-view--pending-tool-rows)
+        (data-buffer mevedel-view--pending-render-data-buffer))
+    (when (timerp mevedel-view--render-timer)
+      (cancel-timer mevedel-view--render-timer))
+    (setq mevedel-view--render-timer nil
+          mevedel-view--pending-render-kind nil
+          mevedel-view--pending-tool-rows nil
+          mevedel-view--pending-render-data-buffer nil)
+    (when (and keep-tool-rows rows (buffer-live-p data-buffer))
+      (setq mevedel-view--pending-tool-rows rows)
+      (mevedel-view--schedule-render
+       'tools data-buffer mevedel-view-rerender-debounce))))
 
 (defun mevedel-view--unattended-p (&optional buffer)
   "Return non-nil when nobody can be watching BUFFER's view.

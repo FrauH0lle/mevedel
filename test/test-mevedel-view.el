@@ -345,7 +345,7 @@
           (should (= 3 (- (point) (mevedel-view--input-start)))))))))
 
 (mevedel-deftest mevedel-view--schedule-render/tool-rows
-  (:doc "tool updates never downgrade pending transcript projection")
+  (:doc "tool updates never downgrade pending projection; cancelling can keep rows")
   (mevedel-view-test--with-buffers
     (unwind-protect
         (with-current-buffer view-buf
@@ -355,7 +355,13 @@
                    (should (eq expected mevedel-view--pending-render-kind)))
           (setq mevedel-view--pending-tool-rows '("stale"))
           (mevedel-view--cancel-scheduled-render)
-          (should-not mevedel-view--pending-tool-rows))
+          (should-not mevedel-view--pending-tool-rows)
+          ;; A settling turn keeps retained rows as their own render.
+          (mevedel-view--schedule-render 'full data-buf 10)
+          (setq mevedel-view--pending-tool-rows '("kept"))
+          (mevedel-view--cancel-scheduled-render t)
+          (should (equal '("kept") mevedel-view--pending-tool-rows))
+          (should (eq 'tools mevedel-view--pending-render-kind)))
       (with-current-buffer view-buf (mevedel-view--cancel-scheduled-render)))))
 
 (mevedel-deftest mevedel-view--unattended-p ()

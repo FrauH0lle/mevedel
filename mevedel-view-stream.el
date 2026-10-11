@@ -63,7 +63,8 @@
                   "mevedel-utilities" (key format &rest args))
 
 ;; `mevedel-view'
-(declare-function mevedel-view--cancel-scheduled-render "mevedel-view" ())
+(declare-function mevedel-view--cancel-scheduled-render "mevedel-view"
+                  (&optional keep-tool-rows))
 (declare-function mevedel-view--schedule-render
                   "mevedel-view" (kind data-buffer delay))
 (declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
@@ -2017,7 +2018,7 @@ NO-PROGRESS suppresses active-turn presentation."
   (unwind-protect
       (progn
         (mevedel-view--stop-request-progress)
-        (mevedel-view--cancel-scheduled-render)
+        (mevedel-view--cancel-scheduled-render t)
         (setq mevedel-view--pending-tool-calls nil)
         (mevedel-view--delete-pending-tool-live-lines))
     (mevedel-view-stream--release-turn)))
@@ -2036,7 +2037,7 @@ NO-PROGRESS suppresses active-turn presentation."
   ;; Retire obsolete streamed work, but keep a full recovery requested
   ;; by the terminal render's error handler before this mandatory release.
   (when (eq mevedel-view--pending-render-kind 'incremental)
-    (mevedel-view--cancel-scheduled-render))
+    (mevedel-view--cancel-scheduled-render t))
   (mevedel-view--stop-spinner-timer)
   (when (markerp mevedel-view--in-flight-turn-start)
     (set-marker mevedel-view--in-flight-turn-start nil))
@@ -2093,7 +2094,7 @@ NO-PROGRESS suppresses active-turn presentation."
                   (mevedel-view--debug-log
                    'render-response-after-spinner
                    :state (mevedel-view--debug-state data-buf start end))
-                  (mevedel-view--cancel-scheduled-render)
+                  (mevedel-view--cancel-scheduled-render t)
                   ;; Clear the list before dropping its rows, or the
                   ;; render below rebuilds the live tail from it.
                   (setq mevedel-view--pending-tool-calls nil)

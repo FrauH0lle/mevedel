@@ -737,6 +737,14 @@
             (with-current-buffer view-buf
               (should-not (gethash "bash-live" mevedel-view--execution-events))
               (should (equal '("bash-live") mevedel-view--pending-tool-rows)))
+            ;; A later turn settling before the view is seen projects only
+            ;; its own range; the older row still needs its refresh.
+            (with-current-buffer data-buf
+              (mevedel-view-stream-render-response (point-min) (point-max)))
+            (with-current-buffer view-buf
+              (should (equal '("bash-live") mevedel-view--pending-tool-rows))
+              (should (eq 'tools mevedel-view--pending-render-kind))
+              (should-not mevedel-view--render-timer))
             (setq unattended nil)
             (mevedel-view--resume-attended-views)
             (with-current-buffer view-buf

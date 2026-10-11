@@ -309,7 +309,8 @@ render keeps its pending kind without running. Skipped tool-row refreshes
 retain each changed tool-use ID once; focus return reads the latest progress
 or terminal state and refreshes those rows. An incremental render also drains
 these row updates, including executions before its live tail. A full render
-subsumes them. Source replacement or cancellation discards the pending IDs.
+subsumes them. A turn that settles or stops projects only its own range, so
+it keeps the pending IDs for their own refresh; view teardown discards them.
 Focus returning to a frame
 (`after-focus-change-function`) or a window redisplaying the buffer
 (`window-buffer-change-functions`) reschedules the pending render.  A view
