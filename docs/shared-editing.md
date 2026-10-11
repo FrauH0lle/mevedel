@@ -366,8 +366,8 @@ that created or changed items settles, each of them gets a version in the
 store; an edit that changed nothing does not count.
 
 `SharedCreate` creates a named item and returns its address. `SharedEdit`
-applies patches, inserts library items, renames, sets a board's background,
-or reverts a contribution from `shared://ID/history`. A patch change is
+applies patches, inserts library items, adds images, renames, sets a board's
+background, or reverts a contribution from `shared://ID/history`. A patch change is
 `{id, hash, set, unset, after, afterId}`:
 
 - `set` merges fields into the current element or block and `unset` removes
@@ -387,9 +387,41 @@ Board elements use Excalidraw's field names; absent fields take Excalidraw's
 defaults, labels are text elements with a `containerId`, and connections are
 arrows with `startBinding`/`endBinding`. The derived Excalidraw fields
 `version`, `versionNonce`, `updated`, `isDeleted` and `boundElements` are
-refused. An image element must reference an existing file; the assistant cannot
-add image bytes. `insert` places a library item with its top-left corner at
-`x`, `y` as new elements.
+refused. An image element in a patch must reference an existing file; the
+`image` action adds a new one. `insert` places a library item with its
+top-left corner at `x`, `y` as new elements.
+
+### Images in and out
+
+The `image` action takes one `source`: a file path or a resource address the
+model can read (`work://`, `artifact://`, or a `shared://ID/images/KEY` or
+`shared://ID/view.png` of any item). It is authorized as a read, like Read, and
+not as an edit (see [permissions](permissions.md)). The tool reads the bytes and
+sends them to the host, which decides the format from the bytes, not the name:
+PNG, JPEG and WebP are stored as they are, and an SVG is rasterized to a PNG at
+twice its intrinsic size, the long edge at most 2,048 px, because boards and
+documents hold only those three raster formats; the item still shows it at its
+intrinsic size. The source file may be up to 4,700,000 bytes; the
+16-megapixel, 8,192-px-per-side and 32-megapixel-per-item limits apply, and a
+failure names the size or limit and what to change.
+
+A board image gets a content-addressed file id, the SHA-1 of its stored bytes,
+as a browser upload does, so identical bytes are stored once, and an element at
+`x`, `y` (give both or neither; the default is below the existing content). A
+document image becomes a block
+after `afterId` (default: the end) with the optional `alt`. The display width
+is the image's own up to 640 px unless `width` is given; the height keeps the
+aspect ratio. The addition is one attributed contribution, the file is
+retained with it, and Revert removes the image and a Revert of that Revert
+restores it. The result lists the new element or block line and, for a board,
+the resulting PNG.
+
+`SharedSaveImage` goes the other way: its `source` is a `shared://ID/images/KEY`
+or `shared://ID/view.png` address and its `file_path` a new file, which keeps the
+image's own format and gets its folders created. It refuses an existing file
+instead of overwriting it, which keeps Rewind exact, and is an edit tool, so
+Plan refuses it and the destination needs write authority. Copying ordinary
+files is Bash's job.
 
 An edit result names the item, its revision, address and contribution, the
 deleted ids, and the stored lines of the elements it changed, including
@@ -724,7 +756,7 @@ Bounds are explicit: 16 MiB canonical state/native input, 4,000 elements and
 JSON excluding embedded image data, with bounded depth and node count. Documents
 allow up to 12 MiB of embedded image data within the canonical state limit.
 Raster images are limited to 16 megapixels each and 32 megapixels per item; browser image uploads are at
-most 4 MiB. Recent revert snapshots are bounded by both count and bytes as
+most 4 MiB, and a file the assistant adds at 4,700,000 bytes. Recent revert snapshots are bounded by both count and bytes as
 described above; they expire before older snapshots block further saves. The
 receipt ledger has a 65,536-operation ceiling. A native export/import begins
 a fresh history when that ceiling is reached. A question's model context is
@@ -748,6 +780,7 @@ npm test --prefix shared-editing
 npm run test:browser --prefix shared-editing
 npx @emacs-eask/cli clean elc
 npx @emacs-eask/cli test ert test/test-mevedel-shared-editing*.el test/test-mevedel-shared-library.el test/test-mevedel-tool-editing.el test/test-mevedel-collaboration-editing.el
+npx @emacs-eask/cli test ert test/test-mevedel-tool-permission-read-access.el test/test-mevedel-pipeline-read-access.el
 MEVEDEL_TEST_SHARED_EDITING=1 timeout 600s ./test/run-remote-acceptance.sh
 ```
 

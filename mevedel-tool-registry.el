@@ -122,7 +122,7 @@ created as a side effect of registration and handles serialization."
     ("Glob" "Grep" "Read"
      mevedel-tool-fs mevedel-tool-fs--register)
     ("ApplyPatch" mevedel-tool-patch-registration mevedel-tool-patch-register)
-    ("SharedCreate" "SharedEdit"
+    ("SharedCreate" "SharedEdit" "SharedSaveImage"
      mevedel-tool-editing mevedel-tool-editing--register)
     ("ToolCall" mevedel-tool-ptc mevedel-tool-ptc--register)
     ("CreateGoal" "GetGoal" "UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
@@ -448,7 +448,8 @@ Gptel format:
 Any trailing plist keys after the description (e.g. `:items',
 `:enum', `:properties') are passed through verbatim to gptel, which
 propagates them into the JSON schema.  Required for array/object
-types under strict function-schema validation."
+types under strict function-schema validation.  The mevedel-only
+`:access' key (see `mevedel-tool-arg-access') stays out of the schema."
   (mapcar
    (lambda (arg-spec)
      (let* ((name (car arg-spec))
@@ -456,7 +457,9 @@ types under strict function-schema validation."
             (rest (cddr arg-spec))
             (required (eq :required (car rest)))
             (desc (cadr rest))
-            (extras (cddr rest))
+            (extras (cl-loop for (key value) on (cddr rest) by #'cddr
+                             unless (eq key :access)
+                             append (list key value)))
             (result (list :name (symbol-name name)
                           :type (if (memq type '(path path-or-resource))
                                     'string type)
@@ -469,6 +472,15 @@ types under strict function-schema validation."
          (setq result (append result (copy-tree extras t))))
        result))
    args))
+
+(defun mevedel-tool-arg-access (arg-spec)
+  "Return the filesystem access ARG-SPEC declares for its path value, or nil.
+ARG-SPEC is (NAME TYPE :required|:optional DESCRIPTION [KEY VALUE]...).
+`:access read' on a `path-or-resource' argument of a tool that otherwise
+mutates says the tool only reads the file or resource the argument names,
+so that argument is authorized as a read and a resource address is
+prepared for reading."
+  (plist-get (nthcdr 4 arg-spec) :access))
 
 (defconst mevedel-tool--canonical-types
   '(string number integer boolean array object)
@@ -705,6 +717,9 @@ Optional (both forms):
   :prompt-file      STRING       Load prompt from file (relative to mevedel
                                  source dir)
   :args             LIST         Arg specs: ((name type :required \"desc\") ...)
+                                 A `path-or-resource' spec may add `:access
+                                 read' when the tool only reads that file or
+                                 resource; see `mevedel-tool-arg-access'.
   :category         STRING       Tool category (default \"mevedel\")
   :groups           LIST         Group symbols: (read edit tasks agents ...)
   :read-only-p      BOOL         Tool never modifies state

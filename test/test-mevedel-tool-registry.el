@@ -344,6 +344,13 @@
      (string-suffix-p mevedel-tool--path-description-suffix
                       provider-description)))
 
+  :doc "keeps the mevedel-only :access key out of the provider schema"
+  (let ((schema (car (mevedel-tool--args-to-gptel
+                      '((source path-or-resource :optional "S" :access read :enum ["a"]))))))
+    (should-not (plist-member schema :access))
+    (should (equal ["a"] (plist-get schema :enum)))
+    (should (plist-get schema :optional)))
+
   :doc "passes through :items for arrays (required for strict schema)"
   (let ((result (mevedel-tool--args-to-gptel
                  '((ids array :optional "list of ids" :items (:type integer))))))
@@ -981,6 +988,19 @@
           (should (equal "0123456789" (with-current-buffer buffer (buffer-string)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-file file))))
+
+(mevedel-deftest mevedel-tool-arg-access
+  (:doc "`mevedel-tool-arg-access' returns the access an argument spec declares")
+  ,test
+  (test)
+  :doc "returns the declared access"
+  (should (eq 'read (mevedel-tool-arg-access
+                     '(source path-or-resource :required "S" :access read))))
+  :doc "returns nil without a declaration"
+  (progn
+    (should-not (mevedel-tool-arg-access '(source path-or-resource :required "S")))
+    (should-not (mevedel-tool-arg-access
+                 '(source path-or-resource :optional "S" :enum ["a"])))))
 
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here

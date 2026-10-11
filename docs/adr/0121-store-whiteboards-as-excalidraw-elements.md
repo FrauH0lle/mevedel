@@ -47,7 +47,9 @@ board was not a pain point; only the data layer and its drawing changed.
   element changes without image bytes, which removes the history growth that
   saturated ADR 0120's boards. The host prunes files that no element and no
   retained contribution references, so Revert can still restore a deleted image.
-  The model cannot author image bytes; it can only reference existing files.
+  The model adds an image through `SharedEdit`'s `image` action, which sends the
+  bytes to the host outside the contribution and stores them under the same
+  content-addressed id; the contribution still records only the element.
 - **Crops are Excalidraw fields.** Boards store `crop`, `scale` (flips) and
   `angle`, not ADR 0120's rendered `imageEdit` PNG; documents keep `imageEdit`.
   The `.excalidraw` file keeps the original so a crop stays editable. An SVG
@@ -118,3 +120,13 @@ separate collections. The library directory replaces the single file;
 installing writes the library as its own file, which can also be removed
 whole. Excalidraw's own libraries never travelled with scenes either, so
 nothing was lost by keeping them off the board.
+
+The first version let the model reference existing board files but never add
+one: no authorized source of bytes existed, and sending bytes through a
+patch would have brought back the history growth the content-addressed files
+removed. Both reasons stopped holding. An image sent as one host action is
+stored once, and the model can already read files and resources under the
+ordinary read permissions, so the `image` action takes its source through that
+same authority instead of accepting inline data. Trying to draw a graph
+natively worked, but a model that could produce a plot or screenshot with
+Python or a browser had no way to put it on the board.

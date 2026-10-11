@@ -577,6 +577,27 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--step-normalize-paths
 		    ctx (lambda (c) (setq updated c)) #'ignore)
 		   (should (eq args (plist-get updated :args))))
+		 :doc "precomputes the canonical path of a read-access argument only"
+		 (let* ((root (file-name-as-directory
+		               (make-temp-file "mevedel-normalize-read-" t)))
+		        (target (file-name-concat root "target.png"))
+		        (link (file-name-concat root "link.png"))
+		        (spec '(source path-or-resource :required "S"))
+		        updated)
+		   (unwind-protect
+		       (progn
+		         (with-temp-file target (insert "x"))
+		         (make-symbolic-link target link)
+		         (dolist (access '(read nil))
+		           (mevedel-pipeline--step-normalize-paths
+		            (list :tool (mevedel-tool--create
+		                         :name "ReadsOne"
+		                         :args (list (if access (append spec '(:access read)) spec)))
+		                  :args (list :source link))
+		            (lambda (c) (setq updated c)) #'ignore)
+		           (should (equal (and access (list (cons link (file-truename target))))
+		                          (plist-get updated :canonical-path-map)))))
+		     (delete-directory root t)))
 		 :doc "uses the session target before authorization"
 		 (let ((root (file-name-as-directory
 			     (make-temp-file "mevedel-normalize-remote-" t))))
@@ -948,6 +969,29 @@ cover, so the permission step's warning about it is captured here."
             (should (equal "b" (gethash path-b snapshots)))
             (let ((absent (make-symbol "absent")))
               (should-not (eq absent (gethash missing snapshots absent))))))
+      (delete-directory root t)))
+  :doc "never snapshots a path the tool only reads"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-read-snapshot-" t)))
+         (source (file-name-concat root "plot.png"))
+         (written (file-name-concat root "out.txt"))
+         (request (mevedel-request--create
+                   :file-snapshots (make-hash-table :test #'equal)))
+         (tool (mevedel-tool--create
+                :name "ReadsOne" :snapshot-p t
+                :args '((source path-or-resource :required "S" :access read))
+                :get-path (lambda (args) (plist-get args :out)))))
+    (unwind-protect
+        (progn
+          (with-temp-file source (insert "image"))
+          (with-temp-file written (insert "old"))
+          (mevedel-pipeline--step-snapshot
+           (list :tool tool :args (list :source source :out written)
+                 :request request)
+           #'ignore #'ignore)
+          (let ((snapshots (mevedel-request-file-snapshots request)))
+            (should (= 1 (hash-table-count snapshots)))
+            (should (equal "old" (gethash written snapshots)))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-pipeline--step-goal-budget-warning ()

@@ -2,6 +2,7 @@
 import * as Y from 'yjs';
 import { anchorSignature, boardContext, checkContext, readComments } from './context.mjs';
 import { readFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import { initWasm, Resvg } from '@resvg/resvg-wasm';
 import {
   create,
@@ -22,6 +23,7 @@ import {
   same,
 } from './model.mjs';
 import { initializeDocument, patchDocument, restoreDocument, markdown, selectedText } from './document.mjs';
+import { imageSize } from './image.mjs';
 import { boardSVG, documentHTML, usedFonts } from './render.mjs';
 import { parseScene, serializeScene, parseLibrary, placeElements } from './excalidraw.mjs';
 import { extent } from './scene.mjs';
@@ -43,10 +45,10 @@ const bytes = (text) => {
 const resource = (name) => readFile(new URL(`./${name}`, import.meta.url));
 const fontFiles = ['font.ttf', ...Object.values(FONT_FILES).map((file) => `${file}.ttf`)];
 let renderer;
-async function png(svg) {
-  renderer ||= Promise.all([resource('resvg.wasm').then(initWasm), ...fontFiles.map(resource)]);
-  const [, ...fonts] = await renderer;
-  const r = new Resvg(svg, { font: { fontBuffers: fonts, defaultFontFamily: 'Noto Sans' } });
+const loadRenderer = () => (renderer ||= Promise.all([resource('resvg.wasm').then(initWasm), ...fontFiles.map(resource)]));
+async function png(svg, fitTo) {
+  const [, ...fonts] = await loadRenderer();
+  const r = new Resvg(svg, { font: { fontBuffers: fonts, defaultFontFamily: 'Noto Sans' }, ...(fitTo ? { fitTo } : {}) });
   try {
     const image = r.render();
     try {
@@ -57,6 +59,59 @@ async function png(svg) {
   } finally {
     r.free();
   }
+}
+/* An image the model supplies arrives as base64 bytes. The format comes from
+   the bytes, not a name: PNG, JPEG and WebP are stored as they are; an SVG is
+   rasterized, because boards and documents hold only those three formats. */
+const FORMATS = 'PNG, JPEG, WebP or SVG';
+function sniffImage(buffer) {
+  const head = buffer.subarray(0, 12);
+  if (head.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') return 'image/png';
+  if (head[0] === 0xff && head[1] === 0xd8) return 'image/jpeg';
+  if (head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  const text = buffer.subarray(0, 2048);
+  if (!text.includes(0) && /<svg[\s>]/.test(text.toString('utf8'))) return 'image/svg+xml';
+  return null;
+}
+/* An SVG's PNG is drawn at up to twice its intrinsic size, for sharp lines
+   when a board is zoomed; its intrinsic size is what the item shows. */
+async function rasterizeSVG(svg) {
+  let probe;
+  try {
+    await loadRenderer();
+    probe = new Resvg(svg);
+  } catch {
+    throw new Error('The SVG could not be parsed; check that it is a complete, valid SVG document');
+  }
+  let width, height;
+  try {
+    [width, height] = [probe.width, probe.height];
+  } finally {
+    probe.free();
+  }
+  check(width > 0 && height > 0, 'The SVG has no size; give it width and height or a viewBox');
+  const zoom = Math.min(2, 2048 / Math.max(width, height));
+  return { data: Buffer.from(await png(svg, { mode: 'zoom', value: zoom }), 'base64'), natural: [width, height] };
+}
+async function preparedImage(request) {
+  check(typeof request.data === 'string' && request.data, 'Image data is required');
+  const raw = bytes(request.data);
+  const mime = sniffImage(raw);
+  check(mime, `Not a supported image; use ${FORMATS}`);
+  const vector = mime === 'image/svg+xml' ? await rasterizeSVG(raw.toString('utf8')) : null;
+  const data = vector ? vector.data : raw;
+  const type = vector ? 'image/png' : mime;
+  const src = `data:${type};base64,${data.toString('base64')}`;
+  const [width, height] = imageSize(src);
+  const [naturalWidth, naturalHeight] = vector ? vector.natural : [width, height];
+  return { src, mime: type, naturalWidth, naturalHeight, fileId: createHash('sha1').update(data).digest('hex') };
+}
+/* Shown size: the image's natural one, narrowed to 640 as a browser upload is,
+   unless the caller names a width; the height keeps the aspect ratio. */
+function imageDisplay(request, image) {
+  const width = request.width === undefined ? Math.min(image.naturalWidth, 640) : request.width;
+  check(Number.isFinite(width) && width >= 1 && width <= 8192, 'width must be between 1 and 8192');
+  return [Math.round(width * 10) / 10, Math.max(1, Math.round((width * image.naturalHeight / image.naturalWidth) * 10) / 10)];
 }
 /* A standalone SVG download embeds the fonts its text uses. Cropped images
    are re-rendered to their visible pixels, so a download never reveals what
@@ -265,7 +320,7 @@ export async function handle(request) {
   }
   if (action === 'library-view') return { result: await libraryView(request.libraries, request.part, request.at) };
   check(
-    ['create', 'import', 'read', 'view', 'update', 'patch', 'insert', 'rename', 'background', 'revert', 'restore', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
+    ['create', 'import', 'read', 'view', 'update', 'patch', 'insert', 'image', 'rename', 'background', 'revert', 'restore', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
     'Unknown editing action',
   );
   let state = request.state,
@@ -530,6 +585,29 @@ export async function handle(request) {
       inserted = placeElements(elements, [request.x + width / 2, request.y + height / 2],
         generateNKeysBetween(top, null, elements.length), () => Math.floor(Math.random() * 2 ** 31));
       patch(doc, inserted.map((e) => ({ id: e.id, before: null, after: e })));
+    }
+    else if (action === 'image') {
+      const image = await preparedImage(request);
+      const [width, height] = imageDisplay(request, image);
+      const id = randomUUID();
+      if (before.kind === 'whiteboard') {
+        check((request.x === undefined) === (request.y === undefined), 'Give both x and y, or neither');
+        // Without a position the image goes below the existing content.
+        const [left, top, , tall] = extent(before.content);
+        const [x, y] = request.x === undefined ? [left, before.content.length ? top + tall + 40 : 0] : [request.x, request.y];
+        check([x, y].every((v) => Number.isFinite(v) && Math.abs(v) <= 1e6), 'x and y must be finite board coordinates');
+        const last = before.content.filter((e) => e.index).at(-1)?.index ?? null;
+        putFile(doc, image.fileId, { mimeType: image.mime, dataURL: image.src, created: Date.now() });
+        patch(doc, [{ id, before: null, after: { id, type: 'image', fileId: image.fileId, status: 'saved', scale: [1, 1],
+          x, y, width, height, seed: Math.floor(Math.random() * 2 ** 31), index: generateNKeysBetween(last, null, 1)[0] } }]);
+      } else {
+        check(request.alt === undefined || (typeof request.alt === 'string' && request.alt.length <= 10000),
+          'alt must be text of at most 10000 characters');
+        check(request.afterId === undefined || typeof request.afterId === 'string', 'afterId must be a block id');
+        patchDocument(doc, [{ id, before: null,
+          after: { type: 'image', attrs: { src: image.src, ...(request.alt === undefined ? {} : { alt: request.alt }), width, height, id } },
+          ...(request.afterId === undefined ? {} : { afterId: request.afterId }) }]);
+      }
     }
     else if (action === 'background') {
       check(before.kind === 'whiteboard', 'Only whiteboards have a canvas background');

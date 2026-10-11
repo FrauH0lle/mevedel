@@ -157,10 +157,13 @@
                   "mevedel-tool-permission" (context decision &rest props))
 (declare-function mevedel-tool-permission-paths
                   "mevedel-tool-permission" (tool args &optional context))
+(declare-function mevedel-tool-permission-read-paths
+                  "mevedel-tool-permission" (tool args))
 (declare-function mevedel-tool-permission-step
                   "mevedel-tool-permission" (context next fail))
 
 ;; `mevedel-tool-registry'
+(declare-function mevedel-tool-arg-access "mevedel-tool-registry" (arg-spec))
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-async-p "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-paths "mevedel-tool-registry" (cl-x) t)
@@ -898,6 +901,18 @@ target path signals for the pipeline runner to handle."
           (setq normalized-context
                 (plist-put normalized-context :canonical-path-map
                            (nreverse path-map)))))
+      ;; A path the tool only reads is canonicalized like any other, so its
+      ;; permission is decided on the path it actually names.
+      (when-let* ((reads (mevedel-tool-permission-read-paths
+                          tool (plist-get normalized-context :args))))
+        (setq normalized-context
+              (plist-put
+               normalized-context :canonical-path-map
+               (append (plist-get normalized-context :canonical-path-map)
+                       (mapcar (lambda (path)
+                                 (cons path (mevedel-pipeline--canonicalize-path-value
+                                             path target)))
+                               reads)))))
       (funcall next normalized-context))))
 
 (defun mevedel-pipeline--resource-operation (tool)
@@ -930,16 +945,18 @@ permission or handler work begins."
                      (mevedel-tool-patch-parse
                       (plist-get args :patch)
                       (plist-get context :default-directory))))))
-      (when operation
       (dolist (spec (mevedel-tool-args tool))
-        (when (eq (cadr spec) 'path-or-resource)
-          (let* ((key (intern (concat ":" (symbol-name (car spec)))))
-                 (address (plist-get args key)))
-            (when (and (stringp address)
-                       (mevedel-resource-address-like-p address))
-              (let ((attempt
-                     (mevedel-resource-prepare operation address context)))
-                (push (cons address attempt) attempts))))))))
+        (let ((spec-operation (if (eq (mevedel-tool-arg-access spec) 'read)
+                                  'read
+                                operation)))
+          (when (and spec-operation (eq (cadr spec) 'path-or-resource))
+            (let* ((key (intern (concat ":" (symbol-name (car spec)))))
+                   (address (plist-get args key)))
+              (when (and (stringp address)
+                         (mevedel-resource-address-like-p address))
+                (let ((attempt
+                       (mevedel-resource-prepare spec-operation address context)))
+                  (push (cons address attempt) attempts))))))))
     (funcall next
              (cond
               (patch-proposal

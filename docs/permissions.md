@@ -68,6 +68,16 @@ authority for that execution. Native `:path` rules remain direct tool
 authorization, but cannot bypass a protected path's
 resource-grant requirement.
 
+Resource authority normally follows the tool's mutability: a read-only tool's
+paths need read authority and any other tool's paths need write authority. A
+`path-or-resource` argument that a mutating tool declares `:access read`
+is the exception. Each such path is authorized separately as a read: in Edits an
+unprotected path needs no prompt, a protected path needs a covering read
+grant, and an Ask prompt offers a read grant, never a write grant. A path the
+tool also writes keeps write authority. The tool's own mode and workflow
+decisions are unchanged, so `SharedEdit` is still refused in Plan whatever it
+reads.
+
 Hook integration sits around this chain:
 
 - `PreToolUse` runs before the chain. A hook `deny` is final. A hook

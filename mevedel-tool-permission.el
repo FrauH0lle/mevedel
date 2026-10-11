@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 
 (require 'mevedel-agents)
@@ -41,6 +42,10 @@
 (declare-function mevedel-permission-persistence-refresh
                   "mevedel-permission-persistence"
                   (workspace continuation &optional on-cancel on-error))
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
+(autoload 'mevedel-resource-address-like-p "mevedel-resource")
 
 ;; `mevedel-tool-patch'
 (declare-function mevedel-tool-patch-get-paths-from-proposal
@@ -431,6 +436,7 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
            (plist-get (plist-get context :patch-proposal) :session-only-p)
            :buffer (plist-get context :buffer)
            :path (plist-get context :permission-path)
+           :resource-access (plist-get context :permission-access)
            :permission-request
            (lambda (entry queue-session settle)
              (mevedel-tool-permission--request
@@ -555,6 +561,41 @@ permission log with REASON."
                    outcome))))
         'ask)))
 
+(defun mevedel-tool-permission-read-paths (tool args)
+  "Return the filesystem paths TOOL's read-access arguments name in ARGS.
+These are the values of `path-or-resource' arguments declared `:access read'
+(see `mevedel-tool-arg-access').  A resource address is authorized by its
+prepared attempt, so only ordinary paths are returned."
+  (when (listp args)
+    (delq nil
+          (mapcar
+           (lambda (spec)
+             (when (and (eq 'path-or-resource (cadr spec))
+                        (eq 'read (mevedel-tool-arg-access spec)))
+               (let ((value (plist-get
+                             args (intern (concat ":" (symbol-name (car spec)))))))
+                 (and (stringp value)
+                      (not (string-empty-p value))
+                      (not (mevedel-resource-address-like-p value))
+                      value))))
+           (mevedel-tool-args tool)))))
+
+(defun mevedel-tool-permission--entries (tool context)
+  "Return the (PATH . ACCESS) pairs to authorize for TOOL in CONTEXT.
+ACCESS is nil for a path the tool touches in its own right, which takes the
+access its mutability implies, and `read' for one it only reads.  A path
+in both lists keeps the stronger default."
+  (let* ((args (plist-get context :args))
+         (paths (mevedel-tool-permission-paths tool args context))
+         (canonical (plist-get context :canonical-path-map))
+         (reads (seq-difference
+                 (delete-dups
+                  (mapcar (lambda (path) (or (cdr (assoc path canonical)) path))
+                          (mevedel-tool-permission-read-paths tool args)))
+                 paths)))
+    (append (mapcar (lambda (path) (cons path nil)) paths)
+            (mapcar (lambda (path) (cons path 'read)) reads))))
+
 (defun mevedel-tool-permission-step (context next fail)
   "Authorize each filesystem path in CONTEXT before continuing.
 
@@ -570,8 +611,7 @@ context and typed reason."
               (buffer-local-value
                'mevedel-permission--context-frozen-p buffer)
             mevedel-permission--context-frozen-p))
-         (paths (mevedel-tool-permission-paths
-                 tool (plist-get context :args) context)))
+         (entries (mevedel-tool-permission--entries tool context)))
     (cl-labels
         ((run ()
            (cond
@@ -579,7 +619,7 @@ context and typed reason."
                   (not (mevedel-tool-read-only-p tool))
                   (mevedel-execution-mutation-refused-p session))
              (funcall fail mevedel-execution-mutation-blocked-message))
-            ((null paths)
+            ((null entries)
              (mevedel-tool-permission--step-one context next fail))
             (t
              (cl-labels
@@ -590,8 +630,10 @@ context and typed reason."
                                             all-direct-p))
                       (let ((path-context
                              (plist-put
-                              (plist-put (copy-sequence current)
-                                         :permission-path (car remaining))
+                              (plist-put
+                               (plist-put (copy-sequence current)
+                                          :permission-path (caar remaining))
+                               :permission-access (cdar remaining))
                               :auto-apply-edit-p nil)))
                         (mevedel-tool-permission--step-one
                          path-context
@@ -601,7 +643,7 @@ context and typed reason."
                             (and all-direct-p
                                  (plist-get updated :auto-apply-edit-p))))
                          fail)))))
-               (authorize paths context t))))))
+               (authorize entries context t))))))
       (cond
        ((and workspace (not frozen-p))
           (mevedel-permission-persistence-refresh

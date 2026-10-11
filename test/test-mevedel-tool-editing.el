@@ -232,13 +232,221 @@
         (should (string-search "Unknown shared:// address"
                                (text (run "Read" (list :file_path (concat address "/nope")) 'error))))))))
 
+(defconst mevedel-tool-editing-test--png-base64
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+  "A valid 1x1 PNG.")
+
+(defconst mevedel-tool-editing-test--jpeg-base64
+  "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAADAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDnaKKK88+vP//Z"
+  "A valid 4x3 JPEG.")
+
+(defconst mevedel-tool-editing-test--webp-base64
+  "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA"
+  "A valid 1x1 WebP.")
+
+(defun mevedel-tool-editing-test--write (path content)
+  "Write the unibyte CONTENT to PATH, creating its directory; return PATH."
+  (make-directory (file-name-directory path) t)
+  (let ((coding-system-for-write 'no-conversion))
+    (with-temp-file path
+      (set-buffer-multibyte nil)
+      (insert content)))
+  path)
+
+(defun mevedel-tool-editing-test--png (path)
+  "Write the sample PNG to PATH and return PATH."
+  (mevedel-tool-editing-test--write
+   path (base64-decode-string mevedel-tool-editing-test--png-base64)))
+
+(defun mevedel-tool-editing-test--bytes (path)
+  "Return PATH's content as a unibyte string."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally path)
+    (buffer-string)))
+
+(defun mevedel-tool-editing-test--file-id (edited)
+  "Return the fileId in the first changed line of the parsed edit result EDITED."
+  (let ((line (aref (plist-get edited :changed) 0)))
+    (and (string-match "\"fileId\":\"\\([0-9a-f]\\{40\\}\\)\"" line)
+         (match-string 1 line))))
+
+(mevedel-deftest mevedel-tool-editing--image
+  (:doc "SharedEdit image brings a file or readable resource image into a board or document" :quiet t)
+  ,test
+  (test)
+  :doc "puts a workspace file on a board, where it reads back as an image"
+  (mevedel-tool-editing-test--with-session
+    (let* ((file (mevedel-tool-editing-test--png (file-name-concat directory "plot.png")))
+           (link (file-name-concat directory "link.png"))
+           (id (plist-get (parse (run "SharedCreate" '(:kind "whiteboard" :title "Plots"))) :id))
+           (edit (run "SharedEdit" (list :id id :action "image" :source file :x 40 :y 50 :width 200)))
+           (line (aref (plist-get (parse edit) :changed) 0))
+           (file-id (mevedel-tool-editing-test--file-id (parse edit))))
+      (should file-id)
+      (should (string-search "\"type\":\"image\"" line))
+      (should (string-search "\"x\":40" line))
+      (should (string-search "\"width\":200" line))
+      (should (plist-get edit :media))
+      (should (plist-get (run "Read" (list :file_path (format "shared://%s/images/%s" id file-id)))
+                         :media))
+      ;; A symlink to an image is read through to the image.
+      (make-symbolic-link file link)
+      (should (equal file-id
+                     (mevedel-tool-editing-test--file-id
+                      (parse (run "SharedEdit" (list :id id :action "image" :source link
+                                                     :x 0 :y 0))))))))
+  :doc "stores JPEG and WebP images as they are, from an artifact:// address or a path"
+  (mevedel-tool-editing-test--with-session
+    (let* ((id (plist-get (parse (run "SharedCreate" '(:kind "whiteboard" :title "Photos"))) :id))
+           (webp (mevedel-tool-editing-test--write
+                  (file-name-concat directory "pic.webp")
+                  (base64-decode-string mevedel-tool-editing-test--webp-base64))))
+      (mevedel-tool-editing-test--write
+       (file-name-concat directory "tool-results" "photo.jpg")
+       (base64-decode-string mevedel-tool-editing-test--jpeg-base64))
+      (cl-loop for (source mime) in `(("artifact://photo.jpg" "image/jpeg") (,webp "image/webp"))
+               for file-id = (mevedel-tool-editing-test--file-id
+                              (parse (run "SharedEdit" (list :id id :action "image" :source source
+                                                             :x 0 :y 0))))
+               do (should file-id)
+               (should (equal mime (plist-get
+                                    (car (plist-get
+                                          (run "Read" (list :file_path (format "shared://%s/images/%s" id file-id)))
+                                          :media))
+                                    :mime))))))
+  :doc "puts a work:// image after a chosen document block, described, and a second at the end"
+  (mevedel-tool-editing-test--with-session
+    (mevedel-tool-editing-test--png (file-name-concat directory "local" "plot.png"))
+    (let* ((id (plist-get (parse (run "SharedCreate" '(:kind "document" :title "Report"))) :id))
+           (first-block
+            (let ((overview (text (run "Read" (list :file_path (concat "shared://" id))))))
+              (should (string-match "\"id\":\"\\([^\"]+\\)\"" overview))
+              (match-string 1 overview)))
+           (head (parse (run "SharedEdit" (list :id id :action "image" :source "work://plot.png"
+                                                :alt "Plot" :afterId first-block)))))
+      (should (string-search "\"alt\":\"Plot\"" (aref (plist-get head :changed) 0)))
+      (run "SharedEdit" (list :id id :action "image" :source "work://plot.png"))
+      (let ((overview (text (run "Read" (list :file_path (concat "shared://" id))))))
+        (should (= 2 (with-temp-buffer
+                       (insert overview)
+                       (how-many (regexp-quote (format "shared://%s/images/" id)) (point-min)))))
+        (should (< (string-match "\"type\":\"paragraph\"" overview)
+                   (string-match "\"type\":\"image\"" overview))))))
+  :doc "copies an image between shared items by address, keeping its content-addressed file"
+  (mevedel-tool-editing-test--with-session
+    (let* ((file (mevedel-tool-editing-test--png (file-name-concat directory "plot.png")))
+           (one (plist-get (parse (run "SharedCreate" '(:kind "whiteboard" :title "One"))) :id))
+           (two (plist-get (parse (run "SharedCreate" '(:kind "whiteboard" :title "Two"))) :id))
+           (file-id (mevedel-tool-editing-test--file-id
+                     (parse (run "SharedEdit" (list :id one :action "image" :source file :x 0 :y 0)))))
+           (copied (parse (run "SharedEdit" (list :id two :action "image" :x 0 :y 0
+                                                  :source (format "shared://%s/images/%s" one file-id)))))
+           (snapshot (parse (run "SharedEdit" (list :id two :action "image" :x 300 :y 0
+                                                    :source (format "shared://%s/view.png" one))))))
+      (should (equal file-id (mevedel-tool-editing-test--file-id copied)))
+      (should-not (equal file-id (mevedel-tool-editing-test--file-id snapshot)))))
+  :doc "explains what is wrong with a source that is no usable image and changes nothing"
+  (mevedel-tool-editing-test--with-session
+    (let* ((id (plist-get (parse (run "SharedCreate" '(:kind "whiteboard" :title "Refusals"))) :id))
+           (refuse (lambda (source)
+                     (text (run "SharedEdit" (list :id id :action "image" :source source :x 0 :y 0)
+                                'error))))
+           (notes (mevedel-tool-editing-test--write
+                   (file-name-concat directory "local" "notes.txt") "plain text"))
+           (huge (mevedel-tool-editing-test--write
+                  (file-name-concat directory "huge.png") (make-string 4800000 ?x)))
+           (gif (mevedel-tool-editing-test--write
+                 (file-name-concat directory "anim.gif") "GIF89a\1\0\1\0")))
+      (should (string-search "File not found" (funcall refuse (file-name-concat directory "missing.png"))))
+      (should (string-search "is a directory" (funcall refuse directory)))
+      (should (string-search "Not a supported image" (funcall refuse notes)))
+      (should (string-search "Not a supported image" (funcall refuse "work://notes.txt")))
+      (should (string-search "Not a supported image" (funcall refuse gif)))
+      (should (string-search "limited to" (funcall refuse huge)))
+      (should (string-search "not an image: it reads as text"
+                             (funcall refuse (concat "shared://" id))))
+      (should (string-search "needs source"
+                             (text (run "SharedEdit" (list :id id :action "image") 'error))))
+      (should (string-search "0 elements" (text (run "Read" (list :file_path (concat "shared://" id))))))))
+  :doc "leaves the item unchanged when reading the source is denied or the session is planning"
+  (mevedel-tool-editing-test--with-session
+    (let* ((file (mevedel-tool-editing-test--png (file-name-concat directory "secret.png")))
+           (id (plist-get (parse (run "SharedCreate" '(:kind "whiteboard" :title "Guarded"))) :id))
+           (attempt (lambda ()
+                      (run "SharedEdit" (list :id id :action "image" :source file :x 0 :y 0)
+                           'error))))
+      (setf (mevedel-session-permission-rules session)
+            (list (list "*" :path file :action 'deny)))
+      (funcall attempt)
+      (setf (mevedel-session-permission-rules session) nil
+            (mevedel-session-plan-mode session) t)
+      (funcall attempt)
+      (setf (mevedel-session-plan-mode session) nil)
+      (should (string-search "0 elements" (text (run "Read" (list :file_path (concat "shared://" id)))))))))
+
+(mevedel-deftest mevedel-tool-editing--save-image
+  (:doc "SharedSaveImage writes a shared image to a new file" :quiet t)
+  ,test
+  (test)
+  :doc "saves an embedded image and the board as drawn, creating folders and never overwriting"
+  (mevedel-tool-editing-test--with-session
+    (setq-local mevedel--current-request
+                (mevedel-request--create :session session
+                                         :file-snapshots (make-hash-table :test #'equal)))
+    (let* ((file (mevedel-tool-editing-test--png (file-name-concat directory "plot.png")))
+           (id (plist-get (parse (run "SharedCreate" '(:kind "whiteboard" :title "Plots"))) :id))
+           (file-id (mevedel-tool-editing-test--file-id
+                     (parse (run "SharedEdit" (list :id id :action "image" :source file :x 0 :y 0)))))
+           (source (format "shared://%s/images/%s" id file-id))
+           (out (file-name-concat directory "exports" "saved.png"))
+           (view (file-name-concat directory "exports" "board.png")))
+      (should (string-search "Saved" (text (run "SharedSaveImage" (list :source source :file_path out)))))
+      (should (equal (mevedel-tool-editing-test--bytes file)
+                     (mevedel-tool-editing-test--bytes out)))
+      ;; Rewind restores the absence the snapshot recorded.
+      (should (null (gethash out (mevedel-request-file-snapshots mevedel--current-request) 'unrecorded)))
+      (should (string-search "already exists"
+                             (text (run "SharedSaveImage" (list :source source :file_path out) 'error))))
+      (should (equal (mevedel-tool-editing-test--bytes file)
+                     (mevedel-tool-editing-test--bytes out)))
+      (run "SharedSaveImage" (list :source (format "shared://%s/view.png" id) :file_path view))
+      (should (equal "\211PNG" (substring (mevedel-tool-editing-test--bytes view) 0 4)))))
+  :doc "saves a document's image by the key its source shows"
+  (mevedel-tool-editing-test--with-session
+    (let* ((file (mevedel-tool-editing-test--png (file-name-concat directory "plot.png")))
+           (id (plist-get (parse (run "SharedCreate" '(:kind "document" :title "Report"))) :id))
+           (out (file-name-concat directory "from-doc.png")))
+      (run "SharedEdit" (list :id id :action "image" :source file))
+      (let ((overview (text (run "Read" (list :file_path (concat "shared://" id))))))
+        (should (string-match (format "shared://%s/images/\\([^\"]+\\)\"" id) overview))
+        (run "SharedSaveImage" (list :source (format "shared://%s/images/%s" id (match-string 1 overview))
+                                     :file_path out)))
+      (should (equal (mevedel-tool-editing-test--bytes file)
+                     (mevedel-tool-editing-test--bytes out)))))
+  :doc "refuses sources it cannot serve, missing images, and a denied destination without writing"
+  (mevedel-tool-editing-test--with-session
+    (let* ((id (plist-get (parse (run "SharedCreate" '(:kind "whiteboard" :title "Empty"))) :id))
+           (out (file-name-concat directory "never.png"))
+           (refuse (lambda (source)
+                     (text (run "SharedSaveImage" (list :source source :file_path out) 'error)))))
+      (should (string-search "SharedSaveImage reads shared://" (funcall refuse "work://plot.png")))
+      (should (string-search "SharedSaveImage reads shared://" (funcall refuse "/etc/hostname")))
+      (should (string-search "SharedSaveImage reads shared://" (funcall refuse (concat "shared://" id))))
+      (should (string-search "No image" (funcall refuse (format "shared://%s/images/missing" id))))
+      (setf (mevedel-session-permission-rules session)
+            (list (list "*" :path out :action 'deny)))
+      (should (funcall refuse (format "shared://%s/view.png" id)))
+      (should-not (file-exists-p out)))))
+
 (mevedel-deftest mevedel-tool-editing--register
   (:doc "Shared tools serialize through the provider schema with correct optional arguments")
   (let ((mevedel-tool--registry (make-hash-table :test #'equal))
         (gptel--known-tools nil))
     (mevedel-tool-editing--register)
     (dolist (spec '(("SharedCreate" ["kind" "title"])
-                    ("SharedEdit" ["id" "action"])))
+                    ("SharedEdit" ["id" "action"])
+                    ("SharedSaveImage" ["source" "file_path"])))
       (let* ((tool (mevedel-tool-gptel-tool (mevedel-tool-get (car spec))))
              (encoded (json-serialize (gptel--parse-tools nil (list tool))
                                       :null-object nil :false-object :json-false))
@@ -255,7 +463,10 @@
           ("SharedEdit"
            (should (equal (plist-get (plist-get properties :changes) :items) '(:type "object")))
            (should (equal (plist-get (plist-get properties :action) :enum)
-                          ["patch" "insert" "rename" "background" "revert"]))))))))
+                          ["patch" "insert" "image" "rename" "background" "revert"]))
+           (let ((source (plist-get properties :source)))
+             (should (stringp (plist-get source :description)))
+             (should-not (plist-member source :access)))))))))
 
 (mevedel-deftest mevedel-tool-editing--summaries
   (:doc "ToolSearch finds the shared tools by what people call shared items")

@@ -20,7 +20,13 @@ export function validateImageContent(image) {
   pixels += validateImage(edit.src);
   return pixels;
 }
+/* Pixel count of an embedded image data URL. */
 export function validateImage(src) {
+  const [width, height] = imageSize(src);
+  return width * height;
+}
+/* Validated [width, height] of an embedded PNG, JPEG, or WebP data URL. */
+export function imageSize(src) {
   const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]*={0,2})$/.exec(src);
   check(match && src.length <= 6 * 1024 * 1024, 'Invalid embedded image');
   const raw = atob(match[2]),
@@ -93,8 +99,12 @@ export function validateImage(src) {
     }
   }
   check(
-    width > 0 && height > 0 && width <= 8192 && height <= 8192 && width * height <= 16000000,
-    'Image dimensions are unsupported or exceed 16 megapixels',
+    width > 0 && height > 0,
+    'The image is truncated or damaged; its dimensions cannot be read. Provide a complete PNG, JPEG, or WebP',
   );
-  return width * height;
+  check(
+    width <= 8192 && height <= 8192 && width * height <= 16000000,
+    `Image dimensions ${width}×${height} are unsupported or exceed 8192 px per side / 16 megapixels; re-render smaller`,
+  );
+  return [width, height];
 }

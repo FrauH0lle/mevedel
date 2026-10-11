@@ -221,7 +221,7 @@ EXPLICIT takes precedence when non-nil."
           path pattern domain name mode workspace-root allowed-roots
           exact-allowed-paths invocation-rules request-rules session-rules
           persistent-rules persistent-snapshot resource-grants
-          permission-request
+          resource-access permission-request
           one-shot-mutations-p patch-session-only-p warn-no-session-p)
   "Return normalized permission invocation context.
 
@@ -234,8 +234,9 @@ EXACT-ALLOWED-PATHS, INVOCATION-RULES, REQUEST-RULES, SESSION-RULES,
 PERSISTENT-RULES, PERSISTENT-SNAPSHOT, RESOURCE-GRANTS, and
 WARN-NO-SESSION-P provide the context facts.  PERSISTENT-SNAPSHOT is the
 invocation's already-refreshed `:rules' and `:resource-grants' plist,
-including when either value is nil.  ONE-SHOT-MUTATIONS-P defaults from
-REQUEST.
+including when either value is nil.  RESOURCE-ACCESS, `read' or `write',
+overrides the access the tool's mutability implies for PATH.
+ONE-SHOT-MUTATIONS-P defaults from REQUEST.
 PATCH-SESSION-ONLY-P classifies prepared ApplyPatch proposals containing only
 session-owned work descendants for the Plan boundary.
 PERMISSION-REQUEST admits an interactive request at its hook boundary before
@@ -326,6 +327,7 @@ happen for a non-read-only tool."
            :allowed-roots allowed-roots
            :exact-allowed-paths exact-allowed-paths
            :resource-grants resource-grants
+           :resource-access resource-access
            :one-shot-mutations-p one-shot-mutations-p
            :patch-session-only-p patch-session-only-p))
          (path (plist-get context :path))

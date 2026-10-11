@@ -47,7 +47,9 @@ elements, board renderings, comments, history and the host's element
 libraries. `SharedCreate` and `SharedEdit` change them through the normal
 permission pipeline, naming each target by the hash the model read.
 Whiteboard targets are Excalidraw elements; `SharedEdit` also inserts library
-items and sets a board's canvas colour. An atomic commit and its result delivery defer cancellation
+items, adds an image from a file or readable resource, and sets a board's
+canvas colour; `SharedSaveImage` writes a shared image to a new file. An
+atomic commit and its result delivery defer cancellation
 settlement until the actual durable outcome is known. See
 [shared editing](shared-editing.md) for schemas, reversion, and host ownership.
 
@@ -383,6 +385,14 @@ Native and wrapped registrations preserve the same permission metadata.
 `:snapshot-p` is an explicit declaration for file-mutating tools whose
 before-state participates in the final patch. `ApplyPatch` declares it and
 uses `:get-paths` so permission and snapshot steps cover every affected path.
+
+A `path-or-resource` argument may declare `:access read`, for a tool that
+mutates something else and only reads the file or resource that argument
+names. Its plain path is canonicalized and authorized as a read, so a mutating
+tool's source file needs the same authority as Read, not write authority. A
+resource address is prepared with the `read` operation and reaches the handler
+as the same authorized attempt Read receives. The key is not part of the
+provider schema. `SharedEdit`'s `source` is the one such argument.
 
 During directive implementation, the pipeline also records conservative
 untracked-effect markers for non-read-only execution tools and agent dispatch.
