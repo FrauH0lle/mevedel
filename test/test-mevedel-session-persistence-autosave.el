@@ -15,6 +15,7 @@
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-journal-test-support"))
+(require 'mevedel-agent-runtime)
 
 (mevedel-deftest mevedel-session-persistence-autosave-buffer
 		 (:quiet t)

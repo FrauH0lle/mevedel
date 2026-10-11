@@ -9,8 +9,9 @@
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-session-test-support"))
-(require 'mevedel-tools)
+(require 'mevedel-pipeline)
 (require 'mevedel-ptc-checkpoint)
+(require 'mevedel-tools)
 
 (mevedel-deftest mevedel-pipeline-run-tool/checkpoint (:quiet t)
   (let* ((root (make-temp-file "mevedel-final-checkpoint-" t))

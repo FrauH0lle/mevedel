@@ -15,6 +15,7 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-transcript-audit)
+(require 'mevedel-view)
 (require 'mevedel-view-render)
 
 (mevedel-deftest mevedel-view--user-turn-attribution

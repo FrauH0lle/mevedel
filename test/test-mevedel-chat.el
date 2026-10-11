@@ -1968,73 +1968,76 @@
       (delete-directory root t)))
 
 
-		 :doc "flushes permission queues and the pending plan approval"
-		 (with-temp-buffer
-		   (let* ((workspace (mevedel-workspace--create
-				      :type 'project
-				      :id "/tmp/mevedel-chat-abort/"
-				      :root "/tmp/mevedel-chat-abort/"
-				      :name "abort"))
-			  (session (mevedel-session-create "main" workspace))
-			  (outcomes nil))
-		     (setq-local mevedel--session session)
-                     (setq-local mevedel-compact-run-cancel
-		                 (lambda () (push '(compaction . aborted) outcomes)))
-		     (mevedel-request-begin session)
-		     (setf (mevedel-session-permission-queue session)
-			   (list (list :kind 'generic
-				       :tool-name "Read"
-				       :session session
-				       :callback
-				       (lambda (outcome)
-					 (push (cons 'permission outcome) outcomes)))))
-		     (setf (mevedel-session-pending-plan-approval session)
-			   (list :body "# Plan"
-				       :chat-buffer (current-buffer)
-				       :session session
-				       :callback
-				       (lambda (outcome)
-					 (push (cons 'plan outcome) outcomes))))
-		     (mevedel-abort (current-buffer))
-		     (should (null (mevedel-session-permission-queue session)))
-		     (should (null (mevedel-session-pending-plan-approval session)))
-		     (should (null mevedel--current-request))
-		     (should (= 1 (length
-				   (mevedel-session-pending-reminders session))))
-		     (should (equal '((compaction . aborted)
-		                      (plan . aborted) (permission . aborted))
-				    outcomes))))
+  :doc "flushes permission queues and the pending plan approval"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-chat-abort-" t))))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((workspace (mevedel-workspace--create
+                             :type 'project :id root :root root :name "abort"))
+                 (session (mevedel-session-create "main" workspace))
+                 (outcomes nil))
+            (setq-local mevedel--session session)
+            (setq-local mevedel-compact-run-cancel
+                        (lambda () (push '(compaction . aborted) outcomes)))
+            (mevedel-request-begin session)
+            (setf (mevedel-session-permission-queue session)
+                  (list (list :kind 'generic
+                              :tool-name "Read"
+                              :session session
+                              :callback
+                              (lambda (outcome)
+                                (push (cons 'permission outcome) outcomes)))))
+            (setf (mevedel-session-pending-plan-approval session)
+                  (list :body "# Plan"
+                        :chat-buffer (current-buffer)
+                        :session session
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'plan outcome) outcomes))))
+            (mevedel-abort (current-buffer))
+            (should (null (mevedel-session-permission-queue session)))
+            (should (null (mevedel-session-pending-plan-approval session)))
+            (should (null mevedel--current-request))
+            (should (= 1 (length
+                          (mevedel-session-pending-reminders session))))
+            (should (equal '((compaction . aborted)
+                             (plan . aborted) (permission . aborted))
+                           outcomes))))
+      (delete-directory root t)))
 
-			 :doc "saves data buffer after abort teardown"
-                         (with-temp-buffer
-                           (let* ((workspace (mevedel-workspace--create
-                                              :type 'project
-                                              :id "/tmp/mevedel-chat-abort-save/"
-                                              :root "/tmp/mevedel-chat-abort-save/"
-                                              :name "abort-save"))
-                                  (session (mevedel-session-create "main" workspace))
-                                  (goal (mevedel-goal--create
-                                         :id "g1" :objective "Ship"
-                                         :status 'active :tokens-used 0
-                                         :time-used-seconds 0 :turns-run 0))
-                                  saved)
-                             (setf (mevedel-session-goal session) goal)
-                             (setq-local mevedel--session session)
-                             (insert "Ship the requested change\n")
-                             (mevedel-request-begin session)
-                             (cl-letf (((symbol-function
-                                         'mevedel-session-artifacts-save)
-                                        (lambda (s b)
-                                          (setq saved
-                                                (list s b mevedel--current-request))
-                                          "saved")))
-                               (mevedel-abort (current-buffer)))
-                             (should (equal (list session (current-buffer) nil)
-                                            saved))
-                             (should (null mevedel--current-request))
-                             (should (eq 'paused (mevedel-goal-status goal)))
-                             (should (equal "interrupted by user"
-                                            (mevedel-goal-reason goal)))))
+  :doc "saves data buffer after abort teardown"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-chat-abort-save-" t))))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((workspace (mevedel-workspace--create
+                             :type 'project :id root :root root
+                             :name "abort-save"))
+                 (session (mevedel-session-create "main" workspace))
+                 (goal (mevedel-goal--create
+                        :id "g1" :objective "Ship"
+                        :status 'active :tokens-used 0
+                        :time-used-seconds 0 :turns-run 0))
+                 saved)
+            (setf (mevedel-session-goal session) goal)
+            (setq-local mevedel--session session)
+            (insert "Ship the requested change\n")
+            (mevedel-request-begin session)
+            (cl-letf (((symbol-function
+                        'mevedel-session-artifacts-save)
+                       (lambda (s b)
+                         (setq saved
+                               (list s b mevedel--current-request))
+                         "saved")))
+              (mevedel-abort (current-buffer)))
+            (should (equal (list session (current-buffer) nil)
+                           saved))
+            (should (null mevedel--current-request))
+            (should (eq 'paused (mevedel-goal-status goal)))
+            (should (equal "interrupted by user"
+                           (mevedel-goal-reason goal)))))
+      (delete-directory root t)))
 
 		 :doc "idles a root roster left running by a lost request teardown"
                  (with-temp-buffer

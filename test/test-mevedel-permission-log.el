@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-hooks)
 (require 'mevedel-permission-log)
+(require 'mevedel-telemetry)
 
 (mevedel-deftest mevedel-permission-log
   (:doc "both diagnostic logs retain nested data and stringify runtime objects")

@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 
+(require 'mevedel-compact-evidence)
 (require 'mevedel-journal-evidence)
 
 (mevedel-deftest mevedel-session-artifacts--restore-segment-file ()

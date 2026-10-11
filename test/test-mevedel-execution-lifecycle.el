@@ -13,6 +13,7 @@
 (require 'mevedel-execution-process)
 (require 'mevedel-execution-target)
 (require 'mevedel-pipeline)
+(require 'mevedel-sandbox)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-publication)
 (require 'mevedel-session-persistence)
