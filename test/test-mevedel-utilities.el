@@ -468,6 +468,25 @@
   (should (= 100 (mevedel--clamped-integer t 100 10 1000)))
   (should (= 10 (mevedel--clamped-integer nil 3 10 1000))))
 
+(mevedel-deftest mevedel--window-text-layout
+  (:doc "Changes with wrapping, text scale and line spacing, not with text.")
+  (save-window-excursion
+    (with-temp-buffer
+      (set-window-buffer (selected-window) (current-buffer))
+      (let* ((window (selected-window))
+             (layout (mevedel--window-text-layout window)))
+        (insert "text")
+        (should (equal layout (mevedel--window-text-layout window)))
+        (dolist (change (list (lambda () (setq-local truncate-lines t))
+                              (lambda () (setq-local word-wrap t))
+                              (lambda () (setq-local line-spacing 2))
+                              (lambda () (text-scale-set 1))
+                              ;; Rescaling edits the remapping list in place.
+                              (lambda () (text-scale-set 2))))
+          (funcall change)
+          (should-not (equal layout (mevedel--window-text-layout window)))
+          (setq layout (mevedel--window-text-layout window)))))))
+
 (mevedel-deftest mevedel--timer-pending-p ()
   ,test
   (test)

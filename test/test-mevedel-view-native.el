@@ -134,7 +134,8 @@ ROOT is the package and user directory; PATH is where the prebuilt goes."
                                                               (cl-letf (((symbol-function 'mevedel-view-native--download)
                                                                          (lambda (url) (push url urls) "tampered"))
                                                                         ((symbol-function 'module-load) (lambda (file) (push file loaded))))
-                                                                (should-error (mevedel-view-native-install) :type 'user-error)
+                                                                (mevedel-test--with-captured-diagnostics nil
+                                                                  (should-error (mevedel-view-native-install) :type 'user-error))
                                                                 (should-not (file-exists-p path))
                                                                 (should (string-match-p "/native-[0-9a-f]\\{16\\}/mevedel-view-native-" (car urls))))
                                                               (cl-letf (((symbol-function 'mevedel-view-native--download)
@@ -466,6 +467,10 @@ ROOT is the package and user directory; PATH is where the prebuilt goes."
               (text-scale-set 2)
               (mevedel-view-native--before-redisplay window)
               (should (= checks 5))
+              ;; Wrapping moves text without editing it.
+              (setq-local truncate-lines (not truncate-lines))
+              (mevedel-view-native--before-redisplay window)
+              (should (= checks 6))
               (text-scale-set 0)
               (mevedel-view-native-stop))))
       (set-window-buffer window previous)

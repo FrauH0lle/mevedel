@@ -1331,7 +1331,10 @@ The native presenter dominated what remained with animation on: checking each
 surface's pixel placement with `posn-at-point` before every redisplay took 30%
 of samples while text streamed. The check now runs only when an input that can
 move a surface changes (text, window start, point, size, scroll, focus, region,
-face remapping or the surfaces), per window. A surface whose target a streamed
+face remapping, wrapping, line spacing, the frame font or the surfaces), per
+window. The pinned-prompt header's on-screen memo keys on the same text-layout
+inputs; without them a wrap or text-scale change left a header stale until the
+next edit or scroll. A surface whose target a streamed
 render replaced and displaced is moved instead of reopened, the presentation's
 rearm callback reuses the result it just computed instead of placing again,
 and the last eight prepared timelines are reused.

@@ -14,13 +14,11 @@
 (require 'xml)
 (require 'seq)
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 (require 'mevedel-view-animation)
 
 ;; `mevedel-structs'
 (defvar mevedel-user-dir)
-
-;; `mevedel-utilities'
-(autoload 'mevedel-library-source-directory "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--set-spinner-option "mevedel-view" (symbol value))
@@ -98,17 +96,13 @@ every sample again.")
   "Return the inputs that can move or uncover this view's surfaces in WINDOW.
 Pixel placement needs `posn-at-point', a display walk from the window
 start: checked before every redisplay, it was 30% of editor CPU while a
-reply streamed.  Placement can change only with the text, the window's
-start, point, size or scroll, frame focus, visible child frames, the
-region, face remapping, font size, line spacing or the surfaces and their
-targets.  Text scaling edits the remapping list in place, so it is copied."
+reply streamed.  Placement can change only with the text, its layout
+\(see `mevedel--window-text-layout'), the window's start, point, position
+or scroll, frame focus, visible child frames, the region or the surfaces
+and their targets."
   (list (buffer-chars-modified-tick)
         (and (use-region-p) (cons (region-beginning) (region-end)))
-        (copy-tree face-remapping-alist)
-        ;; `window-font-width' realizes faces: 14% of samples per redisplay.
-        ;; Buffer-local fonts are in the remapping; the frame's are here.
-        line-spacing (frame-char-width (window-frame window))
-        (frame-char-height (window-frame window))
+        (mevedel--window-text-layout window)
         (window-start window) (window-point window) (window-hscroll window)
         (window-inside-pixel-edges window)
         (frame-focus-state (window-frame window))

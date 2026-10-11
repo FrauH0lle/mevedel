@@ -1279,7 +1279,8 @@ When ARCHIVE is non-nil, POSITION is a source position in that segment."
   "Return non-nil when a prompt header below WINDOW's start is on screen.
 Header lines are evaluated on every redisplay, and finding the window's
 last visible position walks its whole body, so the answer is kept per
-window until its start, size, the buffer or its invisibility changes."
+window until its start, the buffer, its invisibility or its text layout
+changes: size, wrapping, text scale, line spacing or font."
   (let ((key (list (current-buffer)
                    ;; Animation frames rewrite display properties but move
                    ;; nothing a header depends on.
@@ -1287,7 +1288,7 @@ window until its start, size, the buffer or its invisibility changes."
                        (mevedel-view--content-tick)
                      (buffer-modified-tick))
                    buffer-invisibility-spec (window-start window)
-                   (window-body-height window) (window-body-width window)
+                   (mevedel--window-text-layout window)
                    (mevedel-view--input-marker-position)))
         (cached (window-parameter window 'mevedel-view--prompt-on-screen)))
     (if (equal key (car cached))

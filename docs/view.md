@@ -944,7 +944,8 @@ prompt. A local header anywhere in the visible window suppresses the archived
 preview; once it scrolls above the window, its own local preview takes over.
 Finding whether a local header is on screen walks the window body, so it runs
 only when an archived prompt exists, and its answer is kept per window until
-the window's start or size, the buffer, or its invisibility spec changes.
+the window's start or size, the buffer, its invisibility spec, or the text's
+layout changes: wrapping, text scale, line spacing, or the frame font.
 Header lines are evaluated on every redisplay, including the many caused by
 timers and streamed output that change nothing on screen.
 Clicking that preview opens the archived segment read-only at the original

@@ -730,6 +730,22 @@ sets it on a repeating timer while that timer's own function runs."
            (memq timer (bound-and-true-p mevedel-transport--held-timers)))
        t))
 
+(defun mevedel--window-text-layout (window)
+  "Return the inputs that lay out the current buffer's text in WINDOW.
+Call it with WINDOW's buffer current.  A memo of on-screen geometry keyed
+on text and window start stays stale when wrapping, text scale, line
+spacing or the font changes, so such keys add this list.  Every element
+is cheap to read: `window-font-width' realizes faces and cost 14% of
+samples when checked per redisplay, so the frame's font is represented
+by its character size and buffer-local fonts by the face remapping.
+Text scaling edits the remapping list in place, so it is copied."
+  (list (copy-tree face-remapping-alist)
+        line-spacing
+        (frame-char-width (window-frame window))
+        (frame-char-height (window-frame window))
+        truncate-lines word-wrap truncate-partial-width-windows
+        (window-body-width window t) (window-body-height window t)))
+
 (defvar mevedel--coalesced-timers nil
   "Timers whose due callbacks share a host wakeup.")
 (defvar mevedel--coalesced-timer nil

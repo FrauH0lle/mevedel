@@ -1724,6 +1724,37 @@
           (mevedel-view--prompt-on-screen-p window)
           (should (= 3 calls))))))
 
+  :doc "answers again when wrapping, text scale or line spacing changes"
+  (save-window-excursion
+    (with-temp-buffer
+      (insert (make-string (* 4 (window-body-width) (window-body-height)) ?a)
+              "\n"
+              (propertize "Prompt\n" 'mevedel-view-prompt-preview "Prompt"))
+      (set-window-buffer (selected-window) (current-buffer))
+      (set-window-start nil (point-min) t)
+      (let ((window (selected-window)))
+        ;; The wrapped line fills the window and hides the prompt.
+        (setq-local truncate-lines nil)
+        (should-not (mevedel-view--prompt-on-screen-p window))
+        (setq-local truncate-lines t)
+        (should (mevedel-view--prompt-on-screen-p window))
+        (let* ((calls 0)
+               (real (symbol-function 'vertical-motion)))
+          (cl-letf (((symbol-function 'vertical-motion)
+                     (lambda (&rest args) (cl-incf calls) (apply real args))))
+            (setq-local line-spacing 2)
+            (mevedel-view--prompt-on-screen-p window)
+            (should (= 1 calls))
+            (text-scale-set 1)
+            (mevedel-view--prompt-on-screen-p window)
+            (should (= 2 calls))
+            ;; Rescaling edits the remapping list in place.
+            (text-scale-set 2)
+            (mevedel-view--prompt-on-screen-p window)
+            (should (= 3 calls))
+            (mevedel-view--prompt-on-screen-p window)
+            (should (= 3 calls)))))))
+
   :doc "skips the on-screen walk without a compacted continuation prompt"
   (save-window-excursion
     (with-temp-buffer
