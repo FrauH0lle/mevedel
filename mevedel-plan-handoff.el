@@ -16,9 +16,6 @@
   (require 'mevedel-structs))
 (require 'mevedel-plan)
 
-;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
-
 ;; `mevedel-chat'
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
@@ -563,7 +560,8 @@ projected evidence.  CHAT-BUFFER is left unchanged."
                  (mevedel-plan-handoff--implementation-failed
                   session chat-buffer
                   (format "Summary generation failed: %s"
-                          (plist-get result :error))))))
+                          (mevedel-plan-handoff--failure-reason
+                           (plist-get result :error)))))))
             :session session
             :focus focus)))
       (unless settled
@@ -642,7 +640,7 @@ authoritative plan; SOURCE-TRANSFORM filters the projected evidence."
      (lambda (err)
        (if err
            (mevedel-plan-handoff--implementation-failed
-            session chat-buffer (format "%s" err))
+            session chat-buffer err)
          (mevedel-plan-handoff--dispatch-accepted session chat-buffer))))))
 
 (defun mevedel-plan-handoff--prepare-summary (session chat-buffer record)
@@ -675,9 +673,29 @@ CHAT-BUFFER under the ordinary compaction retry policy."
         (mevedel-plan-handoff--prepare-worktree-summary
          session chat-buffer record target focus source-transform))))))
 
+(defconst mevedel-plan-handoff--failure-reason-limit 500
+  "Maximum characters of a failure reason kept in a durable retry record.")
+
+(defun mevedel-plan-handoff--failure-reason (reason)
+  "Return REASON, a string or error value, as bounded text.
+Error data can carry whole requests or sessions.  Printing them unbounded
+would copy transcripts into the retry record and the echo area."
+  (let* ((print-level 3)
+         (print-length 8)
+         (text (cond
+                ((stringp reason) reason)
+                ((and (consp reason) (symbolp (car reason))
+                      (get (car reason) 'error-conditions))
+                 (error-message-string reason))
+                (t (format "%s" reason)))))
+    (truncate-string-to-width
+     text mevedel-plan-handoff--failure-reason-limit nil nil "...")))
+
 (defun mevedel-plan-handoff--implementation-failed
     (session chat-buffer reason)
-  "Keep SESSION retryable after REASON from CHAT-BUFFER."
+  "Keep SESSION retryable after REASON from CHAT-BUFFER.
+REASON is a string or an error value; it is recorded in bounded form."
+  (setq reason (mevedel-plan-handoff--failure-reason reason))
   (when-let* ((view-buffer
                (ignore-errors
                  (mevedel-view--interaction-target-buffer chat-buffer)))
@@ -695,19 +713,20 @@ CHAT-BUFFER under the ordinary compaction retry policy."
        (display-warning
         'mevedel
         (format "Could not persist plan implementation retry: %s"
-                (error-message-string err))))))
+                (mevedel-plan-handoff--failure-reason err))))))
   (message
    "mevedel: Implementation failed: %s; retry with M-x mevedel-retry-plan-implementation"
    reason)
   nil)
 
 (defun mevedel-plan-handoff--implementation-request-started
-    (fsm chat-buffer)
-  "Attach CHAT-BUFFER's Direct handoff recovery to FSM."
-  (let ((info (copy-sequence (or (gptel-fsm-info fsm) nil))))
-    (setf (gptel-fsm-info fsm)
+    (owner chat-buffer)
+  "Attach CHAT-BUFFER's Direct handoff recovery to turn OWNER.
+OWNER is a native gptel state machine or an admitted external request."
+  (let ((info (copy-sequence (or (mevedel-engine-info owner) nil))))
+    (setf (mevedel-engine-info owner)
           (plist-put info :mevedel-plan-handoff-source-buffer chat-buffer)))
-  fsm)
+  owner)
 
 (defun mevedel-plan-handoff--implementation-completed
     (session chat-buffer)
@@ -723,7 +742,7 @@ CHAT-BUFFER under the ordinary compaction retry policy."
        (display-warning
         'mevedel
         (format "Could not persist completed plan implementation: %s"
-                (error-message-string err)))))))
+                (mevedel-plan-handoff--failure-reason err)))))))
 
 (defun mevedel-plan-handoff-settle-request (fsm status &optional reason)
   "Settle FSM's attached Direct Plan handoff with terminal STATUS.
@@ -850,7 +869,7 @@ the durable retry was retained"
             (mevedel-plan-handoff--implementation-request-started
              request-fsm chat-buffer)))
       (error
-       (let ((reason (error-message-string err)))
+       (let ((reason (mevedel-plan-handoff--failure-reason err)))
          (if goal-started
              (progn
                (mevedel-goal-pause-runtime-failure target-buffer reason)
@@ -1002,7 +1021,7 @@ the durable retry was retained"
         result)
     (error
      (mevedel-plan-handoff--implementation-failed
-      session chat-buffer (error-message-string err)))))
+      session chat-buffer err))))
 
 (defun mevedel-plan-handoff-start
     (session chat-buffer selection accepted)
@@ -1028,7 +1047,7 @@ the durable retry was retained"
           (mevedel-plan-handoff--dispatch-accepted session chat-buffer))
       (error
        (mevedel-plan-handoff--implementation-failed
-        session chat-buffer (error-message-string err))))))
+        session chat-buffer err)))))
 
 (defun mevedel-retry-plan-implementation (&optional session chat-buffer)
   "Retry SESSION's accepted plan implementation from CHAT-BUFFER."

@@ -236,7 +236,16 @@
                          (plist-get
                           (plist-get (mevedel-session-plan-metadata session)
                                      :implementation-retry)
-                          :failure))))
+                          :failure)))
+          (mevedel-plan-handoff--implementation-failed
+           session chat-buffer
+           (list 'error (make-string 100000 ?x)))
+          (should (<= (length
+                       (plist-get
+                        (plist-get (mevedel-session-plan-metadata session)
+                                   :implementation-retry)
+                        :failure))
+                      mevedel-plan-handoff--failure-reason-limit)))
       (kill-buffer view-buffer)
       (kill-buffer chat-buffer))))
 
@@ -268,7 +277,47 @@
            (eq retry
                (plist-get (mevedel-session-plan-metadata session)
                           :implementation-retry))))
+      (kill-buffer chat-buffer)))
+
+  :doc "attaches recovery to an external engine's admitted request"
+  (let* ((session (mevedel-session--create :name "main"))
+         (chat-buffer (generate-new-buffer " *mevedel-plan-request-source*"))
+         (request (mevedel-request--create
+                   :session session :context '(:external-history t))))
+    (unwind-protect
+        (progn
+          (should
+           (eq request
+               (mevedel-plan-handoff--implementation-request-started
+                request chat-buffer)))
+          (should
+           (eq chat-buffer
+               (plist-get (mevedel-engine-info request)
+                          :mevedel-plan-handoff-source-buffer)))
+          (should (plist-get (mevedel-engine-info request)
+                             :external-history)))
       (kill-buffer chat-buffer))))
+
+(mevedel-deftest mevedel-plan-handoff--failure-reason
+  (:doc "keeps short strings and describes error values")
+  ,test
+  (test)
+  (should (equal "Transport failed"
+                 (mevedel-plan-handoff--failure-reason "Transport failed")))
+  (should (equal "Boom"
+                 (mevedel-plan-handoff--failure-reason '(error "Boom"))))
+  (should (equal ":skip" (mevedel-plan-handoff--failure-reason :skip)))
+
+  :doc "bounds error data that carries a whole request"
+  (let* ((session (mevedel-session--create
+                   :name (make-string 100000 ?x)
+                   :plan-metadata '(:implementation-retry (:step submit))))
+         (request (mevedel-request--create :session session))
+         (reason (mevedel-plan-handoff--failure-reason
+                  (list 'wrong-type-argument 'gptel-fsm request))))
+    (should (string-prefix-p "Wrong type argument: gptel-fsm, #s(" reason))
+    (should (<= (length reason)
+                mevedel-plan-handoff--failure-reason-limit))))
 
 (mevedel-deftest mevedel-plan-handoff-settle-request
   (:quiet t :doc "terminal success clears the attached direct implementation retry")
