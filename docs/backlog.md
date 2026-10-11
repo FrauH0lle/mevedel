@@ -43,8 +43,6 @@ open:
   another native backend. They keep the accepted 8-fps breathe/bounce and
   half-speed glyph cadences; native surfaces cover PGTK/Wayland only.
   Burst-and-pause glyph variants were rejected.
-- `mevedel-view--status-strip` still evaluates its cache key from several
-  live lookups on every redisplay.
 - The whole-surface repaint itself is an Emacs pgtk behavior worth reporting
   upstream.
 - Streaming still costs 16-23% editor CPU after read pacing (ADR 0119), for
@@ -52,14 +50,9 @@ open:
   0.4-second cycle. An upstream pgtk fix (draw only damaged areas) would help
   every case. The measured Claude Code chunk rates come from a scripted peer;
   check a real adapter's rate and burst sizes.
-- A coalesced callback that waits for input or output delays its siblings.
-- A curl stream paused when Emacs crashes stays stopped, holding its socket,
-  until killed; a crash leaves no hook to continue it.
 - Native surfaces recheck placement only when their layout inputs change;
   invisibility or overlay changes that leave the character tick alone keep a
   stale position until the next edit, scroll or resize.
-- `test/test-mevedel-chat.el` fails `mevedel-abort/test@4` when run alone
-  (it passes in the partitioned suite); find the ordering dependency.
 
 ### Animation and native presenter follow-ups
 
@@ -82,17 +75,6 @@ open:
   the surfaces of the labels before it on each semantic update (about once a
   second). Remember failing signatures until the label changes.
 
-### Wakeup review follow-ups
-
-- `mevedel-view--prompt-on-screen-p` keys its memo on content, invisibility,
-  start, size and the input marker, but not line wrapping, text scale, line
-  spacing or font; a header can stay stale until the next edit or scroll.
-- Tool-row refreshes recorded while a view is hidden are cleared when a later
-  turn settles before it is shown, leaving an older row's progress stale.
-- Publication collection arms its idle timer at the current idle time plus
-  the wait; one armed during a long absence then needs that much idle time
-  again after the user returns.
-- The executions list sorts its Elapsed column as text.
 
 ## Request lifecycle
 
