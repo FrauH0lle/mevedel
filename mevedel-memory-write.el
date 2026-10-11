@@ -24,6 +24,16 @@
 (autoload 'mevedel-tool-patch--same-snapshot-p "mevedel-tool-patch")
 (autoload 'mevedel-tool-patch-commit "mevedel-tool-patch")
 
+;; `mevedel-memory-notes'
+(declare-function mevedel-memory-notes-commit "mevedel-memory-notes" (workspace root target changes currentp))
+(declare-function mevedel-memory-notes-control-directory "mevedel-memory-notes" (directory))
+(declare-function mevedel-memory-notes-observe "mevedel-memory-notes" (snapshot))
+(declare-function mevedel-memory-notes-same-p "mevedel-memory-notes" (left right))
+(autoload 'mevedel-memory-notes-commit "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-control-directory "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-observe "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-same-p "mevedel-memory-notes")
+
 (defconst mevedel-memory-write-intent-file-regexp
   (concat "\\`" mevedel-journal-store-hash-regexp "\\.el\\'")
   "Exact private write-intent and decision record filename spelling.")
@@ -39,14 +49,18 @@
 (defun mevedel-memory-write-control-directory (directory)
   "Return shared write coordination for the original physical DIRECTORY.
 Standard .mevedel/memory roots use their sibling state/memory-write.
-Other memory and instruction roots use .mevedel/state/memory-write/root
-inside that root.  The location never depends on the calling workspace."
+The workspace's shared notes use the sibling state/shared-notes, outside the
+folder they clean.  Other memory and instruction roots use
+.mevedel/state/memory-write/root inside that root.  The location never
+depends on the calling workspace."
   (let* ((directory (directory-file-name directory))
          (parent (file-name-directory directory)))
-    (if (and (equal (file-name-nondirectory directory) "memory")
-             (equal (file-name-nondirectory (directory-file-name parent)) ".mevedel"))
-        (file-name-concat parent "state" "memory-write")
-      (file-name-concat directory ".mevedel" "state" "memory-write" "root"))))
+    (cond
+     ((and (equal (file-name-nondirectory directory) "memory")
+           (equal (file-name-nondirectory (directory-file-name parent)) ".mevedel"))
+      (file-name-concat parent "state" "memory-write"))
+     ((mevedel-memory-notes-control-directory directory))
+     (t (file-name-concat directory ".mevedel" "state" "memory-write" "root")))))
 
 (defun mevedel-memory-write--target (scope root)
   "Return the coordination directory at original ROOT in SCOPE."
@@ -71,17 +85,47 @@ blocks entry, including attempts originating in another workspace."
       (mevedel-journal-claim-settle claim 'cancelled ""))))
 
 (defun mevedel-memory-write--after (before changes)
-  "Derive complete after-state from BEFORE and prepared CHANGES."
+  "Derive complete after-state from BEFORE and prepared CHANGES.
+A change carrying an exact :after snapshot supplies it directly."
   (mapcar
    (lambda (row)
      (let* ((original (cdr row))
             (change (seq-find (lambda (change) (equal (plist-get original :path) (plist-get change :path))) changes)))
        (cons (car row)
-             (if (not change) original
-               (if (eq (plist-get change :action) 'delete)
-                   (list :path (plist-get change :path) :exists nil)
-                 (list :path (plist-get change :path) :exists t :bytes (plist-get change :bytes)
-                       :hash (secure-hash 'sha256 (plist-get change :bytes)) :mode (plist-get change :mode))))))) before))
+             (cond ((not change) original)
+                   ((plist-member change :after) (plist-get change :after))
+                   ((eq (plist-get change :action) 'delete)
+                    (list :path (plist-get change :path) :exists nil))
+                   (t (list :path (plist-get change :path) :exists t :bytes (plist-get change :bytes)
+                            :hash (secure-hash 'sha256 (plist-get change :bytes)) :mode (plist-get change :mode)))))))
+   before))
+
+(defun mevedel-memory-write--notes-root (intent)
+  "Return INTENT's captured shared-notes root, or nil for memory targets."
+  (let ((root (cdr (assoc (plist-get (plist-get intent :item) :root)
+                          (plist-get (mevedel-memory-write-scope intent) :roots)))))
+    (when (eq (plist-get root :kind) 'notes) root)))
+
+(defun mevedel-memory-write--observe (intent snapshot)
+  "Observe SNAPSHOT's current path for INTENT's kind of target."
+  (if (mevedel-memory-write--notes-root intent)
+      (mevedel-memory-notes-observe snapshot)
+    (mevedel-memory-scope--snapshot (plist-get snapshot :path) mevedel-memory-scope--max-file-bytes)))
+
+(defun mevedel-memory-write--same-p (intent left right)
+  "Return non-nil when LEFT and RIGHT match for INTENT's kind of target."
+  (if (mevedel-memory-write--notes-root intent)
+      (mevedel-memory-notes-same-p left right)
+    (mevedel-tool-patch--same-snapshot-p left right)))
+
+(defun mevedel-memory-write--commit (workspace target intent changes currentp)
+  "Commit CHANGES for INTENT in WORKSPACE under TARGET, rechecking CURRENTP.
+Memory roots use the shared patch transaction; shared notes use their own
+byte-preserving checked mutation."
+  (if-let* ((root (mevedel-memory-write--notes-root intent)))
+      (mevedel-memory-notes-commit workspace root target changes currentp)
+    (mevedel-tool-patch-commit
+     changes currentp (lambda (before after) (mevedel-memory-write--mutate target before after)))))
 
 (cl-defun mevedel-memory-write-read (workspace id hash)
   "Read WORKSPACE write ID only when its bytes match expected HASH.
@@ -164,9 +208,9 @@ participates, including unchanged index files."
           (when-let* ((buffer (find-buffer-visiting (plist-get (cdr row) :path)))
                       ((buffer-modified-p buffer)))
             (error "Memory target has an unsaved buffer edit"))
-          (let* ((current (mevedel-memory-scope--snapshot (plist-get (cdr row) :path) mevedel-memory-scope--max-file-bytes))
-                 (old (mevedel-tool-patch--same-snapshot-p current (cdr row)))
-                 (new (mevedel-tool-patch--same-snapshot-p current (cdr (assoc (car row) (plist-get intent :after))))))
+          (let* ((current (mevedel-memory-write--observe intent (cdr row)))
+                 (old (mevedel-memory-write--same-p intent current (cdr row)))
+                 (new (mevedel-memory-write--same-p intent current (cdr (assoc (car row) (plist-get intent :after))))))
             (setq before (and before old) after (and after new) known (and known (or old new)))))
         (cond (before 'before) (after 'after) (known 'mixed) (t 'changed)))
     (error 'unavailable)))
@@ -223,9 +267,12 @@ supplied by the decision owner. No curated file is written."
     (dolist (row before (nreverse changes))
       (let* ((old (cdr row)) (new (cdr (assoc (car row) after))) (path (plist-get old :path)))
         (unless (and new (equal path (plist-get new :path))) (error "Memory snapshot targets differ"))
-        (unless (mevedel-tool-patch--same-snapshot-p old new)
-          (push (append (list :path path :before old :action (if (plist-get new :exists) 'write 'delete))
-                        (when (plist-get new :exists)
+        (unless (and (mevedel-tool-patch--same-snapshot-p old new)
+                     (equal (plist-get old :hash) (plist-get new :hash))
+                     (equal (plist-get old :directory) (plist-get new :directory)))
+          (push (append (list :path path :before old :action (if (plist-get new :exists) 'write 'delete)
+                              :after new)
+                        (when (and (plist-get new :exists) (plist-get new :bytes))
                           (list :bytes (plist-get new :bytes) :mode (plist-get new :mode)
                                 :content (decode-coding-string (plist-get new :bytes) 'utf-8-unix)))) changes))))))
 
@@ -286,15 +333,14 @@ claim and writes nothing. The lock also protects checked rollback."
                (eq (mevedel-memory-write-state intent) 'before))
     (error "Memory dependencies or write owner changed"))
   (mevedel-tool-patch--assert-buffers-unmodified (plist-get intent :changes))
-  (mevedel-tool-patch-commit
-   (plist-get intent :changes)
+  (mevedel-memory-write--commit
+   workspace target intent (plist-get intent :changes)
    (lambda ()
      (mevedel-memory-store--assert-owned claim)
      (mevedel-memory-store--assert-owned target)
      (mevedel-memory-scope--root (mevedel-memory-write-scope intent)
                                 (plist-get (plist-get intent :item) :root))
-     t)
-   (lambda (before after) (mevedel-memory-write--mutate target before after))))
+     t)))
 
 (defun mevedel-memory-write-rollback (workspace claim target intent)
   "Restore a known pending INTENT under current WORKSPACE CLAIM and TARGET.
@@ -323,14 +369,14 @@ interruption leaves the original intent sufficient for another checked recovery.
       (dolist (row (plist-get intent :before))
         (let* ((before (cdr row))
                (after (cdr (assoc (car row) (plist-get intent :after))))
-               (current (mevedel-memory-scope--snapshot (plist-get before :path) mevedel-memory-scope--max-file-bytes)))
-          (unless (mevedel-tool-patch--same-snapshot-p current before)
-            (unless (mevedel-tool-patch--same-snapshot-p current after)
+               (current (mevedel-memory-write--observe intent before)))
+          (unless (mevedel-memory-write--same-p intent current before)
+            (unless (mevedel-memory-write--same-p intent current after)
               (error "Memory rollback target changed"))
             (push (cons (car row) after) reached))))
-      (mevedel-tool-patch-commit
-       (mevedel-memory-write--changes (nreverse reached) (plist-get intent :before)) currentp
-       (lambda (before after) (mevedel-memory-write--mutate target before after))))))
+      (mevedel-memory-write--commit
+       workspace target intent
+       (mevedel-memory-write--changes (nreverse reached) (plist-get intent :before)) currentp))))
 
 (defun mevedel-memory-write-retire (target intent)
   "Retire INTENT's marker under TARGET after a durable resolved decision.

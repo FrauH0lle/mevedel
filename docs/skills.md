@@ -928,5 +928,10 @@ See [retained instruction context](architecture.md#retained-instruction-context)
 
 The bundled `$clean-work [focus]` workflow reviews `work://shared` for confirmed
 duplicates, superseded drafts and completed handoffs. It preserves unresolved
-work and uncertain material, checks surviving sources, and uses normal ApplyPatch
+work and files that may still be in active use, prefers deletion when only
+future usefulness is doubtful, checks surviving sources, and uses normal ApplyPatch
 permissions and review. It does not expire files by age or reorganize folders.
+It is an explicit, conservative cleanup within a conversation. Automatic
+cleanup belongs to memory consolidation, which extracts lasting knowledge from
+quiet shared files and prefers deleting them afterwards; see
+[Shared working-note lifecycle](memory.md#shared-working-note-lifecycle).

@@ -32,6 +32,17 @@ lock before exclusive creation, it prevents stale acquirers from recreating
 pruned generations. `delete-empty-directory` uses native `rmdir`; nonempty
 directories remain untouched. Domain collectors choose retention and references.
 
+`hash` and `verify-hash` hash a regular leaf on the target through a descriptor
+proved to be that leaf, so large files are compared without transferring
+their bytes. `capture-blob` copies a named source into a content-addressed blob
+in the pinned parent: the copy is proved against its SHA-256 name before an
+exclusive link publishes it, and an existing blob with matching bytes makes
+capture idempotent. `restore-blob` copies a blob beside the pinned leaf, proves
+the copy against the blob's name, sets its mode and renames it into place. The
+source paths of both are not pinned; the content proof is their guarantee, so
+a redirected path can only fail. Callers state the expected current leaf as
+an earlier operation, as with every other mutation.
+
 Requests use five fields per operation and NUL framing. Arbitrary content and
 response bytes use base64; numeric limits, modes, and deadlines use validated
 digit strings. On a local target, every `write` and `create` payload travels
@@ -104,11 +115,19 @@ Streamed payloads read with `dd iflag=fullblock`, because a pipe delivers short
 reads that a request file never did.
 
 The target requires Linux descriptor facilities, Bash, stat, and base64; locked
-programs also require flock. Missing required utilities fail visibly. GNU tar is
+programs also require flock, and content hashing and blob verbs require
+sha256sum. Missing required utilities fail visibly. GNU tar is
 an optional read optimization with an ordinary-read fallback. No new caller
 protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
+
+- **Shared-note cleanup needed byte-preserving undo for arbitrary files.**
+  Curated-memory write intents retain full UTF-8 snapshots of at most 32 KiB
+  inside 4-MiB escaped Lisp records, and `verify` ships expected bytes in the
+  request. Shared folders hold images, recordings and multi-megabyte results,
+  which could neither be retained nor compared that way. Hash verification and
+  content-addressed blob capture and restoration keep large bytes on the target.
 
 - **Large pipe writes stalled remote image saves.** A provisioned SSH browser
   acceptance run measured a 12.5-second median for individual image moves.

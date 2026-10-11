@@ -775,8 +775,11 @@ materialization. Other edit tools and `Eval` remain unavailable. Directive
 Planning remains strictly read-only and does not allow `ApplyPatch`, including
 session-only proposals, or `Eval`. The shared `local/plans/` namespace holds
 durable plans for the parent and retained agents. `work://shared/` maps to
-workspace-owned `.mevedel/shared/` for working notes and handoffs across sessions,
-with agent-chosen filenames and folders. See [`address-to-resource.md`](address-to-resource.md) and
+workspace-owned, untracked `.mevedel/shared/` for temporary working notes and
+handoffs across sessions, with agent-chosen filenames and folders. Memory
+consolidation extracts their lasting knowledge and removes them
+([shared working-note lifecycle](memory.md#shared-working-note-lifecycle)).
+See [`address-to-resource.md`](address-to-resource.md) and
 [`ADR 0104`](adr/0104-keep-resource-addresses-closed-and-capability-neutral.md).
 
 ## Generated workspace state

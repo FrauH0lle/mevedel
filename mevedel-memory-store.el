@@ -16,6 +16,14 @@
 (defvar read-circle)
 (defvar read-eval)
 
+;; `mevedel-memory-notes'
+(declare-function mevedel-memory-notes-housekeeping "mevedel-memory-notes" (scope))
+(declare-function mevedel-memory-notes-index "mevedel-memory-notes" (scope))
+(declare-function mevedel-memory-notes-root "mevedel-memory-notes" (scope))
+(autoload 'mevedel-memory-notes-housekeeping "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-index "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-root "mevedel-memory-notes")
+
 (defconst mevedel-memory-store--max-bytes (* 4 1024 1024)
   "Maximum private immutable pass record bytes, including escaped snapshots.")
 
@@ -185,13 +193,22 @@ MUTATION holds journal ownership; the caller has proved release eligibility."
           (mevedel-session-control-fs-absent nil))))))
 
 (defun mevedel-memory-store--proposal (scope id proposal)
-  "Bind PROPOSAL to pass ID, original SCOPE targets, and complete before-state."
+  "Bind PROPOSAL to pass ID, original SCOPE targets, and complete before-state.
+A condensed note also records the hash of its resulting version."
   (let* ((root (cdr (assoc (plist-get proposal :root) (plist-get scope :roots))))
+         (action (plist-get proposal :action))
          (files (delete-dups
                  (append (list (plist-get proposal :file)) (plist-get proposal :merged-files)
-                         (unless (eq (plist-get proposal :action) 'instructions) (list "MEMORY.md")))))
+                         (unless (or (eq action 'instructions) (mevedel-memory-proposal-note-action-p action))
+                           (list "MEMORY.md")))))
          (before (mapcar (lambda (file) (cons file (mevedel-memory-scope-before scope (plist-get proposal :root) file)))
                          (sort files #'string<)))
+         (proposal (if (eq action 'note-condense)
+                       (append proposal
+                               (list :result (secure-hash
+                                              'sha256 (mevedel-memory-proposal-condensed-bytes
+                                                       (plist-get proposal :body)))))
+                     proposal))
          (identity (list id (plist-get root :dir) (plist-get root :client) (plist-get root :target)
                          proposal before)))
     (append proposal (list :id (secure-hash 'sha256 (mevedel-memory-store--print identity)) :before before))))
@@ -222,23 +239,40 @@ authenticated accepted bytes' hash under :hash."
           (mevedel-journal-store--validate-metadata review 'consolidation)
           (append data (list :prepared prepared :hash (plist-get outcome :payload))))))))
 
-(defun mevedel-memory-store-accept (workspace prepared reply entries model references)
+(defun mevedel-memory-store-accept (workspace prepared reply entries model references &optional notes)
   "Accept validated REPLY for WORKSPACE's PREPARED pass before public coverage.
 ENTRIES are the complete admitted subset; MODEL is its exact provider label and
 REFERENCES are bounded dated observations. Retain original target before-state.
+NOTES lists the admitted shared working note IDs.  A nil REPLY accepts a
+housekeeping-only pass, which admitted no digests or notes for inference.
 The immutable claim outcome accepts the bundle hash, allowing later recovery."
-  (mevedel-memory-store-accept-proposals
-   workspace prepared
-   (mevedel-memory-proposal-parse reply (plist-get (plist-get prepared :scope) :roots)
-                                 (mapcar (lambda (entry) (plist-get entry :id)) entries))
-   entries model references))
+  (let ((scope (plist-get prepared :scope)))
+    (when (and (null reply) (or entries notes))
+      (error "Admitted evidence requires a validated review reply"))
+    (mevedel-memory-store-accept-proposals
+     workspace prepared
+     (if reply
+         (mevedel-memory-proposal-parse
+          reply (plist-get scope :roots) (mapcar (lambda (entry) (plist-get entry :id)) entries)
+          (seq-filter (lambda (row) (member (car row) notes)) (mevedel-memory-notes-index scope)))
+       (list :proposals nil :no-action "- Shared-folder housekeeping only."))
+     entries model references)))
+
+(defun mevedel-memory-store--note-p (proposal)
+  "Return non-nil when PROPOSAL disposes of a shared working file."
+  (mevedel-memory-proposal-note-action-p (plist-get proposal :action)))
 
 (defun mevedel-memory-store-accept-proposals (workspace prepared parsed entries producer references)
   "Accept trusted PARSED proposals for WORKSPACE's PREPARED pass.
 ENTRIES and REFERENCES retain the same evidence contract as model replies.
 PRODUCER is the provider label, or `user' for an explicit cockpit action.
 Callers validate model text before this boundary; direct user actions construct
-structured changes from fresh captured snapshots without synthetic model text."
+structured changes from fresh captured snapshots without synthetic model text.
+Housekeeping for the scope's captured attachments and empty folders is added
+here, after every extraction.  Each note disposal records the extractions
+citing its note as :requires, so it cannot apply before them.  Deleting a
+note that memory or instructions cite, without any extraction citing it, is
+accepted as keep instead, so a citation never silently breaks."
   (let* ((id (plist-get prepared :id))
          (claim (plist-get prepared :claim))
          (scope (plist-get prepared :scope))
@@ -259,8 +293,36 @@ structured changes from fresh captured snapshots without synthetic model text."
                        (mevedel-session-control-fs-read-file
                         (mevedel-memory-store--pin workspace id (plist-get entry :id)) 'utf-8-unix 65))
           (error "Accepted digest evidence is not retained"))))
-    (let* ((proposals (mapcar (lambda (proposal) (mevedel-memory-store--proposal scope id proposal))
-                              (plist-get parsed :proposals)))
+    (let* ((proposals
+            (let* ((parsed (append (plist-get parsed :proposals) (mevedel-memory-notes-housekeeping scope)))
+                   (extractions (mapcar (lambda (proposal) (mevedel-memory-store--proposal scope id proposal))
+                                        (seq-remove #'mevedel-memory-store--note-p parsed))))
+              ;; Note disposals depend on every extraction that cites them.
+              (append extractions
+                      (mapcar (lambda (proposal)
+                                (let* ((requires
+                                        (when (plist-get proposal :note)
+                                          (mapcar (lambda (extraction) (plist-get extraction :id))
+                                                  (seq-filter
+                                                   (lambda (extraction)
+                                                     (member (plist-get proposal :note)
+                                                             (plist-get extraction :evidence)))
+                                                   extractions))))
+                                       (cited (plist-get (cdr (assoc (plist-get proposal :file)
+                                                                     (plist-get (cdr (mevedel-memory-notes-root scope))
+                                                                                :notes)))
+                                                         :cited)))
+                                  ;; The citation is the note's continuing use until the
+                                  ;; citing memory changes in the same review.
+                                  (when (and cited (null requires) (eq (plist-get proposal :action) 'note-delete))
+                                    (setq proposal
+                                          (plist-put (plist-put (copy-sequence proposal) :action 'note-keep)
+                                                     :reason (concat "Kept: a memory topic or instruction file cites "
+                                                                     "this note, and no update in this review "
+                                                                     "replaces that citation. Reviewer: "
+                                                                     (plist-get proposal :reason)))))
+                                  (mevedel-memory-store--proposal scope id (append proposal (list :requires requires)))))
+                              (seq-filter #'mevedel-memory-store--note-p parsed)))))
            (review (list :pass-id id :workspace (plist-get scope :workspace)
                          :created (mevedel-journal-store-timestamp
                                    (mevedel-session-control-fs-target-time (plist-get claim :directory)))

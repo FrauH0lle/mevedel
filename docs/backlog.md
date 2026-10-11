@@ -22,8 +22,7 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Collaboration publishes while a reply streams still scan the whole
   transcript's segments (`mevedel-transcript-segments`, about two thirds of a
   retained publish: 8 of 12.5 ms at 1,001 records on the desktop). Resume the
-  scan from the last closed control before the first change. Evidence:
-  `.mevedel/shared/collab-latency-20261010.md`.
+  scan from the last closed control before the first change.
 - A guest prompt waits ~120 ms on the deployed host for the synchronous
   session-transfer control programs in prompt admission before it is
   inserted. Same evidence.
@@ -82,8 +81,8 @@ open:
 - A move while the previous position callback is pending can show one or two
   frames at the old position.
 - Native placement, geometry translation and the C module have no automated
-  coverage beyond mocks; their checks are lab scripts in
-  `work://shared/editor-cpu/renderer-lab/`.
+  coverage beyond mocks; their earlier lab scripts were machine-local working
+  material, not part of the repository.
 - A label whose native placement or timeline keeps failing reopens and closes
   the surfaces of the labels before it on each semantic update (about once a
   second). Remember failing signatures until the label changes.

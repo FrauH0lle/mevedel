@@ -19,6 +19,10 @@
 (declare-function mevedel-journal-cleanup-wait "mevedel-journal-cleanup" (workspace))
 (autoload 'mevedel-journal-cleanup-wait "mevedel-journal-cleanup")
 
+;; `mevedel-memory-notes'
+(declare-function mevedel-memory-notes-recheck "mevedel-memory-notes" (root relative))
+(autoload 'mevedel-memory-notes-recheck "mevedel-memory-notes")
+
 (defun mevedel-memory-decision-terminal-status-p (status)
   "Return non-nil when decision STATUS ends its proposal's lifecycle."
   (memq status '(applied rejected reversed)))
@@ -311,9 +315,13 @@ targets retain the root marker for checked recovery, never blind reapplication."
                         (if reverse 'reversed 'applied))
                        ((eq state 'before) (if reverse 'applied 'unavailable))
                        (t 'recovery-required)))
+         (note (mevedel-memory-proposal-note-action-p (plist-get (plist-get intent :item) :action)))
          (reason (pcase status
-                   ('applied (if reverse "Reversal left the original application unchanged." "Applied captured memory proposal."))
-                   ('reversed "Reversed the captured memory application.")
+                   ('applied (cond (reverse "Reversal left the original application unchanged.")
+                                   (note "Applied shared-note decision; previous content is retained for undo.")
+                                   (t "Applied captured memory proposal.")))
+                   ('reversed (if note "Restored the shared note from its retained content."
+                                "Reversed the captured memory application."))
                    ('unavailable (if failed "Attempt left targets unchanged." "Application was interrupted before completion."))
                    (_ "Targets need checked recovery.")))
          (decision (mevedel-memory-decision--accept workspace claim (plist-get intent :accepted) (plist-get intent :item)
@@ -322,15 +330,33 @@ targets retain the root marker for checked recovery, never blind reapplication."
     (unless (eq status 'recovery-required) (mevedel-memory-write-retire target intent))
     published))
 
-(defun mevedel-memory-decision--application-input (accepted proposal)
+(defun mevedel-memory-decision--requirements (workspace proposal)
+  "Return nil when PROPOSAL's required extractions in WORKSPACE are applied.
+Otherwise return (:status STATUS :reason REASON).  An undecided requirement
+returns `waiting', which records no decision; any other outcome makes the
+dependent note disposal stale, so its note returns to review unchanged."
+  (let (waiting failed)
+    (dolist (id (plist-get proposal :requires))
+      (let ((status (plist-get (mevedel-memory-decision-status workspace id) :status)))
+        (cond ((eq status 'applied))
+              ((null status) (setq waiting t))
+              (t (push status failed)))))
+    (cond (failed (list :status 'stale
+                        :reason (format "A required memory extraction was not applied (%s); the note stays for review."
+                                        (mapconcat #'symbol-name (delete-dups failed) ", "))))
+          (waiting (list :status 'waiting
+                         :reason "Apply the memory extractions from this note first.")))))
+
+(defun mevedel-memory-decision--application-input (accepted proposal &optional workspace)
   "Prepare checked application input for ACCEPTED PROPOSAL without writes.
 Return :scope and :proposal working copies, plus :status and optional :reason.
 Only unrelated index edits may advance the captured before-state. Application
-must hold original-root ownership across this preparation and the transaction."
+must hold original-root ownership across this preparation and the transaction.
+With WORKSPACE, a note disposal also checks its required extractions."
   (let* ((scope (copy-tree (plist-get (plist-get accepted :prepared) :scope)))
          (item (copy-tree proposal))
          (index (assoc "MEMORY.md" (plist-get item :before)))
-         check)
+         (check (and workspace (mevedel-memory-decision--requirements workspace proposal))))
     (condition-case err
         (let ((root (mevedel-memory-scope--root scope (plist-get item :root))))
           (when index
@@ -345,7 +371,13 @@ must hold original-root ownership across this preparation and the transaction."
                 (setf (alist-get "MEMORY.md" (plist-get root :before) nil nil #'equal) current))))
           (unless check
             (setq check (mevedel-memory-scope-check scope (plist-get item :root)
-                                                   (mapcar #'car (plist-get item :before))))))
+                                                   (mapcar #'car (plist-get item :before)))))
+          ;; Housekeeping proved an attachment unreferenced at capture; a
+          ;; note written since then may reference it.
+          (when (and (eq (plist-get check :status) 'fresh)
+                     (equal (plist-get item :type) "attachment"))
+            (when-let* ((reason (mevedel-memory-notes-recheck root (plist-get item :file))))
+              (setq check (list :status 'stale :reason reason)))))
       (error (setq check (list :status 'unavailable :reason (error-message-string err)))))
     (append check (list :scope scope :proposal item))))
 
@@ -369,8 +401,10 @@ application by this call. Repeated terminal decisions do not notify it."
          (mevedel-memory-write-call
           scope (plist-get item :root)
           (lambda (target)
-            (let* ((input (mevedel-memory-decision--application-input accepted item))
+            (let* ((input (mevedel-memory-decision--application-input accepted item workspace))
                    (scope (plist-get input :scope)) (effective (plist-get input :proposal)))
+              (when (eq (plist-get input :status) 'waiting)
+                (user-error "%s" (plist-get input :reason)))
               (if (not (eq (plist-get input :status) 'fresh))
                   (mevedel-memory-decision--publish
                    workspace (mevedel-memory-decision--accept workspace claim accepted item (plist-get input :status)
@@ -388,7 +422,11 @@ application by this call. Repeated terminal decisions do not notify it."
   "Reverse the accepted application of PROPOSAL from PASS in WORKSPACE.
 Require every target to match that application's exact after-state, including
 its shared index. Persist a separate reverse intent before writes and retain
-all prior decisions. Repeated reversal returns the same terminal result."
+all prior decisions. Repeated reversal returns the same terminal result.
+Reversing an extraction first restores every applied note disposal that
+depended on it; if a restoration fails, the extraction stays applied."
+  (when (eq 'applied (plist-get (mevedel-memory-decision-status workspace proposal) :status))
+    (mevedel-memory-decision--reverse-dependents workspace pass proposal))
   (mevedel-memory-decision--with-claim
    workspace nil
    (lambda (claim)
@@ -409,6 +447,22 @@ all prior decisions. Repeated reversal returns the same terminal result."
                 (condition-case nil (mevedel-memory-write-run workspace claim target reverse)
                   ((error quit) (setq failed t)))
                 (mevedel-memory-decision--finish-write workspace claim target reverse failed))))))))))
+
+(defun mevedel-memory-decision--reverse-dependents (workspace pass proposal)
+  "Restore applied note disposals in PASS that required extraction PROPOSAL.
+Signal before PROPOSAL is reversed when a dependent note cannot be restored,
+so its extracted knowledge and its source are never both removed."
+  (dolist (item (plist-get (mevedel-memory-store-accepted workspace pass) :proposals))
+    (when (and (member proposal (plist-get item :requires))
+               (memq (plist-get item :action) '(note-delete note-condense))
+               (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get item :id)) :status)))
+      (let ((result (condition-case err
+                        (mevedel-memory-decision-reverse workspace pass (plist-get item :id))
+                      (error (list :status 'failed :reason (error-message-string err))))))
+        (unless (eq (plist-get result :status) 'reversed)
+          (user-error "Restoring shared note %s failed (%s); the memory extraction stays applied"
+                      (plist-get item :file)
+                      (or (plist-get result :reason) (plist-get result :status))))))))
 
 (defun mevedel-memory-decision-recover-write (workspace id hash &optional rollback)
   "Reconcile WORKSPACE write ID against HASH without repeating its file writes.

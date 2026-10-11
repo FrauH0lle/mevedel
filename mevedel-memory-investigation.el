@@ -87,7 +87,8 @@ called with a reason when a tool budget prevents valid completion."
     (let* ((scope (mevedel-memory-investigation-scope state))
            (descriptor (mevedel-memory-scope--root scope root)))
       (cl-loop for (file . snapshot) in (plist-get descriptor :before)
-               when (plist-get snapshot :exists)
+               ;; Attachments and directories carry hashes, not readable text.
+               when (and (plist-get snapshot :exists) (plist-get snapshot :bytes))
                collect (cons file (decode-coding-string (plist-get snapshot :bytes) 'utf-8-unix))))))
 
 (defun mevedel-memory-investigation--documents (state root path contents)

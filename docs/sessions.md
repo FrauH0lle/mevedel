@@ -619,7 +619,9 @@ agents use `work://plans/...` for current and accepted plans. Working
 notes, findings, contracts, and handoffs default to workspace-owned
 `work://shared/`, outside session persistence. These shared files survive session
 cleanup and are not copied by Fork; sessions in the same workspace use the same
-files. Separate workspace roots have separate shared areas. Accepted archives use canonical `accepted-TIMESTAMP.md` names, so every
+files. Separate workspace roots have separate shared areas. Shared files are
+temporary: memory consolidation removes them once their knowledge is
+extracted. Accepted archives use canonical `accepted-TIMESTAMP.md` names, so every
 managed plan is addressable.
 
 `local/plans/` is the one exception to plain Fork copying, because it is managed

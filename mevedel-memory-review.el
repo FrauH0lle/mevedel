@@ -26,6 +26,12 @@
 (declare-function mevedel-claude-code-request-workload "mevedel-claude-code"
                   (prompt system tools callback before-tool boundary))
 
+;; `mevedel-memory-notes'
+(declare-function mevedel-memory-notes-documents "mevedel-memory-notes" (scope))
+(declare-function mevedel-memory-notes-index "mevedel-memory-notes" (scope))
+(autoload 'mevedel-memory-notes-documents "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-index "mevedel-memory-notes")
+
 ;; `mevedel-structs'
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
@@ -52,9 +58,12 @@ Captured when the request starts; must be a positive integer."
   :type 'natnum
   :group 'mevedel)
 
-(defun mevedel-memory-review--input (scope entries documents references focus rejections omitted)
+(defun mevedel-memory-review--input (scope entries documents references focus rejections omitted
+                                           &optional notes omitted-notes)
   "Encode admitted SCOPE, ENTRIES, DOCUMENTS, and REFERENCES as untrusted input.
-FOCUS and REJECTIONS are bounded caller text. OMITTED counts unread digests."
+FOCUS and REJECTIONS are bounded caller text. OMITTED counts unread digests.
+NOTES are complete shared working notes requiring dispositions; OMITTED-NOTES
+counts captured notes left for a later review."
   (decode-coding-string
    (gptel--json-encode
    (list
@@ -73,6 +82,13 @@ FOCUS and REJECTIONS are bounded caller text. OMITTED counts unread digests."
                               (list :id (plist-get entry :id) :session (plist-get entry :session)
                                     :created (plist-get entry :created) :body (plist-get entry :body))) entries))
     :documents (vconcat documents)
+    :notes (vconcat (mapcar (lambda (note)
+                              (list :id (plist-get note :id) :path (plist-get note :path)
+                                    :modified (plist-get note :modified)
+                                    :cited_by_memory (if (plist-get note :cited) t :json-false)
+                                    :body (plist-get note :body)))
+                            notes))
+    :omitted_notes (or omitted-notes 0)
     :reference_checks (vconcat (plist-get references :references))
     :reference_omissions (vconcat (plist-get references :omissions))
     :omitted_digests omitted
@@ -107,14 +123,21 @@ The breakdown is :reasoning-bytes, :reply-bytes (all rounds), and
 A guard failure adds :budget-kind and :output-limit, naming the guard and
 its numeric threshold. Sparse reminders report remaining budgets before another
 model step. ACP uses completed tool batches plus final completion for :rounds;
-its exact provider payload and per-step token usage are not exposed."
+its exact provider payload and per-step token usage are not exposed.
+
+Complete shared working notes captured in SCOPE are admitted like digests:
+one of each kind is reserved when both fit, then the remaining items oldest
+first while the request fits.  The callback reports the admitted note IDs as
+:notes and the captured notes left for later as :omitted-notes; the reply must
+dispose of every admitted note."
   (let* ((buffer (generate-new-buffer " *mevedel-memory-review*"))
          (caller (current-buffer))
          (stream gptel-stream)
          (token-budget mevedel-memory-review-max-tokens)
          (byte-budget mevedel-memory-review-max-bytes)
          (deadline (+ (float-time) 180))
-         settled timer investigation policy references system input admitted response-start
+         (notes (mevedel-memory-notes-documents scope))
+         settled timer investigation policy references system input admitted admitted-notes response-start
          external cancel-engine (external-input-tokens 0) (external-evidence "")
          (documents nil) (chunks nil) (output "")
          (reply-bytes 0) budget-kind output-limit
@@ -137,6 +160,8 @@ its exact provider payload and per-step token usage are not exposed."
                (funcall callback
                         (append (list :outcome outcome :error error
                                       :scope scope :entries admitted
+                                      :notes (mapcar (lambda (note) (plist-get note :id)) admitted-notes)
+                                      :omitted-notes (- (length notes) (length admitted-notes))
                                       :references references :policy policy :omitted-digests (- (length entries) (length admitted)))
                                 parsed (snapshot))))))
          (estimated ()
@@ -305,7 +330,10 @@ its exact provider payload and per-step token usage are not exposed."
                      (finish 'success nil
                              (append (mevedel-memory-proposal-parse
                                       reply (plist-get scope :roots)
-                                      (mapcar (lambda (entry) (plist-get entry :id)) admitted))
+                                      (mapcar (lambda (entry) (plist-get entry :id)) admitted)
+                                      (let ((index (mevedel-memory-notes-index scope)))
+                                        (mapcar (lambda (note) (assoc (plist-get note :id) index))
+                                                admitted-notes)))
                                      (list :reply reply)))))
                (error (finish 'error (error-message-string err))))))
          (done-handler (fsm) (complete-info (gptel-fsm-info fsm)))
@@ -346,10 +374,11 @@ its exact provider payload and per-step token usage are not exposed."
                           (list 'ERRS (lambda (fsm) (finish 'error (format "%s" (or (plist-get (gptel-fsm-info fsm) :error) "Review request failed")))))
                           (list 'ABRT (lambda (_) (finish 'aborted))))
                     (cl-remove-if (lambda (row) (memq (car row) '(WAIT TOOL DONE ERRS ABRT))) gptel-request--handlers))))
-         (prepare (candidate-entries candidate-documents)
+         (prepare (candidate-entries candidate-documents &optional (candidate-notes admitted-notes))
            (ensure-live)
            (let* ((text (mevedel-memory-review--input scope candidate-entries candidate-documents references focus rejections
-                                                    (- (length entries) (length candidate-entries))))
+                                                    (- (length entries) (length candidate-entries))
+                                                    candidate-notes (- (length notes) (length candidate-notes))))
                   (tokens
                    (with-current-buffer buffer
                      (if external
@@ -371,7 +400,8 @@ its exact provider payload and per-step token usage are not exposed."
             (dolist (bound (list token-budget byte-budget))
               (unless (and (integerp bound) (> bound 0))
                 (error "Review output budgets must be positive integers")))
-            (unless (or entries memory-only) (error "Empty digest batch requires an explicit memory-only review"))
+            (unless (or entries notes memory-only)
+              (error "Empty digest batch requires an explicit memory-only review"))
             (dolist (text (list focus rejections))
               (unless (or (null text) (and (stringp text) (<= (string-bytes text) 8192)))
                 (error "Review guidance exceeds its text bound")))
@@ -406,22 +436,50 @@ its exact provider payload and per-step token usage are not exposed."
                           gptel-confirm-tool-calls nil
                           gptel-tools (mevedel-memory-investigation-tools investigation)
                           gptel-system-prompt system gptel-stream stream))
-            (setq admitted (and entries (list (car entries))) input (prepare admitted nil))
-            (unless input (error "Review cannot admit its required scope and a complete digest"))
+            ;; Reserve one complete item of each kind when both fit; otherwise
+            ;; the older kind leads and the other waits for a later review.
+            (let* ((digest (car entries)) (note (car notes))
+                   (note-first (and digest note
+                                    (string< (plist-get note :modified) (plist-get digest :created)))))
+              (cl-loop for (digests . kept) in
+                       (list (cons (and digest (list digest)) (and note (list note)))
+                             (if note-first (cons nil (list note)) (cons (and digest (list digest)) nil))
+                             (if note-first (cons (list digest) nil) (cons nil (and note (list note)))))
+                       for text = (and (or digests kept (not (or digest note)))
+                                       (prepare digests nil kept))
+                       when text do (setq admitted digests admitted-notes kept input text)
+                       and return t))
+            (unless input (error "Review cannot admit its required scope and a complete digest or note"))
             (let (primary topics)
               (dolist (row (plist-get scope :roots))
-                (dolist (file (plist-get (cdr row) :before))
-                  (when (plist-get (cdr file) :exists)
-                    (let ((document (list :root (car row) :file (car file)
-                                          :body (decode-coding-string (plist-get (cdr file) :bytes) 'utf-8-unix))))
-                      (if (or (eq (plist-get (cdr row) :kind) 'instructions) (equal (car file) "MEMORY.md"))
-                          (push document primary) (push document topics))))))
+                ;; Shared notes travel as review notes, not memory documents.
+                (unless (eq (plist-get (cdr row) :kind) 'notes)
+                  (dolist (file (plist-get (cdr row) :before))
+                    (when (plist-get (cdr file) :exists)
+                      (let ((document (list :root (car row) :file (car file)
+                                            :body (decode-coding-string (plist-get (cdr file) :bytes) 'utf-8-unix))))
+                        (if (or (eq (plist-get (cdr row) :kind) 'instructions) (equal (car file) "MEMORY.md"))
+                            (push document primary) (push document topics)))))))
               (dolist (document (seq-take (nreverse primary) 64)) (add-document document))
-              (catch 'full
-                (dolist (entry (cdr (seq-take entries 20)))
-                  (let* ((candidate (append admitted (list entry))) (text (prepare candidate documents)))
-                    (unless text (throw 'full nil))
-                    (setq admitted candidate input text))))
+              ;; Admit the rest oldest first.  Each kind stays a prefix of its
+              ;; own oldest-first selection: once one does not fit, that kind
+              ;; stops while the other may continue.
+              (let ((digests (seq-drop (seq-take entries 20) (length admitted)))
+                    (pending (seq-drop notes (length admitted-notes)))
+                    digests-full notes-full)
+                (while (or (and digests (not digests-full)) (and pending (not notes-full)))
+                  (if (and digests (not digests-full)
+                           (or notes-full (null pending)
+                               (not (string< (plist-get (car pending) :modified)
+                                             (plist-get (car digests) :created)))))
+                      (let* ((candidate (append admitted (list (car digests))))
+                             (text (prepare candidate documents)))
+                        (if (not text) (setq digests-full t)
+                          (setq admitted candidate input text digests (cdr digests))))
+                    (let* ((candidate (append admitted-notes (list (car pending))))
+                           (text (prepare admitted documents candidate)))
+                      (if (not text) (setq notes-full t)
+                        (setq admitted-notes candidate input text pending (cdr pending)))))))
               (dolist (document (seq-take (nreverse topics) (max 0 (- 64 (length documents))))) (add-document document)))
             (setf (mevedel-memory-investigation-entries investigation) admitted)
             (ensure-live)

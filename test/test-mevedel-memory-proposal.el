@@ -182,5 +182,63 @@ Use a monotonic deadline for elapsed-time retries.
     (dolist (path '("" "/etc/passwd" "~/x" "a:b" "a\nb" "../x" "a/../b" nil))
       (should-not (mevedel-memory-proposal-relative-path-p path)))))
 
+(mevedel-deftest mevedel-memory-proposal-parse/notes ()
+  ,test
+  (test)
+  :doc "admitted notes need exactly one disposition and may be cited as evidence"
+  (let* ((notes '(("work://shared/a.md" "notes-root" . "a.md")
+                  ("work://shared/b.md" "notes-root" . "b.md")))
+         (reply (lambda (dispositions)
+                  (concat (string-replace
+                           "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]"
+                           "[\"work://shared/a.md\"]"
+                           (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply))
+                          "## Notes\n" dispositions "## No action\n- none")))
+         (block (lambda (note disposition &optional body)
+                  (format "````proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n---\n%s````\n"
+                          note disposition (if body (concat body "\n") ""))))
+         (result (mevedel-memory-proposal-parse
+                  (funcall reply (concat (funcall block "work://shared/a.md" "delete")
+                                         (funcall block "work://shared/b.md" "condense" "Open: verify.")))
+                  mevedel-test-memory-proposal--roots nil notes))
+         (proposals (plist-get result :proposals)))
+    (should (equal '(promote note-delete note-condense) (mapcar (lambda (item) (plist-get item :action)) proposals)))
+    (should (equal '("work://shared/a.md") (plist-get (car proposals) :evidence)))
+    (should (equal '("notes-root" . "b.md")
+                   (cons (plist-get (nth 2 proposals) :root) (plist-get (nth 2 proposals) :file))))
+    (should (equal "Open: verify." (plist-get (nth 2 proposals) :body)))
+    (dolist (invalid (list (funcall block "work://shared/a.md" "delete")
+                           (concat (funcall block "work://shared/a.md" "delete")
+                                   (funcall block "work://shared/a.md" "keep")
+                                   (funcall block "work://shared/b.md" "keep"))
+                           (concat (funcall block "work://shared/a.md" "archive")
+                                   (funcall block "work://shared/b.md" "keep"))
+                           (concat (funcall block "work://shared/a.md" "delete" "Unexpected body")
+                                   (funcall block "work://shared/b.md" "keep"))
+                           (concat (funcall block "work://shared/a.md" "delete")
+                                   (funcall block "work://shared/b.md" "condense"))
+                           (concat (funcall block "work://shared/c.md" "delete")
+                                   (funcall block "work://shared/b.md" "keep"))
+                           "- none\n"))
+      (should-error (mevedel-memory-proposal-parse (funcall reply invalid)
+                                                   mevedel-test-memory-proposal--roots nil notes))))
+  :doc "without admitted notes the section is optional and may only be empty"
+  (progn
+    (should (mevedel-memory-proposal-parse
+             (concat (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply)
+                     "## Notes\n- none\n## No action\n- none")
+             mevedel-test-memory-proposal--roots (list (make-string 64 ?a))))
+    (should-error (mevedel-memory-proposal-parse
+                   (concat (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply)
+                           "## Notes\n````proposal\nnote: \"work://shared/a.md\"\ndisposition: \"delete\"\n"
+                           "reason: \"Reviewed\"\n---\n````\n## No action\n- none")
+                   mevedel-test-memory-proposal--roots (list (make-string 64 ?a))))))
+
+(mevedel-deftest mevedel-memory-proposal-condensed-bytes
+  (:doc "condensed notes end in exactly one newline and encode as UTF-8")
+  (progn
+    (should (equal "Open.\n" (mevedel-memory-proposal-condensed-bytes "Open.\n\n\n")))
+    (should (equal (encode-coding-string "界\n" 'utf-8) (mevedel-memory-proposal-condensed-bytes "界")))))
+
 (provide 'test-mevedel-memory-proposal)
 ;;; test-mevedel-memory-proposal.el ends here

@@ -23,7 +23,7 @@ Data model
   mevedel-journal-recovery.el  abandoned checkpoint recovery through source authority
   mevedel-journal-discard.el   accepted omissions and recoverable source-pin release
   mevedel-journal-jobs.el      pending journal inspection, retry, and discard commands
-  mevedel-journal-evidence.el  frozen completed transcript and bounded shared/session working notes
+  mevedel-journal-evidence.el  frozen completed transcript and bounded session working notes
   mevedel-journal-pins.el      source-session and publication retention for captures
   mevedel-models.el           model tier/provider resolution, context budget
   mevedel-memory-proposal.el  bounded consolidation reply and captured-scope validation
@@ -32,6 +32,7 @@ Data model
   mevedel-memory-investigation.el request-local Read/Glob/Grep scope, budgets, and cancellation
   mevedel-memory-review.el    bounded sessionless consolidation request and validated reply
   mevedel-memory-pass.el      consolidation gates, admission, settlement, and checked auto apply
+  mevedel-memory-notes.el     shared working-note readiness, capture, housekeeping, and checked byte-preserving disposal
   mevedel-memory-store.el     private pass evidence, accepted proposals, and review publication
   mevedel-memory-cleanup.el   completed-review retention dependencies and expiry candidates
   mevedel-memory-decision.el  immutable decisions, application, activation recovery, and rejection evidence

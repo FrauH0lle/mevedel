@@ -81,7 +81,24 @@
           (make-symbolic-link outside (file-name-concat local "linked.md"))
           (should-error (mevedel-journal-evidence-notes (mevedel-session--create :save-path session-dir))))
       (delete-directory session-dir t)
-      (delete-file outside))))
+      (delete-file outside)))
+
+  :doc "shared working files stay out of the snapshot while session notes remain"
+  (let* ((root (make-temp-file "mevedel-journal-notes-shared-" t))
+         (session-dir (file-name-concat root "session"))
+         (shared (file-name-concat root ".mevedel" "shared")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat session-dir "local") t)
+          (make-directory shared t)
+          (write-region "Session finding.\n" nil (file-name-concat session-dir "local" "notes.md") nil 'silent)
+          (write-region "Shared finding from another session.\n" nil (file-name-concat shared "note.md") nil 'silent)
+          (let ((snapshot (mevedel-journal-evidence-notes
+                           (mevedel-session--create :save-path session-dir
+                                                    :workspace (mevedel-workspace--create :root root)))))
+            (should (string-match-p "Session finding" snapshot))
+            (should-not (string-match-p "Shared finding\\|work://shared" snapshot))))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-journal-evidence)
 ;;; test-mevedel-journal-evidence.el ends here

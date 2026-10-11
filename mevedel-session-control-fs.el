@@ -374,6 +374,76 @@ before the operation ran."
    "      test ! -L \"$leaf\" || exit 69\n"
    "      rmdir -- \"$leaf\" 2>/dev/null || exit 72\n"
    "      ;;\n"
+   ;; Content hashes read through a descriptor proved to be the pinned leaf,
+   ;; so a link swapped in after the type check cannot redirect the read.
+   "    hash|verify-hash)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      test -e \"$leaf\" || exit 77\n"
+   "      test -f \"$leaf\" || exit 68\n"
+   "      exec 8<\"$leaf\" || exit 67\n"
+   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$leaf\" || exit 70\n"
+   "      sum=$(sha256sum <&8) || exit 67\n"
+   "      sum=${sum%% *}\n"
+   "      if test \"$op\" = hash; then\n"
+   "        size=$(stat -L -c %s -- /proc/self/fd/8) || exit 67\n"
+   "        printf '%s %s' \"$size\" \"$sum\" | base64 -w0 || exit 67\n"
+   "      else\n"
+   "        test \"$sum\" = \"$payload\" || exit 72\n"
+   "      fi\n"
+   "      ;;\n"
+   ;; A content-addressed blob is named by its SHA-256.  Its copy is proved
+   ;; against that name before the exclusive link publishes it, so a source
+   ;; path redirected after the caller's observation can only fail; an
+   ;; existing blob with the right bytes makes capture idempotent.
+   "    capture-blob)\n"
+   "      [[ \"$leaf\" =~ ^[0-9a-f]{64}$ ]] || exit 71\n"
+   "      source=$(printf '%s' \"$payload\" | base64 -d) || exit 71\n"
+   "      test -n \"$source\" || exit 71\n"
+   "      if test -e \"$leaf\" || test -L \"$leaf\"; then\n"
+   "        test ! -L \"$leaf\" && test -f \"$leaf\" || exit 69\n"
+   "        sum=$(sha256sum <\"$leaf\") || exit 67\n"
+   "        test \"${sum%% *}\" = \"$leaf\" || exit 72\n"
+   "        exit 0\n"
+   "      fi\n"
+   "      test ! -L \"$source\" || exit 69\n"
+   "      test -e \"$source\" || exit 77\n"
+   "      test -f \"$source\" || exit 68\n"
+   "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
+   "      trap 'rm -f -- \"$temporary\"' EXIT\n"
+   "      exec 8<\"$temporary\" || exit 66\n"
+   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
+   "      exec 8>/proc/self/fd/8 || exit 66\n"
+   "      dd if=\"$source\" iflag=nofollow status=none >&8 || exit 67\n"
+   "      chmod 600 -- /proc/self/fd/8 || exit 67\n"
+   "      sum=$(sha256sum </proc/self/fd/8) || exit 67\n"
+   "      test \"${sum%% *}\" = \"$leaf\" || exit 72\n"
+   "      ln -- \"$temporary\" \"$leaf\" || exit 73\n"
+   "      rm -f -- \"$temporary\"\n"
+   "      trap - EXIT\n"
+   "      ;;\n"
+   ;; Restoration copies a blob beside the pinned leaf, proves the copy's
+   ;; bytes against the blob's name, then renames it into place.  Callers
+   ;; state the expected current leaf as an earlier operation.
+   "    restore-blob)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      decoded=$(printf '%s' \"$payload\" | base64 -d) || exit 71\n"
+   "      mode=${decoded%%$'\\n'*}\n"
+   "      blob=${decoded#*$'\\n'}\n"
+   "      [[ \"$mode\" =~ ^[0-7]+$ ]] || exit 71\n"
+   "      [[ \"${blob##*/}\" =~ ^[0-9a-f]{64}$ ]] || exit 71\n"
+   "      test ! -L \"$blob\" && test -f \"$blob\" || exit 66\n"
+   "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
+   "      trap 'rm -f -- \"$temporary\"' EXIT\n"
+   "      exec 8<\"$temporary\" || exit 66\n"
+   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
+   "      exec 8>/proc/self/fd/8 || exit 66\n"
+   "      dd if=\"$blob\" iflag=nofollow status=none >&8 || exit 67\n"
+   "      sum=$(sha256sum </proc/self/fd/8) || exit 67\n"
+   "      test \"${sum%% *}\" = \"${blob##*/}\" || exit 72\n"
+   "      chmod \"$mode\" -- /proc/self/fd/8 || exit 67\n"
+   "      mv -fT -- \"$temporary\" \"$leaf\" || exit 67\n"
+   "      trap - EXIT\n"
+   "      ;;\n"
    "    verify-latest)\n"
    "      suffix=$payload\n"
    "      test -n \"$suffix\" || exit 71\n"
@@ -582,7 +652,11 @@ parent must not turn into a `Setting current directory' failure."
     (target-time . "clock")
     (list-directory . "list")
     (verify-list . "verify-list")
-    (tree-size . "tree-size"))
+    (tree-size . "tree-size")
+    (file-hash . "hash")
+    (verify-hash . "verify-hash")
+    (capture-blob . "capture-blob")
+    (restore-blob . "restore-blob"))
   "Program operation names mapped to their target-side verbs.")
 
 (defun mevedel-session-control-fs--program-status (code)
@@ -613,6 +687,13 @@ parent must not turn into a `Setting current directory' failure."
                (list "Portable control tree size is unavailable"
                      (plist-get op :path))))
      (string-to-number payload))
+    ('file-hash
+     (unless (string-match "\\`\\([0-9]+\\) \\([0-9a-f]\\{64\\}\\)\\'" payload)
+       (signal 'file-error
+               (list "Portable control file hash is unavailable"
+                     (plist-get op :path))))
+     (list :size (string-to-number (match-string 1 payload))
+           :sha256 (match-string 2 payload)))
     (_ nil)))
 
 (defun mevedel-session-control-fs--program-fields (op)
@@ -637,6 +718,25 @@ parent must not turn into a `Setting current directory' failure."
                          (natnump (plist-get op :max-bytes)))
               (error "Read byte limit must be a non-negative integer"))
             (number-to-string (plist-get op :max-bytes)))
+           ;; Blob sources travel as encoded target-local names; the target
+           ;; proves copied bytes against the blob's hash name instead.
+           ((memq (plist-get op :op) '(capture-blob restore-blob))
+            (let ((source (plist-get op :source))
+                  (mode (plist-get op :mode)))
+              (unless (and (stringp source)
+                           (equal (file-remote-p source) (file-remote-p (plist-get op :path)))
+                           (or (eq (plist-get op :op) 'capture-blob) (natnump mode)))
+                (error "Invalid control blob operation"))
+              (base64-encode-string
+               (encode-coding-string
+                (concat (when (eq (plist-get op :op) 'restore-blob) (format "%o\n" mode))
+                        (file-local-name (expand-file-name source)))
+                'utf-8-unix)
+               t)))
+           ((eq (plist-get op :op) 'verify-hash)
+            (unless (and (stringp content) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" content))
+              (error "Invalid expected control file hash"))
+            content)
            ((null content) "")
            ((memq (plist-get op :op)
                   '(verify-mode directory-mode before-time verify-latest
@@ -1540,6 +1640,12 @@ See `mevedel-session-control-fs--optional-batch' for the result shape."
 See `mevedel-session-control-fs--optional-batch' for the result shape; a
 successful result also carries the tree's byte count as an integer `:value'."
   (mevedel-session-control-fs--optional-batch 'tree-size paths))
+
+(defun mevedel-session-control-fs-file-hash (path)
+  "Return regular file PATH's (:size BYTES :sha256 HEX) observed on its target.
+The bytes are hashed there and never transferred.  A missing PATH signals
+`mevedel-session-control-fs-absent'; links and other types are file errors."
+  (mevedel-session-control-fs--run-1 'file-hash path))
 
 (defun mevedel-session-control-fs-target-time (directory)
   "Return target filesystem seconds from a descriptor-relative marker.

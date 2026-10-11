@@ -137,6 +137,19 @@ hides expired entries before removing bytes, and deletes complete dependency
 groups. Later mutations finish accepted expiry before pinning new evidence.
 Curated memory is outside journal expiry. Public retrieval uses `memory://journal/`.
 
+Shared working files are not journal input. They are untracked, machine-local
+and temporary; general consolidation reviews quiet versions directly. Each
+admitted note receives one disposition (delete, keep, or condense) beside
+ordinary extraction proposals citing it, and a disposal applies only after
+those extractions are applied. Quiet attachments no surviving note references
+and quiet empty folders receive structured decisions without inference. Files
+that memory or instructions cite are not removed silently. Accepted reviews
+and decisions are the processing record. Note decisions reuse checked intents
+and reversal through a shared-notes target whose coordination stays outside
+the cleaned folder; the previous bytes are retained as content-addressed
+blobs for the ordinary history window, within a quota. Auto mode applies them
+without prompts once no turn runs in the workspace.
+
 The [memory manual](../memory.md) owns configuration, limits, scheduling, proposal
 syntax, commands, inspection, and recovery procedures. Control-program mechanics
 remain in [ADR 0101](0101-carry-control-operations-as-one-pinned-program.md).
@@ -161,6 +174,19 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+- **Shared files left the journal for a consolidation-owned lifecycle.**
+  Capture read shared files before session files within one 32-KiB bound in
+  filename order. With about a hundred shared files, every checkpoint repeated
+  the same alphabetically first files (`artifact-store-review…`,
+  `editor-cpu/…`) as possibly foreign context, and newer notes never reached a
+  digest. Digests are lossy per-turn summaries that record no processed note
+  version, so cleanup could not safely depend on them. Committing the folder
+  had grown it to 57 MB over 66 commits, mostly lab output, although the user
+  does not exchange shared files between machines. The user asked for notes
+  to be extracted reliably and then removed, automatically and without prompts
+  in `auto`. Consolidation now reads complete note versions and records their
+  dispositions as decisions; session-local notes stay in capture.
 
 - **Remote journal work ran one target program per check.** A September 23
   capture of a remote session found 117 control programs, about 12 s of

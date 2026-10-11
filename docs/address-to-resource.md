@@ -197,7 +197,8 @@ is an error rather than an empty discovery root.
   Ephemeral requests cannot create or mutate session-owned work files.
 
 Shared files survive session rename, fork, rewind and deletion, because they
-are workspace-owned. They are mutable working material, distinct from curated
+are workspace-owned. They are mutable, machine-local and temporary working
+material (the directory is not tracked in Git), distinct from curated
 `memory://` and immutable dated `memory://journal/` evidence. Neither scope participates
 in source snapshots, touched-file tracking, diagnostics or directive patch
 capture. Shared writes use the real backing path for normal filesystem edit
@@ -207,10 +208,12 @@ Shared note contents are not automatically added to every conversation. Models
 discover and read them with Read, Glob, and Grep; an agent handing off work
 provides the note's address to the receiving agent.
 
-`/clean-work [focus]` explicitly reviews shared files and removes confirmed
-obsolete copies through normal ApplyPatch permissions and review. It preserves
-unresolved work and does not infer obsolescence from age or session deletion.
-There is no background expiry timer; `/learn` handles durable promotion.
+Memory consolidation reviews quiet shared files automatically, extracts their
+lasting knowledge and then deletes, keeps or condenses each one, preferring
+deletion; quiet unreferenced attachments and empty folders are removed too.
+See [Shared working-note lifecycle](memory.md#shared-working-note-lifecycle).
+`/clean-work [focus]` remains an explicit, interactive cleanup through normal
+ApplyPatch permissions and review; `/learn` handles requested promotion.
 
 The physical session directory remains named `local/` to describe its ownership.
 

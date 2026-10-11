@@ -345,7 +345,17 @@
                    (should-not (file-exists-p (mevedel-journal-store-directory root)))
                    (mevedel-memory-pass-schedule workspace)
                    (should (= 0 (hash-table-count mevedel-memory-pass--pending)))
-                   (should (= 0 calls))))
+                   (should (= 0 calls)))
+                 :doc "a quiet shared note alone offers a review even with journaling disabled"
+                 (let ((mevedel-journal-enabled nil)
+                       (note (file-name-concat root ".mevedel" "shared" "handoff.md")))
+                   (make-directory (file-name-directory note) t)
+                   (write-region "Finding to review.\n" nil note nil 'silent)
+                   (set-file-times note (seconds-to-time (- now (* 2 86400))))
+                   (mevedel-memory-pass-schedule workspace)
+                   (drain)
+                   (should (= 1 calls))
+                   (should-not selected)))
 
 (provide 'test-mevedel-memory-pass-scheduling)
 ;;; test-mevedel-memory-pass-scheduling.el ends here

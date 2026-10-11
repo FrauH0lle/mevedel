@@ -567,8 +567,10 @@ present."
                     "address when handing off work. Use this address rather than a "
                     "cwd-relative .mevedel/shared/ path. Search first "
                     "and update relevant existing files. Choose filenames and folders "
-                    "as needed. Shared files are workspace-owned; writes require "
-                    "ordinary workspace edit authority.")
+                    "as needed. Shared files are workspace-owned, machine-local and "
+                    "temporary: memory review extracts lasting lessons from quiet "
+                    "files, then removes them. Writes require ordinary workspace "
+                    "edit authority.")
             lines))
     (when session
       (push (concat "- `artifact://` - session-owned persisted tool and "

@@ -19,6 +19,10 @@
 (require 'mevedel-utilities)
 (require 'mevedel-workspace-identity)
 
+;; `mevedel-memory-notes'
+(declare-function mevedel-memory-notes-current-p "mevedel-memory-notes" (snapshot))
+(autoload 'mevedel-memory-notes-current-p "mevedel-memory-notes")
+
 (define-error 'mevedel-memory-scope-unavailable "Original memory scope is unavailable")
 
 (defconst mevedel-memory-scope--max-entries 256
@@ -233,7 +237,9 @@ components. Never sample a newly proposed target to manufacture before-state."
   (let* ((root (mevedel-memory-scope--root scope id))
          (before (cdr (assoc file (plist-get root :before))))
          (path (file-name-concat (plist-get root :dir) file)))
-    (unless (mevedel-memory-proposal--file-p file)
+    (unless (if (eq (plist-get root :kind) 'notes)
+                (mevedel-memory-proposal-relative-path-p file)
+              (mevedel-memory-proposal--file-p file))
       (error "Invalid captured memory file"))
     (or before
         (when (and (eq (plist-get root :kind) 'memory)
@@ -261,16 +267,20 @@ must hold current ownership and target coordination across check and commit."
                  (path (file-name-concat (plist-get root :dir) file))
                  (bytes (plist-get before :bytes))
                  (current
-                  (condition-case nil
-                      (list :exists t :bytes
-                            (mevedel-session-control-fs-read-file path 'no-conversion (1+ (length bytes))))
-                    (mevedel-session-control-fs-absent (list :exists nil)))))
+                  (unless (eq (plist-get root :kind) 'notes)
+                    (condition-case nil
+                        (list :exists t :bytes
+                              (mevedel-session-control-fs-read-file path 'no-conversion (1+ (length bytes))))
+                      (mevedel-session-control-fs-absent (list :exists nil))))))
             (unless (and (equal path (plist-get before :path))
-                         (or (not (plist-get before :exists))
+                         (or (not (plist-get before :exists)) (plist-get before :directory)
+                             (and (null bytes) (eq (plist-get root :kind) 'notes))
                              (equal (plist-get before :hash) (secure-hash 'sha256 bytes))))
               (error "Captured before-state is inconsistent"))
-            (unless (and (eq (plist-get before :exists) (plist-get current :exists))
-                         (equal bytes (plist-get current :bytes)))
+            (unless (if (eq (plist-get root :kind) 'notes)
+                        (mevedel-memory-notes-current-p before)
+                      (and (eq (plist-get before :exists) (plist-get current :exists))
+                           (equal bytes (plist-get current :bytes))))
               (push file stale))))
         (if stale (list :status 'stale :reason (format "Files changed since capture: %s" (string-join (nreverse stale) ", ")))
           (list :status 'fresh)))

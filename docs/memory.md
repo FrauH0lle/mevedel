@@ -216,7 +216,9 @@ The consolidation output contract is implemented in
 `mevedel-memory-proposal-parse`. It validates the complete reply against captured
 root IDs, admitted files, complete filename observations for creation, and
 admitted digest IDs before returning any proposals. The fixed ordered sections
-are Promote, Update, Merge, Remove, Instructions, and No action. Proposal fences
+are Promote, Update, Merge, Remove, Instructions, Notes, and No action; Notes is
+required exactly when shared notes were admitted, with one disposition per
+admitted note, and may otherwise be omitted or `- none`. Proposal fences
 contain JSON-valued header lines, a `---` separator, and Markdown replacement
 content. The header is a sequence of `key: value` lines, not a JSON object;
 only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
@@ -486,8 +488,8 @@ eligible completed, durably saved root turns, digest publication, session
 opening and idle maintenance (see [Digest generation](#digest-generation)), and
 leaves its proposals for approval. Auto uses the same review and applies fresh
 memory and instruction proposals, including changes to `AGENTS.md`, through the
-ordinary checked decision path without prior review. The mode is frozen at pass
-admission.
+ordinary checked decision path without prior review, followed by shared-note
+decisions. The mode is frozen at pass admission.
 
 The automatic gate checks mode, then elapsed time since the last successful
 general review, then the eligible unreviewed digest count. The settings
@@ -499,7 +501,12 @@ A smaller backlog becomes eligible one day before its oldest digest reaches the
 configured ordinary-recall age limit (13 days under the default). Disabled expiry
 keeps the count threshold; the elapsed-time gate still applies in either case.
 This creates review opportunities for sparse workspaces and completed work from
-long-running sessions. `/remember` bypasses timing and count thresholds.
+long-running sessions. Ready shared-folder work (a quiet note, attachment or
+empty folder; see [Shared working-note lifecycle](#shared-working-note-lifecycle))
+satisfies the count by itself, so a workspace without digests or with
+journaling disabled is still cleaned up; a shared folder alone makes the
+workspace a candidate. The admitted review then also carries any eligible
+digests. `/remember` bypasses timing and count thresholds.
 
 Turn completion checks cached timing and settings without target I/O. Queued
 turns coalesce, and filesystem work waits for idle transport. A failed count
@@ -709,6 +716,10 @@ update the reader without moving focus. Closing the inspector leaves the request
 running; when the source closes, the inspector reports that state. `k` cancels
 the request through the pass owner,
 and `j` opens pending journal jobs with their inspection/retry/discard actions.
+`s` shows the latest shared-folder observation with blocked items and reasons.
+Shared-note rows show their disposition as the action and `note`, `attachment`
+or `directory` as the type; a disposal whose extraction is undecided shows
+`awaits extraction`. Attachment diffs show size and hash.
 `m` runs another consolidation; a prefix argument asks for focus. The first-class
 `/remember [focus]` command and `M-x mevedel-remember` use the same bounded
 sessionless pass, allow explicit current-memory review without eligible digests,
@@ -755,7 +766,7 @@ records remain retained while any examined digest survives. Once their evidence
 dependencies end, old reviews can expire with their private prepared/accepted
 bodies and complete terminal decision/write history.
 
-## Working notes and completed-turn capture
+## Shared working-note lifecycle
 
 Main and worker guidance asks for attributed factual lessons in
 `work://shared/` when the request permits workspace writes. Agents search before
@@ -763,6 +774,82 @@ creating and update relevant existing files; no filename or structure is require
 report lessons through their existing results or available SendMessage; they
 gain no mutation tools. `$learn` considers available notes and digests as
 additional evidence, verifies relevant claims, and acknowledges omissions.
+
+Shared files (`.mevedel/shared/`) are untracked, machine-local and temporary.
+`mevedel-memory-notes.el` owns their lifecycle: general consolidation reviews
+extract lasting knowledge from quiet files into memory and then dispose of
+them. Focused reviews do not include notes. Accepted reviews and decisions are
+the only processing record.
+
+**Readiness.** A file is ready once unchanged for
+`mevedel-memory-notes-quiet-hours` (default 24) on the target clock. A note
+version is its path and content hash; an edit creates a new version. A pending
+decision suppresses a version. Kept or condensed versions, and versions a user
+rejected or restored, are reconsidered after `mevedel-memory-notes-review-days`
+(default 7). Stale, unavailable and deleted outcomes impose no wait. A review
+admitted while a conversation in the workspace runs a turn captures no notes.
+
+**Capture.** Each general review walks the folder without following links
+(at most 4,096 entries). Text is complete UTF-8 without NUL bytes; anything
+else is an attachment. At most 16 complete text notes and 96 KiB are captured,
+oldest first, each at most 32 KiB; the review request admits them beside
+digests (one of each when both fit, then oldest first). Larger, unreadable and
+linked files are never truncated or deleted: they remain blocked with a
+reason. The latest observation of ready, waiting and blocked items is
+recorded in `.mevedel/state/shared-notes/observation.el`; it counts every
+blocked item and lists at most 64 with reasons. `s` in the memory cockpit
+shows it, and review completion messages report the counts.
+
+**Citations.** Memory topics and instruction files are captured first. A file
+they cite, by `work://shared/` address or `.mevedel/shared/` path, including
+through a cited folder, is never removed as housekeeping. A cited note is
+flagged `cited_by_memory`; a delete without an extraction citing the note is
+accepted as keep, so the citation cannot silently break.
+
+**Decisions.** The reply's Notes section gives every admitted note exactly one
+disposition: delete (the normal outcome, also when future usefulness is
+uncertain), keep (concrete continuing use such as an open handoff) or condense
+(rewrite to the part still in use). Extraction is ordinary memory and
+instruction proposals citing the note's ID as evidence. Acceptance records
+those extractions as the disposition's `:requires`. Delete or condense applies
+only after every required extraction is applied; an undecided requirement
+waits without a decision, and any other requirement outcome makes the
+disposition stale, leaving the note for a later review.
+
+**Housekeeping.** Quiet attachments that no surviving text file references
+(conservatively by root-relative, note-relative, URL-encoded or address
+spelling) and quiet empty folders receive delete and prune decisions without
+inference, at most 128 per review. An incomplete reference scan blocks
+attachment cleanup, not text review. Application rechecks text written since
+capture, so a newly referenced attachment becomes stale. A review with only
+housekeeping starts no model request.
+
+**Application and undo.** Note decisions use the checked decision, write
+intent, recovery and reversal paths with a shared-notes target whose
+coordination lives in `.mevedel/state/shared-notes/`, outside the folder it
+cleans. Each change runs as one locked target program: ownership guard, exact
+hash and mode proof, capture of the previous bytes as a private
+content-addressed blob, mutation, then removal of ancestors left empty. The
+shared root is preserved. Undo restores exact bytes, mode and parent folders
+from the blob. Reversing an extraction first restores every applied note
+disposal that required it; if that fails, the extraction stays applied.
+Blobs are retained while any write intent references them, so they follow the
+ordinary resolution-based history window. `mevedel-memory-notes-undo-quota`
+(default 1 GiB) bounds them: collection of unreferenced blobs runs before each
+review and before refusing a capture, and a change that would exceed the quota
+is refused with the note left in place. Unsaved visiting buffers and changed
+content refuse mutation.
+
+**Modes.** `manual` processes notes only through `/remember`; `propose` leaves
+their decisions in the cockpit; `auto` applies extraction, deletion,
+condensation and housekeeping without prompts. In `auto`, note decisions wait
+while a conversation in the workspace runs a turn; a one-minute retry applies
+them, and undecided decisions of earlier automatic note reviews, once idle.
+
+## Working notes and completed-turn capture
+
+Shared files are not journal input: consolidation reviews them directly. A
+checkpoint captures only the session's own `work://` notes and plan titles.
 
 With `mevedel-journal-enabled` (default `t`), a successful completed root-turn
 save freezes a checkpoint before generation collection. One immutable private
@@ -1098,10 +1185,9 @@ Unreadable proof records stop cleanup rather than being treated as garbage.
 ## Working-note snapshot limits
 
 The internal note snapshotter caps the entire working-note input at 32 KiB,
-including provenance and omission labels. It visits shared files first and
-session files second, in filename order without a preferred filename. Shared
-content is labelled as potentially coming from other sessions, not evidence of
-this session's work. It labels notes as untrusted prior context, lists binary or non-UTF-8 files by
+including provenance and omission labels. It visits the session's own
+`work://` files in filename order without a preferred filename; shared files
+are excluded. It labels notes as untrusted prior context, lists binary or non-UTF-8 files by
 name, and includes only names and first lines for `local/plans/`. Reads are
 bounded on the execution target before transfer. Snapshot strings remain
 unchanged when the source files later change.

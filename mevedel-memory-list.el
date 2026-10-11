@@ -117,7 +117,8 @@
                                 ;; A recorded stale decision may since have become applicable, or a pending
                                 ;; proposal superseded; label rows by what accepting would do now.
                                 :check (when (mevedel-memory-decision-actionable-status-p status)
-                                         (plist-get (mevedel-memory-decision--application-input accepted proposal) :status))
+                                         (plist-get (mevedel-memory-decision--application-input accepted proposal workspace)
+                                                    :status))
                                 :target (format "%s%s" (file-name-concat (plist-get root :dir) (plist-get proposal :file))
                                                 (if (plist-get root :client) (format " [%s]" (plist-get root :client)) ""))) rows))))
             (error (push (list :id pass :pass pass :status 'unavailable :error (error-message-string err)) rows))))))
@@ -143,6 +144,7 @@
                       (and (eq (plist-get item :kind) 'review) "No proposed changes") "Unavailable record")
                   (pcase (list (plist-get item :status) (plist-get item :check))
                     ('(stale fresh) "ready")
+                    (`(,_ waiting) "awaits extraction")
                     (`(,_ stale) "superseded")
                     (`(,_ unavailable) "unavailable")
                     (`(,status ,_) (symbol-name status)))
@@ -202,10 +204,20 @@
                         (plist-get prepared :entries))))))
 
 (defun mevedel-memory-list--diff (before after)
-  "Return a unified diff of exact retained BEFORE and AFTER snapshots."
-  (or (mevedel--unified-diff (decode-coding-string (or (plist-get before :bytes) "") 'utf-8-unix)
-                             (decode-coding-string (or (plist-get after :bytes) "") 'utf-8-unix))
-      "No text changes.\n"))
+  "Return a unified diff of exact retained BEFORE and AFTER snapshots.
+Attachments and folders carry no text and are described by hash and kind."
+  (cl-flet ((describe (snapshot)
+              (cond ((not (plist-get snapshot :exists)) "absent")
+                    ((plist-get snapshot :directory) "empty directory")
+                    (t (format "%s bytes, sha256 %s"
+                               (or (plist-get snapshot :size) (length (plist-get snapshot :bytes)))
+                               (plist-get snapshot :hash))))))
+    (if (seq-some (lambda (snapshot) (and (plist-get snapshot :exists) (not (plist-get snapshot :bytes))))
+                  (list before after))
+        (format "Before: %s\nAfter: %s\n" (describe before) (describe after))
+      (or (mevedel--unified-diff (decode-coding-string (or (plist-get before :bytes) "") 'utf-8-unix)
+                                 (decode-coding-string (or (plist-get after :bytes) "") 'utf-8-unix))
+          "No text changes.\n"))))
 
 (cl-defun mevedel-memory-list--details (item context)
   "Return ITEM's captured body, before/after diff, and evidence in CONTEXT.
@@ -223,7 +235,7 @@ Check original root authority before disclosing private topic contents."
          (decision (mevedel-memory-decision-status workspace (plist-get item :id)))
          (intent (and decision (plist-get (mevedel-memory-decision--published workspace decision) :intent)))
          (input (unless (or intent (eq (plist-get decision :status) 'rejected))
-                  (mevedel-memory-decision--application-input accepted proposal)))
+                  (mevedel-memory-decision--application-input accepted proposal workspace)))
          (effective (if (eq (plist-get input :status) 'fresh) (plist-get input :proposal) proposal))
          (effective-scope (if (eq (plist-get input :status) 'fresh) (plist-get input :scope) scope))
          (before (or (plist-get intent :before) (plist-get effective :before)))
@@ -262,14 +274,17 @@ Check original root authority before disclosing private topic contents."
         (mapcar
          (lambda (id)
            (let ((entry (seq-find (lambda (entry) (equal id (plist-get entry :id)))
-                                  (plist-get (plist-get accepted :prepared) :entries))))
+                                  (plist-get (plist-get accepted :prepared) :entries)))
+                 (note (seq-find (lambda (note) (equal id (plist-get note :id)))
+                                 (mevedel-memory-notes-documents scope))))
              (list :id (cons 'evidence id)
-                   :title (concat "Evidence · " (or (plist-get entry :file) id))
+                   :title (concat "Evidence · " (or (plist-get entry :file) (plist-get note :path) id))
                    :mode 'markdown-mode
-                   :body (if entry
-                             (format "memory://journal/%s\n\n%s\n"
-                                     (plist-get entry :file) (plist-get entry :body))
-                           (format "%s: retained evidence unavailable.\n" id)))))
+                   :body (cond (entry (format "memory://journal/%s\n\n%s\n"
+                                              (plist-get entry :file) (plist-get entry :body)))
+                               (note (format "%s (captured %s)\n\n%s\n"
+                                             id (plist-get note :modified) (plist-get note :body)))
+                               (t (format "%s: retained evidence unavailable.\n" id))))))
          (plist-get proposal :evidence)))
       (list
        (list :id 'references :title "Reference checks"
@@ -366,23 +381,56 @@ Check original root authority before disclosing private topic contents."
   (interactive)
   (mevedel-journal-jobs (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context))))
 
+(defun mevedel-memory-list-notes ()
+  "Inspect the latest shared-folder observation: ready, waiting and blocked items."
+  (interactive)
+  (let* ((workspace (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
+         (observation (or (mevedel-memory-notes-observation workspace)
+                          (user-error "No shared working folder has been observed yet"))))
+    (mevedel-report-show
+     "*mevedel shared notes*"
+     (list :title "Shared working notes" :subtitle (format "Observed %s" (plist-get observation :at))
+           :identity (list 'shared-notes (mevedel-workspace-root workspace))
+           :sections
+           (list (list :id 'summary :title "Latest review selection"
+                       :body (mevedel-report-fields
+                              (list "Text notes" (plist-get observation :notes))
+                              (list "Attachments" (plist-get observation :attachments))
+                              (list "Empty folders" (plist-get observation :directories))
+                              (list "Waiting for a later review" (plist-get observation :remaining))))
+                 (list :id 'blocked :title "Blocked items"
+                       :body (if (plist-get observation :blocked)
+                                 (concat (mapconcat (lambda (row) (format "%s: %s" (car row) (cdr row)))
+                                                    (plist-get observation :blocked) "\n")
+                                         (let ((hidden (- (or (plist-get observation :blocked-count) 0)
+                                                          (length (plist-get observation :blocked)))))
+                                           (if (> hidden 0) (format "\n...and %d more blocked items.\n" hidden) "\n")))
+                               "None.\n")))))))
+
 (defun mevedel-memory-list--finished (workspace result)
   "Refresh WORKSPACE's open table and report settled consolidation RESULT."
   (when-let* ((buffer (get-buffer "*mevedel memory*")))
     (with-current-buffer buffer
       (when (and mevedel-cockpit--context (eq workspace (mevedel-cockpit-context-workspace mevedel-cockpit--context)))
         (condition-case nil (mevedel-cockpit-surface-refresh) (error nil)))))
-  (pcase (plist-get result :outcome)
-    ('success
-     (if (eq (plist-get result :mode) 'auto)
-         (message "mevedel: memory review updated %d files; %d proposals held, %d not applied; %d digests remain"
-                  (plist-get result :updated-files) (plist-get result :held-count)
-                  (plist-get result :unapplied-count) (or (plist-get result :remaining) 0))
-       (let ((entry (plist-get result :entry)))
-         (message "mevedel: memory review covered %d digests, proposed %d changes; %d digests remain"
-                  (length (plist-get entry :digests)) (length (plist-get entry :proposals)) (or (plist-get result :remaining) 0)))))
-    ('aborted (message "mevedel: memory review cancelled"))
-    (_ (message "mevedel: memory review failed: %s" (or (plist-get result :error) "Unavailable")))))
+  (let ((notes (if (cl-some (lambda (key) (> (or (plist-get result key) 0) 0))
+                            '(:notes-reviewed :notes-remaining :notes-blocked))
+                   (format "; %d shared notes reviewed, %d waiting, %d blocked (s in the memory cockpit)"
+                           (or (plist-get result :notes-reviewed) 0) (or (plist-get result :notes-remaining) 0)
+                           (or (plist-get result :notes-blocked) 0))
+                 "")))
+    (pcase (plist-get result :outcome)
+      ('success
+       (if (eq (plist-get result :mode) 'auto)
+           (message "mevedel: memory review updated %d files; %d proposals held, %d not applied; %d digests remain%s"
+                    (plist-get result :updated-files) (plist-get result :held-count)
+                    (plist-get result :unapplied-count) (or (plist-get result :remaining) 0) notes)
+         (let ((entry (plist-get result :entry)))
+           (message "mevedel: memory review covered %d digests, proposed %d changes; %d digests remain%s"
+                    (length (plist-get entry :digests)) (length (plist-get entry :proposals))
+                    (or (plist-get result :remaining) 0) notes))))
+      ('aborted (message "mevedel: memory review cancelled"))
+      (_ (message "mevedel: memory review failed: %s" (or (plist-get result :error) "Unavailable"))))))
 
 ;;;###autoload
 (defun mevedel-remember (&optional focus context)
@@ -418,7 +466,8 @@ a focus. An explicit review may inspect current memory without eligible digests.
            ("v" "Inspect running consolidation" mevedel-memory-list-running)
            ("k" "Kill running consolidation" mevedel-memory-list-kill)
            ("m" "Run consolidation (prefix: focus)" mevedel-remember)
-           ("j" "Inspect pending journal jobs" mevedel-memory-list-jobs)))
+           ("j" "Inspect pending journal jobs" mevedel-memory-list-jobs)
+           ("s" "Inspect shared-note backlog" mevedel-memory-list-notes)))
   "Shared cockpit surface for candidates, stored memories, and history.")
 
 (define-derived-mode mevedel-memory-list-mode tabulated-list-mode "mevedel-memory"

@@ -2,8 +2,10 @@
 
 ;;; Commentary:
 
-;; Captures bounded working notes as dated, untrusted prior context.  Binary
-;; files contribute names only; plans contribute names and first lines.
+;; Captures bounded session working notes as dated, untrusted prior context.
+;; Binary files contribute names only; plans contribute names and first lines.
+;; Shared `work://shared/' notes are not journal input: memory consolidation
+;; reviews them directly and then cleans them up.
 ;; Snapshot strings have no live dependency on the source files or buffer.
 
 ;;; Code:
@@ -18,9 +20,7 @@
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-encode-component "mevedel-resource" (value))
-(declare-function mevedel-resource-work-shared-directory "mevedel-resource" (workspace))
 (autoload 'mevedel-resource-encode-component "mevedel-resource")
-(autoload 'mevedel-resource-work-shared-directory "mevedel-resource")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-read-artifact
@@ -29,7 +29,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tool-fs-read'
 (declare-function mevedel-tool-fs-read--binary-extension-p "mevedel-tool-fs-read" (filename))
@@ -83,14 +82,12 @@ Use only a plan's first line and list binary or undecodable file names."
                    (t "\n"))))))))
 
 (defun mevedel-journal-evidence-notes (session)
-  "Return a frozen, bounded snapshot of SESSION's working notes.
+  "Return a frozen, bounded snapshot of SESSION's own working notes.
 The entire result stays within `mevedel-journal-evidence-notes-max-bytes'.
-Shared files are workspace prior context, not evidence of this session's work.
+Shared working files are excluded; consolidation reviews them directly.
 Unreadable or linked storage signals an error.
 Missing roots contribute nothing."
   (let* ((save-path (mevedel-session-save-path session))
-         (shared (mevedel-resource-work-shared-directory
-                  (mevedel-session-workspace session)))
          (result "")
          (budget mevedel-journal-evidence-notes-max-bytes))
     (cl-labels
@@ -103,9 +100,7 @@ Missing roots contribute nothing."
               ((file-regular-p path)
                (when (string-empty-p result)
                  (setq result
-                       (concat "Working notes: untrusted prior context, possibly repeated.\n"
-                               "Shared files may come from other sessions; they do not "
-                               "establish what this session did.\n")))
+                       "Working notes: untrusted prior context, possibly repeated.\n"))
                (setq result
                      (concat result
                              (mevedel-journal-evidence--note
@@ -116,7 +111,6 @@ Missing roots contribute nothing."
                  (throw 'full nil)))
               (t (error "Working note is not a regular file: %s" path))))))
       (catch 'full
-        (when shared (visit shared shared "shared/"))
         (when save-path
           (let ((root (file-name-concat save-path "local")))
             (visit root root "")))))

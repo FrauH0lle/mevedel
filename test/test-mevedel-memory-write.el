@@ -24,7 +24,12 @@
         (should (equal (concat workspace "/.mevedel/state/memory-write/root")
                        (mevedel-memory-write-control-directory workspace)))
         (should (equal (concat workspace "/custom/.mevedel/state/memory-write/root")
-                       (mevedel-memory-write-control-directory (concat workspace "/custom/"))))))))
+                       (mevedel-memory-write-control-directory (concat workspace "/custom/"))))
+        ;; Shared-note coordination lives outside the folder it cleans.
+        (should (equal (concat workspace "/.mevedel/state/shared-notes")
+                       (mevedel-memory-write-control-directory (concat workspace "/.mevedel/shared/"))))
+        (should (equal (concat workspace "/notes/shared/.mevedel/state/memory-write/root")
+                       (mevedel-memory-write-control-directory (concat workspace "/notes/shared"))))))))
 
 (mevedel-deftest mevedel-memory-write-call
     (:vars* ((root (make-temp-file "mevedel-memory-state-" t))
@@ -86,7 +91,18 @@
         (mevedel-tool-patch-commit changes)
         (dolist (row before)
           (should (equal (cdr row) (mevedel-memory-scope--snapshot (plist-get (cdr row) :path) 32768))))
-        (should-not (mevedel-memory-write--changes before before))))))
+        (should-not (mevedel-memory-write--changes before before)))))
+  :doc "byte-less snapshots differ by hash and carry their exact after-state"
+  (let* ((before (list (cons "a.png" (list :path (file-name-concat root "a.png") :exists t
+                                           :hash (make-string 64 ?a) :size 3 :mode #o644))))
+         (after (list (cons "a.png" (list :path (file-name-concat root "a.png") :exists t
+                                          :hash (make-string 64 ?b) :size 3 :mode #o644))))
+         (change (car (mevedel-memory-write--changes before after))))
+    (should (equal (cdar after) (plist-get change :after)))
+    (should (eq 'write (plist-get change :action)))
+    (should-not (plist-member change :bytes))
+    (should (equal after (mevedel-memory-write--after before (list change))))
+    (should-not (mevedel-memory-write--changes before before))))
 
 (mevedel-deftest mevedel-memory-write-list
     (:vars* ((root (make-temp-file "mevedel-memory-write-list-" t))

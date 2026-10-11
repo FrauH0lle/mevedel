@@ -24,7 +24,9 @@ When writes are permitted, keep short factual notes in `work://shared/`, with
 source/task attribution. Search first, update relevant existing material, and
 re-read concurrent edits before patching. Distinguish observations, user
 corrections, and hypotheses; preserve unresolved constraints and useful lessons
-reported by read-only agents. Shared files survive session cleanup; curate
-lasting lessons into memory. Never write journal digests yourself. Read-only
+reported by read-only agents. Shared files are temporary and machine-local:
+memory review extracts their lasting lessons once they are quiet and then
+removes them, so state open handoffs explicitly. Never write journal digests
+yourself. Read-only
 requests report lessons instead. Plan permits session-owned `work://plans/`
 edits, not shared or memory writes. This guidance does not grant permissions.

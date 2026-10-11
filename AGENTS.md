@@ -141,9 +141,10 @@ For interactive commands, see [README.md](README.md#usage).
   relocate their files merely to follow the ordinary-notes default.
 - `.scratch/` is local-only, for skill workflow files and disposable execution
   material such as checkouts and logs. Never track or commit anything under it.
-- `.mevedel/shared/`, addressed through `work://shared/`, is versioned working
-  material. Review its contents before committing; Git commits and pulls, not
-  the resource address itself, carry it between independent checkouts.
+- `.mevedel/shared/`, addressed through `work://shared/`, is untracked,
+  machine-local and temporary. Memory consolidation extracts lasting lessons
+  from quiet files and then removes them, so never cite shared files from
+  tracked documentation; put durable facts in memory or maintained docs.
 
 ## Agent skills
 

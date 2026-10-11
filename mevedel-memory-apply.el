@@ -13,6 +13,10 @@
 (require 'mevedel-memory-scope)
 (require 'url-util)
 
+;; `mevedel-memory-notes'
+(declare-function mevedel-memory-notes-changes "mevedel-memory-notes" (proposal))
+(autoload 'mevedel-memory-notes-changes "mevedel-memory-notes")
+
 (defun mevedel-memory-apply--index-lines (text)
   "Parse index TEXT into (DESTINATION . LINE) rows, retaining all lines.
 Non-entry lines have a nil destination. Reject ambiguous or unsafe indexes."
@@ -66,10 +70,11 @@ and unsupported link syntax instead of silently creating conflicting entries."
       (if (or (not replacement) inserted) result
         (concat result (unless (or (string-empty-p result) (string-suffix-p "\n" result)) "\n") replacement "\n")))))
 
-(defun mevedel-memory-apply-changes (scope proposal)
+(cl-defun mevedel-memory-apply-changes (scope proposal)
   "Prepare complete patch changes for accepted PROPOSAL in original SCOPE.
 Each change includes :before and exact proposed bytes; writes also carry
 decoded :content for visited-buffer synchronization. No target is written.
+Shared-note actions return the note module's checked changes instead.
 The caller must persist these states and check every captured dependency,
 including unchanged indexes, before applying with workspace and target
 ownership. The patch transaction rechecks each change's expected snapshot."
@@ -80,8 +85,14 @@ ownership. The patch transaction rechecks each change's expected snapshot."
          (body (plist-get proposal :body))
          (before (plist-get proposal :before))
          (affected (delete-dups (append (list file) (plist-get proposal :merged-files)
-                                        (unless (eq action 'instructions) (list "MEMORY.md")))))
+                                        (unless (memq action (cons 'instructions mevedel-memory-proposal-note-actions))
+                                          (list "MEMORY.md")))))
          changes)
+    (when (mevedel-memory-proposal-note-action-p action)
+      (unless (and (eq (plist-get root :kind) 'notes)
+                   (equal (cdr (assoc file before)) (mevedel-memory-scope-before scope id file)))
+        (error "Shared-note proposal differs from its captured scope"))
+      (cl-return-from mevedel-memory-apply-changes (mevedel-memory-notes-changes proposal)))
     (unless (and (memq action '(promote update merge remove instructions))
                  (eq (eq action 'instructions) (eq (plist-get root :kind) 'instructions))
                  (stringp body) (not (string-search "\0" body))

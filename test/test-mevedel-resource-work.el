@@ -81,8 +81,8 @@
                 (snapshot (mevedel-journal-evidence-notes second)))
             (should (string-search "work://plans/current.md" listing))
             (should (string-search address listing))
-            (should (string-search address snapshot))
-            (should (string-search "other sessions" snapshot)))
+            ;; Consolidation reviews shared files directly, not through capture.
+            (should-not (string-search address snapshot)))
           (let ((roots (plist-get
                         (mevedel-resource-execute
                          (mevedel-resource-prepare 'grep "work://" (list :session first)))
