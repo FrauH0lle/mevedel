@@ -978,15 +978,33 @@ workspace root, and execution target — followed by a warning-face alert line
 only when session state is off-nominal: an unready target, an unavailable
 sandbox, a lease that is neither owned nor local, or a pending publication.
 The complete target and durability state is the `i Session info` panel, so
-nominal state costs the cockpit no lines. Cockpit surfaces are grouped as
-Conversation, History, Configure, and Cockpits.
+nominal state costs the cockpit no lines. Commands are grouped as
+Conversation, History, Configure, Workspace (Executions, Worktree, Artifacts,
+Memory), Collaborate (`S Share…`, `n New shared item`, Control) and Extend
+(Tools, Skills, Plugins). A frame at least 170 columns wide shows the six
+groups side by side; from 100 columns they form two rows of three, and
+narrower frames three rows of two. Data view, Session info, Usage, gptel menu
+and Help share one row beneath them, split in two below 72 columns. Every
+layout binds the same keys. Row values longer than 24 columns end in an
+ellipsis; their own surface shows them whole. Nominal values such as `none`,
+`writable`, `not shared` or an empty count are dimmed, so warnings and
+meaningful counts stand out.
+
+`S Share…` opens the Share surface, the menu form of `/collab`. Its header
+shows whether this session and the workspace lobby are shared. It shows this
+session's links or starts sharing it with `/collab`'s disclosure, stops this
+session's share only, reports status, and starts, stops or rotates the lobby.
+Rotating asks first, because every earlier lobby link stops working. Links
+appear only in the share panel with its QR code. The top row's `shared · N
+guests` is read from memory: opening the menu never loads collaboration,
+connects, or reads credentials.
 
 Information panels use read-only sections with theme-inheriting headings,
 aligned labels, and visual wrapping. `RET` on a heading folds its body; `TAB`
 and `S-TAB` visit headings and links, `n`/`p` move between sections, and `q`
 returns to the owner. Long supporting records can start folded; their complete
 text remains available. `g` refreshes reports with a live refresh source.
-`U Subscription usage` in Cockpits and `/usage` share one disposable report per
+`U Usage` in the cockpit and `/usage` share one disposable report per
 originating session. The report opens with a loading state and retrieves the
 current backend's account-wide quotas on opening or `g`, without polling. It
 shows the provider, available account/plan details and last successful retrieval
@@ -1230,6 +1248,9 @@ between all and attached artifacts. It opens an artifact locally (`o`, `e`),
 attaches it to the current session (`a`), views or restores a version (`v`),
 duplicates it into an independent artifact (`D`), opens its dedicated session
 (`c`), and deletes it with its versions, comments and dedicated session (`d`).
+`n` (also the session menu's `n New shared item`, or
+`M-x mevedel-artifacts-new-shared-item`) creates a whiteboard or document; see
+[shared editing](shared-editing.md).
 Whiteboards and documents are store artifacts too: `o` opens one in its editor
 in the session's room, or without a session in its dedicated session's room
 (see [shared editing](shared-editing.md)); `s` saves a version of one; `d`
@@ -1237,7 +1258,8 @@ deletes it through its editing queue (see
 [deleting](shared-editing.md#deleting)). Every change reaches the live rooms
 of the workspace. Everything except opening an item works with no
 room and no relay. The session menu's Artifacts row shows how many artifacts
-are attached to the session and how many the project has.
+are attached to the session out of how many the project has, as
+`ATTACHED/IN-PROJECT`.
 
 See [Browser artifact viewing](collaboration.md#artifact-viewing) for cards,
 on-demand transfer, sandboxed HTML, and supported formats.

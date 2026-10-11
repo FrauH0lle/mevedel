@@ -145,7 +145,7 @@ Chat / view
   mevedel-collaboration-editing.el browser shared editing and selection questions
   mevedel-collaboration-presence.el who else is on each guest's page; lobby counts
   mevedel-shared-conversation.el item-scoped request history from canonical live/archive turns
-  mevedel-shared-editing.el   private editor engine queue and leased store commits
+  mevedel-shared-editing.el   private editor engine queue, leased store commits, item creation
   mevedel-shared-library.el   host whiteboard element library and public Excalidraw collection
   mevedel-collaboration-projection.el canonical, retained browser transcript projection
   mevedel-collaboration-task.el browser task projection and publication
@@ -161,7 +161,7 @@ Chat / view
   mevedel-menu.el             session cockpit transient and model selection
   mevedel-gptel-bridge.el     view-launched gptel menu, restoration, and steering routing
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
-  mevedel-artifacts-list.el   artifacts cockpit: list, open, attach, versions, duplicate, delete
+  mevedel-artifacts-list.el   artifacts cockpit: list, create, open, attach, versions, duplicate, delete
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke
   mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing
   mevedel-instruction-registry.el workspace instruction buckets, IDs, links

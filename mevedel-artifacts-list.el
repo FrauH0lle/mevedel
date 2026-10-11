@@ -6,7 +6,9 @@
 ;; or from any project buffer (`mevedel-artifacts').  It lists, opens,
 ;; versions, duplicates and deletes store artifacts -- files, whiteboards and
 ;; documents -- and attaches them to the current session; live collaboration
-;; rooms of the workspace learn of each change.
+;; rooms of the workspace learn of each change.  It also creates whiteboards
+;; and documents (`mevedel-artifacts-new-shared-item'), which open in their
+;; browser editor.
 
 ;;; Code:
 
@@ -57,11 +59,14 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-workspace
                   "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-format-header
                   "mevedel-cockpit" (name scope state))
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
+(declare-function mevedel-cockpit-require-owner
+                  "mevedel-cockpit" (&optional label context))
 (declare-function mevedel-cockpit-setup-tabulated-surface
                   "mevedel-cockpit" (surface))
 (declare-function mevedel-cockpit-surface-context
@@ -75,9 +80,11 @@
 (autoload 'mevedel-cockpit-context-for-buffer "mevedel-cockpit")
 (autoload 'mevedel-cockpit-context-session "mevedel-cockpit")
 (autoload 'mevedel-cockpit-context-workspace "mevedel-cockpit")
+(autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-format-header "mevedel-cockpit")
 (autoload 'mevedel-cockpit-open-surface "mevedel-cockpit")
 (autoload 'mevedel-cockpit-quit "mevedel-cockpit" nil t)
+(autoload 'mevedel-cockpit-require-owner "mevedel-cockpit")
 (autoload 'mevedel-cockpit-setup-tabulated-surface "mevedel-cockpit")
 (autoload 'mevedel-cockpit-surface-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit" nil t)
@@ -85,14 +92,25 @@
 (autoload 'mevedel-cockpit-workspace-context "mevedel-cockpit")
 
 ;; `mevedel-collaboration'
+(declare-function mevedel-collaboration-item-opener
+                  "mevedel-collaboration" (&optional data-buffer))
 (declare-function mevedel-collaboration-open-shared-item
                   "mevedel-collaboration" (data-buffer id))
+(autoload 'mevedel-collaboration-item-opener "mevedel-collaboration")
 (autoload 'mevedel-collaboration-open-shared-item "mevedel-collaboration")
 
 ;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing-check-new "mevedel-shared-editing" (kind title))
+(declare-function mevedel-shared-editing-create "mevedel-shared-editing"
+                  (workspace kind title actor callback &rest keys))
 (declare-function mevedel-shared-editing-save-version
                   "mevedel-shared-editing" (workspace id &optional session-id))
+(declare-function mevedel-shared-editing-session-writable-p
+                  "mevedel-shared-editing" (buffer))
+(autoload 'mevedel-shared-editing-check-new "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-create "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-session-writable-p "mevedel-shared-editing")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-attached-artifacts "mevedel-structs" (cl-x) t)
@@ -100,6 +118,7 @@
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -361,6 +380,78 @@ progress, together with its comments and history."
   (interactive)
   (mevedel-cockpit-quit "artifacts cockpit"))
 
+
+;;
+;;; Creating whiteboards and documents
+
+(defun mevedel-artifacts-list--creation-owner ()
+  "Return (CONTEXT WORKSPACE SESSION DATA-BUFFER) for creating an item here.
+A session cockpit, the session menu or a session buffer creates for that
+session; anywhere else in a project, for the workspace alone.  A session
+that is read-only here refuses."
+  (let* ((context (or (condition-case nil (mevedel-cockpit-current-context)
+                        (user-error nil))
+                      (mevedel-cockpit-workspace-context
+                       (or (mevedel-workspace) (user-error "No mevedel workspace here"))
+                       (current-buffer))))
+         (session (mevedel-cockpit-context-session context))
+         (data (and session (mevedel-cockpit-context-data-buffer context))))
+    (mevedel-cockpit-require-owner "item creation" context)
+    (unless (mevedel-shared-editing-session-writable-p data)
+      (user-error "This session is read-only here; take control to create items"))
+    (list context (mevedel-artifacts-list--workspace context) session data)))
+
+(defun mevedel-artifacts-list--created (reply kind title workspace data opener)
+  "Report creating a KIND item titled TITLE from REPLY, then open it.
+WORKSPACE holds it; DATA is the session's data buffer, or nil to open it
+in the item's own conversation.  OPENER is from
+`mevedel-collaboration-item-opener'.  A created item is never discarded:
+a later failure is reported with its address."
+  (if-let* ((failure (plist-get reply :error)))
+      (message "mevedel: %s \"%s\" was not created: %s" kind title failure)
+    (let ((id (plist-get reply :id)))
+      (message "mevedel: created %s \"%s\" (shared://%s)" kind title id)
+      (when-let* ((failure (plist-get reply :attach-error)))
+        (message "mevedel: created shared://%s but it was not attached to this session: %s"
+                 id failure))
+      ;; Only a cockpit of the same store lists the item; selecting an id
+      ;; another store lacks would move its selection.
+      (when-let* ((cockpit (get-buffer mevedel-artifacts-list-buffer-name)))
+        (with-current-buffer cockpit
+          (ignore-errors
+            (when (equal (mevedel-workspace-root workspace)
+                         (mevedel-workspace-root (mevedel-artifacts-list--workspace)))
+              (mevedel-cockpit-surface-refresh id)))))
+      (condition-case err
+          (funcall opener (or data (mevedel-artifact-store-conversation workspace id)) id)
+        (error
+         (message "mevedel: created shared://%s \"%s\", but could not open it: %s"
+                  id title (error-message-string err)))))))
+
+;;;###autoload
+(defun mevedel-artifacts-new-shared-item (kind title)
+  "Create a KIND whiteboard or document titled TITLE and open its editor.
+From a session, its cockpits or its menu, the item is attached to that
+session and opens in its room; elsewhere in a project it opens in the
+item's own conversation.  The editor exists only in a room, so when that
+session is not shared this first asks, with `/collab''s disclosure, to
+share it.  Nothing is created when that is declined."
+  (interactive
+   (progn
+     (mevedel-artifacts-list--creation-owner)
+     (let ((kind (downcase (completing-read "New shared item: "
+                                            '("Document" "Whiteboard") nil t))))
+       (list kind (read-string (format "%s title: " (capitalize kind)))))))
+  (pcase-let* ((`(,_context ,workspace ,session ,data)
+                (mevedel-artifacts-list--creation-owner))
+               (title (mevedel-shared-editing-check-new kind title))
+               (opener (mevedel-collaboration-item-opener data)))
+    (mevedel-shared-editing-create
+     workspace kind title "Host"
+     (lambda (reply)
+       (mevedel-artifacts-list--created reply kind title workspace data opener))
+     :session session :buffer data)))
+
 (defconst mevedel-artifacts-list--surface
   `(:buffer-name ,mevedel-artifacts-list-buffer-name
     :label "artifacts cockpit"
@@ -380,6 +471,8 @@ progress, together with its comments and history."
     :details-buffer "*mevedel artifact details*"
     :keys (("o" "Open the selected artifact or shared item in a browser"
             mevedel-artifacts-list-open-browser)
+           ("n" "Create a whiteboard or document and open it"
+            mevedel-artifacts-new-shared-item)
            ("e" "Visit the selected artifact file in Emacs"
             mevedel-artifacts-list-visit)
            ("a" "Attach the selected artifact to this session"

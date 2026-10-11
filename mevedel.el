@@ -58,6 +58,7 @@
 ;; and transient suffix commands load with the owner that binds them.
 (autoload 'mevedel-abort "mevedel-chat" nil t)
 (autoload 'mevedel-artifacts "mevedel-artifacts-list" nil t)
+(autoload 'mevedel-artifacts-new-shared-item "mevedel-artifacts-list" nil t)
 (autoload 'mevedel-buddy-abort "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-clear-changes "mevedel-buddy" nil t)
 (autoload 'mevedel-buddy-dismiss-note "mevedel-buddy-note" nil t)

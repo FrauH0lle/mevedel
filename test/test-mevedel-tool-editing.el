@@ -73,6 +73,16 @@
 			     (should (eq 'success (plist-get reply :status)))
 			     (should (= 1 calls))
 			     (should (= 2 (length (mevedel-shared-editing-list workspace)))))
+				   ;; A blank title is refused before anything is queued.
+				   (setq reply nil)
+				   (mevedel-pipeline-run-tool-outcome tool (lambda (value) (setq reply value))
+								      '(:kind "document" :title "   "))
+				   (let ((deadline (+ (float-time) 10)))
+				     (while (and (not reply) (< (float-time) deadline))
+				       (accept-process-output nil 0.05)))
+				   (should (eq 'error (plist-get reply :status)))
+				   (should (string-match-p "1 to 200 characters" (format "%s" (plist-get reply :result))))
+				   (should (= 2 (length (mevedel-shared-editing-list workspace))))
 			   ;; Item leases, not the session's buffer, decide who may edit.
 			   (dolist (restriction '(plan deny))
 			     (setq reply nil)

@@ -532,6 +532,17 @@ running lobby touches no real state."
                  "/nonexistent/mevedel-lobby/")
                 :type 'user-error))
 
+(mevedel-deftest mevedel-collaboration-lobby-live-p
+  (:doc "reports only a live lobby of the given workspace")
+  (let ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+        (workspace (mevedel-workspace--create :root "/root/"))
+        (other (mevedel-workspace--create :root "/other/")))
+    (should-not (mevedel-collaboration-lobby-live-p nil))
+    (should-not (mevedel-collaboration-lobby-live-p workspace))
+    (puthash "/root/" (list :project "root") mevedel-collaboration-lobby--lobbies)
+    (should (mevedel-collaboration-lobby-live-p workspace))
+    (should-not (mevedel-collaboration-lobby-live-p other))))
+
 (mevedel-deftest mevedel-collaboration-lobby-start
   (:doc "starts one lobby per workspace whose links survive a restart")
   (mevedel-collaboration-lobby-test--with-root root

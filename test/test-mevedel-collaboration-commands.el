@@ -245,6 +245,49 @@
       (mevedel-collaboration-stop)
       (should (string-match-p "not active" (car messages))))))
 
+(mevedel-deftest mevedel-collaboration-stop-session
+  (:doc "stops only the given session's room, whatever other rooms are live")
+  (let* ((mine (generate-new-buffer " *stop-mine*"))
+         (other (generate-new-buffer " *stop-other*"))
+         (room (list :data-buffer other :session-label "other"))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+         stopped messages)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
+                   (lambda (stop-room reason) (push (cons stop-room reason) stopped)))
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (push (apply #'format format-string args) messages))))
+          (should-not (mevedel-collaboration-stop-session mine))
+          (should-not (mevedel-collaboration-stop-session nil))
+          (should-not stopped)
+          (should (string-match-p "not shared" (car messages)))
+          (should (mevedel-collaboration-stop-session other))
+          (should (equal (list (cons room 'user-stop)) stopped))
+          (should (string-match-p "stopped for other" (car messages))))
+      (kill-buffer mine)
+      (kill-buffer other))))
+
+(mevedel-deftest mevedel-collaboration-room-summary
+  (:doc "summarizes a session's room from memory, without its secrets")
+  (let* ((data (generate-new-buffer " *summary*"))
+         (guests (make-hash-table :test #'eql))
+         (room (list :data-buffer data :guests guests
+                     :link-full "http://example/#room.full-secret"))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry room)))
+    (unwind-protect
+        (progn
+          (should-not (mevedel-collaboration-room-summary nil))
+          (should (equal '(:guests 0) (mevedel-collaboration-room-summary data)))
+          (puthash 1 (list :name "Phone" :guest-id "a") guests)
+          (puthash 2 (list :name "Phone" :guest-id "a") guests)
+          (puthash 3 (list :name "Laptop" :guest-id "b") guests)
+          ;; Tabs of one browser are one guest.
+          (should (equal '(:guests 2) (mevedel-collaboration-room-summary data)))
+          (clrhash mevedel-collaboration--rooms)
+          (should-not (mevedel-collaboration-room-summary data)))
+      (kill-buffer data))))
+
 (mevedel-deftest mevedel-collaboration--room-for-overlay
   (:doc "resolves side-conversation interaction overlays to the parent session's room")
   (let* ((parent-data (generate-new-buffer " *collab-overlay-parent*"))
@@ -327,6 +370,55 @@
             (mevedel-collaboration-open-shared-item data-buffer "cd34")
             (should-not started)
             (should (equal "https://relay.example/?shared=cd34#room123456.secret" opened))))
+      (kill-buffer data-buffer))))
+
+(mevedel-deftest mevedel-collaboration-item-opener
+  (:doc "asks to share while preparing, then opens later without asking again")
+  (let ((session (mevedel-session--create :name "share"))
+        (data-buffer (generate-new-buffer " *collaboration-opener*"))
+        (room (list :session-label "share"
+                    :link-full "https://relay.example/#room123456.secret"))
+        live consent asked started opened)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-collaboration--room-for-buffer)
+                     (lambda (_) live))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (_) (setq asked (1+ (or asked 0))) consent))
+                    ((symbol-function 'mevedel-collaboration--start)
+                     (lambda (seen buffer)
+                       (should (eq session seen))
+                       (should (eq data-buffer buffer))
+                       (setq started t live room)
+                       room))
+                    ((symbol-function 'browse-url)
+                     (lambda (url &rest _) (setq opened url)))
+                    ((symbol-function 'message) #'ignore))
+            ;; Declining while preparing leaves nothing to open.
+            (should-error (mevedel-collaboration-item-opener data-buffer)
+                          :type 'user-error)
+            (should (= 1 asked))
+            (should-not (or started opened))
+            ;; Consent is asked once, up front; the opener itself never asks.
+            (setq consent t asked nil)
+            (let ((opener (mevedel-collaboration-item-opener)))
+              (should (= 1 asked))
+              (setq consent nil asked nil)
+              (funcall opener data-buffer "ab12")
+              (should-not asked)
+              (should started)
+              (should (equal "https://relay.example/?shared=ab12#room123456.secret"
+                             opened)))
+            ;; A session shared already opens without asking; if its room
+            ;; ends meanwhile, the opener refuses rather than reshare unasked.
+            (setq started nil opened nil)
+            (let ((opener (mevedel-collaboration-item-opener data-buffer)))
+              (should-not asked)
+              (setq live nil)
+              (should-error (funcall opener data-buffer "cd34") :type 'user-error)
+              (should-not (or started opened)))))
       (kill-buffer data-buffer))))
 
 (mevedel-deftest mevedel-cmd--collab

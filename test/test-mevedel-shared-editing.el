@@ -43,6 +43,96 @@
         (accept-process-output nil 0.05)))
     reply))
 
+(defun mevedel-shared-editing-test--create (workspace kind title &rest keys)
+  "Create a KIND item titled TITLE in WORKSPACE with KEYS; return the reply."
+  (let (reply)
+    (apply #'mevedel-shared-editing-create workspace kind title "Host"
+           (lambda (value) (setq reply value)) keys)
+    (mevedel-test--await 10 "creation settles" reply)
+    reply))
+
+(mevedel-deftest mevedel-shared-editing-create
+  (:quiet t)
+  ,test (test)
+  :doc "creates a titled item under one id, attaches it and saves the session's sidecar"
+  (mevedel-shared-editing-test--with-workspace
+    (let ((session (mevedel-session--create :name "main" :workspace workspace))
+          (data (generate-new-buffer " *create-data*"))
+          written)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-session-persistence-write-sidecar-now)
+                     (lambda (&rest args) (setq written args))))
+            (let* ((reply (mevedel-shared-editing-test--create
+                           workspace "document" "  Notes  " :session session :buffer data))
+                   (id (plist-get reply :id)))
+              (should-not (plist-get reply :error))
+              (should (mevedel-artifact-store-id-p id))
+              (should (equal (list id) (mevedel-shared-editing-ids workspace)))
+              (should (equal '(:kind document :title "Notes")
+                             (cl-subseq (mevedel-artifact-store-meta workspace id) 0 4)))
+              (should (equal (list id) (mevedel-session-attached-artifacts session)))
+              (should (equal (list session data) written))))
+        (kill-buffer data))))
+
+  :doc "refuses an invalid kind or title before queuing anything"
+  (mevedel-shared-editing-test--with-workspace
+    (dolist (bad '(("slides" "Deck") ("whiteboard" "   ") ("document" nil)))
+      (should-error (mevedel-shared-editing-create
+                     workspace (car bad) (cadr bad) "Host" #'ignore)
+                    :type 'user-error))
+    (should-error (mevedel-shared-editing-create
+                   workspace "document" (make-string 201 ?x) "Host" #'ignore)
+                  :type 'user-error)
+    (should-not (plist-get (mevedel-shared-editing--runtime workspace) :queue))
+    (should (equal "x" (mevedel-shared-editing-check-new "document" " x "))))
+
+  :doc "refuses a read-only session at once, and one that loses authority before commit"
+  (mevedel-shared-editing-test--with-workspace
+    (let ((session (mevedel-session--create :name "main" :workspace workspace))
+          (data (generate-new-buffer " *create-data*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer data
+              (setq-local mevedel-session--read-only-mode t))
+            (should-error (mevedel-shared-editing-create
+                           workspace "whiteboard" "Board" "Host" #'ignore
+                           :session session :buffer data)
+                          :type 'user-error)
+            (should-not (plist-get (mevedel-shared-editing--runtime workspace) :queue))
+            (with-current-buffer data
+              (setq-local mevedel-session--read-only-mode nil))
+            ;; Another client takes control while the create waits in the queue.
+            (let (reply)
+              (mevedel-shared-editing-create
+               workspace "whiteboard" "Board" "Host" (lambda (value) (setq reply value))
+               :session session :buffer data)
+              (with-current-buffer data
+                (setq-local mevedel-session--read-only-mode t))
+              (mevedel-test--await 10 "creation settles" reply)
+              (should (plist-get reply :error))
+              (should-not (mevedel-shared-editing-ids workspace))
+              (should-not (mevedel-session-attached-artifacts session))))
+        (kill-buffer data))))
+
+  :doc "a caller's ended authority creates nothing"
+  (mevedel-shared-editing-test--with-workspace
+    (should (plist-get (mevedel-shared-editing-test--create
+                        workspace "whiteboard" "Board" :authorize (lambda () nil))
+                       :error))
+    (should-not (mevedel-shared-editing-ids workspace)))
+
+  :doc "keeps a created item and reports a failed attachment instead of failing"
+  (mevedel-shared-editing-test--with-workspace
+    (let ((session (mevedel-session--create :name "main" :workspace workspace)))
+      (cl-letf (((symbol-function 'mevedel-artifact-store-attach)
+                 (lambda (&rest _) (error "Disk full"))))
+        (let ((reply (mevedel-shared-editing-test--create
+                      workspace "whiteboard" "Board" :session session)))
+          (should-not (plist-get reply :error))
+          (should (equal "Disk full" (plist-get reply :attach-error)))
+          (should (equal (list (plist-get reply :id))
+                         (mevedel-shared-editing-ids workspace))))))))
+
 (mevedel-deftest mevedel-shared-editing--send
   (:doc "Large helper requests use small UTF-8 writes without changing JSON framing")
   (let* ((args (list :title (concat (make-string 1020 ?x) "λ 🌱")

@@ -17,6 +17,8 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-cockpit)
+(require 'mevedel-collaboration)
+(require 'mevedel-collaboration-lobby)
 (require 'mevedel-report-test-support
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name))
@@ -53,6 +55,7 @@
 ;; `transient'
 (declare-function transient--emergency-exit "transient" (&optional id))
 (defvar transient--buffer-name)
+(defvar transient--suffixes)
 (defvar transient--transient-map)
 
 (defmacro mevedel-menu-test--with-model-backends (&rest body)
@@ -180,7 +183,11 @@
                     (with-current-buffer buffer
                       (call-interactively #'mevedel-menu)
                       (should (= collections 0))
-                      (should (string-match-p "7 pending.*cached" (mevedel-menu--memory-description))))
+                      ;; Two alerts fill the row; one leaves room for the marker.
+                      (should (string-match-p "7 pending, 1 recovery" (mevedel-menu--memory-description)))
+                      (setf (mevedel-workspace-memory-observation workspace)
+                            '(:at 0 :pending 7 :recovery 0 :unavailable 0))
+                      (should (string-match-p "7 pending (cached)" (mevedel-menu--memory-description))))
                   (transient--emergency-exit))))
             (setf (mevedel-workspace-memory-observation workspace) nil)
             (save-window-excursion
@@ -882,7 +889,16 @@
                   (mevedel-menu--plugins-description))))
         (should (string= "Worktree   main"
                          (substring-no-properties
-                          (mevedel-menu--worktree-description))))))))
+                          (mevedel-menu--worktree-description))))
+        ;; Nominal states are spelled out but dimmed.
+        (dolist (row (list (cons "Preset     none" #'mevedel-menu--preset-summary)
+                           (cons "Goal       none" #'mevedel-menu--goal-summary)
+                           (cons "Control    writable" #'mevedel-menu--control-summary)
+                           (cons "Artifacts  0/0" #'mevedel-menu--artifacts-description)))
+          (let ((text (funcall (cdr row))))
+            (should (string= (car row) (substring-no-properties text)))
+            (should (eq 'transient-inactive-value
+                        (get-text-property 11 'face text)))))))))
 
 (mevedel-deftest mevedel-menu--mode-choice-description ()
   ,test
@@ -1539,6 +1555,183 @@
                   (mevedel-request--create :session mevedel--session)))
     (with-current-buffer view-buf
       (should-not (mevedel-menu--abort-inapt-p)))))
+
+(defconst mevedel-menu-test--top-keys
+  '("RET" "a" "c" "r" "v" "N" "f" "F" "R" "D" "B" "m" "M" "P" "u" "G"
+    "x" "w" "A" "l" "S" "n" "C" "t" "s" "p" "d" "i" "U" "g" "?")
+  "Every key of the top cockpit.")
+
+(mevedel-deftest mevedel-menu--layout ()
+  ,test
+  (test)
+  :doc "chooses the arrangement from the frame width"
+  (dolist (case '((240 . wide) (170 . wide) (169 . medium) (100 . medium)
+                  (99 . narrow) (60 . narrow)))
+    (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) (car case))))
+      (should (eq (cdr case) (mevedel-menu--layout)))
+      (should (eq (< (car case) mevedel-menu--footer-width)
+                  (mevedel-menu--split-footer-p))))))
+
+(mevedel-deftest mevedel-menu--fit ()
+  ,test
+  (test)
+  :doc "shortens long row values so the layouts keep their widths"
+  (should (equal "gpt-5.5" (mevedel-menu--fit "gpt-5.5")))
+  (should (equal (make-string mevedel-menu--value-width ?x)
+                 (mevedel-menu--fit (make-string mevedel-menu--value-width ?x))))
+  (let ((long (mevedel-menu--fit "claude-opus-4-5-20251101-long-model-name")))
+    (should (= mevedel-menu--value-width (string-width long)))
+    (should (string-suffix-p "…" long)))
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local gptel-model 'claude-opus-4-5-20251101-long-model-name))
+    (with-current-buffer view-buf
+      (should (string-suffix-p "…" (substring-no-properties
+                                    (mevedel-menu--model-description)))))))
+
+(mevedel-deftest mevedel-menu--top ()
+  ,test
+  (test)
+  :doc "binds every key once in each layout and keeps utilities on their own rows"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+    (dolist (width '(200 120 80 60))
+      (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) width))
+                ;; Opening the menu shares nothing and starts no editor.
+                ((symbol-function 'mevedel-collaboration--start)
+                 (lambda (&rest _) (ert-fail "Menu started a share")))
+                ((symbol-function 'mevedel-collaboration-lobby--credentials)
+                 (lambda (&rest _) (ert-fail "Menu read lobby credentials")))
+                ((symbol-function 'mevedel-shared-editing--process)
+                 (lambda (&rest _) (ert-fail "Menu started the editing helper"))))
+        (save-window-excursion
+          (unwind-protect
+              (with-current-buffer view-buf
+                (call-interactively #'mevedel-menu)
+                (let ((keys (mapcar (lambda (suffix) (oref suffix key))
+                                    transient--suffixes)))
+                  (ert-info ((format "width %d keys %S" width keys))
+                    (dolist (key mevedel-menu-test--top-keys)
+                      (should (= 1 (cl-count key keys :test #'equal))))))
+                (let ((lines (split-string
+                              (with-current-buffer transient--buffer-name
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max)))
+                              "\n")))
+                  (ert-info ((format "width %d menu:\n%s" width
+                                     (string-join lines "\n")))
+                    ;; Groups stack instead of overflowing narrower frames.
+                    (should (cl-find-if (lambda (line)
+                                          (string-match-p
+                                           "Conversation.*History" line))
+                                        lines))
+                    (should (eq (>= width 100)
+                                (and (cl-find-if (lambda (line)
+                                                   (string-match-p
+                                                    "History.*Configure" line))
+                                                 lines)
+                                     t)))
+                    (should (eq (>= width 170)
+                                (and (cl-find-if (lambda (line)
+                                                   (string-match-p "Configure.*Extend" line))
+                                                 lines)
+                                     t)))
+                    (if (< width mevedel-menu--footer-width)
+                        (progn
+                          (should (cl-find-if (lambda (line)
+                                                (string-match-p "Data view.*Usage" line))
+                                              lines))
+                          (should-not (cl-find-if (lambda (line)
+                                                    (string-match-p "Usage.*Help" line))
+                                                  lines)))
+                      (should (cl-find-if (lambda (line)
+                                            (string-match-p
+                                             "Data view.*Session info.*Usage.*gptel menu.*Help"
+                                             line))
+                                          lines))))))
+            (transient--emergency-exit)))))
+    (with-current-buffer view-buf
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 4))))))
+
+(mevedel-deftest mevedel-menu--share-summary ()
+  ,test
+  (test)
+  :doc "shows the session's sharing state and guest count without its links"
+  (mevedel-menu-test--with-buffers
+    (let* ((guests (make-hash-table :test #'eql))
+           (room (list :data-buffer data-buf :guests guests
+                       :link-full "https://relay.example/#room.full-secret"))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry))
+           (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal)))
+      (with-current-buffer view-buf
+        (should (string= "Share…     not shared"
+                         (substring-no-properties (mevedel-menu--share-summary))))
+        (should (eq 'transient-inactive-value
+                    (get-text-property 11 'face (mevedel-menu--share-summary))))
+        (should (mevedel-menu--not-shared-p))
+        (should (mevedel-menu--lobby-down-p))
+        (puthash data-buf room mevedel-collaboration--rooms)
+        (puthash 1 (list :name "Phone" :guest-id "a") guests)
+        (should (string= "Share…     shared · 1 guest"
+                         (substring-no-properties (mevedel-menu--share-summary))))
+        (puthash (mevedel-workspace-root workspace) (list :project "p")
+                 mevedel-collaboration-lobby--lobbies)
+        (let ((header (substring-no-properties (mevedel-menu--share-description))))
+          (should (string-match-p "session shared · 1 guest · lobby shared" header))
+          (should-not (string-search "secret" header)))
+        (should-not (mevedel-menu--not-shared-p))
+        (should-not (mevedel-menu--lobby-down-p))))))
+
+(mevedel-deftest mevedel-menu--share ()
+  ,test
+  (test)
+  :doc "opens from the top menu and routes each action to its owner"
+  (mevedel-menu-test--with-buffers
+    (let (calls)
+      (cl-letf (((symbol-function 'transient-setup)
+                 (lambda (prefix &rest _) (push (list 'setup prefix) calls)))
+                ((symbol-function 'mevedel-collaboration-view)
+                 (lambda () (push (list 'view (current-buffer)) calls)))
+                ((symbol-function 'mevedel-collaboration-stop-session)
+                 (lambda (buffer) (push (list 'stop buffer) calls)))
+                ((symbol-function 'mevedel-collaboration-lobby)
+                 (lambda () (push (list 'lobby (current-buffer)) calls)))
+                ((symbol-function 'mevedel-collaboration-lobby-stop)
+                 (lambda () (push (list 'lobby-stop (current-buffer)) calls)))
+                ((symbol-function 'mevedel-collaboration-lobby-rotate)
+                 (lambda () (push (list 'rotate (current-buffer)) calls))))
+        (with-current-buffer view-buf
+          (mevedel-menu-open 'share)
+          (mevedel-menu--share-session)
+          (mevedel-menu--share-stop)
+          (mevedel-menu--share-lobby)
+          (mevedel-menu--share-lobby-stop)))
+      (should (equal (list (list 'setup 'mevedel-menu--share)
+                           (list 'view view-buf)
+                           (list 'stop data-buf)
+                           (list 'lobby data-buf)
+                           (list 'lobby-stop data-buf))
+                     (nreverse calls)))))
+
+  :doc "rotates the lobby links only after confirmation"
+  (mevedel-menu-test--with-buffers
+    (let (rotated messages)
+      (cl-letf (((symbol-function 'mevedel-collaboration-lobby-rotate)
+                 (lambda () (setq rotated (current-buffer)))))
+        (with-current-buffer view-buf
+          (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) nil)))
+            (mevedel-test--with-captured-messages messages
+              (mevedel-menu--share-lobby-rotate)))
+          (should-not rotated)
+          (should (string-match-p "lobby links kept" messages))
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (prompt)
+                       (should (string-match-p "stops working" prompt))
+                       t)))
+            (mevedel-menu--share-lobby-rotate))
+          (should (eq data-buf rotated)))))))
 
 (provide 'test-mevedel-menu)
 

@@ -553,6 +553,11 @@ rejoins with a fresh hello after a drop."
   (gethash (mevedel-workspace-root workspace)
            mevedel-collaboration-lobby--lobbies))
 
+(defun mevedel-collaboration-lobby-live-p (workspace)
+  "Return non-nil while WORKSPACE's lobby is shared.
+It is read from memory, so status displays may call it freely."
+  (and workspace (mevedel-collaboration-lobby--find workspace) t))
+
 (defun mevedel-collaboration-lobby--workspace (directory)
   "Return the workspace DIRECTORY belongs to, or signal `user-error'."
   (let ((dir (file-name-as-directory (expand-file-name directory))))

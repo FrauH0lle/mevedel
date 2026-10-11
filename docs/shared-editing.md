@@ -27,6 +27,21 @@ only in a room, so for a session that is not shared this first asks, with
 item's own conversation, its dedicated session, and the lobby's **Artifacts**
 tab does the same: a whiteboard or document opens in its editor there.
 
+`n` in the artifacts cockpit or the session menu, or
+`M-x mevedel-artifacts-new-shared-item`, creates one: it asks for Document
+or Whiteboard and a title, then opens the new item the same way. The sharing
+question comes before anything is created, so declining or cancelling a prompt
+leaves no item and no room; a creation that fails starts no room either. From
+a session the item is attached to it; elsewhere it opens in its own
+conversation. A read-only session refuses before asking, and one that loses
+control while the creation is queued creates nothing. Once created, an item is
+kept: a failure to attach or open it is reported with its `shared://ID`
+address. Creating records no version.
+
+Every creator -- the browser, the model's `SharedCreate` and Emacs -- applies
+the same rules: the kind is a whiteboard or a document, and the title,
+trimmed, has 1 to 200 characters.
+
 Documents use a continuous paper surface, serif body text, and grouped **Text**,
 **Lists**, and **Insert** menus. Room and editor controls share cool and warm
 palettes and system/light/dark appearance; changes follow the editor without

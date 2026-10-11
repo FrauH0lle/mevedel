@@ -18,6 +18,9 @@
 (require 'mevedel-transport)
 (require 'mevedel-utilities)
 
+;; `mevedel-session-persistence'
+(defvar mevedel-session--read-only-mode)
+
 (defcustom mevedel-shared-editing-node-program "node"
   "Node 22.4 or newer used for the packaged collaboration engine."
   :type 'string :group 'mevedel)
@@ -785,6 +788,58 @@ session makes them; CALLBACK runs in the buffer current now."
         (plist-put runtime :timer
                    (mevedel-transport-run-at-time 0 #'mevedel-shared-editing--drain runtime)))
       (lambda () (plist-put job :cancelled t)))))
+
+(defun mevedel-shared-editing-check-new (kind title)
+  "Return TITLE trimmed when a new KIND item may carry it, else signal.
+Every way of creating a whiteboard or document applies these rules."
+  (unless (member kind '("whiteboard" "document"))
+    (user-error "Choose a whiteboard or document"))
+  (let ((title (and (stringp title) (string-trim title))))
+    (unless (and title (> (length title) 0) (<= (length title) 200))
+      (user-error "An artifact title must contain 1 to 200 characters"))
+    title))
+
+(defun mevedel-shared-editing-session-writable-p (buffer)
+  "Return non-nil when BUFFER, a session's data buffer, may change it.
+A nil BUFFER names no session buffer, and leaves authority to the caller."
+  (or (null buffer)
+      (and (buffer-live-p buffer)
+           (not (with-current-buffer buffer
+                  (bound-and-true-p mevedel-session--read-only-mode))))))
+
+;;;###autoload
+(cl-defun mevedel-shared-editing-create (workspace kind title actor callback
+                                                   &key session buffer authorize commit)
+  "Create a KIND whiteboard or document titled TITLE in WORKSPACE as ACTOR.
+CALLBACK receives the editor's reply.  On success it also carries the new
+item's `:id', and `:attach-error' when attaching it to SESSION failed:
+the item exists either way.  BUFFER is SESSION's data buffer; with it the
+attachment is saved at once, and the session must stay writable here
+from now until the commit.  AUTHORIZE and COMMIT are as for
+`mevedel-shared-editing-call'.  Invalid input and a read-only session
+signal before anything is queued.  Return a cancellation function."
+  (setq title (mevedel-shared-editing-check-new kind title))
+  (unless (mevedel-shared-editing-session-writable-p buffer)
+    (user-error "This session is read-only here; take control to create items"))
+  ;; The id doubles as the operation id, so a retried create is idempotent.
+  (let ((id (mevedel-shared-editing--op-id)))
+    (mevedel-shared-editing-call
+     workspace (list :action "create" :id id :opId id :kind kind
+                     :title title :actor actor)
+     (lambda (reply)
+       (if (plist-get reply :error)
+           (funcall callback reply)
+         (setq reply (plist-put (copy-sequence reply) :id id))
+         (when session
+           (condition-case err
+               (mevedel-artifact-store-attach session id buffer)
+             (error (setq reply (plist-put reply :attach-error
+                                           (error-message-string err))))))
+         (funcall callback reply)))
+     (lambda ()
+       (and (mevedel-shared-editing-session-writable-p buffer)
+            (or (null authorize) (funcall authorize))))
+     commit)))
 
 (provide 'mevedel-shared-editing)
 ;;; mevedel-shared-editing.el ends here

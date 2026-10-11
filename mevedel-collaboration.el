@@ -1029,27 +1029,37 @@ returning the live room."
            (error nil))
          (signal (car error-data) (cdr error-data)))))))
 
+(defun mevedel-collaboration--load-room-modules ()
+  "Load the modules a room needs before one starts."
+  (require 'mevedel-collaboration-projection)
+  (require 'mevedel-collaboration-share)
+  (require 'mevedel-collaboration-transport))
+
+(defun mevedel-collaboration--confirm-share ()
+  "Ask to share a session through the relay; signal `user-error' if declined."
+  (unless (yes-or-no-p
+           (concat
+            "Share visible prompts, responses, paths, and tool results, which "
+            "may contain credentials or secrets, through the relay? Frames are "
+            "sealed end to end; the links are bearer credentials. "))
+    (user-error "Collaboration not started")))
+
+(defun mevedel-collaboration--data-buffer-session (data-buffer)
+  "Return DATA-BUFFER's session, or signal `user-error'."
+  (or (and (buffer-live-p data-buffer)
+           (buffer-local-value 'mevedel--session data-buffer))
+      (user-error "No active mevedel session in this buffer")))
+
 (defun mevedel-collaboration--room-or-start (data-buffer)
   "Return (ROOM . STARTED) for DATA-BUFFER's room.
 Without a room, start one after the user consents; STARTED is then t."
-  (require 'mevedel-collaboration-projection)
-  (require 'mevedel-collaboration-share)
-  (require 'mevedel-collaboration-transport)
-  (let ((session (and (buffer-live-p data-buffer)
-                      (buffer-local-value 'mevedel--session data-buffer)))
+  (mevedel-collaboration--load-room-modules)
+  (let ((session (mevedel-collaboration--data-buffer-session data-buffer))
         (room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (unless session
-      (user-error "No active mevedel session in this buffer"))
-    (cond
-     (room (cons room nil))
-     ((not
-       (yes-or-no-p
-        (concat
-         "Share visible prompts, responses, paths, and tool results, which "
-         "may contain credentials or secrets, through the relay? Frames are "
-         "sealed end to end; the links are bearer credentials. ")))
-      (user-error "Collaboration not started"))
-     (t (cons (mevedel-collaboration--start session data-buffer) t)))))
+    (if room
+        (cons room nil)
+      (mevedel-collaboration--confirm-share)
+      (cons (mevedel-collaboration--start session data-buffer) t))))
 
 (defun mevedel-collaboration-view ()
   "Start live collaboration, or report the active room's links."
@@ -1058,18 +1068,45 @@ Without a room, start one after the user consents; STARTED is then t."
    (car (mevedel-collaboration--room-or-start
          (mevedel-collaboration--current-data-buffer)))))
 
+(defun mevedel-collaboration-item-opener (&optional data-buffer)
+  "Settle now that a shared item may open in a browser; return its opener.
+The editor exists only in a room.  Unless DATA-BUFFER's session is shared
+already, this asks now, with `/collab''s disclosure, to share the
+session the item will open in; nil DATA-BUFFER stands for a session that
+does not exist yet.  Declining signals `user-error'.
+
+The opener takes a data buffer and an item ID.  It opens the item in
+that buffer's room with the full-control link, as the host itself,
+starting the room under the consent given here.  It never asks, so it
+may run later from a timer; a room that ended meanwhile without consent
+having been given is refused rather than reshared."
+  (mevedel-collaboration--load-room-modules)
+  (let ((consented
+         (unless (and data-buffer
+                      (mevedel-collaboration--data-buffer-session data-buffer)
+                      (mevedel-collaboration--room-for-buffer data-buffer))
+           (mevedel-collaboration--confirm-share)
+           t)))
+    (lambda (buffer id)
+      (let ((session (mevedel-collaboration--data-buffer-session buffer))
+            (room (mevedel-collaboration--room-for-buffer buffer))
+            started)
+        (unless room
+          (unless consented
+            (user-error "This session is no longer shared; open the item again"))
+          (setq room (mevedel-collaboration--start session buffer)
+                started t))
+        ;; The viewer opens `?shared=ID' directly as that item's editor tab.
+        (browse-url (mevedel-collaboration-item-link (plist-get room :link-full) id))
+        (when started
+          (message "mevedel: sharing %s; /collab stop ends the room"
+                   (plist-get room :session-label)))))))
+
 (defun mevedel-collaboration-open-shared-item (data-buffer id)
   "Open the workspace's shared item ID in DATA-BUFFER's room in a web browser.
 The editor exists only in a room, so without one this asks to start
-sharing the session first.  The browser joins with the full-control
-link, as the host itself."
-  (pcase-let ((`(,room . ,started)
-               (mevedel-collaboration--room-or-start data-buffer)))
-    ;; The viewer opens `?shared=ID' directly as that item's editor tab.
-    (browse-url (mevedel-collaboration-item-link (plist-get room :link-full) id))
-    (when started
-      (message "mevedel: sharing %s; /collab stop ends the room"
-               (plist-get room :session-label)))))
+sharing the session first."
+  (funcall (mevedel-collaboration-item-opener data-buffer) data-buffer id))
 
 (defun mevedel-collaboration-stop ()
   "Stop the current session's share, or every share outside a session.
@@ -1081,12 +1118,8 @@ never touched: that is a report, not a teardown."
     (cond
      ((null rooms)
       (message "mevedel: collaboration is not active"))
-     ((when-let* ((room (mevedel-collaboration--room-for-buffer
-                         data-buffer)))
-        (mevedel-collaboration--stop-internal room 'user-stop)
-        (message "mevedel: collaboration stopped for %s"
-                 (plist-get room :session-label))
-        t))
+     ((mevedel-collaboration--room-for-buffer data-buffer)
+      (mevedel-collaboration-stop-session data-buffer))
      (data-buffer
       (message "mevedel: no active share for this session; %d share%s live elsewhere"
                (length rooms) (if (= 1 (length rooms)) "" "s")))
@@ -1095,6 +1128,32 @@ never touched: that is a report, not a teardown."
         (mevedel-collaboration--stop-internal room 'user-stop))
       (message "mevedel: stopped %d collaboration share%s"
                (length rooms) (if (= 1 (length rooms)) "" "s"))))))
+
+(defun mevedel-collaboration-stop-session (data-buffer)
+  "Stop the share of DATA-BUFFER's session; return non-nil if one stopped.
+No other session's share is touched, whichever are live."
+  (if-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+      (progn
+        (mevedel-collaboration--stop-internal room 'user-stop)
+        (message "mevedel: collaboration stopped for %s"
+                 (plist-get room :session-label))
+        t)
+    (message "mevedel: this session is not shared")
+    nil))
+
+(defun mevedel-collaboration-room-summary (data-buffer)
+  "Return a summary of DATA-BUFFER's live room, or nil when it is not shared.
+The plist holds `:guests', the number of distinct guests connected.  It is
+read from memory, so status displays may call it freely; it never carries
+a bearer link."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (let (ids)
+      (when-let* ((guests (plist-get room :guests)))
+        (maphash (lambda (peer guest)
+                   (cl-pushnew (or (plist-get guest :guest-id) peer) ids
+                               :test #'equal))
+                 guests))
+      (list :guests (length ids)))))
 
 (defun mevedel-collaboration--room-status (room)
   "Return a status line for ROOM without exposing its secrets."

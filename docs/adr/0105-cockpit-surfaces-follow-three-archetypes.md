@@ -29,6 +29,13 @@ Repeat-heavy view navigation has a sticky submenu. Segment, display, and query
 motion reuse view key meanings such as `n`, `p`, and TAB. The
 [view manual](../view.md) describes user navigation and surface ownership.
 
+The top session menu keeps its columns balanced: six groups of three to six
+verbs, arranged by frame width (six across, two rows of three, or three rows
+of two), with utilities in one row beneath them. Each group is defined once
+and every layout binds the same keys. Row values are capped in width and
+nominal values are dimmed. A related family of actions with its own state,
+such as sharing, gets a submenu behind one key rather than a column of rows.
+
 Information panels share `mevedel-report.el`. Owners supply exact content and
 explicit section identities, and retain responsibility for validation and actions.
 The renderer owns only faces, visual wrapping, folds, reading positions and
@@ -69,6 +76,15 @@ reduce relearning across surfaces, while resource actions remain explicit.
 - **Navigation moved from closing top-level commands into a sticky submenu.**
   Repeated motion had required six menu openings where one now suffices. Matching
   the existing view keys replaced a second vocabulary for the same commands.
+- **The catch-all Cockpits column was split into balanced groups.** It had
+  grown to fifteen rows beside columns of five, so the menu was as tall as
+  that one column. It mixed stateful surfaces with toggles and links, and
+  collaboration had no place at all: `/collab` and creating a whiteboard or
+  document were missing from the menu. Six groups, a utility row and a Share
+  submenu left existing keys unchanged. A single fixed arrangement overflowed
+  narrow frames because Transient rows do not wrap, so the arrangement follows
+  the frame width. Transient levels, which would have hidden rows, were
+  rejected because the menu is the live key reference.
 
 - **Information panels gained section structure.** Long memory reports mixed
   decisions, raw identifiers, diffs and evidence into one crowded block; even

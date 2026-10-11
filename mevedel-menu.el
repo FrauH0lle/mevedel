@@ -28,6 +28,7 @@
                   "mevedel-artifacts-list" (&optional context))
 (autoload 'mevedel-artifacts-list-count "mevedel-artifacts-list")
 (autoload 'mevedel-artifacts-list-open "mevedel-artifacts-list")
+(autoload 'mevedel-artifacts-new-shared-item "mevedel-artifacts-list" nil t)
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-call-in-data
@@ -48,6 +49,28 @@
                   "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-show-help
                   "mevedel-cockpit" (buffer text))
+
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration-room-summary
+                  "mevedel-collaboration" (data-buffer))
+(declare-function mevedel-collaboration-status "mevedel-collaboration" ())
+(declare-function mevedel-collaboration-stop-session
+                  "mevedel-collaboration" (data-buffer))
+(declare-function mevedel-collaboration-view "mevedel-collaboration" ())
+(autoload 'mevedel-collaboration-status "mevedel-collaboration" nil t)
+(autoload 'mevedel-collaboration-stop-session "mevedel-collaboration")
+(autoload 'mevedel-collaboration-view "mevedel-collaboration" nil t)
+
+;; `mevedel-collaboration-lobby'
+(declare-function mevedel-collaboration-lobby "mevedel-collaboration-lobby" ())
+(declare-function mevedel-collaboration-lobby-live-p
+                  "mevedel-collaboration-lobby" (workspace))
+(declare-function mevedel-collaboration-lobby-rotate
+                  "mevedel-collaboration-lobby" ())
+(declare-function mevedel-collaboration-lobby-stop "mevedel-collaboration-lobby" ())
+(autoload 'mevedel-collaboration-lobby "mevedel-collaboration-lobby" nil t)
+(autoload 'mevedel-collaboration-lobby-rotate "mevedel-collaboration-lobby" nil t)
+(autoload 'mevedel-collaboration-lobby-stop "mevedel-collaboration-lobby" nil t)
 
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact"
@@ -336,9 +359,19 @@
   "Return TEXT as an inactive cockpit state value."
   (mevedel-menu--face text 'transient-inactive-value))
 
+(defconst mevedel-menu--value-width 24
+  "Most columns a top menu row's state value takes.
+Longer values end in an ellipsis; their surface shows them whole.  The
+layout widths in `mevedel-menu--layout-widths' assume this bound.")
+
+(defun mevedel-menu--fit (text)
+  "Return TEXT shortened to `mevedel-menu--value-width' columns."
+  (truncate-string-to-width (format "%s" text) mevedel-menu--value-width
+                            nil nil "…"))
+
 (defun mevedel-menu--state-description (label value &optional face)
   "Return a padded cockpit row for LABEL and state VALUE."
-  (format "%-10s %s" label (mevedel-menu--value value face)))
+  (format "%-10s %s" label (mevedel-menu--value (mevedel-menu--fit value) face)))
 
 (defun mevedel-menu--mode-symbol (&optional session data-buffer surface-buffer)
   "Return the effective permission mode for the cockpit context."
@@ -505,8 +538,62 @@ The complete target and durability state lives in the session info panel."
 
 (defun mevedel-menu--control-summary ()
   "Return the top-level cockpit entry description for session control."
-  (format "%-10s %s" "Control"
-          (if (mevedel-menu--read-only-p) "read-only" "writable")))
+  (if (mevedel-menu--read-only-p)
+      (mevedel-menu--state-description "Control" "read-only" 'warning)
+    (mevedel-menu--state-description "Control" "writable" 'transient-inactive-value)))
+
+(defun mevedel-menu--share-state ()
+  "Return the current session's sharing summary, or nil when it is not shared.
+Read from memory only: rendering the menu never loads collaboration,
+connects, or touches a bearer link."
+  (when (featurep 'mevedel-collaboration)
+    (mevedel-collaboration-room-summary
+     (mevedel-cockpit-context-data-buffer (mevedel-menu--context)))))
+
+(defun mevedel-menu--lobby-live-p ()
+  "Return non-nil while the current workspace's lobby is shared."
+  (and (featurep 'mevedel-collaboration-lobby)
+       (mevedel-collaboration-lobby-live-p
+        (mevedel-cockpit-context-workspace (mevedel-menu--context)))))
+
+(defun mevedel-menu--share-label (summary)
+  "Return the sharing state label for room SUMMARY."
+  (if summary
+      (let ((guests (plist-get summary :guests)))
+        (format "shared · %d guest%s" guests (if (= guests 1) "" "s")))
+    "not shared"))
+
+(defun mevedel-menu--share-summary ()
+  "Return the top-level Share row description."
+  (let ((summary (mevedel-menu--share-state)))
+    (mevedel-menu--state-description
+     "Share…" (mevedel-menu--share-label summary)
+     (unless summary 'transient-inactive-value))))
+
+(defun mevedel-menu--share-description ()
+  "Return the Share surface header."
+  (let ((summary (mevedel-menu--share-state))
+        (lobby (mevedel-menu--lobby-live-p)))
+    (concat
+     (mevedel-menu--face "share" 'transient-heading)
+     " session "
+     (mevedel-menu--value (mevedel-menu--share-label summary)
+                          (unless summary 'transient-inactive-value))
+     " · lobby "
+     (mevedel-menu--value (if lobby "shared" "not shared")
+                          (unless lobby 'transient-inactive-value))
+     "\n"
+     (mevedel-menu--face
+      "Links are bearer credentials; their panel shows a QR code and copies them."
+      'transient-inactive-value))))
+
+(defun mevedel-menu--not-shared-p ()
+  "Return non-nil when the current session is not shared."
+  (not (mevedel-menu--share-state)))
+
+(defun mevedel-menu--lobby-down-p ()
+  "Return non-nil when the current workspace's lobby is not shared."
+  (not (mevedel-menu--lobby-live-p)))
 
 (defun mevedel-menu--control-description ()
   "Return the control surface header.
@@ -620,7 +707,7 @@ unavailable until it changes."
 
 (defun mevedel-menu--model-description ()
   "Return the top-level model row description."
-  (let ((model (mevedel-menu--model-label)))
+  (let ((model (mevedel-menu--fit (mevedel-menu--model-label))))
     (format "%-10s %s"
             "Model"
             (if (string= model "none")
@@ -662,10 +749,13 @@ unavailable until it changes."
      (cond ((null counts) "not checked")
            ((>= (- (float-time) (plist-get counts :at)) 10)
             (concat (if labels (string-join labels ", ") "no alerts") " (cached)"))
-           (t (string-join labels ", ")))
-     (when (or (> (or (plist-get counts :recovery) 0) 0)
-               (> (or (plist-get counts :unavailable) 0) 0))
-       'warning))))
+           (labels (string-join labels ", "))
+           (t "no alerts"))
+     (cond ((or (> (or (plist-get counts :recovery) 0) 0)
+                (> (or (plist-get counts :unavailable) 0) 0))
+            'warning)
+           ;; Nothing to act on is not worth the reader's attention.
+           ((null labels) 'transient-inactive-value)))))
 
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
@@ -685,13 +775,15 @@ unavailable until it changes."
      (if (> count 0) 'warning 'transient-inactive-value))))
 
 (defun mevedel-menu--artifacts-description ()
-  "Return the top-level artifacts row description."
+  "Return the top-level artifacts row description.
+The value reads ATTACHED/IN-PROJECT: artifacts attached to this session,
+out of the project's store."
   (let* ((session (mevedel-cockpit-context-session
                    (mevedel-menu--context)))
          (counts (mevedel-artifacts-list-count session)))
     (mevedel-menu--state-description
      "Artifacts"
-     (format "%d attached · %d in project" (car counts) (cdr counts))
+     (format "%d/%d" (car counts) (cdr counts))
      (if (> (car counts) 0) 'warning 'transient-inactive-value))))
 
 (defun mevedel-menu--skills-description ()
@@ -704,19 +796,37 @@ unavailable until it changes."
 
 (defun mevedel-menu--plugins-description ()
   "Return the top-level plugins row description."
-  (let ((workspace (mevedel-cockpit-context-workspace
-                    (mevedel-menu--context))))
+  (let* ((workspace (mevedel-cockpit-context-workspace
+                     (mevedel-menu--context)))
+         (label (mevedel-plugins-count-label workspace)))
     (mevedel-menu--state-description
-     "Plugins" (mevedel-plugins-count-label workspace) 'warning)))
+     "Plugins" label
+     (if (string-suffix-p "/0" label) 'transient-inactive-value 'warning))))
 
 (defun mevedel-menu--worktree-description ()
   "Return the top-level worktree row description."
-  (let ((worktree (mevedel-menu--worktree-label)))
+  (let ((worktree (mevedel-menu--fit (mevedel-menu--worktree-label))))
     (format "%-10s %s"
             "Worktree"
             (if (string= worktree "not-git")
                 (mevedel-menu--inactive-value worktree)
               (mevedel-menu--value worktree)))))
+
+(defun mevedel-menu--preset-summary ()
+  "Return the top-level preset row description."
+  (let ((preset (mevedel-session-preset-name
+                 (mevedel-cockpit-context-session (mevedel-menu--context)))))
+    (if preset
+        (mevedel-menu--state-description "Preset" preset)
+      (mevedel-menu--state-description "Preset" "none" 'transient-inactive-value))))
+
+(defun mevedel-menu--goal-summary ()
+  "Return the top-level Goal row description."
+  (if-let* ((goal (mevedel-menu--current-goal)))
+      (mevedel-menu--state-description
+       "Goal" (format "%s, %d turns" (mevedel-goal-status goal)
+                      (mevedel-goal-turns-run goal)))
+    (mevedel-menu--state-description "Goal" "none" 'transient-inactive-value)))
 
 (defun mevedel-menu--current-goal ()
   "Return the current session Goal, or nil."
@@ -1094,6 +1204,8 @@ asked, such as a collaboration guest's turn."
        (transient-setup 'mevedel-menu--goal))
       ('control
        (transient-setup 'mevedel-menu--control))
+      ('share
+       (transient-setup 'mevedel-menu--share))
       ('preset
        (transient-setup 'mevedel-menu--preset))
       ('skills
@@ -1355,6 +1467,47 @@ nothing to restore."
   (interactive)
   (mevedel-menu-open 'control))
 
+(defun mevedel-menu--open-share ()
+  "Open the Share cockpit surface."
+  (interactive)
+  (mevedel-menu-open 'share))
+
+(defun mevedel-menu--share-session ()
+  "Show this session's share links, first sharing it after confirmation."
+  (interactive)
+  (mevedel-menu--call-in-view #'mevedel-collaboration-view))
+
+(defun mevedel-menu--share-stop ()
+  "Stop sharing this session, leaving every other share running."
+  (interactive)
+  (mevedel-collaboration-stop-session
+   (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
+
+(defun mevedel-menu--share-status ()
+  "Report every live share and lobby without exposing their links."
+  (interactive)
+  (mevedel-collaboration-status))
+
+(defun mevedel-menu--share-lobby ()
+  "Show this workspace's lobby links, first sharing it after confirmation."
+  (interactive)
+  (mevedel-cockpit-call-in-data (mevedel-menu--context) #'mevedel-collaboration-lobby))
+
+(defun mevedel-menu--share-lobby-stop ()
+  "Stop this workspace's lobby."
+  (interactive)
+  (mevedel-cockpit-call-in-data (mevedel-menu--context)
+                                #'mevedel-collaboration-lobby-stop))
+
+(defun mevedel-menu--share-lobby-rotate ()
+  "Replace this workspace's lobby links after confirmation."
+  (interactive)
+  (if (yes-or-no-p (concat "Replace the lobby links? Every earlier lobby link "
+                           "stops working, including ones already handed out. "))
+      (mevedel-cockpit-call-in-data (mevedel-menu--context)
+                                    #'mevedel-collaboration-lobby-rotate)
+    (message "mevedel: lobby links kept")))
+
 (defun mevedel-menu--open-session-info ()
   "Open the session info panel."
   (interactive)
@@ -1382,7 +1535,7 @@ nothing to restore."
         :sections (list (list :id 'help-0 :title "Session cockpit"
 			      :body (string-join (list "The transient menu is the live key reference for session commands.") "\n"))
 			(list :id 'help-1 :title "Slash commands that open UI"
-			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Artifacts" "Cockpit i                   Session info panel" "/usage, Cockpit U           Subscription usage" "/tools, /tools list         Tools" "/ps                         Live executions" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
+			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Artifacts (attached/in project)" "Cockpit n                   New whiteboard or document" "/collab, Cockpit S          Share links, status, lobby" "Cockpit i                   Session info panel" "/usage, Cockpit U           Subscription usage" "/tools, /tools list         Tools" "/ps                         Live executions" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
 			(list :id 'help-2 :title "Direct slash commands"
 			      :body (string-join (list "/plugin enable NAME, disable NAME, reload, update NAME" "/plugin install TARGET, remove NAME, uninstall NAME, hooks ..." "/skills enable NAME, disable NAME, help NAME" "/mode MODE, /model MODEL" "/worktree create [NAME] [--for \"purpose\"] [--clean]" "/goal OBJECTIVE, /goal budget N|none, /goal edit|pause|resume|clear" "/compact, /remember [focus], /review, /verify, /edits, /clear, /init ..., /tokens") "\n"))
 			(list :id 'help-3 :title "Modes"
@@ -1403,71 +1556,185 @@ nothing to restore."
 ;;
 ;;; Transient
 
-(transient-define-prefix mevedel-menu--top ()
-  "Top-level mevedel session cockpit."
-  [:description mevedel-menu--header
-   ["Conversation"
-    :pad-keys t
-    ("RET" "Send" mevedel-menu--send
-     :inapt-if mevedel-menu--send-inapt-p)
-    ("a" "Abort" mevedel-menu--abort
-     :inapt-if mevedel-menu--abort-inapt-p)
-    ("c" "Compact" mevedel-menu--compact)
-    ("r" "Review" mevedel-menu--review)
-    ("v" "Verify" mevedel-menu--verify)]
-   ["History"
-    :pad-keys t
-    ("N" "Navigate…" mevedel-menu--open-navigate)
-    ("f" "Fork conversation" mevedel-menu--fork-conversation-here)
-    ("F" "Fork worktree" mevedel-menu--fork-worktree-here)
-    ("R" "Rewind here" mevedel-menu--rewind-here)
-    ("D" "Redo…" mevedel-menu--redo
-     :inapt-if mevedel-menu--redo-inapt-p)
-    ("B" "Switch variant" mevedel-menu--switch-variant-here)]
-   ["Configure"
-    :pad-keys t
-    ("m" mevedel-menu--open-mode
-     :description mevedel-menu--mode-description)
-    ("M" mevedel-menu--open-model
-     :description mevedel-menu--model-description)
-    ("P" mevedel-menu--open-preset
-     :description (lambda () (format "%-10s %s" "Preset"
-                                     (or (mevedel-session-preset-name
-                                          (mevedel-cockpit-context-session
-                                           (mevedel-menu--context)))
-                                         "none"))))
-    ("u" "Permissions" mevedel-menu--open-permissions)
-    ("G" mevedel-menu--open-goal
-     :description (lambda () (format "%-10s %s" "Goal"
-                                     (if-let* ((goal (mevedel-menu--current-goal)))
-                                         (format "%s, %d turns"
-                                                 (mevedel-goal-status goal)
-                                                 (mevedel-goal-turns-run goal))
-                                       "none"))))]
-   ["Cockpits"
-    :pad-keys t
-    ("l" mevedel-menu--open-memory :description mevedel-menu--memory-description)
-    ("t" mevedel-menu--open-tools
-     :description mevedel-menu--tools-description)
-    ("x" mevedel-menu--open-executions
-     :description mevedel-menu--executions-description)
-    ("A" mevedel-menu--open-artifacts
-     :description mevedel-menu--artifacts-description)
-    ("s" mevedel-menu--open-skills
-     :description mevedel-menu--skills-description)
-    ("p" mevedel-menu--open-plugins
-     :description mevedel-menu--plugins-description)
-    ("w" mevedel-menu--open-worktree
-     :description mevedel-menu--worktree-description)
-    ("C" mevedel-menu--open-control
-     :description mevedel-menu--control-summary)
-    ("d" "Data view" mevedel-menu--toggle-data-view)
-    ("U" "Subscription usage" mevedel-subscription-usage-show)
+;;;; Top menu layout
+
+(defconst mevedel-menu--layout-widths '((wide . 170) (medium . 100))
+  "Smallest frame widths, in columns, of the wider top menu layouts.
+Wide shows the six groups side by side, medium in two rows of three,
+and anything narrower in three rows of two.")
+
+(defconst mevedel-menu--footer-width 72
+  "Smallest frame width, in columns, that fits the utilities on one row.")
+
+(defun mevedel-menu--layout ()
+  "Return the top menu layout for the selected frame.
+The value is `wide', `medium' or `narrow'; see
+`mevedel-menu--layout-widths'."
+  (let ((width (frame-width)))
+    (cond ((>= width (alist-get 'wide mevedel-menu--layout-widths)) 'wide)
+          ((>= width (alist-get 'medium mevedel-menu--layout-widths)) 'medium)
+          (t 'narrow))))
+
+(defun mevedel-menu--wide-p ()
+  "Return non-nil when the top menu shows its groups side by side."
+  (eq (mevedel-menu--layout) 'wide))
+
+(defun mevedel-menu--medium-p ()
+  "Return non-nil when the top menu shows two rows of three groups."
+  (eq (mevedel-menu--layout) 'medium))
+
+(defun mevedel-menu--narrow-p ()
+  "Return non-nil when the top menu shows three rows of two groups."
+  (eq (mevedel-menu--layout) 'narrow))
+
+(defun mevedel-menu--split-footer-p ()
+  "Return non-nil when the utilities need two rows."
+  (< (frame-width) mevedel-menu--footer-width))
+
+;; Each group is defined once and arranged by the width-dependent layouts
+;; below; only one layout is active, so every key is bound exactly once.
+
+(transient-define-group mevedel-menu--conversation-group
+  ["Conversation"
+   :pad-keys t
+   ("RET" "Send" mevedel-menu--send
+    :inapt-if mevedel-menu--send-inapt-p)
+   ("a" "Abort" mevedel-menu--abort
+    :inapt-if mevedel-menu--abort-inapt-p)
+   ("c" "Compact" mevedel-menu--compact)
+   ("r" "Review" mevedel-menu--review)
+   ("v" "Verify" mevedel-menu--verify)])
+
+(transient-define-group mevedel-menu--history-group
+  ["History"
+   :pad-keys t
+   ("N" "Navigate…" mevedel-menu--open-navigate)
+   ("f" "Fork conversation" mevedel-menu--fork-conversation-here)
+   ("F" "Fork worktree" mevedel-menu--fork-worktree-here)
+   ("R" "Rewind here" mevedel-menu--rewind-here)
+   ("D" "Redo…" mevedel-menu--redo
+    :inapt-if mevedel-menu--redo-inapt-p)
+   ("B" "Switch variant" mevedel-menu--switch-variant-here)])
+
+(transient-define-group mevedel-menu--configure-group
+  ["Configure"
+   :pad-keys t
+   ("m" mevedel-menu--open-mode
+    :description mevedel-menu--mode-description)
+   ("M" mevedel-menu--open-model
+    :description mevedel-menu--model-description)
+   ("P" mevedel-menu--open-preset
+    :description mevedel-menu--preset-summary)
+   ("u" "Permissions" mevedel-menu--open-permissions)
+   ("G" mevedel-menu--open-goal
+    :description mevedel-menu--goal-summary)])
+
+(transient-define-group mevedel-menu--workspace-group
+  ["Workspace"
+   :pad-keys t
+   ("x" mevedel-menu--open-executions
+    :description mevedel-menu--executions-description)
+   ("w" mevedel-menu--open-worktree
+    :description mevedel-menu--worktree-description)
+   ("A" mevedel-menu--open-artifacts
+    :description mevedel-menu--artifacts-description)
+   ("l" mevedel-menu--open-memory
+    :description mevedel-menu--memory-description)])
+
+(transient-define-group mevedel-menu--collaborate-group
+  ["Collaborate"
+   :pad-keys t
+   ("S" mevedel-menu--open-share
+    :description mevedel-menu--share-summary)
+   ("n" "New shared item" mevedel-artifacts-new-shared-item
+    :inapt-if mevedel-menu--read-only-p)
+   ("C" mevedel-menu--open-control
+    :description mevedel-menu--control-summary)])
+
+(transient-define-group mevedel-menu--extend-group
+  ["Extend"
+   :pad-keys t
+   ("t" mevedel-menu--open-tools
+    :description mevedel-menu--tools-description)
+   ("s" mevedel-menu--open-skills
+    :description mevedel-menu--skills-description)
+   ("p" mevedel-menu--open-plugins
+    :description mevedel-menu--plugins-description)])
+
+(defconst mevedel-menu--utilities
+  '(("d" "Data view" mevedel-menu--toggle-data-view)
     ("i" "Session info" mevedel-menu--open-session-info)
+    ("U" "Usage" mevedel-subscription-usage-show)
     ("g" "gptel menu" mevedel-menu--open-gptel)
-    ("?" "Help" mevedel-menu--open-help)]]
+    ("?" "Help" mevedel-menu--open-help))
+  "Utility suffixes of the top menu, shown in rows beneath its groups.")
+
+(defun mevedel-menu--utility-suffixes (start &optional end)
+  "Return `mevedel-menu--utilities' from START to END as parsed suffixes."
+  (transient-parse-suffixes
+   'mevedel-menu--top (seq-subseq mevedel-menu--utilities start end)))
+
+(defun mevedel-menu--utilities-row (_children)
+  "Return every utility suffix, for a single footer row."
+  (mevedel-menu--utility-suffixes 0))
+
+(defun mevedel-menu--utilities-first-row (_children)
+  "Return the utilities of a split footer's first row."
+  (mevedel-menu--utility-suffixes 0 3))
+
+(defun mevedel-menu--utilities-second-row (_children)
+  "Return the utilities of a split footer's second row."
+  (mevedel-menu--utility-suffixes 3))
+
+(transient-define-prefix mevedel-menu--top ()
+  "Top-level mevedel session cockpit.
+The groups are arranged by `mevedel-menu--layout'; utilities share a row."
+  [:description mevedel-menu--header :if mevedel-menu--wide-p
+   mevedel-menu--conversation-group mevedel-menu--history-group
+   mevedel-menu--configure-group mevedel-menu--workspace-group
+   mevedel-menu--collaborate-group mevedel-menu--extend-group]
+  [:description mevedel-menu--header :if mevedel-menu--medium-p
+   mevedel-menu--conversation-group mevedel-menu--history-group
+   mevedel-menu--configure-group]
+  [:if mevedel-menu--medium-p
+   mevedel-menu--workspace-group mevedel-menu--collaborate-group
+   mevedel-menu--extend-group]
+  [:description mevedel-menu--header :if mevedel-menu--narrow-p
+   mevedel-menu--conversation-group mevedel-menu--history-group]
+  [:if mevedel-menu--narrow-p
+   mevedel-menu--configure-group mevedel-menu--workspace-group]
+  [:if mevedel-menu--narrow-p
+   mevedel-menu--collaborate-group mevedel-menu--extend-group]
+  [:class transient-row :if-not mevedel-menu--split-footer-p
+   :setup-children mevedel-menu--utilities-row]
+  [:class transient-row :if mevedel-menu--split-footer-p
+   :setup-children mevedel-menu--utilities-first-row]
+  [:class transient-row :if mevedel-menu--split-footer-p
+   :setup-children mevedel-menu--utilities-second-row]
   (interactive)
   (mevedel-menu-open 'top))
+
+(transient-define-prefix mevedel-menu--share ()
+  "Share cockpit surface: this session's room and the workspace lobby.
+Every action goes through the same commands as `/collab'."
+  [:description mevedel-menu--share-description
+   ["Session"
+    :pad-keys t
+    ("s" "Show links, or start sharing" mevedel-menu--share-session)
+    ("x" "Stop sharing" mevedel-menu--share-stop
+     :inapt-if mevedel-menu--not-shared-p)]
+   ["Lobby"
+    :pad-keys t
+    ("l" "Show links, or start the lobby" mevedel-menu--share-lobby)
+    ("L" "Stop the lobby" mevedel-menu--share-lobby-stop
+     :inapt-if mevedel-menu--lobby-down-p)
+    ("r" "Rotate lobby links…" mevedel-menu--share-lobby-rotate)]
+   ["Inspect"
+    :pad-keys t
+    ("i" "Status" mevedel-menu--share-status)]]
+  (interactive)
+  (mevedel-menu--context)
+  (transient-setup 'mevedel-menu--share))
 
 (transient-define-prefix mevedel-menu--control ()
   "Session control cockpit surface.

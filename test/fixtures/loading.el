@@ -193,7 +193,16 @@ temporary one."
                (should (= 1 (length (mevedel-artifact-store-versions workspace "cold"))))
                (mevedel-cockpit-surface-refresh)
                (should (= 1 (length tabulated-list-entries)))
-               (should-not (featurep 'mevedel-shared-editing)))
+               (should-not (featurep 'mevedel-shared-editing))
+               ;; Creating asks to share before anything is queued; declining
+               ;; leaves no item and no editing helper behind.
+               (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Document"))
+                         ((symbol-function 'read-string) (lambda (&rest _) "Cold"))
+                         ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+                 (should-error (call-interactively #'mevedel-artifacts-new-shared-item)
+                               :type 'user-error))
+               (should (equal '("cold") (mevedel-artifact-store-ids workspace)))
+               (should-not (seq-filter #'process-live-p (process-list))))
              (kill-buffer (current-buffer)))
             ('send
              (call-process "git" nil nil nil "init" "-q")

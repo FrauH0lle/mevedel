@@ -16,6 +16,7 @@
 (require 'mevedel-artifacts-list)
 (require 'mevedel-cockpit)
 (require 'mevedel-collaboration-artifact)
+(require 'mevedel-shared-editing)
 (require 'mevedel-structs)
 (require 'tabulated-list)
 (require 'helpers
@@ -330,6 +331,151 @@
                (lambda (&optional seen) (setq label seen))))
       (mevedel-artifacts-list-quit))
     (should (equal "artifacts cockpit" label))))
+
+(defmacro mevedel-artifacts-list-test--with-editing (&rest body)
+  "Run BODY with private shared-editing runtimes and item leases."
+  (declare (indent 0) (debug t))
+  `(let ((mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+         (mevedel-artifact-lease--held (make-hash-table :test #'equal))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+     (unwind-protect (progn ,@body)
+       (mevedel-shared-editing-stop)
+       (mevedel-artifact-lease-release-all))))
+
+(mevedel-deftest mevedel-artifacts-new-shared-item ()
+  ,test
+  (test)
+  :doc "creates, attaches, lists and opens a whiteboard from the session cockpit"
+  (mevedel-artifacts-list-test--with-store
+    (mevedel-artifacts-list-test--with-editing
+      (let (prepared opened written)
+        (with-current-buffer (mevedel-artifacts-list-open
+                              (mevedel-artifacts-list-test--context session view data))
+          (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Whiteboard"))
+                    ((symbol-function 'read-string) (lambda (&rest _) " Plan "))
+                    ((symbol-function 'mevedel-session-persistence-write-sidecar-now)
+                     (lambda (&rest args) (setq written args)))
+                    ((symbol-function 'mevedel-collaboration-item-opener)
+                     (lambda (&optional buffer)
+                       (setq prepared (list buffer))
+                       (lambda (buffer id) (setq opened (list buffer id))))))
+            (mevedel-test--with-captured-messages nil
+              (call-interactively #'mevedel-artifacts-new-shared-item)
+              ;; Consent is settled before the item is queued.
+              (should (equal (list data) prepared))
+              (mevedel-test--await 10 "the item opens" opened)))
+          (let ((id (cadr opened)))
+            (should (equal (list data id) opened))
+            (should (equal '(:kind whiteboard :title "Plan")
+                           (cl-subseq (mevedel-artifact-store-meta workspace id) 0 4)))
+            (should (equal (list id) (mevedel-session-attached-artifacts session)))
+            (should (equal (list session data) written))
+            (should (assoc id tabulated-list-entries))
+            (should (equal id (plist-get (mevedel-cockpit-surface-selected) :id))))))))
+
+  :doc "without a session, opens the new document in its dedicated conversation"
+  (mevedel-artifacts-list-test--with-store
+    (let ((conversation (generate-new-buffer " *artifact-conversation*"))
+          prepared opened messages)
+      (unwind-protect
+          (with-current-buffer (mevedel-artifacts-list-open
+                                (mevedel-cockpit-workspace-context workspace))
+            (cl-letf (((symbol-function 'mevedel-collaboration-item-opener)
+                       (lambda (&optional buffer)
+                         (setq prepared (list buffer))
+                         (lambda (buffer id) (setq opened (list buffer id)))))
+                      ((symbol-function 'mevedel-shared-editing-create)
+                       (lambda (seen kind title actor callback &rest keys)
+                         (should (eq workspace seen))
+                         (should (equal '("document" "Notes" "Host")
+                                        (list kind title actor)))
+                         (should-not (plist-get keys :session))
+                         (funcall callback '(:id "ab12"))))
+                      ((symbol-function 'mevedel-artifact-store-conversation)
+                       (lambda (seen id)
+                         (should (eq workspace seen))
+                         (should (equal "ab12" id))
+                         conversation)))
+              (mevedel-test--with-captured-messages messages
+                (mevedel-artifacts-new-shared-item "document" "Notes"))
+              (should (equal '(nil) prepared))
+              (should (equal (list conversation "ab12") opened))
+              (should (string-match-p "shared://ab12" messages))))
+        (kill-buffer conversation))))
+
+  :doc "refuses a read-only session, an invalid title or declined sharing before queuing"
+  (mevedel-artifacts-list-test--with-store
+    (with-current-buffer data
+      (setq-local mevedel-session--read-only-mode t))
+    (with-current-buffer (mevedel-artifacts-list-open
+                          (mevedel-artifacts-list-test--context session view data))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) (ert-fail "Prompted a read-only session")))
+                ((symbol-function 'mevedel-shared-editing-create)
+                 (lambda (&rest _) (ert-fail "Queued a refused creation"))))
+        (should-error (call-interactively #'mevedel-artifacts-new-shared-item)
+                      :type 'user-error)
+        (with-current-buffer data
+          (setq-local mevedel-session--read-only-mode nil))
+        (cl-letf (((symbol-function 'mevedel-collaboration-item-opener)
+                   (lambda (&rest _) (ert-fail "Asked to share an invalid item"))))
+          (should-error (mevedel-artifacts-new-shared-item "document" "  ")
+                        :type 'user-error)
+          (should-error (mevedel-artifacts-new-shared-item "slides" "Deck")
+                        :type 'user-error))
+        (cl-letf (((symbol-function 'mevedel-collaboration-item-opener)
+                   (lambda (&rest _) (user-error "Collaboration not started"))))
+          (should-error (mevedel-artifacts-new-shared-item "document" "Notes")
+                        :type 'user-error)))))
+
+  :doc "reports a failed creation, and keeps an item that could not be opened"
+  (mevedel-artifacts-list-test--with-store
+    (with-current-buffer (mevedel-artifacts-list-open
+                          (mevedel-artifacts-list-test--context session view data))
+      (let (reply messages)
+        (cl-letf (((symbol-function 'mevedel-collaboration-item-opener)
+                   (lambda (&rest _)
+                     (lambda (&rest _) (error "No browser"))))
+                  ((symbol-function 'mevedel-shared-editing-create)
+                   (lambda (_workspace _kind _title _actor callback &rest _)
+                     (funcall callback reply)))
+                  ((symbol-function 'mevedel-artifact-store-delete)
+                   (lambda (&rest _) (ert-fail "Deleted a created item"))))
+          (setq reply '(:error "Node 22.4 or newer is required"))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-artifacts-new-shared-item "document" "Notes"))
+          (should (string-match-p "not created: Node 22.4" messages))
+          (setq reply '(:id "ab12" :attach-error "Disk full"))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-artifacts-new-shared-item "document" "Notes"))
+          (should (string-match-p "shared://ab12.*not attached.*Disk full" messages))
+          (should (string-match-p "shared://ab12.*could not open.*No browser" messages))))))
+
+  :doc "leaves another workspace's cockpit and its selection alone"
+  (mevedel-artifacts-list-test--with-store
+    (let* ((other-root (file-name-as-directory
+                        (make-temp-file "mevedel-artifacts-other-" t)))
+           (other (mevedel-workspace--create :type 'project :id "o"
+                                             :root other-root :name "other"))
+           finish refreshed)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'mevedel-collaboration-item-opener)
+                       (lambda (&rest _) #'ignore))
+                      ((symbol-function 'mevedel-shared-editing-create)
+                       (lambda (_workspace _kind _title _actor callback &rest _)
+                         (setq finish callback))))
+              (with-current-buffer (mevedel-artifacts-list-open
+                                    (mevedel-artifacts-list-test--context session view data))
+                (mevedel-artifacts-new-shared-item "document" "Notes")))
+            ;; The user switched to another project's cockpit meanwhile.
+            (mevedel-artifacts-list-open (mevedel-cockpit-workspace-context other))
+            (cl-letf (((symbol-function 'mevedel-cockpit-surface-refresh)
+                       (lambda (&rest _) (setq refreshed t))))
+              (mevedel-test--with-captured-messages nil
+                (funcall finish '(:id "ab12"))))
+            (should-not refreshed))
+        (delete-directory other-root t)))))
 
 (provide 'test-mevedel-artifacts-list)
 ;;; test-mevedel-artifacts-list.el ends here

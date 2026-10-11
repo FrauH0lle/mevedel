@@ -17,6 +17,7 @@
 (require 'mevedel-tool-registry)
 (autoload 'mevedel-shared-editing--json "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-create "mevedel-shared-editing")
 (autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
 (autoload 'mevedel-shared-library-text "mevedel-shared-library")
 
@@ -70,53 +71,61 @@ encode these as vectors so the host does not mistake them for objects."
   (unless mevedel--session (error "No active session"))
   (mevedel-session-workspace mevedel--session))
 
-(defun mevedel-tool-editing--call (callback args)
-  "Run validated editing ARGS and deliver a pipeline result to CALLBACK."
-  (unless mevedel--session (error "No active session"))
-  (setq args (plist-put (copy-sequence args) :actor
-                        (concat "Agent: "
-                                (if (bound-and-true-p mevedel--agent-invocation)
-                                    (mevedel-agent-invocation-require-path mevedel--agent-invocation)
-                                  "/root"))))
-  (setq args (plist-put args :opId (secure-hash 'sha256 (format "%s%s" (current-time) (random t)))))
-  (when (equal (plist-get args :action) "create")
-    (setq args (plist-put args :id (secure-hash 'sha256 (format "%s%s" (current-time) (random t))))))
-  (setq args (mevedel-tool-editing--restore-nulls args))
+(defun mevedel-tool-editing--actor ()
+  "Return the attribution of the agent calling an editing tool."
+  (concat "Agent: "
+          (if (bound-and-true-p mevedel--agent-invocation)
+              (mevedel-agent-invocation-require-path mevedel--agent-invocation)
+            "/root")))
+
+(defun mevedel-tool-editing--deliver (callback create)
+  "Return a reply handler delivering a pipeline result to CALLBACK.
+CREATE is non-nil for a creation, which the creation core has attached
+already.  The handler attaches an edited item to the current session and
+versions it when the current request settles."
   (let ((session mevedel--session)
         (workspace (mevedel-tool-editing--workspace))
         (request (bound-and-true-p mevedel--current-request)))
-   (mevedel-shared-editing-call
-   workspace args
-   (lambda (reply)
-     (if-let* ((error-text (plist-get reply :error)))
-         (funcall callback (list :result
-                                 (if (equal (plist-get reply :code) "stale")
-                                     (mevedel-shared-editing--json
-                                      (list :error error-text :code "stale"
-                                            :targets (plist-get reply :targets)
-                                            :revision (plist-get reply :revision)))
-                                   (concat "Error: " error-text)) :status 'error))
-       ;; The model sees what it changed, not the browsers' full state.
-       (let* ((result (plist-get reply :result))
-              (model (plist-get result :model))
-              (png (plist-get result :png))
-              (id (plist-get model :id)))
-         (when (stringp id)
-           (mevedel-artifact-store-attach session id)
-           ;; A no-op edit makes no version: it would push a real one out.
-           ;; Creating records no contribution but makes the item.
-           (when (and request (or (plist-get result :transaction)
-                                  (equal (plist-get args :action) "create")))
-             (cl-pushnew (cons workspace id) (mevedel-request-edited-artifacts request)
-                         :test #'equal)))
-         (funcall callback
-                  (append (list :result (mevedel-shared-editing--json model))
-                          (when png
-                            (list :media
-                                  (list (list :path (format "shared://%s/view.png"
-                                                            (plist-get model :id))
-                                              :kind 'image :mime "image/png" :data png)))))))))
-   mevedel-pipeline--handler-active-p mevedel-pipeline--handler-commit)))
+    (lambda (reply)
+      (if-let* ((error-text (plist-get reply :error)))
+          (funcall callback (list :result
+                                  (if (equal (plist-get reply :code) "stale")
+                                      (mevedel-shared-editing--json
+                                       (list :error error-text :code "stale"
+                                             :targets (plist-get reply :targets)
+                                             :revision (plist-get reply :revision)))
+                                    (concat "Error: " error-text)) :status 'error))
+        ;; The model sees what it changed, not the browsers' full state.
+        (let* ((result (plist-get reply :result))
+               (model (plist-get result :model))
+               (png (plist-get result :png))
+               (id (plist-get model :id)))
+          (when (stringp id)
+            (unless create
+              (mevedel-artifact-store-attach session id))
+            ;; A no-op edit makes no version: it would push a real one out.
+            ;; Creating records no contribution but makes the item.
+            (when (and request (or create (plist-get result :transaction)))
+              (cl-pushnew (cons workspace id) (mevedel-request-edited-artifacts request)
+                          :test #'equal)))
+          (funcall callback
+                   (append (list :result (mevedel-shared-editing--json model))
+                           (when png
+                             (list :media
+                                   (list (list :path (format "shared://%s/view.png"
+                                                             (plist-get model :id))
+                                               :kind 'image :mime "image/png" :data png)))))))))))
+
+(defun mevedel-tool-editing--call (callback args)
+  "Run validated editing ARGS and deliver a pipeline result to CALLBACK."
+  (unless mevedel--session (error "No active session"))
+  (setq args (plist-put (copy-sequence args) :actor (mevedel-tool-editing--actor)))
+  (setq args (plist-put args :opId (secure-hash 'sha256 (format "%s%s" (current-time) (random t)))))
+  (setq args (mevedel-tool-editing--restore-nulls args))
+  (mevedel-shared-editing-call
+   (mevedel-tool-editing--workspace) args
+   (mevedel-tool-editing--deliver callback nil)
+   mevedel-pipeline--handler-active-p mevedel-pipeline--handler-commit))
 
 (defun mevedel-tool-editing--library-args (rest)
   "Return the host request for `shared://library' components REST."
@@ -169,8 +178,14 @@ CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
     (error (funcall callback (list :error (error-message-string err))))))
 
 (defun mevedel-tool-editing--create (callback args)
-  "Create content using CALLBACK and ARGS."
-  (mevedel-tool-editing--call callback (cons :action (cons "create" args))))
+  "Create the item ARGS describe and deliver a pipeline result to CALLBACK."
+  (unless mevedel--session (error "No active session"))
+  (mevedel-shared-editing-create
+   (mevedel-tool-editing--workspace) (plist-get args :kind) (plist-get args :title)
+   (mevedel-tool-editing--actor) (mevedel-tool-editing--deliver callback t)
+   :session mevedel--session
+   :authorize mevedel-pipeline--handler-active-p
+   :commit mevedel-pipeline--handler-commit))
 
 (defun mevedel-tool-editing--edit (callback args)
   "Apply a targeted mutation using CALLBACK and ARGS."
@@ -194,7 +209,7 @@ CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
    :summary "Start a whiteboard or document that people and agents edit together."
    :description "Open a new named collaborative whiteboard or document in the project's artifact store, readable at the shared:// address the result names, and attach it to this session. It appears under Shared work in every room of the project. All full/owner participants and agents can edit concurrently."
    :args ((kind string :required "Editor kind." :enum ["whiteboard" "document"])
-          (title string :required "Item title."))
+          (title string :required "Item title, 1 to 200 characters after trimming."))
    :async-p t :groups (edit))
   (mevedel-define-tool
    :name "SharedEdit" :handler #'mevedel-tool-editing--edit

@@ -120,9 +120,14 @@
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-call "mevedel-shared-editing"
                   (workspace args callback &optional authorize commit))
+(declare-function mevedel-shared-editing-check-new "mevedel-shared-editing" (kind title))
+(declare-function mevedel-shared-editing-create "mevedel-shared-editing"
+                  (workspace kind title actor callback &rest keys))
 (declare-function mevedel-shared-editing-save-version
                   "mevedel-shared-editing" (workspace id &optional session-id))
 (autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-check-new "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-create "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-save-version "mevedel-shared-editing")
 
 ;; `mevedel-structs'
@@ -538,23 +543,19 @@ Signal an error for the guest when the action is refused."
     (pcase action
       ("create"
        (let ((kind (plist-get frame :kind))
-             (title (plist-get frame :title))
-             (id (secure-hash 'sha256 (format "%s%s" (current-time) (random t)))))
-         (unless (member kind '("whiteboard" "document"))
-           (error "Choose a whiteboard or document"))
-         (unless (and (stringp title) (> (length title) 0) (<= (length title) 200))
-           (error "An artifact title must contain 1 to 200 characters"))
+             (title (plist-get frame :title)))
+         ;; Refused input answers the guest now, before any work is queued.
+         (mevedel-shared-editing-check-new kind title)
          (lambda (done)
-           (mevedel-shared-editing-call
-            workspace (list :action "create" :id id :opId id :kind kind
-                            :title title :actor (or (plist-get guest :name) "Guest"))
+           (mevedel-shared-editing-create
+            workspace kind title (or (plist-get guest :name) "Guest")
             (lambda (reply)
-              (if (plist-get reply :error)
-                  (funcall done (list :error (plist-get reply :error)))
-                (when session
-                  (mevedel-artifact-store-attach
-                   session id (mevedel-collaboration--room-data-buffer room)))
-                (funcall done (list :id id))))
+              (funcall done (if (plist-get reply :error)
+                                (list :error (plist-get reply :error))
+                              (list :id (plist-get reply :id)))))
+            :session session
+            :buffer (and session (mevedel-collaboration--room-data-buffer room))
+            :authorize
             (lambda ()
               (and (plist-get guest :writable)
                    (memq guest (hash-table-values (plist-get room :guests)))
