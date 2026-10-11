@@ -38,7 +38,8 @@
                 (with-current-buffer view-buf
                   (if ,slash
                       (mevedel-view-run-invocation "usage" "")
-                    (call-interactively (plist-get (cdr (transient-get-suffix 'mevedel-menu--top "U")) :command))))
+                    ;; The top menu builds its utility row from this list.
+                    (call-interactively (nth 2 (assoc "U" mevedel-menu--utilities)))))
                 (setq report (buffer-local-value 'mevedel-subscription-usage--buffer data-buf))
                 (with-current-buffer report
                   (should (derived-mode-p 'mevedel-report-mode))

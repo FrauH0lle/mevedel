@@ -1252,8 +1252,8 @@ removal; coalescing at the existing projection boundary removed that per-second
 churn. A repeated sleeping-tool workload measured 22-23% with native animation
 versus 38.7% ordinary and 18.7% warmed static. Native and static runs had the
 same Lisp redisplay count, while native main motion ran at 30 fps instead of
-8 fps. Measurements and reproducible experiments are retained in
-Git history at `cdf40152^:.mevedel/shared/editor-cpu/renderer-lab/`.
+8 fps. The measurements and experiments were machine-local working material
+and are not retained.
 
 The user's preview exposed a top-left flash on refocusing that lifecycle counts
 had missed. Wayland traces showed child images committed before their parent
@@ -1291,8 +1291,8 @@ and 41.5% while prose streamed at eight words a second (44.3% before), all with
 native 30-fps motion. Earlier repeated-request mock samples
 reused a tool ID and could find a previous source row, so they do not establish
 fresh-tool performance. Protocol, source hashes, full-suite results and separate
-request/execution teardown checks are retained in
-Git history at `cdf40152^:.mevedel/shared/editor-cpu/wakeup-lab/`.
+request/execution teardown checks were machine-local working material and are
+not retained.
 
 ### October 2026: pace streamed reads
 
