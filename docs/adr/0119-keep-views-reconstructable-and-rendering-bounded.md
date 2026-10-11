@@ -159,8 +159,9 @@ only when their source, or a compound ancestor's source, is in the transcript;
 progress remains cached until source arrival and normal boundary projection.
 Cancellation removes an owner's work without affecting other owners, and the last cancellation removes the host timer.
 Missed periodic observations are skipped after a stall. Batches yield between
-callbacks for input or after 25 ms; individual callbacks still own their own
-responsiveness. Layout hooks avoid scheduling idle callbacks when visible tables
+callbacks for input or after 25 ms. The host timer stays armed while callbacks
+run, so a callback that waits for input or output lets its due siblings run, as
+ordinary timers would; a running callback never re-enters itself. Layout hooks avoid scheduling idle callbacks when visible tables
 and images are already current.
 
 Focus, window and ordinary buffer-scroll events rearm scheduling. The one-shot
@@ -1356,8 +1357,8 @@ wrapper leaves the host armed. A coalesced timer without a time is rejected
 instead of breaking the queue, the heartbeat reads its next due time from its
 timer, uninstalling cancels the queue, and a progress interval above one second
 keeps at least that spacing while staying on whole-second ticks. A coalesced
-callback that waits still delays its siblings (unlike ordinary timers); none
-does today.
+callback that waited still delayed its siblings, unlike ordinary timers, until
+the entry below.
 
 ### October 2026: pace Claude Code streams
 
@@ -1494,3 +1495,14 @@ start of the cycle (breathe) and repaints spans already drawn mid-motion.
 Glyph styles and bounce keep their phase, which shows a glyph or a band by
 design. Resuming continues from the clock, as before.
 
+### October 2026: deliver siblings while a coalesced callback waits
+
+Dispatch suppressed arming the host timer while any callback ran, so a callback
+that waited for input or output held every sibling until it returned; ordinary timers run during such a wait. Dispatch
+now tracks the running callbacks instead: the host stays armed while they run,
+a tick inside a wait delivers due siblings and skips running callbacks, and the
+next arm targets the earliest non-running member. A regression test waits for
+process output in one callback while a sibling falls due. The host timer object
+is reused rather than recreated, so a tick without a wait creates no timer:
+1 member, 3.5 µs and two activations per tick against 2.9 µs, one creation and
+one activation before; 5 members, 7.9 µs against 8.0 µs.

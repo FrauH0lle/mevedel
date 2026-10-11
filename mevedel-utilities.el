@@ -750,8 +750,10 @@ Text scaling edits the remapping list in place, so it is copied."
   "Timers whose due callbacks share a host wakeup.")
 (defvar mevedel--coalesced-timer nil
   "The single host timer delivering coalesced callbacks.")
-(defvar mevedel--coalesced-timer-dispatching nil
-  "Non-nil while coalesced callbacks are being delivered.")
+(defvar mevedel--coalesced-timers-running nil
+  "Coalesced timers whose callbacks are running, innermost first.
+A callback that waits for input or output lets Emacs run timers, the host
+timer included; its own timer must not run again inside that wait.")
 
 (defun mevedel--ui-timer-pending-p (timer)
   "Return whether UI-host TIMER is queued, even during TRAMP suspension."
@@ -802,26 +804,34 @@ This is for periodic observation, not deadlines or animation frames."
     (mevedel--ui-timer-activate timer t)
     timer))
 
-(defun mevedel--coalesced-timer-arm ()
-  "Arm one host timer for the earliest pending coalesced callback."
-  (unless mevedel--coalesced-timer-dispatching
-    (let ((due (cl-loop with earliest = nil
-                        for timer in mevedel--coalesced-timers
-                        for time = (timer--time timer)
-                        when (or (null earliest) (time-less-p time earliest))
-                        do (setq earliest time)
-                        finally return earliest)))
-      (unless (and due (timerp mevedel--coalesced-timer)
-                   (equal due (timer--time mevedel--coalesced-timer))
-                   (mevedel--ui-timer-pending-p mevedel--coalesced-timer))
-        (mevedel--ui-timer-cancel mevedel--coalesced-timer)
-        (setq mevedel--coalesced-timer nil)
-        (when due
-          (let ((timer (timer-create)))
-            (timer-set-time timer due)
-            (timer-set-function timer #'mevedel--coalesced-timer-tick)
-            (setq mevedel--coalesced-timer timer)
-            (mevedel--ui-timer-activate timer)))))))
+(defun mevedel--coalesced-timer-arm (&optional due)
+  "Arm one host timer for DUE, or for the earliest pending callback.
+Running callbacks are excluded, so the timer stays armed for their
+siblings while one waits.  The host timer object is reused until no
+callback remains."
+  (let ((due (or due
+                 (cl-loop with earliest = nil
+                          for timer in mevedel--coalesced-timers
+                          for time = (timer--time timer)
+                          unless (memq timer mevedel--coalesced-timers-running)
+                          when (or (null earliest) (time-less-p time earliest))
+                          do (setq earliest time)
+                          finally return earliest)))
+        (host mevedel--coalesced-timer))
+    (unless (and due (timerp host)
+                 (equal due (timer--time host))
+                 (mevedel--ui-timer-pending-p host))
+      (mevedel--ui-timer-cancel host)
+      (cond
+       (due
+        (unless (timerp host)
+          (setq host (timer-create)
+                mevedel--coalesced-timer host)
+          (timer-set-function host #'mevedel--coalesced-timer-tick))
+        (timer-set-time host due)
+        (mevedel--ui-timer-activate host))
+       ((null mevedel--coalesced-timers)
+        (setq mevedel--coalesced-timer nil))))))
 
 (defun mevedel--coalesced-timer-call (timer)
   "Invoke TIMER while preserving the caller's current buffer.
@@ -833,35 +843,37 @@ This boundary also allows telemetry to time each callback individually."
        timer (timer-next-integral-multiple-of-time nil period) period)
     (setq mevedel--coalesced-timers
           (delq timer mevedel--coalesced-timers)))
-  (save-current-buffer
-    (apply (timer--function timer) (timer--args timer))))
+  (let ((mevedel--coalesced-timers-running
+         (cons timer mevedel--coalesced-timers-running)))
+    (save-current-buffer
+      (apply (timer--function timer) (timer--args timer)))))
 
 (defun mevedel--coalesced-timer-tick ()
-  "Deliver due callbacks together, yielding for input or after 25 ms."
-  (unless mevedel--coalesced-timer-dispatching
-    (mevedel--ui-timer-cancel mevedel--coalesced-timer)
-    (setq mevedel--coalesced-timer nil)
-    (unwind-protect
-        (let* ((mevedel--coalesced-timer-dispatching t)
-               (now (current-time))
-               (until (time-add now 0.025))
-               delivered)
-          (catch 'yield
-            (dolist (timer (copy-sequence mevedel--coalesced-timers))
-              (when (and (memq timer mevedel--coalesced-timers)
-                         (not (time-less-p now (timer--time timer))))
-                ;; Bound a batch between callbacks.  An individual callback
-                ;; still owns its own responsiveness; unlike ordinary timers,
-                ;; its siblings cannot run while it waits for input or output.
-                (when (and delivered
-                           (or (input-pending-p) (time-less-p until nil)))
-                  (throw 'yield nil))
-                (setq delivered t)
-                (condition-case-unless-debug err
-                    (mevedel--coalesced-timer-call timer)
-                  (error (message "Error running periodic callback: %s"
-                                  (error-message-string err))))))))
-      (mevedel--coalesced-timer-arm))))
+  "Deliver due callbacks together, yielding for input or after 25 ms.
+A tick can run inside a callback that waits; it skips running callbacks."
+  (unwind-protect
+      (let* ((now (current-time))
+             (until (time-add now 0.025))
+             delivered)
+        ;; Keep the host armed while callbacks run.  Should one wait for
+        ;; input or output, Emacs runs due timers, and the host delivers
+        ;; that callback's due siblings as ordinary timers would run.
+        (mevedel--coalesced-timer-arm now)
+        (catch 'yield
+          (dolist (timer (copy-sequence mevedel--coalesced-timers))
+            (when (and (memq timer mevedel--coalesced-timers)
+                       (not (memq timer mevedel--coalesced-timers-running))
+                       (not (time-less-p now (timer--time timer))))
+              ;; Bound a batch between callbacks.
+              (when (and delivered
+                         (or (input-pending-p) (time-less-p until nil)))
+                (throw 'yield nil))
+              (setq delivered t)
+              (condition-case-unless-debug err
+                  (mevedel--coalesced-timer-call timer)
+                (error (message "Error running periodic callback: %s"
+                                (error-message-string err))))))))
+    (mevedel--coalesced-timer-arm)))
 
 (defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.

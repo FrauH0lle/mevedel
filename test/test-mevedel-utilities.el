@@ -113,7 +113,44 @@
           (mevedel--coalesced-timer-tick)
           (should (= 2 calls)))
       (mevedel--ui-timer-cancel first)
-      (mevedel--ui-timer-cancel second))))
+      (mevedel--ui-timer-cancel second)))
+
+  :doc "a callback waiting for process output lets due siblings run, never itself"
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        (process (make-process :name "mevedel-coalesced-wait"
+                               :command '("cat") :noquery t
+                               :connection-type 'pipe))
+        (waiter-calls 0) sibling-ran waiter sibling)
+    (unwind-protect
+        (progn
+          ;; Members run newest first; the waiter goes ahead of its sibling.
+          (setq sibling (mevedel--run-periodic-timer
+                         1 (lambda () (setq sibling-ran t)))
+                waiter
+                (mevedel--run-periodic-timer
+                 1 (lambda ()
+                     (cl-incf waiter-calls)
+                     ;; Due again during its own wait: must not re-enter.
+                     (timer-set-time waiter (time-subtract nil 1) 1)
+                     (let ((deadline (time-add nil 5)))
+                       (while (and (not sibling-ran)
+                                   (time-less-p nil deadline))
+                         (accept-process-output process 0.01))))))
+          (timer-set-time waiter (time-subtract nil 2) 1)
+          (timer-set-time sibling (time-subtract nil 1) 1)
+          (mevedel--coalesced-timer-tick)
+          (should sibling-ran)
+          (should (= 1 waiter-calls))
+          (should (time-less-p nil (timer--time sibling)))
+          ;; The waiter is still due and the host timer is armed for it.
+          (should (mevedel--ui-timer-pending-p mevedel--coalesced-timer))
+          (should (equal (timer--time waiter)
+                         (timer--time mevedel--coalesced-timer))))
+      (delete-process process)
+      (mevedel--ui-timer-cancel waiter)
+      (mevedel--ui-timer-cancel sibling))
+    (should-not mevedel--coalesced-timer)))
 
 (mevedel-deftest mevedel--coalesced-timer-arm
   (:doc "owns one persistent host timer across temporary transport bindings")
