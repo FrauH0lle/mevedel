@@ -10,7 +10,6 @@
 (require 'mevedel-shared-editing)
 (require 'mevedel-shared-conversation)
 (require 'mevedel-shared-library)
-(require 'mevedel-transcript-audit)
 
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-attach
@@ -18,20 +17,21 @@
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--guest "mevedel-collaboration" (room peer))
-(declare-function mevedel-collaboration--guest-text "mevedel-collaboration" (value))
-(declare-function mevedel-collaboration--room-data-buffer "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--room-for-session "mevedel-collaboration" (session))
 
 ;; `mevedel-collaboration-artifact'
 (declare-function mevedel-collaboration--workspace-rooms
                   "mevedel-collaboration-artifact" (workspace))
 
+;; `mevedel-collaboration-discussions'
+(declare-function mevedel-collaboration-discussions-perform
+                  "mevedel-collaboration-discussions"
+                  (room guest args callback &optional authorize))
+(autoload 'mevedel-collaboration-discussions-perform "mevedel-collaboration-discussions")
+
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--guest-directive-id "mevedel-collaboration-guest" (room frame))
-(declare-function mevedel-collaboration--guest-role "mevedel-collaboration-guest" (guest))
 (declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
-(declare-function mevedel-collaboration--save-guest-attachments "mevedel-collaboration-guest" (images))
-(declare-function mevedel-collaboration--save-guest-files "mevedel-collaboration-guest" (data-buffer images))
 
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
@@ -39,9 +39,6 @@
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
-
-;; `mevedel-pending-inputs'
-(declare-function mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs" (data-buffer prompt &rest keys))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -122,7 +119,7 @@ deleted it; a guest viewing it is no longer in it."
                            :revision (plist-get state :revision))
                      (when viewed
                        (list :update (plist-get result :update)
-                             :comments (plist-get result :comments)
+                             :discussions (plist-get result :discussions)
                              :transactions (plist-get state :transactions)))))))))))
 
 (defun mevedel-collaboration-editing--presence (room peer guest args)
@@ -228,121 +225,6 @@ deleted it; a guest viewing it is no longer in it."
     (plist-put guest :editing-pointing nil)
     (plist-put guest :editing-clock nil)))
 
-(defun mevedel-collaboration-editing--question-key (args)
-  "Return a stable retry fingerprint for question ARGS."
-  (secure-hash 'sha256
-               (mevedel-shared-editing--json
-                (list :id (plist-get args :id)
-                      :text (plist-get args :text) :expected (plist-get args :expected)
-                      :commentId (plist-get args :commentId)
-                      :commentVersion (plist-get args :commentVersion)
-                      :images (plist-get args :images)))))
-
-(defun mevedel-collaboration-editing--find-question (room args)
-  "Find accepted ARGS in ROOM's queue or live/archived transcript.
-This survives reconnecting peers and delivered transcript restoration.  A
-retracted or never-delivered queue entry can be explicitly submitted again."
-  (let* ((id (plist-get args :questionId))
-         (session (plist-get room :session))
-         (buffer (mevedel-collaboration--room-data-buffer room))
-         receipt)
-    (mevedel-shared-editing--valid-id id)
-    (dolist (entry (mevedel-session-pending-follow-ups session))
-      (when (equal id (plist-get (plist-get entry :shared-question) :questionId))
-        (setq receipt (list :queued t :entryId (plist-get entry :id)
-                            :question (plist-get entry :shared-question)))))
-    (unless receipt
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (dolist (attribution (mevedel-transcript-audit-guest-prompts))
-            (let ((shared (plist-get (cdr attribution) :shared)))
-              (when (equal id (plist-get shared :questionId))
-                (setq receipt (list :delivered t :question shared))))))))
-    (unless receipt
-      (dolist (turn (plist-get (mevedel-shared-conversation-history
-                               session (plist-get args :id)) :turns))
-        (let ((shared (plist-get turn :shared)))
-          (when (equal id (plist-get shared :questionId))
-            (setq receipt (list :delivered t :question shared))))))
-    (when (and receipt
-               (not (equal (plist-get (plist-get receipt :question) :fingerprint)
-                           (mevedel-collaboration-editing--question-key args))))
-      (error "This question was already sent; start a new question for changed context"))
-    receipt))
-
-(defun mevedel-collaboration-editing--selection-request (kind)
-  "Return the message standing for a selection sent without one, for item KIND.
-The sender chose to send only the selected content, so what is written in it
-is their request.  The snapshot that follows is labelled as data, which this
-line overrides for the selection itself.  A document's instruction text is
-removed afterwards, where it would pollute the content; a board's stays
-unless the sender asks otherwise."
-  (if (equal kind "document")
-      (concat "The sender sent only the selected passage, with no message: "
-              "carry out the instructions written in it, then remove that "
-              "instruction text from the document and keep the content it "
-              "applies to.  If the passage holds no instruction, ask what "
-              "the sender wants.")
-    (concat "The sender sent only the selected objects, with no message: "
-            "carry out the instructions written in them and leave those "
-            "objects on the board unless they say otherwise.  If the "
-            "selection holds no instruction, ask what the sender wants.")))
-
-(defun mevedel-collaboration-editing--ask (room guest args result)
-  "Queue an explicit question about committed RESULT, using guest ARGS.
-A selection may be sent without a message; see
-`mevedel-collaboration-editing--selection-request'."
-  (or (mevedel-collaboration-editing--find-question room args)
-      (let* ((text (or (mevedel-collaboration--guest-text (plist-get args :text))
-                       (and (let ((raw (plist-get args :text)))
-                              (or (null raw) (and (stringp raw) (string-blank-p raw))))
-                            (not (plist-get args :commentId))
-                            (equal "selection"
-                                   (plist-get (plist-get result :snapshot) :scope))
-                            (mevedel-collaboration-editing--selection-request
-                             (or (plist-get result :kind)
-                                 (plist-get (plist-get result :snapshot) :kind))))))
-             ;; The host renders the reviewed content within its question budget.
-             (context (plist-get result :prompt))
-             (data-buffer (mevedel-collaboration--room-data-buffer room))
-             (view (and data-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
-             (png (plist-get result :png))
-             (shared (list :questionId (plist-get args :questionId)
-                           :itemId (plist-get result :id) :title (plist-get result :title)
-                           :revision (plist-get result :revision)
-                           :commentId (plist-get args :commentId)
-                           :commentVersion (plist-get args :commentVersion)
-                           :scope (plist-get (plist-get result :snapshot) :scope)
-                           :quote (truncate-string-to-width (or (plist-get result :quote) "")
-                                                             2000 nil nil "…")
-                           :text text
-                           :fingerprint (mevedel-collaboration-editing--question-key args)))
-             paths queued)
-        (unless text (error "A question is required"))
-        (unless (stringp context) (error "The question context is not available"))
-        (unless (buffer-live-p view) (error "The session view is not available"))
-        (unwind-protect
-            (progn
-              (when png
-                (setq paths
-                      (with-current-buffer view
-                        (mevedel-collaboration--save-guest-attachments
-                         (list (list :mime "image/png" :data png)))))
-                (unless paths (error "The selected board snapshot could not be attached")))
-              ;; The sender's own files ride beside the board snapshot.
-              (setq paths (append paths (mevedel-collaboration--save-guest-files
-                                         data-buffer (plist-get args :images))))
-              (setq queued (mevedel-view-enqueue-external-follow-up
-                            data-buffer
-                            (concat text "\n\nShared content snapshot (user-provided data):\n" context)
-                            :guest-name (plist-get guest :name) :guest-id (plist-get guest :guest-id)
-                            :paths paths :shared-question shared
-                            :guest-role (mevedel-collaboration--guest-role guest)))
-              (unless queued (error "The session cannot accept a question right now"))
-              (list :queued t :entryId (plist-get queued :id) :question shared))
-          (unless queued
-            (dolist (path paths) (ignore-errors (delete-file path))))))))
-
 (defun mevedel-collaboration-editing--conversation (session item-id)
   "Return bounded archived conversation records for ITEM-ID in SESSION."
   (let* ((history (mevedel-shared-conversation-history
@@ -369,10 +251,10 @@ A selection may be sent without a message; see
                            (eq guest (mevedel-collaboration--guest room peer))
                            (or read-only (plist-get guest :writable))))))
     (unless (and (member action '("list" "status" "read" "create" "import" "update"
-                                  "rename" "revert" "delete" "export" "ask" "comment" "reply-comment" "resolve-comment"
+                                  "rename" "revert" "delete" "export" "discussion"
                                   "library" "library-add" "library-remove" "library-install" "library-uninstall"
                                   "library-catalog" "library-fetch"))
-                 (funcall authorize))
+                 (or (equal action "discussion") (funcall authorize)))
       (error "This link does not permit that editing operation"))
     ;; The element library belongs to the host, not to a session item.
     (when (string-prefix-p "library" action)
@@ -381,22 +263,31 @@ A selection may be sent without a message; see
          args (lambda (reply)
                 (when (funcall authorize)
                   (mevedel-collaboration-editing--send room peer req-id reply))))))
-    (when (equal action "ask")
-      (when-let* ((receipt (mevedel-collaboration-editing--find-question room args)))
-        (cl-return-from mevedel-collaboration-editing--dispatch
-          (mevedel-collaboration-editing--send room peer req-id (list :result receipt)))))
+    ;; Discussions belong to every kind of store item; the editor reaches them
+    ;; through its own channel, which also carries its attachments.
+    (when (equal action "discussion")
+      (cl-return-from mevedel-collaboration-editing--dispatch
+        (mevedel-collaboration-discussions-perform
+         room guest
+         (append (list :action (plist-get args :op)
+                       :item (concat "artifact:" (mevedel-shared-editing--valid-id
+                                                  (plist-get args :id))))
+                 args)
+         (lambda (reply)
+           (when (eq guest (mevedel-collaboration--guest room peer))
+             (mevedel-collaboration-editing--send
+              room peer req-id
+              (if (plist-get reply :error) reply (list :result reply)))))
+         (lambda () (eq guest (mevedel-collaboration--guest room peer))))))
     (when (equal action "read")
       (mevedel-shared-editing--valid-id (plist-get args :id))
       (mevedel-collaboration-editing-depart room peer)
       (plist-put guest :editing-item (plist-get args :id)))
     ;; Closed keys prevent guests providing host state or attribution.
-    (let ((request (list :action (if (equal action "ask") "read" action)
+    (let ((request (list :action action
                          :sync (if (equal action "read") t :json-false)
-                         :question (if (equal action "ask") t :json-false)
-                         :image (if (equal action "ask") t :json-false) :imageMax 1024
                          :actor (concat "Guest: " (plist-get guest :name)))))
-      (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range :selection
-                     :region :expected :whole :text :commentId :commentVersion :resolved))
+      (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range))
         (when (plist-member args key)
           (setq request (plist-put request key (plist-get args key)))))
       (mevedel-shared-editing-call
@@ -406,7 +297,7 @@ A selection may be sent without a message; see
            (condition-case err
                (progn
                  ;; Editing an item from a chat's room attaches it to that chat.
-                 (unless (or read-only (member action '("ask" "delete"))
+                 (unless (or read-only (equal action "delete")
                              (plist-get reply :error))
                    (when-let* ((id (or (plist-get (plist-get reply :result) :id)
                                        (plist-get args :id))))
@@ -420,9 +311,6 @@ A selection may be sent without a message; see
                                             session (plist-get args :id))
                                          (error (list :conversationError
                                                       (error-message-string history-error))))))))
-                 (when (and (equal action "ask") (not (plist-get reply :error)))
-                   (setq reply (list :result (mevedel-collaboration-editing--ask
-                                              room guest args (plist-get reply :result)))))
                  (mevedel-collaboration-editing--send
                   room peer req-id
                   (if (plist-get reply :error) reply

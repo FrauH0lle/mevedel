@@ -64,7 +64,7 @@ export function captureContext(doc, { selection = [], range, region } = {}) {
     scope = 'selection';
   } else if (selection?.length || region) {
     check(kind === 'whiteboard' && Array.isArray(selection) && selection.length <= 200,
-      'Select document text to create a comment');
+      'A document passage is selected by its text, not by objects');
     check(!region || validRegion(region), 'Invalid board area');
     content = all.filter(shape => selection.includes(shape.id));
     check(content.length === selection.length, 'Selected objects are no longer available');
@@ -98,30 +98,34 @@ export function checkContext(doc, request) {
   return captured;
 }
 
-/* A board comment is changed once its objects move, restyle or disappear, and
-   removed when neither objects nor an area remain to show. */
-function readBoardComment(shapes, comment) {
-  const live = shapes.filter(shape => comment.selection.includes(shape.id));
-  const anchorStatus = !live.length && !comment.region ? 'deleted'
-    : live.length === comment.selection.length && anchorSignature(live, shapes) === comment.signature ? 'current' : 'changed';
-  return { ...comment, liveSelection: live.map(shape => shape.id),
-    liveQuote: boardQuote(live, comment.region, shapes), anchorStatus };
+/* A board discussion is changed once its objects move, restyle or
+   disappear, and removed when neither objects nor an area remain to show. */
+function readBoardTarget(shapes, discussion) {
+  const target = discussion.target;
+  const live = shapes.filter(shape => target.selection.includes(shape.id));
+  const anchorStatus = !live.length && !target.region ? 'deleted'
+    : live.length === target.selection.length && anchorSignature(live, shapes) === target.signature ? 'current' : 'changed';
+  return { ...discussion, liveSelection: live.map(shape => shape.id),
+    liveQuote: boardQuote(live, target.region, shapes), anchorStatus };
 }
 
-export function readComments(doc, comments = []) {
-  if (!comments.length) return [];
+/* Discussions with the live state of their targets.  A discussion about the
+   whole item has no anchor and is always current. */
+export function readDiscussions(doc, discussions = []) {
+  if (!discussions.length) return [];
+  const board = doc.getMap('meta').get('kind') === 'whiteboard';
   // Only boards need their shapes; a document resolves each anchor directly.
-  if (doc.getMap('meta').get('kind') === 'whiteboard') {
-    const { content } = inspect(doc);
-    return comments.map(comment => readBoardComment(content, comment));
-  }
-  return comments.map(comment => {
+  const shapes = board ? inspect(doc).content : null;
+  return discussions.map(discussion => {
+    const target = discussion.target;
+    if (target.kind === 'whole') return { ...discussion, liveQuote: '', anchorStatus: 'current' };
+    if (board) return readBoardTarget(shapes, discussion);
     try {
-      const { text } = selectedText(doc, comment.range);
-      return { ...comment, liveQuote: text,
-        anchorStatus: !text.trim() ? 'deleted' : text === comment.quote ? 'current' : 'changed' };
+      const { text } = selectedText(doc, target.range);
+      return { ...discussion, liveQuote: text,
+        anchorStatus: !text.trim() ? 'deleted' : text === discussion.quote ? 'current' : 'changed' };
     } catch {
-      return { ...comment, liveQuote: '', anchorStatus: 'deleted' };
+      return { ...discussion, liveQuote: '', anchorStatus: 'deleted' };
     }
   });
 }

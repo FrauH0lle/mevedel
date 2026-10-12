@@ -1245,7 +1245,7 @@ Artifacts live in the workspace artifact store,
 Each artifact has a directory whose name is its stable id. Authored files
 (HTML mockups, Markdown, images and assets) stay in that directory. Host
 bookkeeping lives separately under `.state/ID/`: metadata, saved versions,
-comment threads, and whiteboard/document state (see
+HTML artifact discussions, and whiteboard/document state (see
 [shared editing](shared-editing.md#durability-and-recovery)). The protected
 subtree keeps shell commands from creating or replacing bookkeeping, while
 allowing ordinary file creation and atomic replacement in authored directories.
@@ -1269,7 +1269,7 @@ Save As carry that list, so a fork points at the same artifacts. Deleting a
 session leaves its artifacts in place.
 
 An artifact may have one dedicated session, its own conversation for work
-started outside any chat: a comment or question from the lobby, the cockpit's
+started outside any chat: a discussion message from the lobby, the cockpit's
 `c`, or **Conversation** in the browser. It is an ordinary session, created on
 first use, attached to the artifact and saved at once, and named "Artifact
 ID". The two name each other: `meta.el` records the session's id and the
@@ -1328,7 +1328,7 @@ versions and sizes by their numbers; `t` toggles between all and attached
 artifacts. It opens an artifact locally (`o`, `e`),
 attaches it to the current session (`a`), views or restores a version (`v`),
 duplicates it into an independent artifact (`D`), opens its dedicated session
-(`c`), and deletes it with its versions, comments and dedicated session (`d`).
+(`c`), and deletes it with its versions, discussions and dedicated session (`d`).
 `n` (also the session menu's `n New shared item`, or
 `M-x mevedel-artifacts-new-shared-item`) creates a whiteboard or document; see
 [shared editing](shared-editing.md).

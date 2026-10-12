@@ -510,32 +510,30 @@ test(
           .evaluate(() => window.getSelection().toString()),
         'An',
       );
-      await frame(pages[1]).locator('#comment-selection').click();
-      await frame(pages[1]).locator('#comment-text').fill('Explain the selected opening');
-      await frame(pages[1]).locator('#comment-assistant').uncheck();
-      await frame(pages[1]).locator('#comment-post').click();
-      await frame(pages[1]).locator('#comments .comment').waitFor();
-      assert.equal((await agent('InspectTest')).queue.length, 1, 'posting a comment does not queue a model turn');
-      await frame(pages[0]).locator('#comments-tab').click();
-      await frame(pages[0]).locator('#comments .comment > summary').click();
+      const anchored = (page) => frame(page).locator('#discussions .discussion:not([data-discussion-id="general"])');
+      await frame(pages[1]).locator('#discuss-selection').click();
+      await frame(pages[1]).locator('#question').fill('Explain the selected opening');
+      await frame(pages[1]).locator('#ask-assistant').uncheck();
+      await frame(pages[1]).locator('#question-send').click();
+      await anchored(pages[1]).waitFor();
+      assert.equal((await agent('InspectTest')).queue.length, 1, 'a discussion without the assistant does not queue a model turn');
+      await anchored(pages[0]).locator('summary').click();
       await frame(pages[0]).locator('.reply-form textarea').fill('Include a concrete example.');
       await frame(pages[0]).locator('.reply-assistant').uncheck();
-      await frame(pages[0]).getByText('Post reply', {exact:true}).click();
+      await anchored(pages[0]).getByText('Reply', {exact:true}).click();
       await frame(pages[1]).locator('.thread-message').getByText('Include a concrete example.', {exact:true}).waitFor();
       assert.equal((await agent('InspectTest')).queue.length, 1, 'human replies do not queue a model turn');
       await frame(pages[0]).locator('.reply-form textarea').fill('> Private reply draft\nsecond line');
-      await frame(pages[0]).locator('#assistant-tab').click();
       await frame(pages[0]).locator('#question').fill('Separate private AI question');
       await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Separate private AI question'));
       await pages[0].reload();
       await frame(pages[0]).locator('.tiptap[contenteditable="true"]').waitFor();
       if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
       assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Separate private AI question');
-      await frame(pages[0]).locator('#comments-tab').click();
-      await frame(pages[0]).locator('#comments .comment > summary').click();
+      await anchored(pages[0]).locator('summary').click();
       assert.equal(await frame(pages[0]).locator('.reply-form textarea').inputValue(),'> Private reply draft\nsecond line');
       await frame(pages[0]).locator('#assistant-close').click();
-      await frame(pages[1]).locator('.thread-send').click();
+      await anchored(pages[1]).locator('.thread-send').click();
       const rangeAsk = await until(async () => {
         const info = await agent('InspectTest');
         return info.queue.length === 2 ? info.queue[1] : null;
@@ -1076,11 +1074,11 @@ test(
       // The pen keeps drawing, so the stroke is selected to ask about it.
       await frame(ownerPage).locator('[data-tool="select"]').click();
       await ownerPage.mouse.click(area.x + 400, area.y + 230);
-      await frame(ownerPage).locator('#selection-question').click();
+      await frame(ownerPage).locator('#discuss-selection').click();
       await frame(ownerPage).locator('body').evaluate(() => {
         const post = MessagePort.prototype.postMessage;
         MessagePort.prototype.postMessage = function(data, ...rest) {
-          if (data?.type === 'request' && data.args?.action === 'ask')
+          if (data?.type === 'request' && data.args?.action === 'discussion' && data.args.op === 'post')
             window.retryQuestion = () => post.call(this, {...data, reqId:crypto.randomUUID()});
           return post.call(this, data, ...rest);
         };

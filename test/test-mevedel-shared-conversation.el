@@ -353,30 +353,4 @@
                         :type 'user-error))
       (delete-directory directory t))))
 
-(mevedel-deftest mevedel-collaboration-editing--find-question-archived
-  (:doc "accepted archived questions cannot be submitted twice after compaction")
-  (let* ((directory (make-temp-file "shared-question-retry-" t))
-         (session (mevedel-session--create :save-path directory :current-segment 2 :authority-mode 'pid-lock))
-         (args '(:id "doc" :questionId "q1" :text "Question"))
-         (shared (list :itemId "doc" :questionId "q1" :text "Question"
-                       :fingerprint (mevedel-collaboration-editing--question-key args))))
-    (unwind-protect
-        (with-temp-buffer
-          (org-mode)
-          (mevedel--insert-user-turn "Question")
-          (insert (mevedel--format-hook-audit-record
-                   (list :type 'guest-prompt :name "Guest" :shared shared)))
-          (insert (propertize "Answer" 'gptel 'response))
-          (let ((gptel--bounds nil)) (gptel--save-state))
-          (write-region (point-min) (point-max)
-                        (mevedel-session-artifacts-segment-path directory 1) nil 'silent)
-          (erase-buffer)
-          (let* ((room (list :session session :data-buffer (current-buffer)))
-                 (receipt (mevedel-collaboration-editing--find-question room args)))
-            (should (plist-get receipt :delivered))
-            (should (equal "q1" (plist-get (plist-get receipt :question) :questionId)))
-            (should-error (mevedel-collaboration-editing--find-question
-                           room (plist-put (copy-sequence args) :text "Changed question")))))
-      (delete-directory directory t))))
-
 ;;; test-mevedel-shared-conversation.el ends here

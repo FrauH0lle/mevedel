@@ -5,7 +5,7 @@
 ;; The workspace artifact store at `<workspace>/.mevedel/artifacts/'.  Each
 ;; artifact has a directory named by its stable id for authored files.
 ;; Protected `.state/ID/' directories hold host bookkeeping: `meta.el',
-;; numbered versions with `index.el', `comments.json' and shared editor
+;; numbered versions with `index.el', `discussions.json' and shared editor
 ;; `state.json'.  Sessions attach to artifacts by id.  An artifact may have
 ;; one dedicated session, created on demand for conversations outside any chat.
 ;; The two name each other; while they agree the session is hidden from session

@@ -150,7 +150,7 @@
 
 (defconst mevedel-collaboration--store-read-budget '(8 . 2.0)
   "At most CAR store reads per guest within CDR seconds.
-Listing the store, or an artifact's versions or comments, reads files
+Listing the store, or an artifact's versions or discussions, reads files
 for each one; a link that may only view must not keep the host busy.")
 
 (defun mevedel-collaboration--store-read-allowed-p (guest)

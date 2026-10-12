@@ -166,3 +166,7 @@ to the decision bearing that ID.
 - [ADR 0124: Keep artifacts in a workspace store that sessions attach to](0124-keep-artifacts-in-a-workspace-store.md)
   amends ADR 0099's published-record authority, ADR 0120's per-session storage
   and queue, and ADR 0122's lobby with an Artifacts tab.
+
+- [ADR 0125: Discuss items through one mechanism](0125-discuss-items-through-one-mechanism.md)
+  amends ADR 0120's separate comments and assistant views and its explicit-only
+  resolution, and extends ADR 0124's comment routing to every item kind.

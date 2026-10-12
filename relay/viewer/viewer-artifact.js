@@ -34,7 +34,7 @@
       + '});})()<\/script>';
   }
 
-  function create({send, el, flash, summarize, reveal, canComment, canDelete, busy, ask,
+  function create({send, el, flash, summarize, reveal, canDiscuss, canDelete, busy, ask,
                    onPage = () => {}}) {
     const nav = document.getElementById('artifacts');
     const box = document.getElementById('artifacts-box');
@@ -47,26 +47,27 @@
     const remove = document.getElementById('artifact-delete');
     const closeButton = document.getElementById('artifact-close');
     const body = document.getElementById('artifact-body');
-    const commentToggle = document.getElementById('artifact-comment');
+    const discussToggle = document.getElementById('artifact-discussion');
+    const generalButton = document.getElementById('artifact-general');
     const askButton = document.getElementById('artifact-ask');
     // KIND is 'artifact' for an artifact card or 'file' for a project file,
-    // which has no comments and is removed from the file tree instead.
-    // STORE is the artifact store id comments belong to, if any.
+    // which has no discussions and is removed from the file tree instead.
+    // STORE is the artifact store id discussions belong to, if any.
     const view = {id: null, name: null, store: null, kind: 'artifact', reqId: 0,
                   staging: null, meta: null, bytes: null, urls: [], frames: []};
     let requestSequence = 0;
     let theme = null;
-    const commentKit = window.mevedelArtifactComments;
-    const comments = commentKit && body ? commentKit.create({
-      send, el, body, toggle: commentToggle, flash,
+    const discussionKit = window.mevedelArtifactDiscussions;
+    const discussions = discussionKit && body ? discussionKit.create({
+      send, el, body, toggle: discussToggle, general: generalButton, flash,
       renderMarkdown: text => window.mevedelTranscriptRenderer.renderMarkdown(text),
-      // The panel covers the conversation, so showing a comment's turn
+      // The panel covers the conversation, so showing a discussion's turn
       // closes the artifact first.
       reveal: typeof reveal === 'function' ? id => {
         close();
         reveal(id);
       } : null,
-      canComment: typeof canComment === 'function' ? canComment : () => false,
+      canDiscuss: typeof canDiscuss === 'function' ? canDiscuss : () => false,
       busy: typeof busy === 'function' ? busy : () => false,
     }) : null;
 
@@ -75,14 +76,14 @@
       body.replaceChildren(el('p', 'panel-note', text));
     }
 
-    // Only the panel frame carries the comment picker: its parent is this
+    // Only the panel frame carries the discussion picker: its parent is this
     // viewer. A separate tab's frame answers to a shell with no room.
-    function sandboxedFrame(doc, html, commentable) {
+    function sandboxedFrame(doc, html, discussable) {
       const frame = doc.createElement('iframe');
       frame.setAttribute('sandbox', 'allow-scripts');
       frame.className = 'artifact-frame';
       frame.srcdoc = CSP + themePrelude(theme)
-        + (commentable && comments ? commentKit.script() : '') + html;
+        + (discussable && discussions ? discussionKit.script() : '') + html;
       view.frames.push(frame);
       return frame;
     }
@@ -112,7 +113,7 @@
       view.bytes = null;
       view.urls.splice(0).forEach(url => URL.revokeObjectURL(url));
       view.frames = [];
-      if (comments) comments.detach();
+      if (discussions) discussions.detach();
       if (panel) panel.hidden = true;
       if (body) body.replaceChildren();
       if (tab) tab.hidden = true;
@@ -123,13 +124,13 @@
     }
 
     // Deleting removes the artifact for everyone, with its versions and
-    // comments; the host resolves it from its own record of the card or
+    // discussions; the host resolves it from its own record of the card or
     // from its store id, and the card then reads as deleted.
     const deletions = new Map();
     let deleteSequence = 0;
     if (remove) {
       remove.addEventListener('click', async () => {
-        if (!view.id || !window.confirm(`Delete ${view.name} for everyone, with its versions and comments? This cannot be undone.`)) return;
+        if (!view.id || !window.confirm(`Delete ${view.name} for everyone, with its versions and discussions? This cannot be undone.`)) return;
         const reqId = ++deleteSequence;
         deletions.set(reqId, view.name);
         if (!await send({t: 'artifact-delete', reqId, id: view.id})) {
@@ -195,14 +196,14 @@
       if (download) download.hidden = false;
       if (remove) remove.hidden = !(artifact && typeof canDelete === 'function' && canDelete());
       if (askButton) askButton.hidden = view.kind !== 'file' || !ask || !ask.available();
-      // Comments belong to a store artifact; the host keeps them on its
+      // Discussions belong to a store artifact; the host keeps them on its
       // main file.
-      const commentable = artifact && view.store !== null;
+      const discussable = artifact && view.store !== null;
       if (mime === 'text/html') {
         if (tab) tab.hidden = false;
-        const frame = sandboxedFrame(document, text(), commentable);
+        const frame = sandboxedFrame(document, text(), discussable);
         body.append(frame);
-        if (comments && commentable) comments.attach(frame, view.id, view.store);
+        if (discussions && discussable) discussions.attach(frame, view.id, view.store);
       } else if (mime === 'text/markdown') {
         const prose = renderMarkdown(text());
         prose.className = 'prose artifact-prose';
@@ -299,7 +300,7 @@
     let attached = [];
     function render(records) {
       published = records;
-      if (comments) comments.records(records);
+      if (discussions) discussions.records(records);
       paint();
     }
 
@@ -356,28 +357,28 @@
       });
     }
     function queue(entries) {
-      if (comments) comments.queue(entries);
+      if (discussions) discussions.queue(entries);
     }
 
     function handleDiscussion(frame) {
-      if (comments) comments.handle(frame);
+      if (discussions) discussions.handle(frame);
     }
 
     function storedDiscussions(frame) {
-      if (comments) comments.stored(frame);
+      if (discussions) discussions.stored(frame);
     }
 
     // The session started or finished a turn: markers show whether the
     // assistant is still working on their threads.
     function activity() {
-      if (comments) comments.activity();
+      if (discussions) discussions.activity();
     }
 
     // A room message about store artifact STORE as a whole, with attachment
     // IMAGES, sent into the artifact's conversation.
     function discuss(store, text, images = []) {
-      if (!comments) return Promise.reject(new Error('Artifact messages are unavailable.'));
-      return comments.discuss(`artifact:${store}`, text, images);
+      if (!discussions) return Promise.reject(new Error('Artifact messages are unavailable.'));
+      return discussions.discuss(`artifact:${store}`, text, images);
     }
 
     return Object.freeze({open, openFile, render, attachedRows, handle, handleDelete, close,

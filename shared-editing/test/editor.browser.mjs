@@ -6,6 +6,21 @@ import {editorFixture} from './editor-fixture.mjs';
 const shape = (id, type, [x, y, width, height], text) => [{id, type, x, y, width, height},
   ...(text ? [{id:`${id}-label`, type:'text', x, y, width:0, height:0, text, containerId:id}] : [])];
 const geometry = ({x, y, width, height}) => [x, y, width, height];
+/* The editor's discussion requests of operation OP, in the order sent. */
+const sent = (page, op) => page.evaluate(op => window.messages
+  .filter(m => m.args?.action === 'discussion' && m.args.op === op).map(m => m.args), op);
+/* The card of the Nth discussion about a selection; the general one is first. */
+const anchored = (frame, n = 0) => frame.locator('#discussions .discussion:not([data-discussion-id="general"])').nth(n);
+/* Wait until the assistant was asked N times; the requests live in Node. */
+async function askedCount(page, n) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const asked = await page.evaluate(() => window.asked());
+    if (asked.length === n) return asked;
+    if (Date.now() > deadline) throw new Error(`Asked ${asked.length} times, expected ${n}`);
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
 
 // The real packaged iframe and port, without room setup, for interaction regressions.
 test('editor interaction regressions', async (t) => {
@@ -470,24 +485,24 @@ test('editor interaction regressions', async (t) => {
       await drag([-20,-20], [200,150]);
       assert.deepEqual(await chosen(), ['a']);
       assert.equal(await frame.locator('#selection .selection-region').count(), 0, 'the box disappears on release');
-      assert.equal(await frame.locator('#selection-question').isDisabled(), false);
+      assert.equal(await frame.locator('#discuss-selection').isDisabled(), false);
       await drag([-20,-20], [320,150], 'Alt');
       assert.deepEqual(await chosen(), ['a','b']);
       await drag([-20,280], [150,450], 'Shift');
       assert.deepEqual(await chosen(), ['a','b','c']);
       await drag([140,140], [260,260]);
       assert.deepEqual(await chosen(), []);
-      assert.equal(await frame.locator('#selection-question').isDisabled(), false,
+      assert.equal(await frame.locator('#discuss-selection').isDisabled(), false,
         'an empty area remains selected for questions');
       const [x, y] = await at(200, 200);
       await page.mouse.click(offset.x + x, offset.y + y);
-      assert.equal(await frame.locator('#selection-question').isDisabled(), true);
+      assert.equal(await frame.locator('#discuss-selection').isDisabled(), true);
       const content = await page.evaluate(async () => (await window.apply({action:'read'})).content);
       assert.deepEqual(content.filter(s => s.type !== 'text').map(geometry), [[0,0,100,100],[300,0,100,100],[0,300,100,100]],
         'box selection never edits content');
       await page.close();
     });
-    await t.test('asking about a boxed area sends its region with the contained objects', async () => {
+    await t.test('discussing a boxed area sends its region with the contained objects', async () => {
       const {page, frame} = await open({content:[
         ...shape('a', 'rectangle', [0,0,100,100], 'A'),
         ...shape('b', 'rectangle', [300,0,100,100], 'B'),
@@ -502,26 +517,34 @@ test('editor interaction regressions', async (t) => {
       await page.mouse.down();
       await page.mouse.move(offset.x + x1, offset.y + y1, {steps: 4});
       await page.mouse.up();
-      await frame.locator('#selection-question').click();
+      await frame.locator('#discuss-selection').click();
       assert.equal(await frame.locator('#selection .selection-region').count(), 1, 'the attached area shows again');
-      assert.match(await frame.locator('#context-title').innerText(), /Selected area/);
+      assert.match(await frame.locator('#context-title').innerText(), /New discussion · selected area/);
       assert.equal(await frame.locator('#selected-question').innerText(), 'Selected area');
       assert.match(await frame.locator('#context-quote').textContent(), /^Area \d+ × \d+ at -2\d, -2\d\n1 object\nrectangle: A$/);
-      await frame.locator('#question').fill('Put a legend here');
-      await frame.locator('#question-send').click();
-      await page.waitForFunction(() => window.messages.some(m => m.args?.action === 'ask'));
-      const ask = await page.evaluate(() => window.messages.find(m => m.args?.action === 'ask').args);
-      assert.deepEqual(ask.selection, ['a']);
-      assert.equal(ask.region.length, 4);
-      // The host checks the reviewed capture by its hash; the capture stays here.
-      assert.match(ask.expected, /^[0-9a-f]{12}$/);
       await frame.locator('#whole-question').click();
       await frame.locator('#selected-question').click();
-      assert.match(await frame.locator('#context-title').innerText(), /Selected area/,
+      assert.match(await frame.locator('#context-title').innerText(), /selected area/,
         'switching scopes retains the captured area');
+      await frame.locator('#question').fill('Put a legend here');
+      await frame.locator('#question-send').click();
+      await askedCount(page, 1);
+      const [post] = await sent(page, 'post');
+      assert.deepEqual(post.target.selection, ['a']);
+      assert.equal(post.target.region.length, 4);
+      // The host checks the reviewed capture by its hash; the capture stays here.
+      assert.match(post.expected, /^[0-9a-f]{12}$/);
+      const [ask] = await page.evaluate(() => window.asked());
+      assert.deepEqual([ask.discussionId, ask.version], [post.discussionId, post.messageId]);
+      assert.deepEqual(ask.selection, ['a']);
+      // The started discussion continues in its card; the composer returns
+      // to the whole board.
+      await anchored(frame).getByText('Put a legend here', {exact: true}).waitFor();
+      assert.equal(await anchored(frame).evaluate(e => e.open), true);
+      assert.match(await frame.locator('#context-title').innerText(), /^Whole whiteboard/);
       await page.close();
     });
-    await t.test('a selection is sent without a message, a whole-board question is not', async () => {
+    await t.test('a selection is sent without a message, a whole-board message is not', async () => {
       const {page, frame} = await open({content:[
         ...shape('a', 'rectangle', [0,0,100,100], 'A'),
         ...shape('b', 'rectangle', [300,0,100,100], 'B'),
@@ -536,24 +559,34 @@ test('editor interaction regressions', async (t) => {
       await page.mouse.down();
       await page.mouse.move(offset.x + x1, offset.y + y1, {steps: 4});
       await page.mouse.up();
-      await frame.locator('#selection-question').click();
-      assert.match(await frame.locator('#question').getAttribute('placeholder'), /leave empty to send the selected objects/);
+      await frame.locator('#discuss-selection').click();
+      assert.match(await frame.locator('#question').getAttribute('placeholder'), /leave empty to send the selected area/);
       assert.equal(await frame.locator('#question').inputValue(), '');
+      // Without the assistant, a selection alone says nothing.
+      await frame.locator('#ask-assistant').uncheck();
+      assert.doesNotMatch(await frame.locator('#question').getAttribute('placeholder'), /leave empty/);
       await frame.locator('#question-send').click();
-      await page.waitForFunction(() => window.messages.some(m => m.args?.action === 'ask'));
-      const ask = await page.evaluate(() => window.messages.find(m => m.args?.action === 'ask').args);
-      assert.equal(ask.text, '', 'the host, not the browser, words a selection sent alone');
+      assert.match(await frame.locator('#assistant-notice').innerText(), /choose Ask assistant to send the selection alone/);
+      assert.equal((await sent(page, 'post')).length, 0);
+      await frame.locator('#ask-assistant').check();
+      await frame.locator('#question-send').click();
+      await askedCount(page, 1);
+      const [post] = await sent(page, 'post');
+      assert.equal(post.text, '', 'the host, not the browser, words a selection sent alone');
+      assert.equal(post.toAssistant, true);
+      const [ask] = await page.evaluate(() => window.asked());
       assert.deepEqual(ask.selection, ['a']);
+      await anchored(frame).locator('.thread-message p.alone')
+        .getByText('Sent the selection as the request', {exact: true}).waitFor();
       // The whole board has nothing of its own to say: it needs a message.
-      await page.evaluate(() => { window.messages.length = 0; });
-      await frame.locator('#whole-question').click();
+      assert.equal(await frame.locator('#whole-question').getAttribute('aria-pressed'), 'true');
       await frame.locator('#question-send').click();
-      assert.match(await frame.locator('#assistant-notice').innerText(), /Write a question, or select content/);
-      assert.equal(await page.evaluate(() => window.messages.filter(m => m.args?.action === 'ask').length), 0);
-      assert.match(await frame.locator('#question').getAttribute('placeholder'), /Ask a question/);
+      assert.match(await frame.locator('#assistant-notice').innerText(), /Write a message, or select content/);
+      assert.equal((await sent(page, 'post')).length, 1);
+      assert.match(await frame.locator('#question').getAttribute('placeholder'), /Write about the whole whiteboard/);
       await page.close();
     });
-    await t.test('board comments: comment tool, numbered markers, hover card, threads and resolution', async () => {
+    await t.test('board discussions: Discuss tool, numbered markers, hover card, messages and resolution', async () => {
       const {page, frame} = await open({content:[
         ...shape('a', 'rectangle', [0,0,100,100], 'A'),
         ...shape('b', 'rectangle', [300,0,100,100], 'B'),
@@ -568,63 +601,66 @@ test('editor interaction regressions', async (t) => {
       };
       await frame.locator('#canvas').focus();
       await page.keyboard.press('m');
-      assert.equal(await frame.locator('[data-tool="comment"]').getAttribute('aria-pressed'), 'true');
+      assert.equal(await frame.locator('[data-tool="discuss"]').getAttribute('aria-pressed'), 'true');
       await page.mouse.move(...await at(50, 50));
-      assert.equal(await frame.locator('#selection .comment-hover').count(), 1, 'hover outlines the target');
+      assert.equal(await frame.locator('#selection .discussion-hover').count(), 1, 'hover outlines the target');
       await page.mouse.down(); await page.mouse.up();
-      await frame.locator('#comment-text').waitFor();
-      assert.equal(await frame.locator('#comment-quote').textContent(), '1 object\nrectangle: A');
-      await frame.locator('#comment-text').fill('Make this blue');
-      await frame.locator('#comment-assistant').uncheck();
-      await frame.locator('#comment-post').click();
-      const card = frame.locator('#comments .comment').first();
+      await frame.locator('#question').waitFor();
+      assert.equal(await frame.locator('#context-quote').textContent(), '1 object\nrectangle: A');
+      await frame.locator('#question').fill('Make this blue');
+      await frame.locator('#ask-assistant').uncheck();
+      await frame.locator('#question-send').click();
+      const card = anchored(frame);
       await card.waitFor();
-      assert.equal(await card.locator('.comment-passage').textContent(), 'Show objects');
-      const pin = frame.locator('#comment-markers .comment-pin');
+      assert.equal(await card.locator('.discussion-show').textContent(), 'Show objects');
+      const pin = frame.locator('#discussion-markers .discussion-pin');
       await pin.waitFor();
       assert.equal(await pin.textContent(), '1');
-      // An area comment from a drag in comment mode.
+      // An area discussion from a drag with the Discuss tool.
       await frame.locator('#assistant-close').click();
       const [x0, y0] = await at(150, 20), [x1, y1] = await at(250, 80);
       await page.mouse.move(x0, y0); await page.mouse.down();
       await page.mouse.move(x1, y1, {steps: 3}); await page.mouse.up();
-      assert.match(await frame.locator('#comment-quote').textContent(), /^Area 10\d × 6\d at 1(49|50), (19|20)\n0 objects$/);
-      await frame.locator('#comment-text').fill('Legend here');
-      await frame.locator('#comment-assistant').uncheck();
-      await frame.locator('#comment-post').click();
-      await frame.locator('#comment-markers .comment-pin').nth(1).waitFor();
-      assert.match(await frame.locator('#comments .comment summary').nth(1).textContent(),
-                   /^Area 10\d × 6\d at 1(49|50), (19|20) · 0 objects$/, 'thread headers keep quote lines apart');
-      const posted = await page.evaluate(() => window.messages.filter(m => m.args?.action === 'comment').map(m => m.args));
-      assert.deepEqual(posted[0].selection, ['a']);
-      assert.equal(posted[1].region.length, 4);
-      // Hovering a pin shows its thread; clicking opens it in the panel.
+      assert.match(await frame.locator('#context-quote').textContent(), /^Area 10\d × 6\d at 1(49|50), (19|20)\n0 objects$/);
+      assert.equal(await frame.locator('#ask-assistant').isChecked(), false, 'the choice is kept for the next message');
+      await frame.locator('#question').fill('Legend here');
+      await frame.locator('#question-send').click();
+      await frame.locator('#discussion-markers .discussion-pin').nth(1).waitFor();
+      assert.match(await anchored(frame, 1).locator('summary').textContent(),
+                   /^Area 10\d × 6\d at 1(49|50), (19|20) · 0 objects$/, 'card headers keep quote lines apart');
+      const posted = await sent(page, 'post');
+      assert.deepEqual(posted[0].target.selection, ['a']);
+      assert.equal(posted[1].target.region.length, 4);
+      assert.equal((await page.evaluate(() => window.asked())).length, 0);
+      const id = posted[0].discussionId;
+      // Hovering a pin shows its discussion; clicking opens it in the panel.
       await frame.locator('#assistant-close').click();
+      await card.evaluate(e => { e.open = false; });
       await pin.first().hover();
-      await frame.locator('#comment-peek:not([hidden])').waitFor();
-      assert.match(await frame.locator('#comment-peek').textContent(), /Alice.*Make this blue/s);
+      await frame.locator('#discussion-peek:not([hidden])').waitFor();
+      assert.match(await frame.locator('#discussion-peek').textContent(), /Alice.*Make this blue/s);
       await page.mouse.move(offset.x + 5, offset.y + offset.height - 5);
-      assert.equal(await frame.locator('#comment-peek').isHidden(), true);
+      assert.equal(await frame.locator('#discussion-peek').isHidden(), true);
       await pin.first().click();
       assert.equal(await card.evaluate(e => e.open), true);
       await page.keyboard.press('Escape');
       await frame.locator('[data-tool="select"]').click();
       await frame.locator('#ask-toggle').click();
-      await frame.locator('#comments-tab').click();
-      await card.locator('.comment-passage').click();
+      await card.locator('.discussion-show').click();
       assert.equal(await frame.locator('#selection').getAttribute('data-selected'), 'a');
-      // Sending the thread asks about its objects; resolving removes its marker.
-      await card.getByText('Send thread to assistant', {exact: true}).click();
-      await page.waitForFunction(() => window.messages.some(m => m.args?.action === 'ask'));
-      const ask = await page.evaluate(() => window.messages.find(m => m.args?.action === 'ask').args);
+      // Sending the discussion asks about its objects; resolving removes its marker.
+      await card.getByText('Send to assistant', {exact: true}).click();
+      await askedCount(page, 1);
+      const [ask] = await page.evaluate(() => window.asked());
       assert.deepEqual(ask.selection, ['a']);
-      assert.equal(ask.commentId, posted[0].opId);
-      assert.equal(ask.text, 'Make this blue', 'the comment itself is the request');
+      assert.deepEqual([ask.discussionId, ask.version], [id, posted[0].messageId],
+        'the latest message is the request');
       // Its pin carries a turning ring while the assistant works on it.
-      const spinning = () => frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working] .comment-spin`).count();
-      await frame.locator('#comment-markers [data-working] .comment-spin').waitFor();
+      const marker = `#discussion-markers [data-discussion-id="${id}"]`;
+      const spinning = () => frame.locator(`${marker}[data-working] .discussion-spin`).count();
+      await frame.locator('#discussion-markers [data-working] .discussion-spin').waitFor();
       const delivered = {id:'q', kind:'user', guest:'Alice',
-        shared:{questionId:ask.questionId, commentId:posted[0].opId}, text:'Make this blue'};
+        shared:{questionId:ask.questionId, discussionId:id, messageId:ask.version}, text:'Make this blue'};
       const update = (records, busy, active) => page.evaluate(([records, busy, active]) =>
         window.port.postMessage({type:'conversation', connected:true, busy, active, own:[], records}),
       [records, busy, active]);
@@ -635,42 +671,39 @@ test('editor interaction regressions', async (t) => {
       await page.waitForTimeout(50);
       assert.equal(await spinning(), 1, 'a first reply does not end the turn');
       await update([delivered, {id:'r', kind:'assistant', text:'On it.'}], true, 'another-question');
-      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working]`)
-        .waitFor({state:'detached'});
-      assert.equal(await spinning(), 0, 'another turn running is not this thread');
+      await frame.locator(`${marker}[data-working]`).waitFor({state:'detached'});
+      assert.equal(await spinning(), 0, 'another turn running is not this discussion');
       await update([delivered, {id:'r', kind:'assistant', text:'Done.'}], true, ask.questionId);
-      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working]`).waitFor();
+      await frame.locator(`${marker}[data-working]`).waitFor();
       await update([delivered, {id:'r', kind:'assistant', text:'Done.'}], false, null);
-      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"][data-working]`)
-        .waitFor({state:'detached'});
+      await frame.locator(`${marker}[data-working]`).waitFor({state:'detached'});
       assert.equal(await spinning(), 0, 'a finished turn stops spinning');
+      await card.getByText('Done.', {exact: true}).waitFor();
       // Resolved elsewhere while its pin is hovered, the peek closes with the pin.
       await frame.locator('#assistant-close').click();
-      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"] .comment-pin`).hover();
-      await frame.locator('#comment-peek:not([hidden])').waitFor();
-      await page.evaluate(async commentId => {
-        const result = await window.apply({action:'resolve-comment', opId:'elsewhere', commentId, resolved:true});
+      await frame.locator(`${marker} .discussion-pin`).hover();
+      await frame.locator('#discussion-peek:not([hidden])').waitFor();
+      await page.evaluate(async discussionId => {
+        const result = await window.apply({action:'discussion', op:'resolve', discussionId, resolved:true});
         window.port.postMessage({type:'changed', ...result});
-      }, posted[0].opId);
-      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"]`).waitFor({state:'detached'});
-      assert.equal(await frame.locator('#comment-peek').isHidden(), true);
-      await page.evaluate(async commentId => {
-        const result = await window.apply({action:'resolve-comment', opId:'reopen', commentId, resolved:false});
+      }, id);
+      await frame.locator(marker).waitFor({state:'detached'});
+      assert.equal(await frame.locator('#discussion-peek').isHidden(), true);
+      await page.evaluate(async discussionId => {
+        const result = await window.apply({action:'discussion', op:'resolve', discussionId, resolved:false});
         window.port.postMessage({type:'changed', ...result});
-      }, posted[0].opId);
-      await frame.locator(`#comment-markers [data-comment-id="${posted[0].opId}"]`).waitFor();
+      }, id);
+      await frame.locator(marker).waitFor();
       await frame.locator('#ask-toggle').click();
-      await frame.locator('#comments-tab').click();
       await card.getByText('Resolve', {exact: true}).click();
       await card.waitFor({state: 'hidden'});
-      assert.equal(await frame.locator('#comment-markers .comment-pin').count(), 1);
-      assert.equal(await frame.locator('#comment-markers .comment-pin').textContent(), '1', 'open markers renumber');
-      // Deleting the objects of an object comment marks its thread removed.
+      assert.equal(await frame.locator('#discussion-markers .discussion-pin').count(), 1);
+      assert.equal(await frame.locator('#discussion-markers .discussion-pin').textContent(), '1', 'open markers renumber');
+      // Deleting the objects of a discussion marks it removed.
       await frame.locator('#show-resolved').check();
       await card.getByText('Reopen', {exact: true}).click();
-      await page.evaluate(questionId => window.port.postMessage({type:'conversation', connected:true, own:[], records:[
-        {id:'q', kind:'user', guest:'Alice', shared:{questionId}, text:'Make this blue'},
-        {id:'r', kind:'assistant', text:'Done.'}]}), ask.questionId);
+      await page.evaluate(delivered => window.port.postMessage({type:'conversation', connected:true, own:[], records:[
+        delivered, {id:'r', kind:'assistant', text:'Done.'}]}), delivered);
       await page.evaluate(async () => {
         const read = await window.apply({action:'read'});
         const result = await window.apply({action:'patch', opId:'agent-delete',
@@ -678,20 +711,20 @@ test('editor interaction regressions', async (t) => {
         window.port.postMessage({type:'changed', ...result});
       });
       await card.locator('.thread-status').getByText('Referenced objects were removed').waitFor();
-      assert.equal(await card.getByText('Send thread to assistant', {exact: true}).isDisabled(), true);
-      assert.equal(await frame.locator('#comment-markers .comment-pin').count(), 1, 'a removed anchor has no marker');
+      assert.equal(await card.getByText('Send to assistant', {exact: true}).isDisabled(), true);
+      assert.equal(await frame.locator('#discussion-markers .discussion-pin').count(), 1, 'a removed target has no marker');
       await page.close();
     });
     await t.test('whole and selection actions stay together beside the composer', async () => {
       const {page, frame} = await open();
       await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});
-      await frame.locator('#selection-question').click();
+      await frame.locator('#discuss-selection').click();
       const selection = await frame.locator('#selected-question').boundingBox();
       const whole = await frame.locator('#whole-question').boundingBox();
       assert.ok(Math.abs(selection.y - whole.y) < 45);
       assert.equal(await frame.locator('#context-scope button:visible').count(), 2);
       assert.ok(Math.abs(selection.x - whole.x) < 200);
-      assert.match(await frame.locator('#context-title').innerText(), /Selected content/);
+      assert.match(await frame.locator('#context-title').innerText(), /selected objects/);
       if (process.env.MEVEDEL_EDITOR_SCREENSHOTS) await page.screenshot({path:'.scratch/shared-editing-followup/context-buttons.png'});
       await frame.locator('#whole-question').click();
       assert.match(await frame.locator('#context-title').innerText(), /Whole whiteboard/);
@@ -1033,58 +1066,62 @@ test('editor interaction regressions', async (t) => {
         await page.close();
       },
     );
-    await t.test('separate drafts, human replies, direct thread send and inline AI answers', async () => {
+    await t.test('one composer: a selection starts a discussion, replies, direct send and inline answers', async () => {
       const {page, frame} = await open({kind:'document'});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
       await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
       if (process.env.MEVEDEL_DISCUSSION_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/document-discussion/selection.png',import.meta.url).pathname});
-      await frame.locator('#selection-question').click();
+      await frame.locator('#discuss-selection').click();
       assert.equal(await frame.locator('#context-quote').textContent(),'useful');
-      await frame.locator('#question').fill('> Keep this question\nsecond line');
+      await frame.locator('#question').fill('Explain this word');
+      // The draft and what it discusses survive closing the panel.
       await frame.locator('#assistant-close').click();
-      await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
-      await frame.locator('#comment-selection').click();
-      await frame.locator('#comment-text').fill('Explain this word');
-      await frame.locator('#assistant-tab').click();
-      assert.equal(await frame.locator('#question').inputValue(),'> Keep this question\nsecond line');
+      await frame.locator('#ask-toggle').click();
+      assert.equal(await frame.locator('#question').inputValue(),'Explain this word');
       assert.equal(await frame.locator('#context-quote').textContent(),'useful');
-      await frame.locator('#comments-tab').click();
-      assert.equal(await frame.locator('#comment-text').inputValue(),'Explain this word');
-      await frame.locator('#comment-assistant').uncheck();
-      await frame.locator('#comment-post').click();
-      const card = frame.locator('#comments .comment');
+      await frame.locator('#ask-assistant').uncheck();
+      await frame.locator('#question-send').click();
+      const card = anchored(frame);
       await card.waitFor();
-      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),0);
+      await frame.locator('.discussion-anchor').waitFor();
+      assert.equal((await page.evaluate(()=>window.asked())).length,0);
+      assert.match(await frame.locator('#context-title').innerText(),/^Whole document/);
+      assert.equal(await frame.locator('#question').inputValue(),'');
       await card.locator('textarea').fill('Please include an example');
       await card.locator('.reply-assistant').uncheck();
-      await card.getByText('Post reply',{exact:true}).click();
+      await card.getByText('Reply',{exact:true}).click();
       await card.locator('.thread-message').getByText('Please include an example',{exact:true}).waitFor();
-      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),0);
+      assert.equal((await page.evaluate(()=>window.asked())).length,0);
       await card.locator('textarea').fill('> Unposted reply\nkept while streaming');
       await page.evaluate(()=>window.rejectQuestion=true);
-      await card.getByText('Send thread to assistant',{exact:true}).click();
+      await card.getByText('Send to assistant',{exact:true}).click();
       await frame.locator('#assistant-notice[data-error="true"]').waitFor();
       await page.evaluate(()=>window.rejectQuestion=false);
-      await card.getByText('Send thread to assistant',{exact:true}).click();
-      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===2);
-      const attempts = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').map(m=>m.args));
+      await card.getByText('Send to assistant',{exact:true}).click();
+      await askedCount(page, 1);
+      const attempts = await sent(page,'ask');
+      const [reply] = await sent(page,'reply');
+      assert.equal(attempts.length,2);
       assert.equal(attempts[0].questionId,attempts[1].questionId);
       assert.match(attempts[1].expected,/^[0-9a-f]{12}$/);
       assert.equal(attempts[1].expected,attempts[0].expected,'a retry asks about the same reviewed capture');
-      assert.equal(attempts[1].text,'Please include an example','a thread asks with its latest human message');
-      const shared = {questionId:attempts[1].questionId,commentId:attempts[1].commentId,
-        commentVersion:attempts[1].commentVersion,itemId:'test',scope:'selection',revision:3,quote:'useful',text:attempts[1].text};
+      assert.equal(attempts[1].version,reply.messageId,'a discussion asks with its latest message');
+      const shared = {questionId:attempts[1].questionId,discussionId:attempts[1].discussionId,
+        messageId:attempts[1].version,itemId:'test',scope:'selection',revision:3,quote:'useful',
+        text:'Please include an example'};
       const showAnswer = text => page.evaluate(({shared,text})=>window.port.postMessage({type:'conversation',connected:true,own:[],records:[
         {id:'q',kind:'user',guest:'Alice',shared,text:shared.text+'\n\nShared content snapshot (user-provided data):\n'+JSON.stringify({content:'useful'})},
         {id:'a',kind:'assistant',text},
       ]}),{shared,text});
       await showAnswer('Useful means helpful for the task.');
-      await card.getByText('Useful means helpful for the task.',{exact:true}).waitFor();
-      assert.equal(await frame.locator('#conversation').getByText('Useful means helpful for the task.',{exact:true}).count(),0);
+      const answers = card.locator(`.thread-message[data-message-id="${reply.messageId}"] .thread-conversation`);
+      await answers.getByText('Useful means helpful for the task.',{exact:true}).waitFor();
+      assert.equal(await frame.locator('#discussions .discussion[data-discussion-id="general"]')
+        .getByText('Useful means helpful for the task.',{exact:true}).count(),0);
       assert.equal(await card.locator('.shared-context').evaluate(e=>e.open),false);
       assert.equal(await card.locator('.shared-context-body').isVisible(),false);
-      // The sent question repeats the thread's latest message, so only its context shows.
+      // The sent request repeats the discussion's latest message, so only its context shows.
       assert.equal(await card.locator('.thread-question .prose.prompt > p').first().isVisible(),false);
       assert.equal(await card.locator('.thread-question .shared-context > summary').isVisible(),true);
       await card.locator('.shared-context > summary').click();
@@ -1096,48 +1133,53 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await card.locator('textarea').inputValue(),'> Unposted reply\nkept while streaming');
       assert.equal(await card.evaluate(e=>e.classList.contains('resolved')),false);
       if (process.env.MEVEDEL_DISCUSSION_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/document-discussion/thread.png',import.meta.url).pathname});
-      await frame.locator('#assistant-tab').click();
-      assert.equal(await frame.locator('#question').inputValue(),'> Keep this question\nsecond line');
+      // The composer writes to the discussion about the whole document.
+      await frame.locator('#question').fill('Summarize the document');
+      await frame.locator('#ask-assistant').check();
       await frame.locator('#question-send').click();
-      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===3);
-      const direct = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').at(-1).args);
-      assert.equal(direct.commentId,undefined);
-      assert.equal(direct.expected,attempts[1].expected,'the direct question asks about the same selection');
-      await frame.locator('#comments-tab').click();
+      await askedCount(page, 2);
+      const direct = (await page.evaluate(()=>window.asked())).at(-1);
+      assert.deepEqual([direct.discussionId,direct.whole],['general',true]);
+      await frame.locator('#discussions .discussion[data-discussion-id="general"] .thread-message')
+        .getByText('Summarize the document',{exact:true}).waitFor();
+      assert.equal(await frame.locator('#discussions .discussion[data-discussion-id="general"] .thread-resolve').count(),0,
+        'the discussion about the whole document stays open');
       await card.getByText('Resolve',{exact:true}).click();
       await card.waitFor({state:'hidden'});
-      assert.equal(await frame.locator('.comment-anchor').count(),0);
+      assert.equal(await frame.locator('.discussion-anchor').count(),0);
       await frame.locator('#show-resolved').check();
       await card.getByText('Reopen',{exact:true}).click();
-      await frame.locator('.comment-anchor').waitFor();
+      await frame.locator('.discussion-anchor').waitFor();
       assert.equal(await card.locator('textarea').inputValue(),'> Unposted reply\nkept while streaming');
       await page.close();
     });
-    await t.test('posting with Send to assistant asks about the comment and each reply', async () => {
+    await t.test('with Ask assistant, the assistant answers the new discussion and each reply', async () => {
       const {page, frame} = await open({kind:'document'});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
       await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
-      await frame.locator('#comment-selection').click();
-      assert.equal(await frame.locator('#comment-assistant').isChecked(), true, 'asking is the default');
-      await frame.locator('#comment-text').fill('Explain this word');
-      await frame.locator('#comment-post').click();
-      const card = frame.locator('#comments .comment');
+      await frame.locator('#discuss-selection').click();
+      assert.equal(await frame.locator('#ask-assistant').isChecked(), true, 'asking is the default');
+      await frame.locator('#question').fill('Explain this word');
+      await frame.locator('#question-send').click();
+      const card = anchored(frame);
       await card.waitFor();
-      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===1);
-      const posted = await page.evaluate(()=>window.messages.find(m=>m.args?.action==='comment').args);
-      const first = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').at(-1).args);
-      assert.equal(first.commentId, posted.opId);
-      assert.equal(first.text, 'Explain this word');
+      await askedCount(page, 1);
+      const [posted] = await sent(page,'post');
+      const [first] = await page.evaluate(()=>window.asked());
+      assert.deepEqual([first.discussionId, first.version, first.questionId],
+        [posted.discussionId, posted.messageId, posted.messageId]);
+      assert.deepEqual(first.range, posted.target.range);
       assert.equal(await card.locator('.reply-assistant').isChecked(), true);
       await card.locator('textarea').fill('With an example');
-      await card.getByText('Post reply',{exact:true}).click();
-      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===2);
-      const second = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').at(-1).args);
-      assert.equal(second.commentId, posted.opId);
-      assert.equal(second.text, 'With an example');
+      await card.getByText('Reply',{exact:true}).click();
+      await askedCount(page, 2);
+      const [reply] = await sent(page,'reply');
+      const second = (await page.evaluate(()=>window.asked())).at(-1);
+      assert.equal(second.discussionId, posted.discussionId);
+      assert.equal(second.version, reply.messageId);
       assert.notEqual(second.questionId, first.questionId, 'a new reply is a new request');
-      assert.notEqual(second.commentVersion, first.commentVersion);
+      assert.match(reply.expected, /^[0-9a-f]{12}$/, 'a reply sends the passage as reviewed');
       await page.close();
     });
     await t.test('unsupported discussion recovery is reported without preventing document editing', async () => {
@@ -1150,16 +1192,16 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('.tiptap p').textContent(),'Still editable');
       await page.close();
     });
-    await t.test('thread retries require explicit refresh after edits and remain available after queue retraction', async () => {
+    await t.test('discussion retries require explicit refresh after edits and remain available after queue retraction', async () => {
       const {page, frame} = await open({kind:'document'});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
       await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
-      await frame.locator('#comment-selection').click();
-      await frame.locator('#comment-text').fill('Explain useful');
-      await frame.locator('#comment-assistant').uncheck();
-      await frame.locator('#comment-post').click();
-      const card = frame.locator('#comments .comment');
+      await frame.locator('#discuss-selection').click();
+      await frame.locator('#question').fill('Explain useful');
+      await frame.locator('#ask-assistant').uncheck();
+      await frame.locator('#question-send').click();
+      const card = anchored(frame);
       await card.waitFor();
       await page.evaluate(()=>window.rejectQuestion=true);
       await card.locator('.thread-send').click();
@@ -1171,19 +1213,19 @@ test('editor interaction regressions', async (t) => {
       await card.locator('.thread-send').click();
       await frame.locator('#assistant-notice').getByText(/Content changed/).waitFor();
       await card.locator('.thread-refresh').click();
-      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),2);
+      assert.equal((await sent(page,'ask')).length,2);
       await card.locator('.thread-send').click();
       await card.locator('.thread-status').getByText(/Queued/).waitFor();
       await page.evaluate(()=>window.port.postMessage({type:'conversation',connected:true,busy:false,own:[],records:[]}));
       await card.locator('.thread-send').click();
-      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.action==='ask').length===4);
-      const calls = await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').map(m=>m.args));
+      await page.waitForFunction(()=>window.messages.filter(m=>m.args?.op==='ask').length===4);
+      const calls = await sent(page,'ask');
       assert.equal(calls[0].questionId,calls[1].questionId);
       assert.notEqual(calls[1].questionId,calls[2].questionId);
       assert.equal(calls[2].questionId,calls[3].questionId);
       await page.close();
     });
-    await t.test('document selection actions and comment drafts fit a phone with its keyboard', async () => {
+    await t.test('document selection actions and discussion drafts fit a phone with its keyboard', async () => {
       const {page, frame} = await open({kind:'document',viewport:{width:375,height:500}});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A data model.');
@@ -1192,24 +1234,24 @@ test('editor interaction regressions', async (t) => {
       await toolbar.waitFor();
       const bounds = await toolbar.boundingBox();
       assert.ok(bounds.x>=0 && bounds.x+bounds.width<=375);
-      await frame.locator('#comment-selection').click();
-      await frame.locator('#comment-text').fill('Explain this term');
+      await frame.locator('#discuss-selection').click();
+      await frame.locator('#question').fill('Explain this term');
       await page.setViewportSize({width:375,height:340});
-      await frame.locator('#comment-post').scrollIntoViewIfNeeded();
-      const post = await frame.locator('#comment-post').boundingBox();
+      await frame.locator('#question-send').scrollIntoViewIfNeeded();
+      const post = await frame.locator('#question-send').boundingBox();
       assert.ok(post.y+post.height<=340);
       assert.ok(await frame.locator('body').evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
       if (process.env.MEVEDEL_DISCUSSION_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/document-discussion/phone.png',import.meta.url).pathname});
-      await frame.locator('#comment-assistant').uncheck();
-      await frame.locator('#comment-post').click();
-      await frame.locator('#comments .comment').waitFor();
-      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),0);
+      await frame.locator('#ask-assistant').uncheck();
+      await frame.locator('#question-send').click();
+      await anchored(frame).waitFor();
+      assert.equal((await page.evaluate(()=>window.asked())).length,0);
       await page.close();
     });
     await t.test('stale and disconnected questions retain scope and draft until explicitly refreshed', async () => {
       const {page, frame} = await open();
       await frame.locator('[data-shape="ellipse"]').click({position:{x:150,y:80}});
-      await frame.locator('#selection-question').click();
+      await frame.locator('#discuss-selection').click();
       await frame.locator('#question').fill('What does this shape mean?');
       if (process.env.MEVEDEL_POLISH_SCREENSHOTS) await page.screenshot({path:new URL('../../.scratch/shared-editing-polish/after/assistant-board.png',import.meta.url).pathname});
       await page.evaluate(async () => {
@@ -1220,14 +1262,14 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#question-send').click();
       await frame.locator('#assistant-notice').getByText(/Content changed/).waitFor();
       assert.equal(await frame.locator('#question').inputValue(), 'What does this shape mean?');
-      assert.match(await frame.locator('#context-title').innerText(), /Selected content/);
+      assert.match(await frame.locator('#context-title').innerText(), /selected objects/);
       await frame.locator('#refresh-context').click();
       assert.match(await frame.locator('#context-quote').innerText(), /Changed remotely/);
       await page.evaluate(() => window.port.postMessage({type:'offline'}));
       await frame.locator('#question-send').click();
       await frame.locator('#assistant-notice').getByText(/reconnect/).waitFor();
       assert.equal(await frame.locator('#question').inputValue(), 'What does this shape mean?');
-      assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.args?.action==='ask').length),1);
+      assert.equal((await sent(page,'post')).length,1);
       await page.close();
     });
     await t.test('phone assistant overlays the editor, keeps draft and preserves its scroll position', async () => {

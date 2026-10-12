@@ -344,7 +344,7 @@ window.mevedelEditingView = {
         const args = data.args;
         if (
           !args ||
-          !['read', 'update', 'rename', 'revert', 'export', 'ask', 'comment', 'reply-comment', 'resolve-comment',
+          !['read', 'update', 'rename', 'revert', 'export', 'discussion',
             'library', 'library-add', 'library-remove', 'library-install', 'library-uninstall',
             'library-catalog', 'library-fetch'].includes(args.action) ||
           (state.readOnly && !['read', 'export'].includes(args.action))
@@ -579,7 +579,7 @@ window.mevedelEditingView = {
         else entry.resolve(value.result);
       }
     }
-    // Deleting removes an item for everyone, with its comments and history.
+    // Deleting removes an item for everyone, with its discussions and history.
     // There is no undo; the sheet offers a copy that can be imported again.
     const deleteSheet = document.getElementById('delete-shared');
     let deleting = null;
@@ -589,7 +589,7 @@ window.mevedelEditingView = {
       const kind = item.kind === 'whiteboard' ? 'whiteboard' : 'document';
       document.getElementById('delete-shared-title').textContent = `Delete “${item.title}”?`;
       document.getElementById('delete-shared-note').textContent =
-        `This removes the ${kind} for everyone in this room, with its comments and contribution history. `
+        `This removes the ${kind} for everyone in this room, with its discussions and contribution history. `
         + 'It cannot be undone; a downloaded copy can be imported again.';
       deleteSheet.returnValue = '';
       deleteSheet.showModal();
@@ -739,11 +739,11 @@ window.mevedelEditingView = {
           point: null,
         });
     };
-    // A room message in an item's discussion asks about the whole item as
-    // currently committed; the reply lands in that item's conversation.
+    // A room message about an item goes to the assistant in the item's
+    // general discussion, about the whole item as currently committed.
     function ask(id, text, images = []) {
-      const questionId = crypto.randomUUID();
-      return request({ action: 'ask', id, opId: questionId, questionId, text, whole: true,
+      return request({ action: 'discussion', op: 'post', id, target: { kind: 'whole' },
+        messageId: crypto.randomUUID(), text, toAssistant: true,
         ...(images.length ? { images } : {}) });
     }
     // Whether item ID still exists on the host: null until the host has

@@ -1,32 +1,32 @@
-/* viewer-artifact-comments.js -- comment picker that runs inside artifacts
+/* viewer-artifact-discussions.js -- discussion picker that runs inside artifacts
  *
  * The artifact frame is sandboxed without allow-same-origin, so the viewer
  * cannot reach into it. The viewer inlines this function's source into the
  * frame's srcdoc ahead of the artifact. Inside the frame it only reports
- * where the user pointed and draws highlights and markers; the comment text
+ * where the user pointed and draws highlights and markers; the discussion text
  * is typed into the viewer, never into the frame, so an artifact cannot read
  * or forge what a participant writes.
  *
- * Frame -> viewer messages carry {mevedelComment: TYPE, ...}:
+ * Frame -> viewer messages carry {mevedelDiscussion: TYPE, ...}:
  *   pick    {anchor, rect, context}  a click, word, text selection or box
  *   draft   {rect}                   the picked target moved (scroll/resize)
- *   peek    {id, rect} / unpeek {}   pointer over / off a comment marker
+ *   peek    {id, rect} / unpeek {}   pointer over / off a discussion marker
  *   open    {id, rect}               a marker was clicked
  *   located {found, missing}         which markers could be placed
- *   exit    {}                       Escape pressed in comment mode
+ *   exit    {}                       Escape pressed in discussion mode
  * Viewer -> frame messages carry {t: TYPE, ...}:
- *   comment-mode    {on}
- *   comment-markers {markers: [{id, n, anchor, state}]}
- *   comment-draft   {active}
- *   comment-reveal  {id}
+ *   discussion-mode    {on}
+ *   discussion-markers {markers: [{id, n, anchor, state}]}
+ *   discussion-draft   {active}
+ *   discussion-reveal  {id}
  */
 'use strict';
 
-function mevedelArtifactCommentRuntime() {
+function mevedelArtifactDiscussionRuntime() {
   const LIMITS = {selector: 1000, label: 128, quote: 512, words: 40,
                   text: 2000, html: 4000, markers: 200, kids: 16};
   const HEADINGS = 'h1,h2,h3,h4,h5,h6,[role=heading]';
-  const SKIP = 'script,style,template,noscript,head,[data-uncommentable]';
+  const SKIP = 'script,style,template,noscript,head,[data-undiscussable]';
   const CONTROLS = 'button,input,textarea,select,option,a[href],summary,label';
   const DRAG_THRESHOLD = 6;
   const SIG_DISTANCE = 20;
@@ -45,7 +45,7 @@ function mevedelArtifactCommentRuntime() {
   let segmenter;
 
   const post = (type, data) => {
-    try { parent.postMessage(Object.assign({mevedelComment: type}, data || {}), '*'); }
+    try { parent.postMessage(Object.assign({mevedelDiscussion: type}, data || {}), '*'); }
     catch (_error) { /* the viewer went away */ }
   };
 
@@ -256,7 +256,7 @@ function mevedelArtifactCommentRuntime() {
   }
 
   // A 64-bit simhash of the element's text: small edits change few bits,
-  // so a rewritten artifact still finds the element a comment was about.
+  // so a rewritten artifact still finds the element a discussion was about.
   function fnv(text, seed) {
     let hash = seed >>> 0;
     for (let index = 0; index < text.length; index++) {
@@ -549,8 +549,8 @@ function mevedelArtifactCommentRuntime() {
 
   function ensureLayer() {
     if (layerHost && layerHost.isConnected) return;
-    layerHost = document.createElement('mevedel-comment-layer');
-    layerHost.setAttribute('data-uncommentable', '');
+    layerHost = document.createElement('mevedel-discussion-layer');
+    layerHost.setAttribute('data-undiscussable', '');
     layerHost.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;'
       + 'overflow:visible;margin:0;padding:0;border:0;z-index:2147483647;'
       + 'pointer-events:none;display:block';
@@ -572,8 +572,8 @@ function mevedelArtifactCommentRuntime() {
       .pin[data-state=working]::after{content:"";position:absolute;inset:-6px;
         box-sizing:border-box;border-radius:50%;border:2.5px solid transparent;
         border-top-color:#d97757;border-right-color:#d97757;
-        animation:mevedel-comment-spin .9s linear infinite;pointer-events:none}
-      @keyframes mevedel-comment-spin{to{transform:rotate(360deg)}}
+        animation:mevedel-discussion-spin .9s linear infinite;pointer-events:none}
+      @keyframes mevedel-discussion-spin{to{transform:rotate(360deg)}}
       @media (prefers-reduced-motion:reduce){.pin[data-state=working]::after{
         animation:none;border-style:dashed;border-color:#d97757}}
       .pin:focus-visible{outline:2px solid #3b82f6;outline-offset:2px}`;
@@ -639,7 +639,7 @@ function mevedelArtifactCommentRuntime() {
       pin.dataset.state = marker.state;
       pin.textContent = String(marker.n);
       pin.setAttribute('aria-label', marker.state === 'working'
-        ? `Comment ${marker.n}, assistant working` : `Comment ${marker.n}`);
+        ? `Discussion ${marker.n}, assistant working` : `Discussion ${marker.n}`);
       const rect = rectOf(found);
       const onText = !!found.range;
       pin.style.left = `${(onText ? rect.left : rect.left + rect.width - 20) + scrollX}px`;
@@ -849,19 +849,19 @@ function mevedelArtifactCommentRuntime() {
     if (event.source !== parent) return;
     const data = event.data;
     if (!data || typeof data !== 'object') return;
-    if (data.t === 'comment-mode') {
+    if (data.t === 'discussion-mode') {
       setActive(data.on === true);
-    } else if (data.t === 'comment-draft') {
+    } else if (data.t === 'discussion-draft') {
       if (data.active !== true) {
         draft = null;
         repaint();
       }
-    } else if (data.t === 'comment-markers' && Array.isArray(data.markers)) {
+    } else if (data.t === 'discussion-markers' && Array.isArray(data.markers)) {
       markers = data.markers.slice(0, LIMITS.markers).filter(marker =>
         marker && typeof marker.id === 'string' && marker.anchor
           && typeof marker.anchor.selector === 'string');
       relocate();
-    } else if (data.t === 'comment-reveal' && typeof data.id === 'string') {
+    } else if (data.t === 'discussion-reveal' && typeof data.id === 'string') {
       const found = placed.get(data.id);
       if (found && found.el.isConnected) {
         found.el.scrollIntoView({block: 'center'});
@@ -887,15 +887,18 @@ function mevedelArtifactCommentRuntime() {
 
 // -- Viewer-side controller ------------------------------------------------
 
-// Owns comment mode, the composer and the marker threads for the artifact
-// shown in the panel. Comments live in the host's per-artifact store; the
+// Owns discussion mode, the composer and the marker threads for the artifact
+// shown in the panel. Discussions live in the host's per-artifact store; the
 // transcript supplies what the assistant made of those sent to it. Frame
 // messages are untrusted: only the current frame's window is heard, and
 // every field is bounded before it is used or sent.
-function createArtifactCommentController(options) {
-  const {send, el, body, toggle, flash, renderMarkdown, reveal, canComment} = options;
+function createArtifactDiscussionController(options) {
+  const {send, el, body, toggle, general, flash, renderMarkdown, reveal, canDiscuss} = options;
   const busy = typeof options.busy === 'function' ? options.busy : () => false;
-  const MAX_COMMENT_BYTES = 10000;
+  const MAX_MESSAGE_BYTES = 10000;
+  // The discussion about the whole artifact: it has no marker and opens
+  // from its own button.
+  const GENERAL = 'general';
   const view = {frame: null, id: null, name: null, mode: false,
                 draft: null, composer: null, card: null, cardPinned: false};
   let records = [];
@@ -1020,8 +1023,8 @@ function createArtifactCommentController(options) {
     text: message && message.alone === true ? ALONE : String(message && message.text || '')});
 
   // The open discussions anchored to a part of the artifact; the general
-  // discussion about the whole artifact is the room's item conversation.
-  function comments() {
+  // discussion about the whole artifact opens from its own button.
+  function discussions() {
     if (!view.name) return [];
     const list = [];
     const seen = new Set();
@@ -1049,23 +1052,37 @@ function createArtifactCommentController(options) {
     return list;
   }
 
+  function generalDiscussion() {
+    const found = stored.find(discussion => discussion && discussion.id === GENERAL);
+    const messages = found && Array.isArray(found.messages) ? found.messages.map(messageView) : [];
+    return Object.assign({id: GENERAL, general: true, anchor: {label: 'Whole artifact'},
+                          empty: !messages.length,
+                          text: messages.length ? messages[0].text : '',
+                          actor: messages.length ? messages[0].actor : '',
+                          sessionName: found && typeof found.sessionName === 'string'
+                            ? found.sessionName : '',
+                          replies: messages.slice(1)},
+                         assistantState(GENERAL));
+  }
+
   // Streaming redraws call this for every record update; the frame only
   // hears about markers when they actually changed.
   let lastMarkers = '';
   function publishMarkers(force) {
     if (!view.frame) return;
-    const list = comments();
-    const markers = list.map((comment, index) => ({id: comment.id, n: index + 1,
-                                                   anchor: comment.anchor,
-                                                   state: comment.working ? 'working'
-                                                     : comment.state || 'posted'}));
+    const list = discussions();
+    const markers = list.map((discussion, index) => ({id: discussion.id, n: index + 1,
+                                                   anchor: discussion.anchor,
+                                                   state: discussion.working ? 'working'
+                                                     : discussion.state || 'posted'}));
     const encoded = JSON.stringify(markers);
     if (force === true || encoded !== lastMarkers) {
       lastMarkers = encoded;
-      post({t: 'comment-markers', markers});
+      post({t: 'discussion-markers', markers});
     }
     if (view.card) {
-      const shown = list.find(comment => comment.id === view.card.dataset.comment);
+      const shown = view.card.dataset.discussion === GENERAL ? generalDiscussion()
+        : list.find(discussion => discussion.id === view.card.dataset.discussion);
       if (!shown) closeCard();
       else if (view.card.dataset.version !== cardVersion(shown)) refreshCard(shown);
     }
@@ -1073,8 +1090,16 @@ function createArtifactCommentController(options) {
   }
 
   function updateToggle(count) {
+    if (general) {
+      // Everyone who sees the artifact reads its general discussion.
+      const whole = generalDiscussion();
+      const messages = whole.empty ? 0 : whole.replies.length + 1;
+      general.hidden = !view.frame;
+      general.textContent = messages ? `Whole artifact · ${messages}` : 'Whole artifact';
+      general.title = 'The discussion about the whole artifact';
+    }
     if (!toggle) return;
-    const allowed = !!view.frame && canComment();
+    const allowed = !!view.frame && canDiscuss();
     toggle.hidden = !allowed;
     toggle.setAttribute('aria-pressed', view.mode ? 'true' : 'false');
     toggle.textContent = view.mode ? 'Discussing…' : count ? `Discuss · ${count}` : 'Discuss';
@@ -1134,15 +1159,15 @@ function createArtifactCommentController(options) {
   // untick away.
   function messageForm(className, placeholder, submitLabel, draft) {
     const form = el('form', className);
-    const input = el('textarea', 'artifact-comment-input');
+    const input = el('textarea', 'artifact-discussion-input');
     input.placeholder = placeholder;
     input.rows = 3;
     input.setAttribute('aria-label', placeholder);
     if (draft) input.value = draft;
-    const status = el('p', 'artifact-comment-status', '');
+    const status = el('p', 'artifact-discussion-status', '');
     status.setAttribute('role', 'status');
-    const actions = el('div', 'artifact-comment-actions');
-    const option = el('label', 'artifact-comment-assistant');
+    const actions = el('div', 'artifact-discussion-actions');
+    const option = el('label', 'artifact-discussion-assistant');
     const assistant = el('input');
     assistant.type = 'checkbox';
     assistant.checked = true;
@@ -1169,7 +1194,7 @@ function createArtifactCommentController(options) {
       parts.status.textContent = alone ? 'Write a message, or ask the assistant.' : '';
       return null;
     }
-    if (new TextEncoder().encode(text).length > MAX_COMMENT_BYTES) {
+    if (new TextEncoder().encode(text).length > MAX_MESSAGE_BYTES) {
       parts.status.textContent = 'Message too long.';
       return null;
     }
@@ -1182,22 +1207,22 @@ function createArtifactCommentController(options) {
     if (view.composer) view.composer.remove();
     view.composer = null;
     view.draft = null;
-    post({t: 'comment-draft', active: false});
+    post({t: 'discussion-draft', active: false});
   }
 
   function openComposer(anchor, rect, context) {
     closeCard();
     if (view.composer) view.composer.remove();
     view.draft = {anchor, rect, context};
-    const parts = messageForm('artifact-comment-composer',
+    const parts = messageForm('artifact-discussion-composer',
                               'What should change here? Empty sends the selection as the request.',
                               'Post');
     const {form, input, status, actions, assistant, submit} = parts;
     form.setAttribute('role', 'dialog');
     form.setAttribute('aria-label', 'Discuss this part of the artifact');
-    form.prepend(el('p', 'artifact-comment-target', anchor.label || 'Selected part'));
+    form.prepend(el('p', 'artifact-discussion-target', anchor.label || 'Selected part'));
     if (anchor.quote && anchor.kind !== 'word') {
-      form.insertBefore(el('blockquote', 'artifact-comment-quote', anchor.quote), input);
+      form.insertBefore(el('blockquote', 'artifact-discussion-quote', anchor.quote), input);
     }
     const cancel = el('button', 'btn quiet', 'Cancel');
     cancel.type = 'button';
@@ -1246,9 +1271,9 @@ function createArtifactCommentController(options) {
 
   // -- Thread card ------------------------------------------------------
 
-  const cardVersion = comment => JSON.stringify(
-    [comment.text, comment.replies.map(reply => reply.id), comment.state, comment.working,
-     comment.reply, comment.sessionName]);
+  const cardVersion = discussion => JSON.stringify(
+    [discussion.text, discussion.replies.map(reply => reply.id), discussion.state, discussion.working,
+     discussion.reply, discussion.sessionName]);
 
   function closeCard() {
     if (view.card) view.card.remove();
@@ -1256,67 +1281,73 @@ function createArtifactCommentController(options) {
     view.cardPinned = false;
   }
 
-  function fillCard(card, comment) {
+  function fillCard(card, discussion) {
     const reply = view.card === card && card.querySelector
-      ? card.querySelector('.artifact-comment-input') : null;
-    if (reply) replyDrafts.set(comment.id, reply.value);
+      ? card.querySelector('.artifact-discussion-input') : null;
+    if (reply) replyDrafts.set(discussion.id, reply.value);
     card.replaceChildren();
-    card.dataset.version = cardVersion(comment);
-    const status = comment.working && comment.state !== 'queued' ? 'Assistant working…'
+    card.dataset.version = cardVersion(discussion);
+    const status = discussion.working && discussion.state !== 'queued' ? 'Assistant working…'
       : {queued: 'Queued for the assistant', sent: 'Sent to assistant',
-         answered: 'Answered'}[comment.state] || 'Posted';
-    const head = el('div', 'artifact-comment-head');
-    head.append(el('span', '', [comment.actor || 'Guest', status].join(' · ')));
+         answered: 'Answered'}[discussion.state] || 'Posted';
+    const head = el('div', 'artifact-discussion-head');
+    head.append(el('span', '', [discussion.actor || 'Guest', status].join(' · ')));
     // The session that answers this thread, wherever it was written.
-    if (comment.sessionName) {
-      head.append(el('span', 'artifact-comment-session', `answered in ${comment.sessionName}`));
+    if (discussion.sessionName) {
+      head.append(el('span', 'artifact-discussion-session', `answered in ${discussion.sessionName}`));
     }
-    const close = el('button', 'artifact-comment-close', '×');
+    const close = el('button', 'artifact-discussion-close', '×');
     close.type = 'button';
     close.title = 'Close';
     close.setAttribute('aria-label', 'Close');
     close.addEventListener('click', closeCard);
     head.append(close);
-    card.append(head, el('p', 'artifact-comment-target', comment.anchor.label || ''));
-    const thread = el('div', 'artifact-comment-thread');
-    for (const message of [comment, ...comment.replies]) {
-      const item = el('p', 'artifact-comment-text');
+    card.append(head, el('p', 'artifact-discussion-target', discussion.anchor.label || ''));
+    const thread = el('div', 'artifact-discussion-thread');
+    if (discussion.empty) thread.append(el('p', 'artifact-discussion-text', 'No messages yet.'));
+    for (const message of discussion.empty ? [] : [discussion, ...discussion.replies]) {
+      const item = el('p', 'artifact-discussion-text');
       item.append(el('strong', '', `${message.actor || 'Guest'}: `), String(message.text || ''));
       thread.append(item);
     }
     card.append(thread);
-    if (comment.reply) {
-      const excerpt = comment.reply.length > 1200
-        ? comment.reply.slice(0, 1200).trimEnd() + '…' : comment.reply;
+    if (discussion.reply) {
+      const excerpt = discussion.reply.length > 1200
+        ? discussion.reply.slice(0, 1200).trimEnd() + '…' : discussion.reply;
       const answer = renderMarkdown(excerpt);
-      answer.className = 'prose artifact-comment-reply';
+      answer.className = 'prose artifact-discussion-reply';
       card.append(answer);
     }
     if (!view.cardPinned) return;
-    const actions = el('div', 'artifact-comment-actions');
-    if (comment.recordId && typeof reveal === 'function') {
+    const actions = el('div', 'artifact-discussion-actions');
+    if (discussion.recordId && typeof reveal === 'function') {
       const show = el('button', 'btn quiet', 'Show in chat');
       show.type = 'button';
-      show.addEventListener('click', () => reveal(comment.recordId));
+      show.addEventListener('click', () => reveal(discussion.recordId));
       actions.append(show);
     }
-    if (canComment() && stored.some(item => item && item.id === comment.id)) {
-      const resolve = el('button', 'btn quiet', 'Resolve');
-      resolve.type = 'button';
-      resolve.title = 'Mark this discussion done for everyone; its marker goes away';
-      resolve.addEventListener('click', async () => {
-        resolve.disabled = true;
-        try {
-          await request({action: 'resolve', item: view.id, discussionId: comment.id,
-                         resolved: true});
-        } catch (error) {
-          resolve.disabled = false;
-          if (flash) flash(error.message);
-        }
-      });
-      actions.append(resolve);
-      const parts = messageForm('artifact-comment-reply-form', 'Reply…', 'Post reply',
-                                replyDrafts.get(comment.id));
+    if (canDiscuss() && (discussion.general || stored.some(item => item && item.id === discussion.id))) {
+      // The general discussion stays open.
+      if (!discussion.general) {
+        const resolve = el('button', 'btn quiet', 'Resolve');
+        resolve.type = 'button';
+        resolve.title = 'Mark this discussion done for everyone; its marker goes away';
+        resolve.addEventListener('click', async () => {
+          resolve.disabled = true;
+          try {
+            await request({action: 'resolve', item: view.id, discussionId: discussion.id,
+                           resolved: true});
+          } catch (error) {
+            resolve.disabled = false;
+            if (flash) flash(error.message);
+          }
+        });
+        actions.append(resolve);
+      }
+      const parts = messageForm('artifact-discussion-reply-form',
+                                discussion.general ? 'Write about the whole artifact…' : 'Reply…',
+                                discussion.general ? 'Post' : 'Post reply',
+                                replyDrafts.get(discussion.id));
       parts.form.addEventListener('submit', async event => {
         event.preventDefault();
         const text = checkedText(parts);
@@ -1324,9 +1355,13 @@ function createArtifactCommentController(options) {
         parts.submit.disabled = true;
         parts.status.textContent = parts.assistant.checked ? 'Posting and sending…' : 'Posting…';
         try {
-          await request({action: 'reply', item: view.id, discussionId: comment.id,
-                         messageId: newId(), text, toAssistant: parts.assistant.checked});
-          replyDrafts.delete(comment.id);
+          // The first message about the whole artifact starts its discussion.
+          await request(discussion.general
+            ? {action: 'post', item: view.id, target: {kind: 'whole'}, messageId: newId(),
+               text, toAssistant: parts.assistant.checked}
+            : {action: 'reply', item: view.id, discussionId: discussion.id,
+               messageId: newId(), text, toAssistant: parts.assistant.checked});
+          replyDrafts.delete(discussion.id);
           parts.input.value = '';
           parts.status.textContent = '';
         } catch (error) {
@@ -1340,47 +1375,48 @@ function createArtifactCommentController(options) {
     card.append(actions);
   }
 
-  function refreshCard(comment) {
-    if (view.card) fillCard(view.card, comment);
+  function refreshCard(discussion) {
+    if (view.card) fillCard(view.card, discussion);
   }
 
   function openCard(id, rect, pinned) {
-    const comment = comments().find(item => item.id === id);
-    if (!comment) return;
-    if (view.card && view.card.dataset.comment === id) {
+    const discussion = id === GENERAL ? generalDiscussion() : discussions().find(item => item.id === id);
+    if (!discussion) return;
+    if (view.card && view.card.dataset.discussion === id) {
       if (pinned && !view.cardPinned) {
         view.cardPinned = true;
-        fillCard(view.card, comment);
+        fillCard(view.card, discussion);
       }
       return;
     }
     if (view.cardPinned && !pinned) return;
     closeCard();
-    const card = el('section', 'artifact-comment-card');
-    card.dataset.comment = id;
+    const card = el('section', 'artifact-discussion-card');
+    card.dataset.discussion = id;
     card.setAttribute('role', 'dialog');
     card.setAttribute('aria-label', 'Discussion');
     view.card = card;
     view.cardPinned = pinned === true;
-    fillCard(card, comment);
+    fillCard(card, discussion);
     body.append(card);
-    placeBeside(card, rect);
+    if (rect) placeBeside(card, rect);
+    else place(card, null);
   }
 
   // -- Mode and wiring --------------------------------------------------
 
   function setMode(on) {
-    view.mode = on === true && !!view.frame && canComment();
-    post({t: 'comment-mode', on: view.mode});
-    if (!view.mode && !view.composer) post({t: 'comment-draft', active: false});
-    updateToggle(comments().length);
+    view.mode = on === true && !!view.frame && canDiscuss();
+    post({t: 'discussion-mode', on: view.mode});
+    if (!view.mode && !view.composer) post({t: 'discussion-draft', active: false});
+    updateToggle(discussions().length);
   }
 
   function onMessage(event) {
     if (!view.frame || event.source !== view.frame.contentWindow) return;
     const data = event.data;
-    if (!data || typeof data !== 'object' || typeof data.mevedelComment !== 'string') return;
-    const type = data.mevedelComment;
+    if (!data || typeof data !== 'object' || typeof data.mevedelDiscussion !== 'string') return;
+    const type = data.mevedelDiscussion;
     if (type === 'pick') {
       if (!view.mode) return;
       const anchor = cleanAnchor(data.anchor);
@@ -1405,6 +1441,14 @@ function createArtifactCommentController(options) {
   }
   if (typeof addEventListener === 'function') addEventListener('message', onMessage);
   if (toggle) toggle.addEventListener('click', () => setMode(!view.mode));
+  if (general) general.addEventListener('click', () => {
+    if (view.card && view.card.dataset.discussion === GENERAL) {
+      closeCard();
+      return;
+    }
+    closeComposer();
+    openCard(GENERAL, null, true);
+  });
 
   function load(name) {
     request({action: 'list', item: view.id}).then(reply => {
@@ -1475,13 +1519,13 @@ function createArtifactCommentController(options) {
       else entry.resolve(frame);
     },
     onMessage,
-    comments,
+    discussions,
   });
 }
 
-window.mevedelArtifactComments = Object.freeze({
-  runtime: mevedelArtifactCommentRuntime,
+window.mevedelArtifactDiscussions = Object.freeze({
+  runtime: mevedelArtifactDiscussionRuntime,
   // The source inlined into each artifact frame's srcdoc.
-  script: () => '<script>(' + mevedelArtifactCommentRuntime.toString() + ')()<\/script>',
-  create: createArtifactCommentController,
+  script: () => '<script>(' + mevedelArtifactDiscussionRuntime.toString() + ')()<\/script>',
+  create: createArtifactDiscussionController,
 });

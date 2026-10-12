@@ -43,7 +43,7 @@ ToolSearch delivers current contracts; the dialect manual lists pure operations.
 
 Session-owned collaborative whiteboards and documents are read with Read and
 Grep at `shared://` addresses: one hashed line per element or block, full
-elements, board renderings, comments, history and the host's element
+elements, board renderings, discussions, history and the host's element
 libraries. `SharedCreate` and `SharedEdit` change them through the normal
 permission pipeline, naming each target by the hash the model read.
 Whiteboard targets are Excalidraw elements; `SharedEdit` also inserts library

@@ -157,20 +157,20 @@ test('approved editor controls on the production bundle', async t => {
   });
   await t.test('discussion keeps its attached passage when focus or scope changes, and resizes with pointer or keyboard', async () => {
     const {page,frame}=await open({kind:'document',content,viewport:{width:1600,height:1000}});
-    const text=await select(frame);await frame.locator('#selection-question').click();
+    const text=await select(frame);await frame.locator('#discuss-selection').click();
     await frame.locator('#question').fill('Keep my question');
-    assert.equal(await frame.locator('.discussion-anchor').innerText(),text);
-    await frame.locator('#whole-question').click();assert.equal(await frame.locator('.discussion-anchor').count(),0);
+    assert.equal(await frame.locator('.discussion-draft').innerText(),text);
+    await frame.locator('#whole-question').click();assert.equal(await frame.locator('.discussion-draft').count(),0);
     await frame.locator('#selected-question').click();
-    assert.equal(await frame.locator('.discussion-anchor').innerText(),text);
+    assert.equal(await frame.locator('.discussion-draft').innerText(),text);
     assert.equal(await frame.locator('#question').inputValue(),'Keep my question');
     const handle=frame.locator('#discussion-resize'),b=await handle.boundingBox();
     await page.mouse.move(b.x+3,b.y+80);await page.mouse.down();await page.mouse.move(b.x-140,b.y+80,{steps:8});await page.mouse.up();
     assert.ok((await frame.locator('#assistant').boundingBox()).width>=495);
     await handle.focus();await page.keyboard.press('End');assert.equal((await frame.locator('#assistant').boundingBox()).width,800);
     await page.keyboard.press('Home');assert.equal((await frame.locator('#assistant').boundingBox()).width,360);
-    await frame.locator('#assistant-close').click();assert.equal(await frame.locator('.discussion-anchor').count(),0);
-    await frame.locator('#ask-toggle').click();assert.equal(await frame.locator('.discussion-anchor').innerText(),text);
+    await frame.locator('#assistant-close').click();assert.equal(await frame.locator('.discussion-draft').count(),0);
+    await frame.locator('#ask-toggle').click();assert.equal(await frame.locator('.discussion-draft').innerText(),text);
     const draft=await page.evaluate(()=>window.messages.filter(m=>m.type==='draft').at(-1).draft.assistant);
     const restored=await open({kind:'document',content,assistantDraft:draft,viewport:{width:1600,height:1000}});
     assert.equal(await restored.frame.locator('#question').inputValue(),'Keep my question');

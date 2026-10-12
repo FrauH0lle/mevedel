@@ -114,10 +114,10 @@
           entries.push(['Conversation', 'Continue in this artifact\'s own session',
                         () => act('conversation', row.id)]);
         }
-        entries.push(['Delete', 'Delete for everyone, with versions, comments and conversation',
+        entries.push(['Delete', 'Delete for everyone, with versions, discussions and conversation',
                       () => {
           if (confirm(`Delete ${row.title || row.id} for everyone, with its versions, `
-                      + 'comments and conversation? This cannot be undone.')) {
+                      + 'discussions and conversation? This cannot be undone.')) {
             act('delete', row.id);
           }
         }, true]);

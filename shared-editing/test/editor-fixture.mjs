@@ -82,12 +82,54 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
     let state = created.state;
     // Agent edits name their targets by the hash the model reads.
     await page.exposeFunction('contentHash', contentHash);
+    const run = async (request) => {
+      const reply = await handle({ ...request, state, actor: 'Guest: Alice' });
+      state = reply.state || state;
+      return { ...reply.result, transactions: state.transactions };
+    };
+    // Each request the session would queue for the assistant, as Emacs sends
+    // it after reading the discussed content as the sender reviewed it.
+    const asked = [];
+    await page.exposeFunction('asked', () => asked);
+    const target = (t) => t.kind === 'whole' ? { whole: true } : t.kind === 'passage' ? { range: t.range }
+      : { selection: t.selection ?? [], ...(t.region ? { region: t.region } : {}) };
+    const reviewed = (a) => a.whole ? { whole: true } : a.range ? { range: a.range }
+      : { selection: a.selection ?? [], ...(a.region ? { region: a.region } : {}) };
+    const ask = async (discussionId, questionId, version, fields, expected) => {
+      const read = await run({ action: 'read', question: true, discussionId, version, ...fields,
+        ...(expected ? { expected } : {}) });
+      asked.push({ discussionId, questionId, version, ...fields, expected, prompt: read.prompt });
+      return { ...read, discussionId, questionId, queued: true };
+    };
+    /* A stand-in for mevedel-collaboration-discussions-perform on this item. */
+    const discuss = async (args) => {
+      if (args.op === 'post') {
+        const whole = args.target?.kind === 'whole', id = whole ? 'general' : args.discussionId;
+        const alone = !whole && args.toAssistant === true && !args.text.trim();
+        const posted = await run({ action: 'discussion-post', opId: args.messageId, discussionId: id,
+          messageId: args.messageId, target: args.target, text: alone ? '' : args.text, alone,
+          ...(args.expected ? { expected: args.expected } : {}) });
+        return { ...posted, discussionId: id, messageId: args.messageId,
+          ...(args.toAssistant ? await ask(id, args.messageId, args.messageId, target(args.target), args.expected) : {}) };
+      }
+      if (args.op === 'reply') {
+        const posted = await run({ action: 'discussion-reply', opId: args.messageId,
+          discussionId: args.discussionId, messageId: args.messageId, text: args.text });
+        return { ...posted, messageId: args.messageId,
+          ...(args.toAssistant ? await ask(args.discussionId, args.messageId, args.messageId, reviewed(args), args.expected) : {}) };
+      }
+      if (args.op === 'resolve')
+        return run({ action: 'discussion-resolve', opId: crypto.randomUUID(), discussionId: args.discussionId,
+          resolved: args.resolved === true });
+      if (args.op === 'ask')
+        return ask(args.discussionId, args.questionId, args.version, reviewed(args), args.expected);
+      throw new Error('Unknown discussion action');
+    };
     await page.exposeFunction('apply', async (args) => {
       // Emacs owns the element library; this stands in for mevedel-shared-library.
       if (args.action.startsWith('library')) return library(args);
-      const reply = await handle({ ...args, action:args.action === 'ask' ? 'read' : args.action, sync:args.action === 'read', question:args.action === 'ask', state, actor: 'Guest: Alice' });
-      state = reply.state || state;
-      return { ...reply.result, transactions: state.transactions };
+      if (args.action === 'discussion') return discuss(args);
+      return run({ ...args, sync: args.action === 'read' });
     });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.evaluate(
@@ -99,7 +141,8 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
           window.messages.push(data);
           if (data.type === 'request') {
             try {
-              if (window.rejectQuestion && data.args.action === 'ask') throw new Error('Host refused this submission');
+              if (window.rejectQuestion && data.args.action === 'discussion' && data.args.op === 'ask')
+                throw new Error('Host refused this submission');
               const result = await window.apply(data.args);
               if (!data.args.action.startsWith('library')) channel.port1.postMessage({ type: 'changed', ...result });
               channel.port1.postMessage({ type: 'reply', reqId: data.reqId, result });

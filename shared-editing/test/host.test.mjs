@@ -436,13 +436,14 @@ test('restoring a document version keeps comments on unchanged blocks', async ()
   const live = restore(Buffer.from(state.crdt, 'base64'));
   const expected = contentHash(captureContext(live, { range }).snapshot);
   live.destroy();
-  ({ state } = await handle({ action: 'comment', state, actor: 'Alice', opId: 'note', text: 'Why?', range, expected }));
+  ({ state } = await handle({ action: 'discussion-post', state, actor: 'Alice', opId: 'note', messageId: 'note',
+    discussionId: 'note', text: 'Why?', target: { kind: 'passage', range }, expected }));
   ({ state } = await handle({ action: 'patch', state, actor: 'Agent', opId: 'edit1', changes: [
     { id: 'b', hash: h(para('b', 'Old text.')), after: para('b', 'New text.') },
     { id: 'c', after: para('c', 'Added.') }] }));
   const restored = await handle({ action: 'restore', state, actor: 'Alice', opId: 'restore1', target: version });
   assert.deepEqual(restored.result.content.content.map((n) => n.content[0].text), ['Keep this passage.', 'Old text.']);
-  assert.equal(restored.result.comments[0].anchorStatus, 'current', 'the unchanged block keeps its anchor');
+  assert.equal(restored.result.discussions[0].anchorStatus, 'current', 'the unchanged block keeps its anchor');
   assert.deepEqual(restored.state.transactions[0].changes.map((c) => c.id).sort(), ['b', 'c']);
 });
 

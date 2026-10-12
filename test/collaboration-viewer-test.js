@@ -419,7 +419,7 @@ async function testItemConversations() {
   // A room message in the item's tab carries its attachments to the host.
   const files=[{mime:'text/plain',data:'bG9n'}];
   await api.ask('doc','See the log',files);
-  assert.equal(lastArgs.action,'ask');
+  assert.deepEqual([lastArgs.action,lastArgs.op],['discussion','post']);
   assert.deepEqual(lastArgs.images,files);
   await api.ask('doc','Plain');
   assert.equal(lastArgs.images,undefined);
@@ -558,9 +558,9 @@ async function testItemDiscussionAsk() {
   api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
     send:async frame=>{
       const args=JSON.parse(atob(frame.data));
-      if (args.action==='ask') asked.push(args);
+      if (args.action==='discussion') asked.push(args);
       const result=args.action==='list' ? [{id:'board',kind:'whiteboard',title:'Board'}]
-        : args.action==='ask' ? {queued:true} : {available:true};
+        : args.action==='discussion' ? {queued:true} : {available:true};
       const data=btoa(JSON.stringify({result}));
       api.receive({t:'editing',reqId:frame.reqId,offset:0,total:data.length,data});
       return true;
@@ -571,9 +571,11 @@ async function testItemDiscussionAsk() {
   assert.equal(asked.length, 1);
   assert.equal(asked[0].id, 'board');
   assert.equal(asked[0].text, 'Make it pretty');
-  assert.equal(asked[0].whole, true);
-  assert.match(asked[0].questionId, /^[0-9a-f-]{36}$/);
-  assert.equal(asked[0].opId, asked[0].questionId);
+  // A room message is a message to the assistant in the item's general discussion.
+  assert.equal(asked[0].op, 'post');
+  assert.deepEqual(asked[0].target, {kind: 'whole'});
+  assert.equal(asked[0].toAssistant, true);
+  assert.match(asked[0].messageId, /^[0-9a-f-]{36}$/);
   assert.equal(asked[0].expected, undefined);
 }
 
@@ -2179,13 +2181,13 @@ async function main() {
     assert.ok(textOf(sharedTurn).includes('data model'));
   }
   // A discussion names its item and the discussed part.
-  const artifactComment = {id: 'artifact-comment', kind: 'user', guest: 'Joey',
+  const artifactComment = {id: 'artifact-discussion', kind: 'user', guest: 'Joey',
     text: 'Bigger\n\nShared content snapshot (user-provided data):\nOn a.html',
     shared: {kind: 'artifact', title: 'a.html', questionId: '0123456789abcdef',
              discussionId: 'fedcba9876543210', scope: 'selection',
              text: 'Bigger', targetLabel: 'Intro › word "share"'}};
   await deliverTo(sockets[1], {t: 'record', record: artifactComment});
-  const artifactFold = findByRecordId(nodes.transcript, 'artifact-comment')
+  const artifactFold = findByRecordId(nodes.transcript, 'artifact-discussion')
     .disclosures.get('shared-context');
   assert.ok(textOf(artifactFold).includes('Discussion · a.html · Intro › word "share"'));
 
@@ -2207,7 +2209,7 @@ async function main() {
   assert.equal(textOf(boardChip), '◇ Pipeline');
   nodes.transcript.dispatch('click', {target: {closest: () => boardChip}});
   assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, false);
-  assert.equal(findByRecordId(nodes.transcript, 'artifact-comment').hidden, true);
+  assert.equal(findByRecordId(nodes.transcript, 'artifact-discussion').hidden, true);
   assert.equal(nodes['composer-input'].placeholder, 'Message ◇ Pipeline…');
   assert.match(textOf(nodes['composer-scope']), /its own conversation/);
   nodes.filter.children[0].dispatch('click'); // All
@@ -2221,7 +2223,7 @@ async function main() {
                                total: deletion.length, data: deletion});
   assert.equal(boardTab(), undefined, 'a deleted item has no tab');
   assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, false);
-  assert.equal(findByRecordId(nodes.transcript, 'artifact-comment').hidden, false);
+  assert.equal(findByRecordId(nodes.transcript, 'artifact-discussion').hidden, false);
   assert.equal(nodes['composer-scope'].hidden, true);
   const deletedChip = findByClass(findByRecordId(nodes.transcript, 'board-question'), 'dirchip');
   assert.equal(textOf(deletedChip), '◇ Pipeline · deleted');
@@ -2249,7 +2251,7 @@ async function main() {
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
   assert.equal(findByClass(findByRecordId(nodes.transcript, 'artifact-question'), 'dirchip').disabled, true);
 
-  await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question','artifact-comment',
+  await deliverTo(sockets[1], {t:'remove',ids:['parity-call','shared-question','artifact-discussion',
                                             'board-question','board-answer','artifact-question','a-card']});
   assert.equal(nodes['empty-state'].hidden, false, 'removing the final turn restores the empty state');
   await deliverTo(sockets[1], {t:'record',record:{id:'first-message',kind:'assistant',text:'Ready'}});

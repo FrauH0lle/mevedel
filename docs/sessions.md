@@ -1690,8 +1690,8 @@ script prints each session's artifacts.
 Nothing in the original sessions changes, so a failed run loses nothing. A
 rerun into a new destination reuses the store artifacts an earlier run
 completed, including shared items reused across forked sessions. Interrupted
-imports are removed on failure and retried with their comments and first
-version intact. After checking the destination, move the
+imports are removed on failure and retried with their first version intact.
+After checking the destination, move the
 original sessions directory aside as a backup and put the destination in its
 place.
 

@@ -98,7 +98,7 @@ test('document images are addresses in text and survive edits that name them', a
   assert.ok(!text.includes('base64'), 'no image data in text');
   const shown = lineOf(text, 'picture');
   const [, key] = /shared:\/\/doc\/images\/(img-[0-9a-f]{12})/.exec(shown.node.attrs.src);
-  assert.match(text.split('\n')[1], /Block: shared:\/\/doc\/elements\/ID · Comments \(0\)/);
+  assert.match(text.split('\n')[1], /Block: shared:\/\/doc\/elements\/ID · Discussions \(0\)/);
   const fetched = await view(state, 'image', { image: key });
   assert.deepEqual([fetched.mime, fetched.png], ['image/png', data]);
   let result;
@@ -112,20 +112,23 @@ test('document images are addresses in text and survive edits that name them', a
   await assert.rejects(view(state, 'png'), /A document has no rendering/);
 });
 
-test('comments, history and libraries read as text', async () => {
+test('discussions, history and libraries read as text', async () => {
   let { state } = await handle({ action: 'create', id: 'talk', kind: 'whiteboard', title: 'Talk',
     content: [rect('a', 0)], actor: 'Guest: Ann', opId: 'create' });
-  assert.equal((await view(state, 'comments')).text, 'No comments.\n');
+  assert.equal((await view(state, 'discussions')).text, 'No discussions.\n');
   const doc = restore(Buffer.from(state.crdt, 'base64'));
   const expected = contentHash(captureContext(doc, { selection: ['a'] }).snapshot);
   doc.destroy();
-  ({ state } = await handle({ action: 'comment', state, actor: 'Guest: Ann', opId: 'note', text: 'Is this the API?',
-    selection: ['a'], expected }));
-  const comments = (await view(state, 'comments')).text;
-  assert.match(comments, /^comment note · open · current · on a\n {2}quote: "1 object\\nrectangle"\n {2}Guest: Ann: "Is this the API\?"\n$/);
+  ({ state } = await handle({ action: 'discussion-post', state, actor: 'Ann', opId: 'note', messageId: 'note',
+    discussionId: 'note', text: 'Is this the API?', target: { kind: 'objects', selection: ['a'] }, expected }));
+  ({ state } = await handle({ action: 'discussion-post', state, actor: 'Bo', opId: 'whole', messageId: 'whole',
+    target: { kind: 'whole' }, text: 'Overall?' }));
+  const discussions = (await view(state, 'discussions')).text;
+  assert.equal(discussions, 'discussion general · open · whole item\n  Bo: "Overall?"\n'
+    + 'discussion note · open · current · on a\n  quote: "1 object\\nrectangle"\n  Ann: "Is this the API?"\n');
   ({ state } = await handle({ action: 'rename', state, actor: 'Agent: /root', opId: 'title', title: 'Talks' }));
   const history = (await view(state, 'history')).text.split('\n');
-  assert.match(history[0], /^title · revision 3 · Agent: \/root · \d{4}-.*Z · title "Talk" → "Talks"$/);
+  assert.match(history[0], /^title · revision 4 · Agent: \/root · \d{4}-.*Z · title "Talk" → "Talks"$/);
   const library = JSON.stringify({ type: 'excalidrawlib', version: 2, libraryItems: [
     { id: 'cloud', name: 'Cloud', status: 'published', elements: [{ id: 'c', type: 'ellipse', x: 0, y: 0, width: 80, height: 40 }] }] });
   const listing = (await handle({ action: 'library-view', part: 'list', at: 'shared://library',

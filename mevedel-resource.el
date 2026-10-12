@@ -1037,7 +1037,7 @@ as Glob or Grep scopes."
 
 (defun mevedel-resource--shared-shape-p (components)
   "Return non-nil when COMPONENTS name a `shared://' resource.
-Items are `ID' with `view.png', `comments', `history', `elements/ID' and
+Items are `ID' with `view.png', `discussions', `history', `elements/ID' and
 `images/KEY' descendants; `library' lists element libraries, optionally one
 library by name, each with a `sheet.png'."
   (cl-flet ((id-p (value)
@@ -1049,7 +1049,7 @@ library by name, each with a `sheet.png'."
       (`("library" ,_) t)
       (`("library" ,_ "sheet.png") t)
       (`(,id) (id-p id))
-      (`(,id ,(or "view.png" "comments" "history")) (id-p id))
+      (`(,id ,(or "view.png" "discussions" "history")) (id-p id))
       (`(,id ,(or "elements" "images") ,name) (and (id-p id) (id-p name))))))
 
 (defun mevedel-resource--shared-available-p (components session)

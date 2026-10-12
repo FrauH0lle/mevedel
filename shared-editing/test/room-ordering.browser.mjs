@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { editorFixture } from './editor-fixture.mjs';
 
-test('question attachments follow the reply, not the host queue notification', async t => {
+test('message attachments follow the reply, not the host queue notification', async t => {
   const { open } = await editorFixture(t);
   const { page, frame } = await open();
   await page.evaluate(() => {
     const apply = window.apply;
     window.apply = async args => {
       const result = await apply(args);
-      if (args.action === 'ask') {
+      if (args.action === 'discussion' && args.toAssistant) {
         window.questionQueued = true;
         await new Promise(resolve => { window.replyToQuestion = resolve; });
       }

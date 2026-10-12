@@ -571,7 +571,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                                                :root root :name "w"))
          (dir (expand-file-name (mevedel-artifact-store-directory workspace)))
          (path (file-name-concat dir "mockup" "index.html"))
-         (comments (file-name-concat dir ".state" "mockup" "comments.json"))
+         (discussions (file-name-concat dir ".state" "mockup" "discussions.json"))
          (other (file-name-concat dir "other" "page.html"))
          (session (mevedel-session--create :name "s" :workspace workspace
                                            :authority-mode 'pid-lock))
@@ -588,7 +588,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
     (puthash 2 (list :name "writer" :writable t :ready t) guests)
     (unwind-protect
         (progn
-          (dolist (file (list path comments other logo))
+          (dolist (file (list path discussions other logo))
             (make-directory (file-name-directory file) t)
             (with-temp-file file (insert "x")))
           (mevedel-artifact-store-create-meta workspace "mockup" "index.html")
@@ -611,7 +611,7 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
               (should (eq t (plist-get (reply 2 "tool-1") :ok)))
               ;; The whole artifact goes, not only the carded file.
               (should-not (file-exists-p (file-name-concat dir "mockup")))
-              (should-not (file-exists-p comments))
+              (should-not (file-exists-p discussions))
               (should (equal "artifact-delete" (plist-get (reply 2 "nope") :t)))
               (should (plist-get (reply 2 "nope") :error))
               ;; Any link may reach a store artifact by its id.

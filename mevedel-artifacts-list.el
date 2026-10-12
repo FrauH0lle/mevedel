@@ -361,16 +361,16 @@ Restoring copies the version over the artifact as a new version."
      (mevedel-artifact-store-conversation workspace id))))
 
 (defun mevedel-artifacts-list-delete ()
-  "Delete the selected artifact with its versions, comments and conversation.
+  "Delete the selected artifact with its versions, discussions and conversation.
 A whiteboard or document is deleted as a shared item, after any save in
-progress, together with its comments and history."
+progress, together with its discussions and history."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (item (mevedel-cockpit-surface-selected))
          (name (or (plist-get item :title) (plist-get item :id)))
          (buffer (current-buffer)))
-    (when (yes-or-no-p (format "Delete %s with its versions, comments and conversation? "
+    (when (yes-or-no-p (format "Delete %s with its versions, discussions and conversation? "
                                name))
       (mevedel-artifact-store-delete
        workspace (plist-get item :id) nil

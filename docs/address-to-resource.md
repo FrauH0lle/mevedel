@@ -391,7 +391,7 @@ of the discovery observation and whether automatic capture is enabled.
 Shared items are the session's collaborative whiteboards and documents. Bare
 `shared://` lists them with `shared://library`. An item address is
 session-relative: `shared://ID` reads its overview of hashed element or block
-lines, and its parts are `view.png`, `comments`, `history`,
+lines, and its parts are `view.png`, `discussions`, `history`,
 `elements/ELEMENT` and `images/KEY`. `shared://library` lists element library
 items, `shared://library/NAME` one library, and `sheet.png` beneath either
 renders their numbered sheet. Item, element and image identities match

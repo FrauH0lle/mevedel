@@ -9,13 +9,14 @@
 ;; artifact element, word or box.  A message is either a note between people
 ;; or also sent to the assistant, which answers in that discussion.
 ;;
-;; This module owns the lifecycle: identities, limits, the actions, which
-;; session answers, the request the model receives, and resolving a selection
-;; sent alone once its turn completes.  Item kinds differ only in where their
-;; discussions are stored, how a target's content is captured, and how a
-;; target is checked.  HTML artifacts keep theirs in the artifact store's
-;; protected state; whiteboards and documents keep theirs in the item, on the
-;; editing host, which validates anchors against the item's content.
+;; This module performs every guest action, decides which session answers,
+;; builds the request the model receives, and resolves a selection sent alone
+;; once its turn completes.  Item kinds differ in where their discussions are
+;; stored, how a target's content is captured, and how a target is checked.
+;; HTML artifacts keep theirs in the artifact store's protected state, and
+;; this module applies their limits.  Whiteboards and documents keep theirs
+;; in the item, on the editing host, which validates targets against the
+;; item's content and applies the same limits there.
 
 ;;; Code:
 
@@ -32,11 +33,13 @@
                   "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-conversation
                   "mevedel-artifact-store" (workspace id))
+(declare-function mevedel-artifact-store-meta "mevedel-artifact-store" (workspace id))
 (declare-function mevedel-artifact-store-session-buffer
                   "mevedel-artifact-store" (workspace session-id))
 (autoload 'mevedel-artifact-store-attach "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-bookkeeping-directory "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-conversation "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-meta "mevedel-artifact-store")
 (autoload 'mevedel-artifact-store-session-buffer "mevedel-artifact-store")
 
 ;; `mevedel-collaboration'
@@ -69,6 +72,8 @@
                   "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--room-workspace
                   "mevedel-collaboration-guest" (room))
+(declare-function mevedel-collaboration--save-guest-attachments
+                  "mevedel-collaboration-guest" (images))
 (declare-function mevedel-collaboration--save-guest-files
                   "mevedel-collaboration-guest" (data-buffer images))
 
@@ -81,12 +86,19 @@
                   "mevedel-pending-inputs" (data-buffer text &rest keys))
 (defvar mevedel-view--turn-guest-attribution)
 
+;; `mevedel-shared-conversation'
+(declare-function mevedel-shared-conversation-history
+                  "mevedel-shared-conversation"
+                  (session item-id &rest keys))
+(autoload 'mevedel-shared-conversation-history "mevedel-shared-conversation")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-follow-ups "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-guest-prompts
@@ -402,22 +414,30 @@ Discussions belong to the item, so every room and the lobby see them."
 (defun mevedel-collaboration-discussions--item (room guest id)
   "Return the item frame ID names for GUEST in ROOM, or signal.
 ID is \"artifact:STORE-ID\" or a card published to GUEST.  The result names
-the item's kind, store identity, item identity, title and record."
+the item's kind, store identity, item identity, title and record.  A
+whiteboard's or document's item identity is its store id, as its room
+conversation knows it; an HTML artifact's is \"artifact:STORE-ID\"."
   (let* ((record (mevedel-collaboration--artifact-target room guest id))
-         (store (plist-get record :store)))
+         (store (plist-get record :store))
+         (workspace (mevedel-collaboration--room-workspace room)))
     (unless (and record store (not (plist-get record :missing)))
       (error "This artifact is not published"))
-    (unless (equal (mevedel-collaboration--artifact-mime (plist-get record :artifact))
-                   "text/html")
-      (error "Only HTML artifacts, whiteboards and documents take discussions"))
-    (unless (equal (plist-get record :artifact)
-                   (plist-get (mevedel-collaboration--artifact-target
-                               room guest (concat "artifact:" store))
-                              :artifact))
-      (error "Discussions are kept on an artifact's main file"))
-    (list :kind "artifact" :store store :item (concat "artifact:" store)
-          :title (plist-get record :artifact) :record record
-          :workspace (mevedel-collaboration--room-workspace room))))
+    (if (plist-get record :item)
+        (let ((meta (mevedel-artifact-store-meta workspace store)))
+          (list :kind (symbol-name (plist-get meta :kind)) :store store :item store
+                :title (or (plist-get meta :title) store) :record record
+                :workspace workspace :shared t))
+      (unless (equal (mevedel-collaboration--artifact-mime (plist-get record :artifact))
+                     "text/html")
+        (error "Only HTML artifacts, whiteboards and documents take discussions"))
+      (unless (equal (plist-get record :artifact)
+                     (plist-get (mevedel-collaboration--artifact-target
+                                 room guest (concat "artifact:" store))
+                                :artifact))
+        (error "Discussions are kept on an artifact's main file"))
+      (list :kind "artifact" :store store :item (concat "artifact:" store)
+            :title (plist-get record :artifact) :record record
+            :workspace workspace))))
 
 (defun mevedel-collaboration-discussions--load (item)
   "Return ITEM's stored discussions."
@@ -438,9 +458,11 @@ the item's kind, store identity, item identity, title and record."
 ;;
 ;;; Assistant requests
 
-(defun mevedel-collaboration-discussions--question-known-p (data-buffer question-id)
+(defun mevedel-collaboration-discussions--question-known-p (data-buffer item question-id)
   "Return non-nil when QUESTION-ID is already queued or delivered in DATA-BUFFER.
-A retried send then succeeds without queueing the message twice."
+ITEM is the attribution's item identity, `artifact:ID'.  A retried send then
+succeeds without queueing the message twice, also when the request was
+delivered before compaction moved it into an archived segment."
   (let ((known (lambda (shared)
                  (and (plist-get shared :discussionId)
                       (equal (plist-get shared :questionId) question-id)))))
@@ -449,7 +471,10 @@ A retried send then succeeds without queueing the message twice."
                    (mevedel-session-pending-follow-ups mevedel--session))
           (cl-some (lambda (attribution)
                      (funcall known (plist-get (cdr attribution) :shared)))
-                   (mevedel-transcript-audit-guest-prompts))))))
+                   (mevedel-transcript-audit-guest-prompts))
+          (cl-some (lambda (turn) (funcall known (plist-get turn :shared)))
+                   (plist-get (mevedel-shared-conversation-history mevedel--session item)
+                              :turns))))))
 
 (defun mevedel-collaboration-discussions-answering-buffer (room item thread-session)
   "Return the data buffer of the session that answers about store ITEM.
@@ -479,11 +504,13 @@ dedicated session."
         (truncate-string-to-width label 120 nil nil "…")))))
 
 (defun mevedel-collaboration-discussions--send
-    (room guest item discussion message question-id images)
+    (room guest item discussion message question-id images &optional capture)
   "Queue MESSAGE of DISCUSSION about ITEM for the answering session.
 QUESTION-ID identifies the request; IMAGES are the sender's attachment
-frames.  Return the reply fields: the answering session and queue state.
-The discussion is updated to record the session that answers it."
+frames.  CAPTURE is what the editing host captured of a whiteboard's or
+document's target: (:prompt TEXT :png BASE64 :revision N :quote Q); an HTML
+artifact's target is captured here.  Return the reply fields: the
+answering session and queue state."
   (let* ((kind (plist-get item :kind))
          (data-buffer (mevedel-collaboration-discussions-answering-buffer
                        room (plist-get item :store) (plist-get discussion :session)))
@@ -491,7 +518,8 @@ The discussion is updated to record the session that answers it."
          (answering (list :session (mevedel-session-session-id session)
                           :sessionName (mevedel-session-name session))))
     (mevedel-artifact-store-attach session (plist-get item :store) data-buffer)
-    (if (mevedel-collaboration-discussions--question-known-p data-buffer question-id)
+    (if (mevedel-collaboration-discussions--question-known-p
+         data-buffer (plist-get item :item) question-id)
         (append (list :queued t :questionId question-id) answering)
       (let* ((alone (eq (plist-get message :alone) t))
              (text (if alone
@@ -499,22 +527,38 @@ The discussion is updated to record the session that answers it."
                      (plist-get message :text)))
              (general (mevedel-collaboration-discussions--general-p discussion))
              (input (concat text mevedel-collaboration-discussions-snapshot-heading
-                            (mevedel-collaboration-discussions--artifact-capture
-                             (plist-get item :record) discussion)
+                            (if capture (plist-get capture :prompt)
+                              (mevedel-collaboration-discussions--artifact-capture
+                               (plist-get item :record) discussion))
                             (unless general
                               (concat "\n" (mevedel-collaboration-discussions--thread
                                             discussion)))))
-             (paths (mevedel-collaboration--save-guest-files data-buffer images))
+             (paths (append
+                     ;; A board's rendering of the target rides beside the
+                     ;; sender's own files.
+                     (when-let* ((png (plist-get capture :png)))
+                       (or (with-current-buffer (buffer-local-value
+                                                 'mevedel--view-buffer data-buffer)
+                             (mevedel-collaboration--save-guest-attachments
+                              (list (list :mime "image/png" :data png))))
+                           (error "The board snapshot could not be attached")))
+                     (mevedel-collaboration--save-guest-files data-buffer images)))
              (shared (append (list :kind kind
                                    :itemId (plist-get item :item)
                                    :title (plist-get item :title)
                                    :questionId question-id
                                    :discussionId (plist-get discussion :id)
+                                   :messageId (plist-get message :id)
                                    :scope (if general "whole" "selection")
                                    :targetLabel (mevedel-collaboration-discussions--target-label
                                                  discussion)
                                    :text text)
-                             (when alone (list :alone t))))
+                             (when alone (list :alone t))
+                             (when capture
+                               (list :revision (plist-get capture :revision)
+                                     :quote (truncate-string-to-width
+                                             (or (plist-get capture :quote) "") 2000
+                                             nil nil "…")))))
              queued)
         (unwind-protect
             (setq queued
@@ -551,7 +595,193 @@ Return nil when nothing changes."
 
 
 ;;
+;;; Whiteboards and documents
+
+;; Their discussions live in the item, on the editing host, which checks each
+;; target against the item's content and keeps the anchors current.
+
+(defun mevedel-collaboration-discussions--shared-call (item request authorize callback)
+  "Run editing REQUEST on ITEM's host and call CALLBACK with its result.
+AUTHORIZE, when non-nil, must still permit the operation.  CALLBACK
+receives the result plist, or (:error MESSAGE)."
+  (mevedel-shared-editing-call
+   (plist-get item :workspace)
+   (append (list :id (plist-get item :store)) request)
+   (lambda (reply)
+     (funcall callback (if (plist-get reply :error)
+                           (list :error (plist-get reply :error))
+                         (plist-get reply :result))))
+   authorize))
+
+(defun mevedel-collaboration-discussions--shared-target (target)
+  "Return the whiteboard or document target guest TARGET names, or signal."
+  (pcase (plist-get target :kind)
+    ("whole" (list :kind "whole"))
+    ("passage" (list :kind "passage" :range (plist-get target :range)))
+    ("objects" (append (list :kind "objects"
+                             :selection (or (plist-get target :selection) []))
+                       (when (plist-get target :region)
+                         (list :region (plist-get target :region)))))
+    (_ (error "The discussed part could not be identified"))))
+
+(defun mevedel-collaboration-discussions--shared-capture (target)
+  "Return the question read fields that capture TARGET as it now stands."
+  (pcase (plist-get target :kind)
+    ("whole" (list :whole t))
+    ("passage" (list :range (plist-get target :range)))
+    (_ (append (list :selection (plist-get target :selection))
+               (when (plist-get target :region)
+                 (list :region (plist-get target :region)))))))
+
+(defun mevedel-collaboration-discussions--shared-ask
+    (room guest item id question-id version target expected images authorize callback)
+  "Send ITEM's discussion ID at VERSION to the assistant, then call CALLBACK.
+QUESTION-ID identifies the request.  TARGET names the discussed part as the
+sender reviewed it and EXPECTED that content's hash; a discussion about the
+whole item has none.  IMAGES are the sender's attachment frames.
+AUTHORIZE, when non-nil, must still permit the operation."
+  (let ((room-buffer (and (plist-get room :session)
+                          (mevedel-collaboration--room-data-buffer room))))
+    (if (and room-buffer
+             (mevedel-collaboration-discussions--question-known-p
+              room-buffer (plist-get item :item) question-id))
+        (funcall callback (list :discussionId id :queued t :questionId question-id))
+      (mevedel-collaboration-discussions--shared-call
+       item (append (list :action "read" :question t :image t :imageMax 1024
+                          :discussionId id :version version)
+                    (mevedel-collaboration-discussions--shared-capture target)
+                    (when expected (list :expected expected)))
+       authorize
+       (lambda (result)
+         (funcall
+          callback
+          (condition-case err
+              (if (plist-get result :error) result
+                (let* ((discussions (append (plist-get result :discussions) nil))
+                       (discussion (or (mevedel-collaboration-discussions--find discussions id)
+                                       (error "That discussion no longer exists")))
+                       (message (car (last (mevedel-collaboration-discussions--messages
+                                            discussion))))
+                       (answer (mevedel-collaboration-discussions--send
+                                room guest item discussion message question-id images
+                                (list :prompt (plist-get result :prompt)
+                                      :png (plist-get result :png)
+                                      :revision (plist-get result :revision)
+                                      :quote (plist-get result :quote)))))
+                  (when (mevedel-collaboration-discussions--answered discussions id answer)
+                    (mevedel-collaboration-discussions--shared-call
+                     item (list :action "discussion-answered" :discussionId id
+                                :session (plist-get answer :session)
+                                :sessionName (plist-get answer :sessionName)
+                                :opId (mevedel-collaboration-discussions--op-id)
+                                :actor (mevedel-collaboration-discussions--actor guest))
+                     authorize #'ignore))
+                  (append (list :discussionId id) answer)))
+            (error (list :error (error-message-string err))))))))))
+
+(defun mevedel-collaboration-discussions--shared-reviewed (args)
+  "Return the target ARGS name for an existing discussion, as reviewed.
+The sender names the parts of the discussion's target that still exist;
+the host checks them against the stored target."
+  (cond
+   ((eq (plist-get args :whole) t) (list :kind "whole"))
+   ((plist-get args :range) (list :kind "passage" :range (plist-get args :range)))
+   (t (append (list :kind "objects" :selection (or (plist-get args :selection) []))
+              (when (plist-get args :region) (list :region (plist-get args :region)))))))
+
+(defun mevedel-collaboration-discussions--shared-perform
+    (room guest item args authorize callback)
+  "Perform discussion ARGS on whiteboard or document ITEM; call CALLBACK.
+AUTHORIZE, when non-nil, must still permit the operation."
+  (let* ((action (plist-get args :action))
+         (actor (mevedel-collaboration-discussions--actor guest))
+         (to-assistant (eq (plist-get args :toAssistant) t))
+         (then-ask
+          (lambda (id message-id target)
+            (lambda (result)
+              (cond
+               ((plist-get result :error) (funcall callback result))
+               ((not to-assistant)
+                (funcall callback (list :discussionId id :messageId message-id
+                                        :discussions (plist-get result :discussions))))
+               (t (mevedel-collaboration-discussions--shared-ask
+                   room guest item id message-id message-id target
+                   (plist-get args :expected) (plist-get args :images) authorize
+                   (lambda (answer)
+                     (funcall callback
+                              (if (plist-get answer :error) answer
+                                (append (list :messageId message-id) answer)))))))))))
+    (pcase action
+      ("list"
+       (mevedel-collaboration--store-read guest)
+       (mevedel-collaboration-discussions--shared-call
+        item (list :action "read") authorize
+        (lambda (result)
+          (funcall callback
+                   (if (plist-get result :error) result
+                     (list :item (plist-get item :item)
+                           :discussions (or (plist-get result :discussions) [])))))))
+      ("post"
+       (let* ((target (mevedel-collaboration-discussions--shared-target
+                       (plist-get args :target)))
+              (whole (equal (plist-get target :kind) "whole"))
+              (message-id (mevedel-collaboration-discussions--identity
+                           (plist-get args :messageId) "message"))
+              (id (if whole mevedel-collaboration-discussions-general-id
+                    (mevedel-collaboration-discussions--identity
+                     (plist-get args :discussionId) "discussion")))
+              (text (mevedel-collaboration-discussions--text (plist-get args :text)))
+              (alone (and (not text) to-assistant (not whole))))
+         (unless (or text alone)
+           (error (if whole "A message is required"
+                    "A message is required, or send the selection to the assistant")))
+         (mevedel-collaboration-discussions--shared-call
+          item (append (list :action "discussion-post" :discussionId id :messageId message-id
+                             :target target :text (or text "") :alone (if alone t :json-false)
+                             :opId message-id :actor actor)
+                       (when (plist-get args :expected)
+                         (list :expected (plist-get args :expected))))
+          authorize (funcall then-ask id message-id target))))
+      ("reply"
+       (let ((id (or (plist-get args :discussionId) (error "Name the discussion to reply to")))
+             (message-id (mevedel-collaboration-discussions--identity
+                          (plist-get args :messageId) "message"))
+             (text (or (mevedel-collaboration-discussions--text (plist-get args :text))
+                       (error "A message is required"))))
+         (mevedel-collaboration-discussions--shared-call
+          item (list :action "discussion-reply" :discussionId id :messageId message-id
+                     :text text :opId message-id :actor actor)
+          authorize
+          ;; A reply sends the discussion's target as the sender reviewed it.
+          (funcall then-ask id message-id
+                   (mevedel-collaboration-discussions--shared-reviewed args)))))
+      ("resolve"
+       (let ((id (plist-get args :discussionId))
+             (resolved (if (eq (plist-get args :resolved) t) t :json-false)))
+         (mevedel-collaboration-discussions--shared-call
+          item (list :action "discussion-resolve" :discussionId id :resolved resolved
+                     :opId (mevedel-collaboration-discussions--op-id) :actor actor)
+          authorize
+          (lambda (result)
+            (funcall callback
+                     (if (plist-get result :error) result
+                       (list :discussionId id :resolved resolved
+                             :discussions (plist-get result :discussions))))))))
+      ("ask"
+       (mevedel-collaboration-discussions--shared-ask
+        room guest item (plist-get args :discussionId)
+        (mevedel-collaboration-discussions--identity (plist-get args :questionId) "question")
+        (plist-get args :version)
+        (mevedel-collaboration-discussions--shared-reviewed args)
+        (plist-get args :expected) nil authorize callback)))))
+
+
+;;
 ;;; Actions
+
+(defun mevedel-collaboration-discussions--op-id ()
+  "Return a fresh operation identity for a host-made discussion change."
+  (substring (secure-hash 'sha256 (format "%s%s" (current-time) (random t))) 0 40))
 
 (defun mevedel-collaboration-discussions--append (discussion message)
   "Return DISCUSSION with MESSAGE added, or DISCUSSION when it already has it."
@@ -562,7 +792,7 @@ Return nil when nothing changes."
       (when (eq (plist-get discussion :resolved) t)
         (error "Reopen this discussion before adding to it"))
       (when (>= (length messages) mevedel-collaboration-discussions--max-messages)
-        (error "This discussion already has %d messages"
+        (error "This discussion has reached its %d message limit"
                mevedel-collaboration-discussions--max-messages))
       (plist-put (copy-sequence discussion) :messages
                  (vconcat messages (list message))))))
@@ -610,7 +840,7 @@ A whole-item target adds to the item's general discussion."
                 (when (>= (cl-count-if-not #'mevedel-collaboration-discussions--general-p
                                            discussions)
                           mevedel-collaboration-discussions--max-discussions)
-                  (error "This item already has %d discussions"
+                  (error "This item has reached its %d discussion limit"
                          mevedel-collaboration-discussions--max-discussions)))
               (append (list :id id :target target
                             :quote (if whole "" (or (plist-get target :quote)
@@ -689,40 +919,51 @@ request.  IMAGES are the sender's attachment frames."
                         :resolvedBy (and (eq resolved t) actor)))))
     (list :discussionId id :resolved resolved)))
 
-(defun mevedel-collaboration-discussions-perform (room guest args callback)
+(defun mevedel-collaboration-discussions-perform
+    (room guest args callback &optional authorize)
   "Perform GUEST's discussion ARGS in ROOM and call CALLBACK with the reply.
 The reply is a plist of fields for the sender, or (:error MESSAGE) when the
-action is refused.  CALLBACK is called exactly once."
-  (funcall
-   callback
-   (condition-case err
-       (let* ((action (plist-get args :action))
-              (item (progn
-                      (unless (member action '("list" "post" "reply" "resolve" "ask"))
-                        (error "Unknown discussion action"))
-                      (mevedel-collaboration-discussions--item
-                       room guest (plist-get args :item)))))
-         (unless (or (equal action "list") (plist-get guest :writable))
-           (error "This link can view the item but not discuss it"))
-         (pcase action
-           ("list"
-            (mevedel-collaboration--store-read guest)
-            (list :item (plist-get item :item)
-                  :discussions (mevedel-collaboration-discussions-public
-                                (mevedel-collaboration-discussions--load item))))
-           ("post" (mevedel-collaboration-discussions--post room guest item args))
-           ("reply" (mevedel-collaboration-discussions--reply room guest item args))
-           ("resolve" (mevedel-collaboration-discussions--resolve
-                       item args (mevedel-collaboration-discussions--actor guest)))
-           ("ask"
-            (let ((id (plist-get args :discussionId)))
-              (append (list :discussionId id)
-                      (mevedel-collaboration-discussions--ask-now
-                       room guest item (mevedel-collaboration-discussions--load item) id
-                       (mevedel-collaboration-discussions--identity
-                        (plist-get args :questionId) "question")
-                       nil))))))
-     (error (list :error (error-message-string err))))))
+action is refused.  CALLBACK is called exactly once: at once for an HTML
+artifact, once its editing host answers for a whiteboard or document.
+AUTHORIZE, when non-nil, must still permit the operation when that host
+runs it."
+  (let ((answered nil))
+    (cl-flet ((reply (value)
+                (unless answered
+                  (setq answered t)
+                  (funcall callback value))))
+      (condition-case err
+          (let* ((action (plist-get args :action))
+                 (item (progn
+                         (unless (member action '("list" "post" "reply" "resolve" "ask"))
+                           (error "Unknown discussion action"))
+                         (mevedel-collaboration-discussions--item
+                          room guest (plist-get args :item)))))
+            (unless (or (equal action "list") (plist-get guest :writable))
+              (error "This link can view the item but not discuss it"))
+            (if (plist-get item :shared)
+                (mevedel-collaboration-discussions--shared-perform
+                 room guest item args authorize #'reply)
+              (reply
+               (pcase action
+                 ("list"
+                  (mevedel-collaboration--store-read guest)
+                  (list :item (plist-get item :item)
+                        :discussions (mevedel-collaboration-discussions-public
+                                      (mevedel-collaboration-discussions--load item))))
+                 ("post" (mevedel-collaboration-discussions--post room guest item args))
+                 ("reply" (mevedel-collaboration-discussions--reply room guest item args))
+                 ("resolve" (mevedel-collaboration-discussions--resolve
+                             item args (mevedel-collaboration-discussions--actor guest)))
+                 ("ask"
+                  (let ((id (plist-get args :discussionId)))
+                    (append (list :discussionId id)
+                            (mevedel-collaboration-discussions--ask-now
+                             room guest item (mevedel-collaboration-discussions--load item) id
+                             (mevedel-collaboration-discussions--identity
+                              (plist-get args :questionId) "question")
+                             nil))))))))
+        (error (reply (list :error (error-message-string err))))))))
 
 (defun mevedel-collaboration-discussions-handle (room peer frame)
   "Perform guest PEER's discussion FRAME in ROOM and answer the sender.
@@ -736,7 +977,10 @@ handler, whose failure would stop the share for everyone."
        (lambda (reply)
          (mevedel-collaboration--transport-send
           (plist-get room :transport) peer
-          (append (list :t "discussion" :reqId req-id) reply)))))))
+          (append (list :t "discussion" :reqId req-id) reply)))
+       ;; A whiteboard's or document's host runs later: the guest must still
+       ;; be in the room.
+       (lambda () (eq guest (mevedel-collaboration--guest room peer)))))))
 
 
 ;;
@@ -746,7 +990,8 @@ handler, whose failure would stop the share for everyone."
   "Resolve the selection-alone discussion the current buffer's turn served.
 OUTCOME is the turn's terminal outcome; only a completed turn resolves.  A
 selection sent alone is a task rather than a conversation, so once it is
-done nothing remains to discuss.  The turn's attribution is consumed either
+done nothing remains to discuss -- unless someone wrote in the discussion
+meanwhile, which keeps it open.  The turn's attribution is consumed either
 way."
   (when-let* ((attribution (and (boundp 'mevedel-view--turn-guest-attribution)
                                 mevedel-view--turn-guest-attribution))
@@ -755,23 +1000,35 @@ way."
               ((eq outcome 'success))
               ((eq (plist-get shared :alone) t))
               (item (plist-get shared :itemId))
-              ((string-prefix-p "artifact:" item))
               (session (bound-and-true-p mevedel--session)))
-    (condition-case err
-        (let* ((store (substring item 9))
-               (workspace (mevedel-session-workspace session))
-               (discussions (mevedel-collaboration-discussions--artifact-read workspace store))
-               (discussion (mevedel-collaboration-discussions--find
-                            discussions (plist-get shared :discussionId))))
-          (when (and discussion (not (eq (plist-get discussion :resolved) t)))
-            (mevedel-collaboration-discussions--artifact-write
-             workspace store
-             (mevedel-collaboration-discussions--replace
-              discussions
-              (plist-put (plist-put (copy-sequence discussion) :resolved t)
-                         :resolvedBy "Assistant")))))
-      (error (message "mevedel: could not resolve the discussion: %s"
-                      (error-message-string err))))))
+    (let ((workspace (mevedel-session-workspace session))
+          (id (plist-get shared :discussionId))
+          (report (lambda (text)
+                    (message "mevedel: could not resolve the discussion: %s" text))))
+      (condition-case err
+          (if (not (string-prefix-p "artifact:" item))
+              ;; A whiteboard's or document's discussion lives on its host.
+              (mevedel-shared-editing-call
+               workspace (list :action "discussion-resolve" :id item :discussionId id
+                               :resolved t :actor "Assistant" :ifAlone t
+                               :opId (mevedel-collaboration-discussions--op-id))
+               (lambda (reply)
+                 (when-let* ((text (plist-get reply :error)))
+                   (funcall report text))))
+            (let* ((store (substring item 9))
+                   (discussions (mevedel-collaboration-discussions--artifact-read
+                                 workspace store))
+                   (discussion (mevedel-collaboration-discussions--find discussions id)))
+              (when (and discussion (not (eq (plist-get discussion :resolved) t))
+                         (cl-every (lambda (message) (eq (plist-get message :alone) t))
+                                   (mevedel-collaboration-discussions--messages discussion)))
+                (mevedel-collaboration-discussions--artifact-write
+                 workspace store
+                 (mevedel-collaboration-discussions--replace
+                  discussions
+                  (plist-put (plist-put (copy-sequence discussion) :resolved t)
+                             :resolvedBy "Assistant"))))))
+        (error (funcall report (error-message-string err)))))))
 
 (add-hook 'mevedel-turn-settled-functions #'mevedel-collaboration-discussions-turn-settled)
 

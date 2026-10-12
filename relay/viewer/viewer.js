@@ -168,7 +168,7 @@
     send, el, flash: flashNotice, summarize: summarizeSession,
     onPage: () => presence.report(),
     // A lobby has no welcome; its link tier decides instead.
-    canComment: () => (state.connected && !state.readOnly)
+    canDiscuss: () => (state.connected && !state.readOnly)
       || (lobby.active() && state.writable),
     canDelete: () => (state.connected && !state.readOnly)
       || (lobby.active() && state.writable),
@@ -183,7 +183,7 @@
     reveal: id => {
       const turn = state.elements.get(id);
       if (!turn) {
-        flashNotice('That comment is no longer in the loaded conversation.');
+        flashNotice('That request is no longer in the loaded conversation.');
         return;
       }
       if (typeof turn.scrollIntoView === 'function') {

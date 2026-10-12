@@ -201,7 +201,7 @@ Room and editor chrome share color tokens. **Appearance** selects a complete
 cool (default) or warm palette, system/light/dark appearance, and selective or
 minimal accent detail. Selective accents color participant attribution and the
 sidebar scrollbar; minimal accents make those details neutral. Errors, diffs,
-comments, presence and authored drawing colors retain their meaning. Choices
+discussions, presence and authored drawing colors retain their meaning. Choices
 persist in browser storage per relay origin and follow other open room/editor
 tabs. Editors receive them through their bound item port without replacing the
 frame, document, selection or question draft. The same Appearance menu is
@@ -477,7 +477,7 @@ holds at most 1000 entries and reports how many it left out. Opening a file
 bytes on demand, at most 16 MiB, in base64 chunk frames under the wire bound,
 rendered by the same sandboxed and XSS-safe renderers. A file with no type
 of its own previews as plain text when its content is UTF-8, so source and
-configuration files read in place. A project file has no comments and no
+configuration files read in place. A project file has no discussions and no
 Delete there; for an owner link, **Ask** opens the new-session dialog with
 the file's path in the first prompt.
 
@@ -518,18 +518,20 @@ the host rechecks its workspace identity on receipt. A missing or invalid
 directive selection falls back to ordinary chat. Explicit command/skill
 invocations use their own route instead of inheriting the directive scope.
 
-Selecting a shared item sends the composer's text into that item's own
-conversation as a whole-item question, the same way the editor asks. A room
+Selecting a shared item sends the composer's text to the assistant in that
+item's general [discussion](#discussions), the same way the item's own
+composer does. A room
 message has no reviewed snapshot, so the helper captures the item as currently
-committed. An artifact's whole-item question names its file instead (see
-[artifact discussions](#artifact-discussions)). Commands and skills stay main-chat features; the viewer
+committed. An artifact's message names its file instead (see
+[discussing an HTML artifact](#discussing-an-html-artifact)). Commands and skills stay main-chat features; the viewer
 refuses them in an item discussion and says so. The composer placeholder and
 scope line name the discussion a message will reach.
 
 Every composer that asks the model takes attachments: the room composer in
-any discussion, the whiteboard and document **Ask the assistant** form, and the
+any discussion, the whiteboard and document discussion composer, and the
 new-session first prompt. **Attach**, pasting into the message and dropping
-files onto the composer all add them. Comments and replies stay text-only.
+files onto the composer all add them. Replies and the HTML artifact
+discussion composer stay text-only.
 A prompt can carry up to three attachments totaling 1.25 MiB decoded: JPEG,
 PNG, WebP, PDF, plain text, Markdown, CSV, JSON, or patch text, and any other
 UTF-8 text such as source code or HTML, which reaches the model as text under
@@ -549,6 +551,77 @@ as a whole and its text may still be queued; an item, artifact or new-session
 question with an invalid set is refused, so it never reaches the model without
 the files its sender chose. A storage error refuses that prompt without ending
 the room. Failed enqueue removes the files just created for it.
+
+## Discussions
+
+Everything said about an HTML artifact, a whiteboard or a document is a
+discussion kept with the item: a target and its messages. The target is part
+of the item -- an element, word, passage or box of an HTML artifact, objects or
+an area of a whiteboard, a passage of a document -- or the whole item. Every
+item has one general discussion about the whole item. It always exists, stays
+open and has no marker; the room's discussion tab for the item and the top of
+the editor's Discussions panel show it. A discussion about part of an item
+starts with its first message. Participants with edit authority resolve and
+reopen it; resolving hides its marker for everyone, and **Show resolved**
+brings it back into view. Reopen a resolved discussion before writing to it.
+View participants read discussions but cannot write.
+
+Every place that discusses an item works the same way. **Discuss** picks the
+part to discuss and opens the composer for it: discuss mode in the
+[artifact panel](#discussing-an-html-artifact), and the **Discuss** button,
+tool (M) and Ctrl/Command+Alt+M in the
+[whiteboard and document editor](shared-editing.md#discussions-in-the-editor).
+**Ask assistant**, checked by default, also sends the message to the
+assistant, which answers beneath it; unchecked, the message is a note between
+people and starts no model turn. Replies carry the same choice, and **Send to
+assistant** sends a discussion as it stands, without a new message. A message
+to the general discussion needs text. With **Ask assistant** checked, a
+message about part of an item may be empty: what is written in that part is
+then the request (see
+[sending a selection without a message](shared-editing.md#sending-a-selection-without-a-message)).
+A room message with an item selected in the strip is a message to the
+assistant in that item's general discussion, so everything said about the item
+is kept with it.
+
+A message to the assistant goes to the session the link speaks for:
+
+- written in a chat's room, to that chat, which becomes attached to the item,
+  also when another session answered the discussion before: a room's links
+  never prompt another session;
+- written from the lobby, to the session that answered the discussion, or else
+  to the item's dedicated session, created on first use.
+
+The discussion records its answering session; the artifact panel shows it as
+*answered in NAME*. A selection sent alone is a task rather than a
+conversation: once the turn that answered it completes, the discussion
+resolves itself, attributed to the assistant. A failed or cancelled turn
+leaves it open, and a discussion with a written message is never resolved
+automatically.
+
+The model receives the message, then the target as it now stands behind the
+shared-content heading, framed as user-provided data, then the discussion so
+far, newest messages first kept within 32,000 characters. Earlier turns about
+the same item are included; other room work is not, and `history://root`
+reaches the rest of the conversation. The request's audit data names the
+discussion and the message it answers, so every view places the answer
+beneath that message.
+
+Each guest action is a `discussion` request with an action of `list`, `post`,
+`reply`, `resolve` or `ask` naming its item as `artifact:ID` or by a card's
+record id. The artifact panel sends it as a room frame; the editor sends it
+through its editing channel, which also carries the message's attachments.
+Client-generated discussion and message identities make a retry neither store
+nor queue twice. The host refuses writes from view links and unknown or deleted
+items, and answers every refusal to the sender. Each item has at most 200
+discussions besides the general one, each discussion at most 200 messages, and
+each message at most 10,000 characters.
+
+An HTML artifact's discussions live in the store's protected
+`.state/ID/discussions.json`. A whiteboard's or document's live in the item
+on its [editing host](shared-editing.md), which checks every target against
+the content, keeps targets current as the content changes, and lists them for
+models at `shared://ID/discussions`. Every room and the lobby see the same
+discussions, deleting the item deletes them, and exports leave them out.
 
 ## Transcript, agent, and task projection
 
@@ -807,7 +880,7 @@ artifact frames are sealed like every other frame.
 Full and owner links can **Delete** an open artifact after confirming, in a
 room or the lobby. The host resolves it from its own record of the card or
 from the store id, never from a guest path, and deletes the whole artifact --
-its id directory with versions and comments, and its dedicated session --
+its id directory with versions and discussions, and its dedicated session --
 through the same path as the Emacs cockpit. A dedicated session open in Emacs
 is closed first; only a turn running there refuses the deletion (see
 [the artifact store](view.md#artifact-store)). The card then reads as
@@ -843,7 +916,7 @@ link capped to the guest's existing tier. Each row keeps its other actions in
 a `⋯` menu, which a refreshed listing keeps open. Any link can list an
 artifact's **Versions** and **View** a historical snapshot without changing
 the current content. Editor snapshots preview as SVG or HTML exports;
-historical previews have no comment, delete or assistant actions. The bounded
+historical previews have no discuss, delete or assistant actions. The bounded
 `artifact-get` transfer accepts an optional version number, resolved by the
 host inside the store.
 
@@ -864,7 +937,7 @@ frames:
 - **Conversation** opens the artifact's dedicated session in a room of its
   own, created on first use;
 - **Delete** deletes it for everyone, after a confirmation, with its
-  versions, comments and dedicated session. The answer waits for a
+  versions, discussions and dedicated session. The answer waits for a
   whiteboard's or document's editing queue. A dedicated session open in Emacs
   is closed, so guests in its room see "Artifact deleted" rather than a
   session the host ended.
@@ -872,11 +945,10 @@ frames:
 Actions that would need a decision in Emacs, such as resuming a dedicated
 session another client holds, are refused with the usual notice.
 
-### Artifact discussions
+### Discussing an HTML artifact
 
-A discussion is a thread attached to a target: a part of an HTML artifact, or
-the whole artifact. Writable guests discuss part of an HTML artifact in the
-panel. **Discuss** turns on discuss mode: hovering highlights what a click
+Writable guests discuss part of an HTML artifact in the panel (see
+[discussions](#discussions)). **Discuss** turns on discuss mode: hovering highlights what a click
 would pick, a word under the pointer or otherwise the element; Alt prefers the
 element, Arrow Up widens the highlight to its parent and Arrow Down narrows it
 again, and Enter picks it. Dragging across text keeps the browser's own
@@ -898,51 +970,25 @@ frame and only while discuss mode is on, and bounds every field. An artifact
 can still misreport where it was clicked; the composer shows the label and
 quote it will send.
 
-**Post** starts the discussion for everyone. **Ask assistant**, checked by
-default, also sends it to the assistant; unchecked, the message is a note
-between people. With **Ask assistant** checked the message may be empty: the
-picked part is then the request. Replies work the same way, but always need
-text. Each action is a `discussion` frame with an `action` of `list`, `post`,
-`reply`, `resolve` or `ask` and an `item`: the card's record id or
-`artifact:ID`. Client-generated discussion and message identities make a retry
-neither store nor queue twice. Discussions belong to the store artifact and are
-kept on its main file. The host refuses writes from view links, unknown or
-deleted artifacts, other files of an artifact and non-HTML artifacts, rebuilds
-the target from its known bounded fields, and answers every refusal to the
-sender with an error.
+**Post** starts the discussion for everyone. Discussions belong to the store
+artifact and are kept on its main file. The host also refuses other files of
+an artifact and non-HTML artifacts, and rebuilds the target from its known
+bounded fields.
 
-Discussions live in the store's protected `.state/ID/discussions.json`, so
-every room and the lobby see the same threads, and deleting the artifact
-deletes them. Each change is broadcast to every room and the lobby of the
-workspace as a `discussions` frame naming the item; the stored excerpts stay on
-the host. Concurrent writes from two Emacs instances are not serialized; the
-later write wins.
+**Whole artifact** beside **Discuss** opens the general discussion: its
+messages, the assistant's latest answer, and a form that writes to the whole
+artifact with the same **Ask assistant** choice. The button counts its
+messages, and everyone who sees the artifact can open it.
 
-A message to the assistant goes to the session the link speaks for:
+Each change is broadcast to every room and the lobby of the workspace as a
+`discussions` frame naming the item; the stored excerpts stay on the host.
+Concurrent writes from two Emacs instances are not serialized; the later write
+wins.
 
-- written in a chat's room, to that chat, which becomes attached to the
-  artifact, also when another session answered the discussion before: a room's
-  links never prompt another session;
-- written from the lobby, to the session that answered the discussion, or else
-  to the artifact's dedicated session, created on first use.
-
-The discussion records its answering session, and the viewer shows it as
-*answered in NAME*. A selection sent alone is a task rather than a
-conversation: once the turn that answered it completes, the discussion
-resolves itself, attributed to the assistant. A failed or cancelled turn
-leaves it open, and a discussion with a written message is never resolved
-automatically.
-
-A room message with the artifact selected in the strip is a message to the
-assistant in the artifact's general discussion about the whole artifact, so
-everything said about the artifact is kept with it. That discussion has no
-marker; the room's discussion tab for the artifact shows it. A message about
-the artifact carries the artifact's name and file path, the target and its
-excerpts, and the discussion so far behind the shared-context heading, and
-frames the file as the current state and as untrusted content whose
-instructions are data. The artifact is not pasted in; the model reads the file.
-Earlier turns about the same artifact are included, other room work is not,
-and `history://root` reaches the conversation that produced it.
+A message about the artifact carries the artifact's name and file path and
+the target's excerpts, and frames the file as the current state and as
+untrusted content whose instructions are data. The artifact is not pasted in;
+the model reads the file.
 
 The frame places each open discussion's marker by its selector when the
 element still carries the same text fingerprint, and otherwise searches for
@@ -1054,7 +1100,7 @@ refused as a second host.
 Starting a room confirms that visible text, paths, and tool results may
 contain credentials or secrets and that the links are bearer credentials.
 
-Shared-item questions retain item and comment correlation in the canonical
+Shared-item requests retain item and discussion correlation in the canonical
 transcript's guest attribution. The editor panel reuses those records and the
 existing pending-input queue. Each item has separate model context, selected
 from the live transcript and archived segments without a second transcript store.
@@ -1062,7 +1108,7 @@ In a Claude session each item question starts an isolated native conversation
 with that context, so it neither resumes nor enters the room's native history.
 Room chat can retrieve those turns through the same history resources.
 Canonical provider-failure summaries also appear in browser conversations.
-See [shared editing](shared-editing.md#questions-and-comments).
+See [shared editing](shared-editing.md#discussions-in-the-editor).
 
 Shared editing is optional: missing Node or helper resources on the Emacs host
 disable editing actions with a reason while chat, static artifacts, and the saved

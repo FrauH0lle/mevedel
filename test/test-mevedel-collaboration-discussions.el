@@ -15,6 +15,7 @@
           "helpers"))
 (require 'cl-lib)
 (require 'gptel)
+(require 'gptel-org)
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
@@ -22,6 +23,8 @@
 (require 'mevedel-collaboration-artifact)
 (require 'mevedel-collaboration-discussions)
 (require 'mevedel-pending-inputs)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-shared-editing)
 (require 'mevedel-structs)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-turn)
@@ -454,24 +457,55 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
         (kill-buffer dedicated)))))
 
 (mevedel-deftest mevedel-collaboration-discussions--question-known-p
-  (:doc "finds queued and delivered discussion requests by identity")
+  ()
+  ,test
+  (test)
+  :doc "finds queued and delivered discussion requests by identity"
   (mevedel-test--with-discussion-room
-    (should-not (mevedel-collaboration-discussions--question-known-p
-                 data-buf "1123456789abcdef0123"))
-    (mevedel-test--discussion-act room guest (mevedel-test--discussion-post))
-    (should (mevedel-collaboration-discussions--question-known-p data-buf "1123456789abcdef0123"))
-    (mevedel-session-set-pending-input-paused session nil)
-    (cl-letf (((symbol-function 'gptel-send) #'ignore))
-      (mevedel-view--drain-follow-up data-buf))
-    (should-not (mevedel-session-pending-follow-ups session))
-    (should (mevedel-collaboration-discussions--question-known-p data-buf "1123456789abcdef0123"))
-    ;; The delivered prompt names the turn the session is now running.
-    (should (equal "1123456789abcdef0123"
-                   (plist-get (plist-get (with-current-buffer data-buf
-                                           mevedel-view--turn-guest-attribution)
-                                         :shared)
-                              :questionId)))
-    (should-not (mevedel-collaboration-discussions--question-known-p data-buf "other"))))
+    (let ((item "artifact:schema"))
+      (should-not (mevedel-collaboration-discussions--question-known-p
+                   data-buf item "1123456789abcdef0123"))
+      (mevedel-test--discussion-act room guest (mevedel-test--discussion-post))
+      (should (mevedel-collaboration-discussions--question-known-p
+               data-buf item "1123456789abcdef0123"))
+      (mevedel-session-set-pending-input-paused session nil)
+      (cl-letf (((symbol-function 'gptel-send) #'ignore))
+        (mevedel-view--drain-follow-up data-buf))
+      (should-not (mevedel-session-pending-follow-ups session))
+      (should (mevedel-collaboration-discussions--question-known-p
+               data-buf item "1123456789abcdef0123"))
+      ;; The delivered prompt names the turn the session is now running.
+      (should (equal "1123456789abcdef0123"
+                     (plist-get (plist-get (with-current-buffer data-buf
+                                             mevedel-view--turn-guest-attribution)
+                                           :shared)
+                                :questionId)))
+      (should-not (mevedel-collaboration-discussions--question-known-p data-buf item "other"))))
+  :doc "finds a request accepted before compaction in the archived segments"
+  (let* ((directory (make-temp-file "discussion-retry-" t))
+         (session (mevedel-session--create :save-path directory :current-segment 2
+                                           :authority-mode 'pid-lock))
+         (shared (list :kind "document" :itemId "artifact:doc" :discussionId "general"
+                       :messageId "q1" :questionId "q1" :text "Question")))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (mevedel--insert-user-turn "Question")
+          (insert (mevedel--format-hook-audit-record
+                   (list :type 'guest-prompt :name "Guest" :shared shared)))
+          (insert (propertize "Answer" 'gptel 'response))
+          (let ((gptel--bounds nil)) (gptel--save-state))
+          (write-region (point-min) (point-max)
+                        (mevedel-session-artifacts-segment-path directory 1) nil 'silent)
+          (erase-buffer)
+          (setq-local mevedel--session session)
+          (should (mevedel-collaboration-discussions--question-known-p
+                   (current-buffer) "artifact:doc" "q1"))
+          (should-not (mevedel-collaboration-discussions--question-known-p
+                       (current-buffer) "artifact:doc" "q2"))
+          (should-not (mevedel-collaboration-discussions--question-known-p
+                       (current-buffer) "artifact:other" "q1")))
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel-collaboration-discussions-turn-settled ()
   ,test
@@ -506,7 +540,38 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
         (setq mevedel-view--turn-guest-attribution (list :shared shared))
         (run-hook-with-args 'mevedel-turn-settled-functions 'success)))
     (should-not (eq t (plist-get (car (mevedel-test--discussions workspace "schema"))
-                                 :resolved)))))
+                                 :resolved))))
+  :doc "keeps a selection sent alone open once someone wrote in its discussion"
+  (mevedel-test--with-discussion-room
+    (mevedel-test--discussion-act room guest (mevedel-test--discussion-post :text nil))
+    (let ((shared (plist-get (car (mevedel-session-pending-follow-ups session)) :shared-question)))
+      ;; A note added while the assistant works on the selection.
+      (mevedel-test--discussion-act
+       room guest (list :t "discussion" :reqId 4 :action "reply" :item "tool-1"
+                        :discussionId "0123456789abcdef0123"
+                        :messageId "2123456789abcdef0123" :text "Keep the legend"))
+      (with-current-buffer data-buf
+        (setq mevedel-view--turn-guest-attribution (list :shared shared))
+        (run-hook-with-args 'mevedel-turn-settled-functions 'success)))
+    (should-not (eq t (plist-get (car (mevedel-test--discussions workspace "schema"))
+                                 :resolved))))
+  :doc "asks a whiteboard's host to resolve it, as the assistant, only while every message was sent alone"
+  (let (request)
+    (with-temp-buffer
+      (setq-local mevedel--session
+                  (mevedel-session--create
+                   :workspace (mevedel-workspace--create :type 'file :id "w" :root "/tmp/")))
+      (setq-local mevedel-view--turn-guest-attribution
+                  (list :shared (list :itemId "board" :discussionId "d1" :alone t)))
+      (cl-letf (((symbol-function 'mevedel-shared-editing-call)
+                 (lambda (_workspace args callback &rest _)
+                   (setq request args)
+                   (funcall callback '(:result (:id "board"))))))
+        (mevedel-collaboration-discussions-turn-settled 'success))
+      (should-not mevedel-view--turn-guest-attribution))
+    (should (equal (list "discussion-resolve" "board" "d1" t "Assistant" t)
+                   (mapcar (lambda (key) (plist-get request key))
+                           '(:action :id :discussionId :resolved :actor :ifAlone))))))
 
 (mevedel-deftest mevedel-collaboration-discussions-handle
   (:doc "answers the sender with a receipt or a refusal and never signals")
@@ -526,6 +591,158 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
     (mevedel-collaboration-discussions-handle
      room 1 (mevedel-test--discussion-post :reqId "x"))
     (should-not sent)))
+
+(defmacro mevedel-test--with-shared-discussion-room (&rest body)
+  "Run BODY with ROOM, a writable GUEST and a whiteboard BOARD on a real host.
+DIRECTORY is the workspace root and WORKSPACE its workspace; SESSION
+answers in DATA-BUF."
+  (declare (indent 0))
+  `(mevedel-view-test--with-buffers
+     (let* ((mevedel-artifact-store-changed-functions nil)
+            (directory (file-name-as-directory (make-temp-file "mevedel-shared-discussions-" t)))
+            (workspace (mevedel-workspace--create :type 'file :id "shared-discussions"
+                                                  :root directory))
+            (session (mevedel-session-create "main" workspace))
+            (room (list :session session :data-buffer data-buf :transport 'transport
+                        :guests (make-hash-table :test #'eql)))
+            (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+            (mevedel-shared-editing--runtimes (make-hash-table :test #'equal))
+            (mevedel-artifact-lease--held (make-hash-table :test #'equal))
+            (mevedel-session-durability--client-id (make-string 64 ?a))
+            (guest (list :name "Alice" :guest-id "alice" :writable t :role "full"))
+            board)
+       (puthash 1 guest (plist-get room :guests))
+       (setf (mevedel-session-save-path session) (file-name-concat directory "session")
+             (mevedel-session-authority-mode session) 'pid-lock)
+       (with-current-buffer data-buf
+         (setq-local mevedel--session session mevedel--workspace workspace
+                     mevedel--view-buffer view-buf))
+       (mevedel-session-set-pending-input-paused session t)
+       (unwind-protect
+           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send) #'ignore)
+                     ((symbol-function 'mevedel-recovery-save-now) #'ignore))
+             (let (created)
+               (mevedel-shared-editing-create workspace "whiteboard" "Plan" "Agent: test"
+                                              (lambda (reply) (setq created reply)))
+               (mevedel-test--wait (lambda () created))
+               (setq board (plist-get created :id)))
+             ,@body)
+         (mevedel-shared-editing-stop)
+         (maphash (lambda (_directory held)
+                    (when (timerp (plist-get held :timer))
+                      (cancel-timer (plist-get held :timer))))
+                  mevedel-artifact-lease--held)
+         (delete-directory directory t)))))
+
+(defun mevedel-test--wait (ready)
+  "Wait up to ten seconds for READY to return non-nil."
+  (let ((deadline (+ (float-time) 10)))
+    (while (and (not (funcall ready)) (< (float-time) deadline))
+      (accept-process-output nil 0.05))))
+
+(defun mevedel-test--shared-act (room guest args)
+  "Perform discussion ARGS for GUEST in ROOM on the real host; return the reply."
+  (let (reply)
+    (mevedel-collaboration-discussions-perform room guest args (lambda (r) (setq reply r)))
+    (mevedel-test--wait (lambda () reply))
+    reply))
+
+(defun mevedel-test--shared-discussions (workspace id)
+  "Return the discussions the host stores for WORKSPACE's item ID."
+  (append (plist-get (mevedel-shared-editing--read workspace id) :discussions) nil))
+
+(mevedel-deftest mevedel-collaboration-discussions--shared-perform ()
+  ,test
+  (test)
+  :doc "a whole-item message goes to the general discussion and to the assistant"
+  (mevedel-test--with-shared-discussion-room
+    (let* ((reply (mevedel-test--shared-act
+                   room guest (list :action "post" :item (concat "artifact:" board)
+                                    :target '(:kind "whole") :messageId "aaaaaaaaaaaaaaaaaaaa"
+                                    :text "Add a legend" :toAssistant t)))
+           (entry (car (mevedel-session-pending-follow-ups session)))
+           (shared (plist-get entry :shared-question)))
+      (should-not (plist-get reply :error))
+      (should (plist-get reply :queued))
+      (should (equal "general" (plist-get reply :discussionId)))
+      (should (equal board (plist-get shared :itemId)))
+      (should (equal "whiteboard" (plist-get shared :kind)))
+      (should (equal "general" (plist-get shared :discussionId)))
+      (should (equal "aaaaaaaaaaaaaaaaaaaa" (plist-get shared :questionId)))
+      (should (equal "whole" (plist-get shared :scope)))
+      (should (integerp (plist-get shared :revision)))
+      ;; The host describes the board; a whole-item request carries no thread.
+      (should (string-prefix-p "Add a legend\n\nShared content snapshot (user-provided data):\n"
+                               (plist-get entry :input)))
+      (should (string-match-p "the question is about the whole whiteboard"
+                              (plist-get entry :input)))
+      (should-not (string-match-p "^Discussion:" (plist-get entry :input)))
+      (should (equal "Discussion · Plan · Whole item"
+                     (plist-get (mevedel-transcript-audit-shared-context
+                                 (plist-get entry :input) shared)
+                                :label)))
+      ;; The general discussion records the message and, once told, its session.
+      (mevedel-test--wait (lambda () (plist-get (car (mevedel-test--shared-discussions
+                                                       workspace board))
+                                                :session)))
+      (let ((general (car (mevedel-test--shared-discussions workspace board))))
+        (should (equal "general" (plist-get general :id)))
+        (should (equal "Alice" (plist-get (aref (plist-get general :messages) 0) :actor)))
+        (should (equal (mevedel-session-session-id session) (plist-get general :session))))
+      ;; A retry queues nothing more.
+      (mevedel-test--shared-act
+       room guest (list :action "post" :item (concat "artifact:" board)
+                        :target '(:kind "whole") :messageId "aaaaaaaaaaaaaaaaaaaa"
+                        :text "Add a legend" :toAssistant t))
+      (should (= 1 (length (mevedel-session-pending-follow-ups session))))))
+  :doc "a note stays between people; lists, refusals and a stale target answer the sender"
+  (mevedel-test--with-shared-discussion-room
+    (let ((note (mevedel-test--shared-act
+                 room guest (list :action "post" :item (concat "artifact:" board)
+                                  :target '(:kind "whole") :messageId "bbbbbbbbbbbbbbbbbbbb"
+                                  :text "Looks good" :toAssistant :json-false))))
+      (should-not (plist-get note :error))
+      (should-not (mevedel-session-pending-follow-ups session))
+      (should (= 1 (length (plist-get (mevedel-test--shared-act
+                                       room guest (list :action "list"
+                                                        :item (concat "artifact:" board)))
+                                      :discussions)))))
+    (dolist (case (list (list (list :action "resolve" :discussionId "general" :resolved t)
+                              "stays open")
+                        (list (list :action "post" :target '(:kind "objects" :selection ["x"])
+                                    :discussionId "cccccccccccccccccccc"
+                                    :messageId "dddddddddddddddddddd" :text "Here"
+                                    :expected "000000000000" :toAssistant t)
+                              "no longer available\\|Content changed")
+                        (list (list :action "post" :target '(:kind "whole")
+                                    :messageId "eeeeeeeeeeeeeeeeeeee" :text "  " :toAssistant t)
+                              "message is required")))
+      (let ((reply (mevedel-test--shared-act
+                    room guest (append (list :item (concat "artifact:" board)) (car case)))))
+        (should (string-match-p (cadr case) (or (plist-get reply :error) "")))))
+    (should-not (mevedel-session-pending-follow-ups session))
+    (should (= 1 (length (mevedel-test--shared-discussions workspace board)))))
+  :doc "the room composer reaches the general discussion through the editor channel"
+  (mevedel-test--with-shared-discussion-room
+    (let (sent)
+      (cl-letf (((symbol-function 'mevedel-collaboration-editing--send)
+                 (lambda (_room _peer req-id value) (push (cons req-id value) sent)))
+                ((symbol-function 'mevedel-collaboration--room-for-session) (lambda (_) room))
+                ((symbol-function 'mevedel-collaboration--guest) (lambda (_room _peer) guest)))
+        (mevedel-collaboration-editing--dispatch
+         room 1 guest 4 (list :action "discussion" :op "post" :id board
+                              :target '(:kind "whole") :messageId "ffffffffffffffffffff"
+                              :text "Summarize the board" :toAssistant t))
+        ;; The item's change event to its viewers travels the same way.
+        (mevedel-test--wait (lambda () (assoc 4 sent))))
+      (should (plist-get (plist-get (cdr (assoc 4 sent)) :result) :queued))
+      (let ((shared (plist-get (car (mevedel-session-pending-follow-ups session))
+                               :shared-question)))
+        (should (equal "Summarize the board" (plist-get shared :text)))
+        ;; The editor files the answer beneath the message it answers.
+        (should (equal '("general" "ffffffffffffffffffff")
+                       (list (plist-get shared :discussionId)
+                             (plist-get shared :messageId))))))))
 
 (provide 'test-mevedel-collaboration-discussions)
 ;;; test-mevedel-collaboration-discussions.el ends here

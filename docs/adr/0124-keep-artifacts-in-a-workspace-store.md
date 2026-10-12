@@ -12,7 +12,7 @@ the project's view).
 
 **The workspace artifact store is the original.** Every artifact, whiteboard
 and document has a stable id under `<workspace>/.mevedel/artifacts/ID/`.
-Authored files live there; metadata, versions, comments and live editor state
+Authored files live there; metadata, versions, discussions and live editor state
 live under the protected sibling `.mevedel/artifacts/.state/ID/`.
 Sessions do not own artifacts; they attach to them.
 One artifact can be attached to several sessions, and one session can attach
@@ -23,7 +23,7 @@ artifacts.
 
 **Attaching.** A session is attached when its model creates or edits the
 artifact, when someone in its room creates or edits a whiteboard or document,
-when a comment reaches it (from its room, or as the dedicated session), when
+when a discussion message reaches it (from its room, or as the dedicated session), when
 it duplicates the artifact, or when the user adds it (cockpit `a`, the room's
 **Attach**).
 
@@ -60,7 +60,7 @@ ApplyPatch versions use the committed bytes from that write.
 **Store contents are durable work, not machine state.** Whether the store is
 committed to Git is the project's choice; mevedel adds no ignore rule. Item
 leases therefore live outside it, under `.mevedel/leases/`. The store's
-bookkeeping -- metadata, item state, comments, versions -- lives in the
+bookkeeping -- metadata, item state, discussions, versions -- lives in the
 separate `.state/` subtree. That subtree and the leases are read-only to model
 tools by default, so edits cannot bypass leases, versions and validation.
 Authored files remain writable with ApplyPatch and confined shell commands.
@@ -73,13 +73,14 @@ the artifact as its conversation, and exempt from expiry while the artifact
 exists. Deleting the artifact closes and deletes it, unless a turn is running
 there; one that cannot be deleted yet stays as an ordinary session.
 
-**Comment routing** follows where the comment is written: in a chat's room, to
+**Discussion routing** follows where the message is written: in a chat's room, to
 that chat, whose links speak for it alone; from the lobby, to the session
-that answered the thread, shown as "answered in", or else the dedicated
-session.
+that answered the discussion, shown as "answered in", or else the dedicated
+session. [ADR 0125](0125-discuss-items-through-one-mechanism.md) applies it to
+every item kind.
 
 **Access.** View links list and open artifacts and list versions. Full and
-owner links also edit, comment, restore, attach, duplicate, delete, create
+owner links also edit, discuss, restore, attach, duplicate, delete, create
 whiteboards and documents, and open an artifact's conversation, which they
 start on first use. ADR 0099 lets a full link start a new session only with
 an owner's or Emacs's approval; an artifact's conversation is no new chat of
@@ -145,13 +146,13 @@ push out every earlier version, including the state before the turn.
 - A room exposes artifacts by store identity, not only through its own
   transcript records: any link to the workspace can open any artifact. This
   deliberately widens ADR 0099's "published record is the authority".
-- Deleting an artifact deletes its versions, comments, lease and dedicated
+- Deleting an artifact deletes its versions, discussions, lease and dedicated
   session; deleting a session deletes none of them.
 - Existing per-session artifacts move once with an explicit migration script, a
   user-requested exception to the no-migration rule, which also converts every
   session to the v0.5.11 sidecar format that records attached ids. Transcript
   cards in old segments that name pre-migration paths show as missing.
-- Comments on an HTML artifact are not serialized across Emacs instances; the
+- Discussions on an HTML artifact are not serialized across Emacs instances; the
   later write wins.
 
 ## Evidence

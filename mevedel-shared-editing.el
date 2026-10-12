@@ -132,7 +132,7 @@ A stale entry is dropped."
 
 (defun mevedel-shared-editing--delete (workspace args)
   "Delete WORKSPACE's shared item named by ARGS and return the reply.
-The item's whole artifact goes with it: content, images, comments,
+The item's whole artifact goes with it: content, images, discussions,
 history, versions and its dedicated session.  Observers learn of it as a
 state with `:deleted' and the deleting `:actor'."
   (let ((id (plist-get args :id)))
@@ -284,7 +284,7 @@ busy.  SESSION-ID names the session that edited it; a failure is a message."
 (defun mevedel-shared-editing-restore (workspace id n actor callback)
   "Restore version N of WORKSPACE's shared item ID as one edit by ACTOR.
 The version's content becomes the item's through the editing queue, so
-lineage, comments and history stay and the restore can be reverted.
+lineage, discussions and history stay and the restore can be reverted.
 CALLBACK receives the edit's reply."
   (let ((version (mevedel-shared-editing--parse
                   (with-temp-buffer

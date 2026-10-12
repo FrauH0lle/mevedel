@@ -1,6 +1,6 @@
 /* Private JSON request handler. Emacs alone owns files, authority, and commits. */
 import * as Y from 'yjs';
-import { anchorSignature, boardContext, checkContext, readComments } from './context.mjs';
+import { anchorSignature, boardContext, checkContext, readDiscussions } from './context.mjs';
 import { readFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { initWasm, Resvg } from '@resvg/resvg-wasm';
@@ -30,8 +30,8 @@ import { extent } from './scene.mjs';
 import { generateNKeysBetween } from 'fractional-indexing';
 import { escape } from './render.mjs';
 import { FONT_FILES } from './text.mjs';
-import { address, commentsView, contentHash, documentImages, element, historyView, line, nodeId,
-  nodesOf, overview, restoreImages } from './view.mjs';
+import { address, discussionsView, contentHash, documentImages, element, GENERAL_DISCUSSION,
+  historyView, line, nodeId, nodesOf, overview, restoreImages } from './view.mjs';
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const bytes = (text) => {
   check(
@@ -214,10 +214,14 @@ function resolveChanges(id, kind, content, changes) {
   return resolved;
 }
 /* What a question tells the model: the reviewed content as the same hashed
-   lines it reads at shared://ID, the discussion it continues, and past the
-   budget the address to read on from, so no question is too large to ask. */
+   lines it reads at shared://ID, and past the budget the address to read on
+   from, so no question is too large to ask.  The discussion it continues is
+   added by Emacs, which owns discussions across item kinds. */
 const QUESTION_BUDGET = 128 * 1024;
-function questionPrompt(state, before, snapshot, discussion) {
+/* Discussion limits; Emacs applies the same ones to an HTML artifact's
+   discussions, which it stores itself. */
+const MAX_DISCUSSIONS = 200, MAX_DISCUSSION_MESSAGES = 200, MAX_MESSAGE_CHARS = 10000;
+function questionPrompt(state, before, snapshot) {
   const { kind } = before, id = state.id, noun = kind === 'whiteboard' ? 'ELEMENT' : 'BLOCK';
   const byId = new Map(nodesOf(kind, before.content).map((n) => [nodeId(kind, n), n]));
   const lines = (nodes) => nodes.filter(Boolean).map((n) => line(id, kind, n));
@@ -225,7 +229,6 @@ function questionPrompt(state, before, snapshot, discussion) {
   const head = [`${kind} ${JSON.stringify(before.title)} at ${address(id)}, revision ${state.revision}; the question is about ${scope}.`];
   if (snapshot.region) head.push(`Area: x ${snapshot.region[0]}, y ${snapshot.region[1]}, ${snapshot.region[2]} × ${snapshot.region[3]}`);
   const sections = [];
-  if (discussion) sections.push(['Discussion:', discussion.map(({ actor, text }) => `${actor}: ${JSON.stringify(text)}`)]);
   if (snapshot.scope === 'whole') sections.push([`Content (HASH ${noun}-JSON):`, lines(nodesOf(kind, before.content))]);
   else if (kind === 'document') {
     sections.push(['Selected text:', [JSON.stringify(snapshot.content.text)]]);
@@ -244,8 +247,7 @@ function questionPrompt(state, before, snapshot, discussion) {
       else omitted += 1;
     }
   }
-  if (omitted) out.push(`${omitted} more line${omitted === 1 ? '' : 's'} omitted; Read ${address(id)}` +
-    (discussion ? ` and ${address(id, 'comments')}` : '') + ' for the rest.');
+  if (omitted) out.push(`${omitted} more line${omitted === 1 ? '' : 's'} omitted; Read ${address(id)} for the rest.`);
   return out.join('\n');
 }
 /* What an edit tells the model: the stored lines of everything it changed,
@@ -322,7 +324,7 @@ export async function handle(request) {
   }
   if (action === 'library-view') return { result: await libraryView(request.libraries, request.part, request.at) };
   check(
-    ['create', 'import', 'read', 'view', 'update', 'patch', 'insert', 'image', 'rename', 'background', 'revert', 'restore', 'export', 'comment', 'reply-comment', 'resolve-comment'].includes(action),
+    ['create', 'import', 'read', 'view', 'update', 'patch', 'insert', 'image', 'rename', 'background', 'revert', 'restore', 'export', 'discussion-post', 'discussion-reply', 'discussion-resolve', 'discussion-answered'].includes(action),
     'Unknown editing action',
   );
   let state = request.state,
@@ -437,8 +439,8 @@ export async function handle(request) {
     if (action === 'view') {
       const { part } = request;
       const nodes = nodesOf(before.kind, before.content);
-      if (part === 'overview') return { result: { text: overview(state.id, state, before, state.comments || []) } };
-      if (part === 'comments') return { result: { text: commentsView(state.id, readComments(doc, state.comments)) } };
+      if (part === 'overview') return { result: { text: overview(state.id, state, before, state.discussions || []) } };
+      if (part === 'discussions') return { result: { text: discussionsView(readDiscussions(doc, state.discussions)) } };
       if (part === 'history') return { result: { text: historyView(state) } };
       if (part === 'element') {
         const node = nodes.find((n) => nodeId(before.kind, n) === request.element);
@@ -465,26 +467,27 @@ export async function handle(request) {
         revision: state.revision,
         ...before,
         transactions: state.transactions,
-        comments: readComments(doc, state.comments),
+        discussions: readDiscussions(doc, state.discussions),
       };
       if (request.range) result.selection = selectedText(doc, request.range);
       if (request.question) {
-        if (request.commentId) {
-          const comment = (state.comments || []).find(c => c.id === request.commentId);
-          // A board thread sends the objects of its anchor that still exist.
-          check(comment && (before.kind === 'whiteboard'
-            ? Array.isArray(request.selection) && request.selection.every(id => comment.selection.includes(id))
-              && same(request.region ?? null, comment.region ?? null)
-            : same(request.range, comment.range)), 'Comment selection is no longer available');
-          check(!comment.resolved, 'Reopen this discussion before asking the assistant');
-          check(request.commentVersion === (comment.replies?.at(-1)?.id || comment.id),
-            'Discussion changed. Review the thread before sending again.');
-          result.discussion = [comment, ...(comment.replies || [])].map(({actor, text}) => ({actor, text}));
+        if (request.discussionId) {
+          const discussion = (state.discussions || []).find(d => d.id === request.discussionId);
+          check(discussion, 'Discussion is no longer available');
+          // A board discussion sends the objects of its target that still exist.
+          const target = discussion.target;
+          check(target.kind === 'whole' ? request.whole === true
+            : target.kind === 'objects'
+              ? Array.isArray(request.selection) && request.selection.every(id => target.selection.includes(id))
+                && same(request.region ?? null, target.region ?? null)
+              : same(request.range, target.range), 'Discussed selection is no longer available');
+          check(!discussion.resolved, 'Reopen this discussion before asking the assistant');
+          check(request.version === discussion.messages.at(-1)?.id,
+            'Discussion changed. Review it before sending again.');
         }
         const captured = checkContext(doc, request);
-        result.snapshot = { id: state.id, revision: state.revision, ...captured.snapshot,
-          ...(result.discussion ? {discussion: result.discussion} : {}) };
-        result.prompt = questionPrompt(state, before, captured.snapshot, result.discussion);
+        result.snapshot = { id: state.id, revision: state.revision, ...captured.snapshot };
+        result.prompt = questionPrompt(state, before, captured.snapshot);
         result.quote = captured.quote;
       }
       if (request.since !== undefined) {
@@ -536,7 +539,7 @@ export async function handle(request) {
     if (Object.hasOwn(state.receipts, request.opId))
       return {
         state,
-        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc), background: before.background }))} : {}), comments: readComments(doc, state.comments), update: b64(encode(doc)),
+        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc), background: before.background }))} : {}), discussions: readDiscussions(doc, state.discussions), update: b64(encode(doc)),
           model: modelResult(state, before, null) },
       };
     // ponytail: bounded receipt ledger; compact with acknowledged client epochs if long-lived boards reach this ceiling.
@@ -544,35 +547,78 @@ export async function handle(request) {
       Object.keys(state.receipts).length < 65536,
       'Editing history limit reached; export and import into a new item',
     );
-    let comments = state.comments || [], inserted;
-    if (action === 'comment') {
-      const board = before.kind === 'whiteboard';
-      check(board ? request.selection?.length || request.region : request.range,
-        board ? 'Select objects or an area first' : 'Select a document passage first');
-      check(comments.length < 200, `This ${before.kind === 'whiteboard' ? 'whiteboard' : 'document'} has reached its 200 comment limit`);
-      check(typeof request.text === 'string' && request.text.trim() && request.text.length <= 10000, 'A comment is required (at most 10000 characters)');
-      const captured = checkContext(doc, board ? { ...request, range: undefined, selection: request.selection ?? [] } : request);
-      const anchor = board
-        ? { selection: captured.snapshot.content.map(shape => shape.id),
-            ...(request.region ? { region: request.region } : {}),
-            signature: anchorSignature(captured.snapshot.content, before.content) }
-        : { range: request.range };
-      comments = [...comments, { id: request.opId, actor: request.actor, text: request.text,
-        ...anchor, quote: captured.quote, created: Date.now(), resolved: false }];
-    } else if (action === 'reply-comment') {
-      const comment = comments.find(c => c.id === request.commentId);
-      check(comment, 'Comment is no longer available');
-      check(!comment.resolved, 'Reopen this discussion before replying');
-      check(typeof request.text === 'string' && request.text.trim() && request.text.length <= 10000,
-        'A reply is required (at most 10000 characters)');
-      const replies = comment.replies || [];
-      check(replies.length < 200, 'This discussion has reached its 200 reply limit');
-      const reply = {id: request.opId, actor: request.actor, text: request.text, created: Date.now()};
-      comments = comments.map(c => c.id === comment.id ? {...c, replies: [...replies, reply]} : c);
-    } else if (action === 'resolve-comment') {
-      check(comments.some(c => c.id === request.commentId), 'Comment is no longer available');
-      check(typeof request.resolved === 'boolean', 'Invalid comment status');
-      comments = comments.map(c => c.id === request.commentId ? {...c, resolved: request.resolved} : c);
+    let discussions = state.discussions || [], inserted;
+    const kindName = before.kind === 'whiteboard' ? 'whiteboard' : 'document';
+    const findDiscussion = (id) => {
+      const found = discussions.find(d => d.id === id);
+      check(found, 'Discussion is no longer available');
+      return found;
+    };
+    const message = (alone) => {
+      check(identifier(request.messageId), 'Invalid message identity');
+      check(typeof request.text === 'string' && request.text.length <= MAX_MESSAGE_CHARS
+        && (alone ? !request.text.trim() : request.text.trim()),
+        `A message is required (at most ${MAX_MESSAGE_CHARS} characters)`);
+      return { id: request.messageId, actor: request.actor, text: request.text,
+        ...(alone ? { alone: true } : {}), created: Date.now() };
+    };
+    const append = (discussion, added) => {
+      if (discussion.messages.some(m => m.id === added.id)) return discussion;
+      check(!discussion.resolved, 'Reopen this discussion before adding to it');
+      check(discussion.messages.length < MAX_DISCUSSION_MESSAGES,
+        `This discussion has reached its ${MAX_DISCUSSION_MESSAGES} message limit`);
+      return { ...discussion, messages: [...discussion.messages, added] };
+    };
+    const replace = (discussion) => discussions.map(d => d.id === discussion.id ? discussion : d);
+    if (action === 'discussion-post') {
+      const target = request.target && typeof request.target === 'object' ? request.target : {};
+      const whole = target.kind === 'whole';
+      const alone = request.alone === true;
+      check(!alone || !whole, 'Only a selection can be sent alone');
+      const added = message(alone);
+      const id = whole ? GENERAL_DISCUSSION : request.discussionId;
+      check(identifier(id), 'Invalid discussion identity');
+      const existing = discussions.find(d => d.id === id);
+      if (existing) discussions = replace(append(existing, added));
+      else {
+        let anchor = { kind: 'whole' }, quote = '';
+        if (!whole) {
+          const board = before.kind === 'whiteboard';
+          check(board ? target.selection?.length || target.region : target.range,
+            board ? 'Select objects or an area first' : 'Select a document passage first');
+          check(discussions.filter(d => d.id !== GENERAL_DISCUSSION).length < MAX_DISCUSSIONS,
+            `This ${kindName} has reached its ${MAX_DISCUSSIONS} discussion limit`);
+          const captured = checkContext(doc, board
+            ? { selection: target.selection ?? [], region: target.region, expected: request.expected }
+            : { range: target.range, expected: request.expected });
+          anchor = board
+            ? { kind: 'objects', selection: captured.snapshot.content.map(shape => shape.id),
+                ...(target.region ? { region: target.region } : {}),
+                signature: anchorSignature(captured.snapshot.content, before.content) }
+            : { kind: 'passage', range: target.range };
+          quote = captured.quote;
+        }
+        discussions = [...discussions, { id, target: anchor, quote, messages: [added],
+          resolved: false, created: Date.now() }];
+      }
+    } else if (action === 'discussion-reply') {
+      discussions = replace(append(findDiscussion(request.discussionId), message(false)));
+    } else if (action === 'discussion-resolve') {
+      const discussion = findDiscussion(request.discussionId);
+      check(discussion.id !== GENERAL_DISCUSSION, 'The discussion about the whole item stays open');
+      check(typeof request.resolved === 'boolean', 'Invalid discussion status');
+      // A completed selection sent alone is resolved only while nobody wrote in it.
+      if (!(request.ifAlone === true && discussion.messages.some(m => !m.alone))) {
+        const { resolvedBy, ...open } = discussion;
+        discussions = replace(request.resolved
+          ? { ...open, resolved: true, resolvedBy: request.actor } : { ...open, resolved: false });
+      }
+    } else if (action === 'discussion-answered') {
+      const discussion = findDiscussion(request.discussionId);
+      check(typeof request.session === 'string' && request.session.length <= 200
+        && typeof request.sessionName === 'string' && request.sessionName.length <= 200,
+        'Invalid answering session');
+      discussions = replace({ ...discussion, session: request.session, sessionName: request.sessionName });
     } else if (action === 'update') applyUpdate(doc, bytes(request.update));
     else if (action === 'insert') {
       check(before.kind === 'whiteboard', 'Library items insert into whiteboards');
@@ -621,7 +667,7 @@ export async function handle(request) {
       }
     } else if (action === 'restore') {
       // A saved version's content becomes the item's content as one ordinary
-      // attributed change: lineage, comments and history stay, and the
+      // attributed change: lineage, discussions and history stay, and the
       // restore itself can be reverted.
       const source = restore(bytes(request.target));
       try {
@@ -700,13 +746,16 @@ export async function handle(request) {
     const changed = changes.length || transaction.title || transaction.background;
     if (after.kind === 'whiteboard')
       pruneFiles(doc, retainedFiles(changed ? [transaction, ...state.transactions].slice(0, 32) : state.transactions));
+    // Comments were replaced by discussions without a migration; an item's
+    // old comments go with its next commit.
+    const { comments: _replaced, ...kept } = state;
     const next = {
-      ...state,
+      ...kept,
       kind: after.kind,
       title: after.title,
       revision,
       crdt: b64(encode(doc)),
-      comments,
+      discussions,
       receipts: { ...state.receipts, [request.opId]: revision },
       transactions: (changed ? [transaction, ...state.transactions] : [...state.transactions]).slice(0, 32),
     };
@@ -729,7 +778,7 @@ export async function handle(request) {
         revision,
         ...after,
         ...(request.image && after.kind === 'whiteboard' ? {png: await png(boardSVG(after.content, { files: filesOf(doc), background: after.background }))} : {}),
-        comments: readComments(doc, comments),
+        discussions: readDiscussions(doc, discussions),
         update: b64(Y.encodeStateAsUpdate(doc, vector)),
         transaction: changed ? transaction : null,
         ...(notes?.length ? { notes } : {}),

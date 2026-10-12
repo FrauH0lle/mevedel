@@ -93,20 +93,18 @@ body.editor #assistant { width:var(--discussion-width); }
 #discussion-resize:hover,#discussion-resize:focus-visible { background:var(--accent-soft); }
 #discussion-resize:hover::after,#discussion-resize:focus-visible::after,.discussion-resizing #discussion-resize::after { background:var(--accent); }
 .discussion-resizing,.discussion-resizing * { cursor:col-resize!important; user-select:none!important; }
-body.editor .assistant-head { min-height:124px; padding:20px 22px 0; display:grid; grid-template-columns:1fr auto; gap:12px; align-content:space-between; }
+body.editor .assistant-head { padding:20px 22px 14px; display:grid; grid-template-columns:1fr auto; gap:10px 12px; align-content:space-between; }
 #discussion-title { font-size:17px; letter-spacing:-.02em; font-weight:600; margin:0; }
-body.editor .assistant-head nav { grid-column:1/-1; grid-row:2; gap:20px; }
-body.editor .assistant-head nav button { padding:10px 0; border:0; border-bottom:2px solid transparent; border-radius:0; background:none; font-size:14px; }
-body.editor .assistant-head nav button[aria-pressed="true"] { color:var(--accent); border-bottom-color:var(--accent); }
+body.editor .assistant-head .show-resolved { grid-column:1/-1; grid-row:2; margin:0; }
 #assistant-close { grid-column:2; grid-row:1; min-width:32px; padding:0; }
 body.editor #conversation-state { padding:10px 22px; font-size:12px; }
 body.editor #assistant-scroll { padding:20px 22px; background:var(--ground); scrollbar-width:thin; scrollbar-gutter:stable; }
 body.editor #conversation-context { padding:0 0 16px; background:none; border-bottom:1px solid var(--line); font-size:13px; line-height:1.6; }
-body.editor #conversation .turn { padding:20px 0; }
-body.editor #conversation .turn.guest,body.editor #conversation .turn.you { padding:14px 16px; margin-top:20px; background:color-mix(in srgb,var(--surface-2) 34%,var(--ground)); border-left:2px solid var(--guest); border-bottom:0; }
-body.editor #conversation .who { color:var(--ink); font-size:12px; margin-bottom:10px; }
-body.editor #conversation p { font-size:14px; line-height:1.7; }
-body.editor #conversation p:last-child { margin-bottom:0; }
+body.editor .thread-conversation .turn { padding:20px 0; }
+body.editor .thread-conversation .turn.guest,body.editor .thread-conversation .turn.you { padding:14px 16px; margin-top:20px; background:color-mix(in srgb,var(--surface-2) 34%,var(--ground)); border-left:2px solid var(--guest); border-bottom:0; }
+body.editor .thread-conversation .who { color:var(--ink); font-size:12px; margin-bottom:10px; }
+body.editor .thread-conversation p { font-size:14px; line-height:1.7; }
+body.editor .thread-conversation p:last-child { margin-bottom:0; }
 body.editor .assistant-compose { padding:18px 22px; scrollbar-width:thin; }
 body.editor #question-compose { display:flex; flex-direction:column; gap:10px; }
 body.editor #attached-context { order:0; margin:0; padding:0; background:transparent; border-radius:0; font-size:13px; }
@@ -125,15 +123,11 @@ body.editor #question { border:0; padding:0; min-height:72px; font-size:14px; li
 body.editor #question:focus-visible { outline:none; }
 body.editor #question-send,body.editor #question-attach { padding:7px 12px; min-height:34px; font-size:12px; font-weight:500; }
 body.editor .shared-notice { font-size:12px; line-height:1.5; margin:0; order:3; }
-body.editor #comment-form { font-size:14px; }
-body.editor #comment-form label { color:var(--ink); font-size:13px; }
-body.editor #comment-text { font-size:14px; line-height:1.6; }
-body.editor .discussion-anchor { background:var(--accent-soft); color:var(--ink); box-shadow:0 2px 0 var(--accent); }
-body.editor #comment-quote { background:var(--accent-soft); border-left-color:var(--accent); padding:10px 12px; font-size:13px; line-height:1.6; }
-body.editor .comment-actions button { font-size:12px; min-height:32px; }
-body.editor .comment-passage { font-size:13px; line-height:1.6; }
-body.editor #comment-post { font-size:13px; }
-body.editor .conversation-empty,body.editor #comments-empty { font-size:14px; line-height:1.7; }
+body.editor .discussion-draft { background:var(--accent-soft); color:var(--ink); box-shadow:0 2px 0 var(--accent); }
+body.editor .thread-context { background:var(--accent-soft); border-left-color:var(--accent); padding:10px 12px; font-size:13px; line-height:1.6; }
+body.editor .discussion-actions button { font-size:12px; min-height:32px; }
+body.editor .discussion-show { font-size:13px; line-height:1.6; }
+body.editor .conversation-empty,body.editor #discussions-hint { font-size:14px; line-height:1.7; }
 body.editor #selection-actions.document-selection-actions { border-radius:4px; padding:6px; gap:6px; }
 body.editor #selection-actions button { font-size:13px; }
 /* Canvas colors are authored content; only its surrounding controls follow dark mode. */
@@ -235,8 +229,8 @@ body.editor[data-kind="whiteboard"].assistant-open .drawing-tools { grid-column:
   body.editor .tiptap td,body.editor .tiptap th { padding:6px; font-size:14px; }
   body.editor footer { padding:7px 12px; min-height:32px; }
   body.editor #hint { display:none; }
-  body.editor .assistant-head { min-height:102px; padding:14px 18px 0; }
-  body.editor #question,body.editor #comment-text { font-size:16px; }
+  body.editor .assistant-head { padding:14px 18px 10px; }
+  body.editor #question { font-size:16px; }
   body.editor #tools,body.editor.assistant-open #tools { padding:4px 10px 8px; }
   body.editor .drawing-tools { margin-left:0; gap:2px; }
   body.editor .drawing-tools button { width:40px; height:40px; }
@@ -248,8 +242,7 @@ body.editor[data-kind="whiteboard"].assistant-open .drawing-tools { grid-column:
   body.editor[data-kind="whiteboard"] footer #hint { display:none; }
 }
 @media (max-width:799px) and (max-height:550px) {
-  body.editor .assistant-head { min-height:76px; padding-top:6px; gap:0; }
-  body.editor .assistant-head nav button { padding:6px 0; }
+  body.editor .assistant-head { padding-top:6px; padding-bottom:6px; gap:4px; }
   body.editor #conversation-state { padding:4px 18px; }
   body.editor #formatting { min-height:40px; padding:3px 8px; }
   body.editor #formatting > button { min-width:28px; width:28px; padding:4px; }

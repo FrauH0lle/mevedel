@@ -363,7 +363,7 @@
   (test)
   :doc "names items, their parts and element libraries, and nothing else"
   (dolist (components '(nil ("library") ("library" "Weather") ("library" "Weather" "sheet.png")
-                        ("board") ("board" "view.png") ("board" "comments") ("board" "history")
+                        ("board") ("board" "view.png") ("board" "discussions") ("board" "history")
                         ("board" "elements" "api") ("board" "images" "img-0123456789ab")))
     (should (mevedel-resource--shared-shape-p components)))
   (dolist (components '(("board" "nope") ("board" "elements") ("board" "elements" "a" "b")

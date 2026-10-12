@@ -45,13 +45,12 @@ trimmed, has 1 to 200 characters.
 Documents use a continuous paper surface, serif body text, and grouped **Text**,
 **Lists**, and **Insert** menus. Room and editor controls share cool and warm
 palettes and system/light/dark appearance; changes follow the editor without
-replacing its document or question draft. The whiteboard keeps a light drawing
+replacing its document or discussion drafts. The whiteboard keeps a light drawing
 surface so authored colors remain unchanged.
 
-**Discussion** (documents) or **Assistant** (whiteboards) opens a sidebar on
-desktop and a full-width overlay on phones; both have **Comments** and
-**Assistant** views. Document discussion starts open on
-wide screens. Drag its divider to widen it, up to half the viewport; Left/Right
+**Discussions** opens the [discussion panel](#discussions-in-the-editor), a
+sidebar on desktop and a full-width overlay on phones. It starts open on
+wide screens for documents. Drag its divider to widen it, up to half the viewport; Left/Right
 arrow keys also resize it, Home/End select the limits, and double-click resets
 its width. The width is retained with the item's private drafts. Closing the
 panel preserves drafts, captured context, and editor position. The editor
@@ -133,7 +132,7 @@ exports draw the same wobble.
 The drawing menu follows Excalidraw: hand (H), selection (V), rectangle (R),
 diamond (D), ellipse (O), sticky note (N), arrow (A), line (L), freehand
 drawing (P or X), **Shape from drawing** (Shift+X), text (T) and eraser (E),
-followed by the laser (K), comment (M) and image (9) tools. Number keys 1–8
+followed by the laser (K), Discuss (M) and image (9) tools. Number keys 1–8
 and 0 select tools as in Excalidraw. Buttons expose tool names and keyboard
 shortcuts. Selection supports Shift multi-selection, arrow-key
 movement, Delete, and resizing. Dragging across empty canvas with the
@@ -142,9 +141,9 @@ the objects it fully contains, Alt selects every object it touches, and Shift
 adds them to the current selection. Connectors are tested by their drawn path.
 A press without movement clears the selection. The box disappears on release,
 but its area stays attached to the selection, even when it contains no
-objects, until the selection changes or an object moves: **Ask about
-selection** and **Add comment** use it, and the area shows again while a
-question or comment draft carries it. Box selection never edits content.
+objects, until the selection changes or an object moves: **Discuss** uses it,
+and the area shows again while the discussion composer carries it. Box
+selection never edits content.
 
 Selection follows Excalidraw's handles. A lone element shows an outline with
 eight resize handles and a rotation handle above it; a group or several
@@ -343,7 +342,7 @@ whiteboard finds `SharedCreate`. The prompt's resource roster lists
 | `shared://ID/elements/ELEMENT` | one element or block in full, with each stroke point on its own line |
 | `shared://ID/view.png` | the board rendered, long edge at most 2048 px |
 | `shared://ID/images/KEY` | an embedded image: a board file by its `fileId`, a document image by the key its `src` shows |
-| `shared://ID/comments` | comments and their replies with anchor status and live quote |
+| `shared://ID/discussions` | the item's discussions, the general one first, with their status, target, live quote and messages |
 | `shared://ID/history` | retained contributions, newest first, with their changed ids |
 | `shared://library`, `shared://library/NAME` | element library items as `LIBRARY/ITEM-ID` references |
 | `shared://library[/NAME]/sheet.png` | a numbered sheet of the first 60 of those items |
@@ -355,7 +354,7 @@ order does not matter. Lines stay within Read's 2,000-character cap: past
 element's address. Document images appear as `shared://ID/images/KEY`, never as
 image data. Text pages through Read's ordinary `offset` and `limit` and its
 50 KiB output bound, so an item of any size can be read in parts. Grep searches
-the text views: an item's overview, comments or history, or every item's
+the text views: an item's overview, discussions or history, or every item's
 overview under bare `shared://`. Images go through Read's ordinary media
 delivery, so models without image support get its explicit refusal. Glob and
 ApplyPatch do not accept `shared://`. Views are computed by the workspace's
@@ -433,45 +432,52 @@ read or a connected browser. Tools use normal permissions, Plan and read-only
 ceilings, cancellation, and result/media persistence. They work with every
 browser closed and never silently start a share.
 
-### Questions and comments
+### Discussions in the editor
 
-The document's **Discussion** panel and the whiteboard's **Assistant** panel have
-**Comments** and **Assistant** views. The assistant shows questions about
-that item and their canonical replies, with the session's queued, paused,
-working, disconnected, or provider-failure state.
+Whiteboards and documents follow the room's [discussion](collaboration.md#discussions)
+model. **Discussions** opens the editor's panel: the discussion about the
+whole item first, then one card per discussion about part of it, with its
+target, messages and the assistant's answers beneath the messages they answer.
+The panel heading counts the open discussions, and **Show resolved** brings
+resolved ones back. The panel shows the session's queued, paused, working,
+disconnected, or provider-failure state.
 While the session is working, a spinner accompanies the status and the panel's
 toolbar button. The room chat shows **Assistant working…** in its status strip.
 These indicators follow the host's session activity, including tool execution,
 and clear on completion or disconnection. Reduced-motion preferences disable
 the spinning animation. A paused follow-up queue does not conceal a running turn.
-All submitted questions, comments, replies, and assistant answers are shared with the room; drafts stay
+Posted messages and assistant answers are shared with the room; drafts stay
 in the current browser's recovery storage. View participants can read them.
 
-Selecting document text shows **Add comment** and **Ask about selection** beside
-the passage. **Add comment** (Ctrl+Alt+M) opens a separate draft; **Post**
-publishes an anchored discussion and **Post reply** adds an attributed human
-reply. Each has a **Send to assistant** choice, checked by default: posting then
-also sends the thread to the assistant, which answers in it. Unchecked, the
-message stays a note between people and submits no model turn. The same choice
-applies to artifact comments in the room. Questions and comment/reply drafts remain
-independent when switching views, receiving updates, or reopening the editor.
+The panel has one composer. It writes about the **Whole document** or **Whole
+whiteboard**, which posts to the general discussion, or about the **Selected
+passage**, **Selected objects** or **Selected area**, which starts a new
+discussion. **Discuss** (Ctrl/Command+Alt+M) opens the composer for the current
+selection: selecting document text shows it beside the passage, and a board
+shows it in the footer. **Ask assistant**, checked by default, also sends the
+message to the assistant; the choice is kept for the next message. After a
+discussion starts, its card opens and the composer returns to the whole item.
+Each card has a reply form with its own **Ask assistant** choice, **Send to
+assistant**, which sends the discussion as it stands and confirms reviewed
+context or retries an unconfirmed request, and **Resolve** or **Reopen**. The
+composer, reply drafts and the panel width survive switching scopes,
+receiving updates, closing the panel and reopening the editor.
 An unrecognized saved discussion-draft format is reported and reset without
 blocking recovery of document content or posted discussions.
-
-**Ask about selection** opens the assistant composer directly with the passage
-attached. **Use whole document** explicitly changes its scope. The attached quote
-stays fixed when focus or the document selection moves elsewhere.
 
 ### Sending a selection without a message
 
 A selection can be sent with no message, on a board or in a document: what is
 written in the selected content is then the request, for example a handwritten
 “draw it” beside a formula, or “Rephrase this paragraph” typed above the
-paragraph. The composer says so in its placeholder, and the whole board or
-document still needs a message, because it has no instruction of its own.
+paragraph. The composer says so in its placeholder when **Ask assistant** is
+checked. A message to the whole board or document still needs text, because
+it has no instruction of its own, and so does a discussion that does not ask
+the assistant.
 
 The browser sends the empty message and the host words it, so the room sees,
-and the model receives, the same line in place of a message. It says the
+and the model receives, the same line in place of a message; the discussion
+shows **Sent the selection as the request**. The line says the
 sender sent only the selection, tells the model to carry out the instructions
 written in it and, when there are none, to ask what the sender wants. This
 overrides the “user-provided data” label of the snapshot for the selection
@@ -479,71 +485,63 @@ itself; the unselected content in the snapshot stays data, so another
 participant's text becomes an instruction only when someone selects and sends
 it. Afterwards the instruction text is removed from a document, where it would
 pollute the content, and left on a board unless it says otherwise. A written
-message always replaces the host's line, and a discussion thread always has
-one. Posting a comment still needs text.
+message always replaces the host's line. Once the turn completes, the
+discussion resolves itself.
 
-A request submits the posted human thread and its passage, without changing the
-assistant composer or including unposted reply text. The thread's latest human
-message is the visible request in the room and to the model; the whole thread
-travels in the shared context. **Send thread to assistant** sends the thread as
-it stands without a new message, and confirms a reviewed context or retries an
-unconfirmed request. Queue and delivery status appear alongside the discussion. Canonical
-AI replies render in that thread beneath the human message that prompted them;
-ordinary questions remain in the Assistant view. Another AI request requires
-another message sent to the assistant or an explicit thread send. The host checks the reviewed thread version as well as
-the passage; concurrent replies require reviewing the updated discussion before
-resubmission. Failed delivery retains its request identity for retry.
+### What the assistant receives
 
-Clicking a document highlight opens its discussion; **Show passage** scrolls back
-to the live anchor. Participants with edit authority can resolve or reopen a
-thread. Resolution hides its highlight and removes it from the open list;
-**Show resolved** reveals its retained discussion. AI responses never resolve
-threads automatically. Reopen a resolved thread before posting or asking again.
-There are at most 200 comments per document and 200 human replies per comment,
-with at most 10,000 characters per message and the normal snapshot size limit
-on submissions to the assistant.
+A request carries the discussion's latest message, which is the visible
+request in the room and to the model, with the discussion so far in the shared
+context; unposted reply text never travels. Queue and delivery status appear
+on the card. Another AI request requires another message sent to the assistant
+or an explicit **Send to assistant**. The host checks that the discussion has
+not moved on since the sender reviewed it, as well as its target; a concurrent
+reply requires sending again. Failed delivery retains its request identity for
+retry.
 
-Comments keep their original quote and collaboration-aware text anchors. The
-panel marks a passage changed or removed after later edits. Changed passages
-require reviewing current context before sending; removed passages cannot be
-sent. The immutable snapshot of an already sent question remains unchanged.
-In the editor sidebar, room transcript, and Emacs view, sent questions keep their
-authored text visible and collapse the snapshot under **Shared context** by
-default. Expand it to inspect the full sent context and attachment links; the
-summary names the item, scope, and revision. This affects display only, not what
-the model receives. Prompts edited on the host remain fully visible.
-Comments are item annotations: native, document and board exports contain the
-content, not the comments or conversation. A fresh import starts without those
-annotations.
+Clicking a document highlight opens its discussion; **Show passage** scrolls
+back to the live passage. Resolving hides its highlight.
 
-Whiteboard comments anchor to objects, to a board area, or to both. Select
-objects or box-select an area and choose **Add comment** (Ctrl/Command+Alt+M),
-or use the **Comment** tool (M): it outlines the object under the pointer,
-comments on a clicked object, and comments on a dragged area together with the
-objects it contains. The tool stays active for further comments; Escape returns
-to selection. Every open comment shows a numbered pin at the top-right corner
-of its anchor, following moves live. Hovering a pin outlines its anchor and
-shows the author, text, reply count, and whether its objects changed; clicking
-it opens the thread. A ring turns around a pin while the assistant works on its
-thread, the same way as for artifact comments. Resolved comments have no pin,
-and pins renumber in order of the open comments. **Show objects** selects the thread's surviving objects
-and area and frames them. Pins, hover cards and threads are visible to view
-participants, who cannot post.
+A document discussion keeps its original quote and a collaboration-aware text
+anchor. The card marks a passage changed or removed after later edits. A
+changed passage requires **Review updated context** before sending; a removed
+passage cannot be sent. The immutable snapshot of an already sent request
+remains unchanged. In the editor sidebar, room transcript, and Emacs view, sent
+requests keep their authored text visible and collapse the snapshot under
+**Shared context** by default. Expand it to inspect the full sent context and
+attachment links; the summary names the item, scope, and revision. This
+affects display only, not what the model receives. Prompts edited on the host
+remain fully visible. Discussions are item annotations: native, document and
+board exports contain the content, not the discussions or conversation. A
+fresh import starts without them.
 
-A board comment records its object IDs, optional area, quote, and a fingerprint
-of those objects and their labels. The quote names labelled objects and counts
-unlabelled ones by type, such as `freedraw ×24`. In a thread, a question sent to
-the assistant shows only its sender and shared context, since its text is the
-thread's latest message. The thread is
+A whiteboard discussion is about objects, a board area, or both. Select
+objects or box-select an area and choose **Discuss**, or use the **Discuss**
+tool (M): it outlines the object under the pointer, discusses a clicked
+object, and discusses a dragged area together with the objects it contains.
+The tool stays active for further discussions; Escape returns to selection.
+Every open discussion shows a numbered pin at the top-right corner of its
+target, following moves live. Hovering a pin outlines its target and shows the
+author, first message, reply count, and whether its objects changed; clicking
+it opens the discussion. A ring turns around a pin while the assistant works on
+its discussion, the same way as for artifact discussions. Resolved discussions
+have no pin, and pins renumber in order of the open discussions. **Show
+objects** selects the discussion's surviving objects and area and frames them.
+Pins, hover cards and discussions are visible to view participants, who cannot
+post.
+
+A board discussion records its object IDs, optional area, quote, and a
+fingerprint of those objects and their labels. The quote names labelled
+objects and counts unlabelled ones by type, such as `freedraw ×24`. In a
+discussion, a request sent to the assistant shows only its sender and shared
+context, since its text is the latest message. The discussion is
 **changed** once an object moves, restyles, changes its label or is deleted, and
 **removed** when none of its objects remain and it has no area. An area
-outlives its objects. A request to the assistant attaches the anchor's surviving
+outlives its objects. A request to the assistant attaches the target's surviving
 objects and its area, subject to the same review of changed context; the host
-accepts only objects from the comment's own anchor and its exact area.
-The same 200-comment and 200-reply limits apply to whiteboards.
+accepts only objects from the discussion's own target and its exact area.
 
-For a whiteboard, select one or more objects and choose **Ask about selection**.
-After a box selection, the question is about the **Selected area**: it carries
+A box selection is discussed as the **Selected area**: it carries
 the box's board region with the objects it contains, including an area with no
 objects, so a request such as “put a legend here” names a place. Unselected
 objects the area touches accompany it as context with their labels; images
@@ -551,28 +549,27 @@ appear by file reference, and their pixels only in the attached PNG, which
 shows the area with a small margin and is scaled up to four times so small
 areas stay legible. Selected objects bring their labels and the shapes their
 arrows connect as context.
-The discussion composer offers **Selected objects** (or **Selected area**) /
-**Whole whiteboard** or **Selected passage** / **Whole document**. Switching to the whole item retains
+Switching the composer to the whole item retains
 the previously attached selection, so switching back does not require selecting
 it again. A private document highlight keeps the attached passage visible while
-focus is in the discussion or comment draft; closing discussion removes that
-highlight. The attached quote shows the chosen scope before submission. Opening controls, typing, and toggling the panel retain that capture.
+the panel is open; closing it removes that highlight. The attached quote shows
+the chosen scope before submission. Opening controls, typing, and toggling the
+panel retain that capture.
 Pending edits must save first. The browser sends a content hash of the capture
 it showed, and the host compares it with a capture of its committed content; a
 concurrent change rejects the request with an explicit **Refresh context**
 recovery. It never substitutes a whole item for a missing selection. No
-selection is too large to ask about. The model receives the reviewed content
+selection is too large to discuss. The model receives the reviewed content
 as the hashed lines it reads at `shared://ID`, introduced by the item's address
 and revision. A document selection gives its text and the blocks it spans; a
 board selection or area gives its elements, then its labels, connected and
-nearby elements. A thread's discussion comes first. Past a 128 KiB budget the
-remaining lines are counted and the model is told to read on at `shared://ID`
-and, for a thread, `shared://ID/comments`. The board PNG accompanies it as
-before.
+nearby elements. Past a 128 KiB budget the remaining lines are counted and the
+model is told to read on at `shared://ID`. The discussion so far follows the
+content, and the board PNG accompanies it as before.
 
-Each document and whiteboard has its own model conversation. A question receives
+Each document and whiteboard has its own model conversation. A request receives
 its reviewed content snapshot and recent turns about the same item, including
-questions sent from its comment threads. Other items and ordinary room chat are
+requests from every one of its discussions. Other items and ordinary room chat are
 excluded. Ordinary room requests and room compaction summaries likewise exclude
 item discussion turns. The room transcript still shows their shared chronology,
 and lists each existing item as a discussion of its own: selecting it in the room shows
@@ -623,7 +620,7 @@ Disconnected or rejected submissions retain the draft and request identity.
 Retrying an accepted question finds its queued or delivered record across browser
 reconnects, preventing a second turn. Editing the question or refreshing context
 creates a new identity; an intentional follow-up is a new question. Drawing,
-typing, posting comments, and synchronization never start model turns automatically.
+typing, posting without **Ask assistant**, and synchronization never start model turns automatically.
 
 ## Durability and recovery
 
@@ -684,14 +681,14 @@ instances, rereads the whole item instead of applying only that change. If
 that read fails, the editor says so and reads again with the next change.
 
 Versions follow the store's caps. A version keeps the item's content, title
-and comments but not its receipts or contribution history. One is recorded
+and discussions but not its receipts or contribution history. One is recorded
 through the item's editing queue, after the saves before it, when a model
 turn that changed the item settles, and on **Save version** (the
 cockpit's `s`, or the store list in a room or the lobby). Restoring a version
-is one ordinary, attributed edit through the queue: lineage, comments and
+is one ordinary, attributed edit through the queue: lineage, discussions and
 history stay, concurrent editors receive it as an update, and the restore can
 itself be reverted. The most blocks of a document that are the same in the
-version and still in its order keep their identity, so comments anchored in
+version and still in its order keep their identity, so discussions anchored in
 them stay current, even around a moved block; the others are copied whole
 from the version. Whiteboard restores update retained objects in place, so a
 pending browser edit to an unchanged object still merges. Removed objects
@@ -725,7 +722,7 @@ recovery download until the host supplies valid current content and authority.
 
 **Delete whiteboard/document…** in the editor's **☰** menu, or `d` on its row
 in the Emacs artifacts cockpit, deletes an item for everyone: its content,
-embedded images, comments and contribution history. There is no undo; the
+embedded images, discussions and contribution history. There is no undo; the
 browser's confirmation offers **Download a copy**, which can be imported
 again. The deletion runs in the workspace's editing queue, so it lands after
 any save in progress, and removes the item's whole artifact: versions, its
@@ -806,9 +803,11 @@ MEVEDEL_TEST_SHARED_EDITING=1 timeout 600s ./test/run-remote-acceptance.sh
 
 The focused editor checks reproduce interior selection, inline text, cursor
 replacement, local/remote laser trails, grouped contributions, export-neutral
-assistant highlights, frozen context, stale/offline refusal, explicit comments,
-reply rendering, disclosure continuity, box selection, area questions, board
-comment pins and threads, and a small keyboard-sized viewport.
+assistant highlights, frozen context, stale/offline refusal, discussions with
+and without the assistant, selections sent alone, reply rendering, disclosure
+continuity, box selection, area discussions, board discussion pins, and a small
+keyboard-sized viewport. The editor fixture stands in for Emacs's discussion
+actions and records what the assistant would be asked.
 `test/board-tools.browser.mjs` covers shape recognition, the library (with a
 stand-in for the host's library requests), groups, locking, duplicates,
 arrowheads and fonts; `test/test-mevedel-shared-library.el` covers the library

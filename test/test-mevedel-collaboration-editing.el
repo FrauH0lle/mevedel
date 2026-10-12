@@ -25,7 +25,7 @@
          (tx (list :id "move" :actor "Agent: test" :revision 7 :time 123 :changes changes))
          (result (list :id "board" :kind "whiteboard" :revision 7 :crdt "editable-state"
                        :content (vector (list :src image)) :transaction tx
-                       :transactions (vector tx) :comments []
+                       :transactions (vector tx) :discussions []
                        :snapshot (list :content "question context")))
          (value (list :result result))
          (projected (mevedel-collaboration-editing--browser-value value))
@@ -207,157 +207,6 @@
 (require 'mevedel-view)
 (require 'mevedel-pending-inputs)
 
-(mevedel-deftest mevedel-collaboration-editing--question-key
-  (:doc "Retry fingerprints bind the item, text, comment and frozen context")
-  (let* ((args '(:id "one" :text "Why?" :commentId "c" :expected (:title "A")))
-         (key (mevedel-collaboration-editing--question-key args)))
-    (should (equal key (mevedel-collaboration-editing--question-key (copy-tree args))))
-    (dolist (change '((:id . "two") (:text . "How?") (:commentId . "d") (:commentVersion . "new-reply")
-                      (:expected . (:title "B"))))
-      (should-not (equal key (mevedel-collaboration-editing--question-key
-                             (plist-put (copy-tree args) (car change) (cdr change))))))))
-
-(mevedel-deftest mevedel-collaboration-editing--ask
-  (:doc "Questions use the ordinary queue and remain idempotent after transcript delivery")
-  (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create :type 'file :id "shared-ask" :root "/tmp"))
-           (session (mevedel-session-create "main" workspace))
-           (room (list :session session :data-buffer data-buf))
-           (guest '(:name "Alice" :guest-id "alice" :role "full"))
-           (args '(:id "document" :questionId "question" :commentId "comment" :commentVersion "reply"
-                       :text "Why?" :expected (:kind "document" :scope "selection")))
-           (result '(:id "document" :title "Notes" :revision 7 :quote "a passage"
-                         :snapshot (:id "document" :title "Notes" :revision 7
-                                        :kind "document" :scope "selection" :content "a passage")
-                         :prompt "document \"Notes\" at shared://document, revision 7\nSelected text:\n\"a passage\"")))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session mevedel--workspace workspace))
-      (mevedel-session-set-pending-input-paused session t)
-      (let* ((receipt (mevedel-collaboration-editing--ask room guest args result))
-             (entry (car (mevedel-session-pending-follow-ups session)))
-             (shared (plist-get entry :shared-question)))
-        (should (plist-get receipt :queued))
-        (should (equal (plist-get shared :revision) 7))
-        (should (equal (plist-get shared :commentVersion) "reply"))
-        (should (string-match-p "a passage" (plist-get entry :input)))
-        (should (equal receipt (mevedel-collaboration-editing--ask room guest args result)))
-        (should (= 1 (length (mevedel-session-pending-follow-ups session))))
-        (should-error (mevedel-collaboration-editing--find-question
-                       room (plist-put (copy-tree args) :id "other")))
-        ;; Exercise the actual composer insertion and audit projection, retaining
-        ;; another session's in-flight attribution across this session's drain.
-        (with-temp-buffer
-          (setq-local mevedel-view--pending-guest-attribution '(:name "Other"))
-          (mevedel-session-set-pending-input-paused session nil)
-          (cl-letf (((symbol-function 'gptel-send) #'ignore))
-            (mevedel-view--drain-follow-up data-buf))
-          (should (equal mevedel-view--pending-guest-attribution '(:name "Other"))))
-        (should-not (mevedel-session-pending-follow-ups session))
-        (with-current-buffer data-buf
-          (should-not mevedel-view--pending-guest-attribution)
-          (should (equal shared (plist-get (cdar (mevedel-transcript-audit-guest-prompts)) :shared))))
-        (should (plist-get (mevedel-collaboration-editing--find-question room args) :delivered))
-        (should (plist-get (mevedel-collaboration-editing--ask room guest args result) :delivered))
-        (should-not (mevedel-session-pending-follow-ups session))))))
-
-(mevedel-deftest mevedel-collaboration-editing--selection-request
-  (:doc "A selection sent alone is the request; a document's instruction is removed, a board's kept")
-  ,test
-  (test)
-  :doc "tells the model to carry out the instructions in a selected passage and remove them"
-  (let ((text (mevedel-collaboration-editing--selection-request "document")))
-    (should (string-match-p "selected passage" text))
-    (should (string-match-p "remove that instruction text" text))
-    (should (string-match-p "ask what the sender wants" text)))
-  :doc "tells the model to carry out the instructions in selected objects and keep them"
-  (let ((text (mevedel-collaboration-editing--selection-request "whiteboard")))
-    (should (string-match-p "selected objects" text))
-    (should (string-match-p "leave those objects on the board" text))
-    (should (string-match-p "ask what the sender wants" text))))
-
-(mevedel-deftest mevedel-collaboration-editing--ask/selection-alone
-  (:doc "A selection may be sent without a message; nothing else may")
-  (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create :type 'file :id "shared-ask" :root "/tmp"))
-           (session (mevedel-session-create "main" workspace))
-           (room (list :session session :data-buffer data-buf))
-           (guest '(:name "Alice" :guest-id "alice" :role "full"))
-           (result (lambda (kind scope)
-                     (list :id "item" :title "Notes" :revision 4 :kind kind
-                           :snapshot (list :id "item" :kind kind :scope scope)
-                           :prompt "item \"Notes\" at shared://item, revision 4")))
-           (queue (lambda (id kind scope &rest args)
-                    (mevedel-collaboration-editing--ask
-                     room guest (append (list :id "item" :questionId id) args)
-                     (funcall result kind scope))))
-           (queued (lambda () (mevedel-session-pending-follow-ups session))))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session mevedel--workspace workspace))
-      (mevedel-session-set-pending-input-paused session t)
-      ;; Empty and whitespace-only messages both send the selection alone.
-      (dolist (spec '(("document" nil "remove that instruction text")
-                      ("whiteboard" "" "leave those objects on the board")
-                      ("whiteboard" "  \n " "leave those objects on the board")))
-        (let* ((id (format "alone-%d" (length (funcall queued))))
-               (receipt (apply queue id (car spec) "selection"
-                               (when (cadr spec) (list :text (cadr spec)))))
-               (entry (car (last (funcall queued)))))
-          (should (plist-get receipt :queued))
-          (should (string-match-p (nth 2 spec) (plist-get (plist-get entry :shared-question) :text)))
-          (should (string-prefix-p (plist-get (plist-get entry :shared-question) :text)
-                                   (plist-get entry :input)))
-          (should (string-match-p "Shared content snapshot (user-provided data):"
-                                  (plist-get entry :input)))))
-      (should (= 3 (length (funcall queued))))
-      ;; A written message always wins over the host's line.
-      (apply queue "written" "document" "selection" '(:text "Tighten this"))
-      (should (equal "Tighten this"
-                     (plist-get (plist-get (car (last (funcall queued))) :shared-question) :text)))
-      ;; The whole item, a thread, or a non-string message is never sent alone.
-      (dolist (args '((:text "") (:commentId "c" :commentVersion "v") (:text 5)))
-        (should-error (apply queue "refused" "document"
-                             (if (plist-member args :commentId) "selection" "whole") args))
-        (should-error (apply queue "refused" "document" "selection" '(:text 5))))
-      (should (= 4 (length (funcall queued)))))))
-
-(mevedel-deftest mevedel-collaboration-editing--ask/attachments
-  (:doc "A question carries the sender's files beside the board snapshot, or queues nothing")
-  (mevedel-view-test--with-buffers
-    (let* ((root (file-name-as-directory (make-temp-file "mevedel-ask-files-" t)))
-           (workspace (mevedel-workspace--create :type 'file :id "shared-ask" :root "/tmp"))
-           (session (mevedel-session-create "main" workspace))
-           (room (list :session session :data-buffer data-buf))
-           (guest '(:name "Alice" :guest-id "alice" :role "full"))
-           (log (list :mime "text/plain" :data (base64-encode-string "log line\n" t)))
-           (result (list :id "board" :title "Board" :revision 3
-                         :png (base64-encode-string "\211PNG\r\n" t)
-                         :snapshot '(:id "board" :kind "whiteboard" :scope "whole")
-                         :prompt "whiteboard \"Board\" at shared://board, revision 3")))
-      (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--media-dir) (lambda () root)))
-            (with-current-buffer data-buf
-              (setq-local mevedel--session session mevedel--workspace workspace))
-            (mevedel-session-set-pending-input-paused session t)
-            (mevedel-collaboration-editing--ask
-             room guest (list :id "board" :questionId "with-files" :text "See this"
-                              :images (vector log))
-             result)
-            (let ((paths (plist-get (car (mevedel-session-pending-follow-ups session))
-                                    :guest-paths)))
-              (should (equal '("png" "txt") (mapcar #'file-name-extension paths)))
-              (should (equal "log line\n" (with-temp-buffer
-                                             (insert-file-contents (cadr paths))
-                                             (buffer-string)))))
-            ;; A refused set takes the board snapshot with it.
-            (should-error (mevedel-collaboration-editing--ask
-                           room guest (list :id "board" :questionId "bad-files" :text "See this"
-                                            :images (vector (list :mime "application/x-msdownload"
-                                                                  :data "eA==")))
-                           result))
-            (should (= 1 (length (mevedel-session-pending-follow-ups session))))
-            (should (= 2 (length (directory-files root nil "\\`guest-")))))
-        (delete-directory root t)))))
-
 (mevedel-deftest mevedel-collaboration-editing--dispatch
   ()
   ,test
@@ -376,27 +225,32 @@
               ((symbol-function 'mevedel-shared-editing-call)
                (lambda (_workspace request &rest _) (push request requests))))
       (mevedel-collaboration-editing--dispatch
-       room 1 guest 7 '(:action "comment" :id "board" :opId "op" :text "Here" :selection ["a"]
-                                :region [0 0 40 30] :expected (:scope "selection")
-                                :actor "Agent: forged" :state (:revision 99)))
+       room 1 guest 7 '(:action "rename" :id "board" :opId "op" :title "Here"
+                                :selection ["a"] :actor "Agent: forged" :state (:revision 99)))
       (let ((request (car requests)))
-        (should (equal (plist-get request :region) [0 0 40 30]))
-        (should (equal (plist-get request :selection) ["a"]))
         (should (equal (plist-get request :actor) "Guest: Alice"))
         (should-not (plist-member request :state))
-        (should (equal (plist-get request :action) "comment")))
-      ;; A room message about a whole item reaches the helper as a
-      ;; question read carrying the whole-item flag.
+        (should-not (plist-member request :selection))
+        (should (equal (plist-get request :action) "rename")))
+      ;; Discussions belong to the discussion mechanism, which names the item
+      ;; by its store identity; the reply returns on the editor's channel.
       (setq requests nil)
-      (cl-letf (((symbol-function 'mevedel-collaboration-editing--find-question) #'ignore))
-        (mevedel-collaboration-editing--dispatch
-         room 1 guest 8 '(:action "ask" :id "board" :questionId "q" :text "Make it pretty"
-                                  :whole t)))
-      (let ((request (car requests)))
-        (should (equal (plist-get request :action) "read"))
-        (should (eq (plist-get request :question) t))
-        (should (eq (plist-get request :whole) t))
-        (should (equal (plist-get request :text) "Make it pretty")))
+      (let (performed sent)
+        (cl-letf (((symbol-function 'mevedel-collaboration-discussions-perform)
+                   (lambda (_room _guest args callback &rest _)
+                     (setq performed args)
+                     (funcall callback (list :discussionId "general" :queued t))))
+                  ((symbol-function 'mevedel-collaboration-editing--send)
+                   (lambda (_room _peer req-id value) (push (cons req-id value) sent))))
+          (mevedel-collaboration-editing--dispatch
+           room 1 guest 8 '(:action "discussion" :op "post" :id "board"
+                                    :target (:kind "whole") :messageId "m" :text "Make it pretty"
+                                    :toAssistant t)))
+        (should-not requests)
+        (should (equal (plist-get performed :action) "post"))
+        (should (equal (plist-get performed :item) "artifact:board"))
+        (should (equal (plist-get performed :text) "Make it pretty"))
+        (should (equal sent '((8 :result (:discussionId "general" :queued t))))))
       ;; Full links delete with their own attribution; view links cannot.
       (setq requests nil)
       (mevedel-collaboration-editing--dispatch room 1 guest 9 '(:action "delete" :id "board"))
@@ -441,16 +295,16 @@
                (lambda (sent-room peer req-id value)
                  (should (eq sent-room room))
                  (push (list peer req-id value) sent))))
-      (mevedel-collaboration-editing--changed 'workspace state '(:update "u" :comments []))
+      (mevedel-collaboration-editing--changed 'workspace state '(:update "u" :discussions []))
       (should (equal '((0 "event" (:event "changed" :id "board" :kind "whiteboard"
                                   :title "Board" :revision 4)))
                      sent))
       (setq sent nil)
       (plist-put (gethash 2 guests) :editing-item "board")
-      (mevedel-collaboration-editing--changed 'workspace state '(:update "u" :comments []))
+      (mevedel-collaboration-editing--changed 'workspace state '(:update "u" :discussions []))
       (should (equal '((0 "event" (:event "changed" :id "board" :kind "whiteboard"
                                   :title "Board" :revision 4
-                                  :update "u" :comments [] :transactions [t])))
+                                  :update "u" :discussions [] :transactions [t])))
                      sent))))
 
   :doc "Library requests reach the host's library only for writable links"

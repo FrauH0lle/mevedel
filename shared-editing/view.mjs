@@ -23,6 +23,8 @@ export function contentHash(value) {
 }
 
 export const address = (id, ...parts) => [`shared://${id}`, ...parts].join('/');
+/* The identity of every item's discussion about the whole item. */
+export const GENERAL_DISCUSSION = 'general';
 export const nodesOf = (kind, content) => (kind === 'whiteboard' ? content : content.content || []);
 export const nodeId = (kind, node) => (kind === 'whiteboard' ? node.id : node.attrs?.id);
 
@@ -98,7 +100,7 @@ export function element(id, kind, node) {
   return `hash ${contentHash(node)}\n{\n${fields.join(',\n')}\n}\n`;
 }
 
-export function overview(id, state, inspected, comments) {
+export function overview(id, state, inspected, discussions) {
   const { kind, title, background, content } = inspected;
   const nodes = nodesOf(kind, content);
   const noun = kind === 'whiteboard' ? 'element' : 'block';
@@ -108,20 +110,25 @@ export function overview(id, state, inspected, comments) {
     `Lines are HASH ${noun.toUpperCase()}-JSON in ${kind === 'whiteboard' ? 'drawing' : 'document'} order. ` +
       `${noun[0].toUpperCase() + noun.slice(1)}: ${address(id, 'elements', 'ID')}` +
       (kind === 'whiteboard' ? ` · Rendering: ${address(id, 'view.png')}` : '') +
-      ` · Comments (${comments.length}): ${address(id, 'comments')} · History: ${address(id, 'history')}`,
+      ` · Discussions (${discussions.length}): ${address(id, 'discussions')} · History: ${address(id, 'history')}`,
   ];
   return `${[...head, ...nodes.map((node) => line(id, kind, node))].join('\n')}\n`;
 }
 
-export function commentsView(id, comments) {
-  if (!comments.length) return 'No comments.\n';
-  return `${comments.map((c) => {
-    const anchor = c.liveSelection ? `on ${c.liveSelection.join(', ') || 'removed objects'}` : '';
-    const area = c.region ? ` · area ${c.region.join(', ')}` : '';
-    const lines = [`comment ${c.id} · ${c.resolved ? 'resolved' : 'open'} · ${c.anchorStatus}${anchor ? ` · ${anchor}` : ''}${area}`,
-      `  quote: ${JSON.stringify(c.liveQuote ?? c.quote ?? '')}`,
-      `  ${c.actor}: ${JSON.stringify(c.text)}`,
-      ...(c.replies || []).map((r) => `  ${r.actor}: ${JSON.stringify(r.text)}`)];
+/* Discussions, the one about the whole item first: each with its target's
+   live state, then its messages in order. */
+export function discussionsView(discussions) {
+  if (!discussions.length) return 'No discussions.\n';
+  const ordered = [...discussions].sort((a, b) =>
+    (b.id === GENERAL_DISCUSSION) - (a.id === GENERAL_DISCUSSION));
+  return `${ordered.map((d) => {
+    const target = d.target.kind === 'whole' ? 'whole item'
+      : d.liveSelection ? `on ${d.liveSelection.join(', ') || 'removed objects'}` : 'passage';
+    const area = d.target.region ? ` · area ${d.target.region.join(', ')}` : '';
+    const status = d.target.kind === 'whole' ? '' : ` · ${d.anchorStatus}`;
+    const lines = [`discussion ${d.id} · ${d.resolved ? 'resolved' : 'open'}${status} · ${target}${area}`,
+      ...(d.target.kind === 'whole' ? [] : [`  quote: ${JSON.stringify(d.liveQuote ?? d.quote ?? '')}`]),
+      ...d.messages.map((m) => `  ${m.actor}: ${m.alone ? '(sent the selection as the request)' : JSON.stringify(m.text)}`)];
     return lines.join('\n');
   }).join('\n')}\n`;
 }

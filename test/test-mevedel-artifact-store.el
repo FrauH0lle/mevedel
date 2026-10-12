@@ -421,10 +421,10 @@
       (should (= 1 (length (mevedel-artifact-store-versions workspace "b"))))
       (should (= 2 (length (mevedel-artifact-store-versions workspace "a"))))
       (should-error (mevedel-artifact-store-duplicate workspace "a" "b"))
-      ;; Comments stay with the original.
-      (mevedel-artifact-store-test--write store ".state/a/comments.json" "{}")
+      ;; Discussions stay with the original.
+      (mevedel-artifact-store-test--write store ".state/a/discussions.json" "{}")
       (mevedel-artifact-store-duplicate workspace "a" "c")
-      (should-not (file-exists-p (file-name-concat store ".state/c/comments.json")))
+      (should-not (file-exists-p (file-name-concat store ".state/c/discussions.json")))
       (should-error (mevedel-artifact-store-duplicate workspace "a" "../c"))))
 
   :doc "duplicate restores read-only directory modes after writing their children"

@@ -203,7 +203,7 @@ export function seedEmptyText(doc) {
   seed(doc.getXmlFragment('document'));
 }
 /* Make DOC's document SOURCE's, block by block: blocks unchanged in both,
-   kept in order, keep their Yjs items, so comment anchors and concurrent
+   kept in order, keep their Yjs items, so discussion anchors and concurrent
    cursors in them survive; the rest are deleted and copied from SOURCE. */
 export function restoreDocument(doc, source) {
   const root = doc.getXmlFragment('document'), from = source.getXmlFragment('document');

@@ -175,7 +175,7 @@ CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
                (`("library" . ,rest) (mevedel-tool-editing--library-args rest))
                (`(,id) (list :action "view" :id id :part "overview"))
                (`(,id "view.png") (list :action "view" :id id :part "png"))
-               (`(,id ,(and part (or "comments" "history")))
+               (`(,id ,(and part (or "discussions" "history")))
                 (list :action "view" :id id :part part))
                (`(,id "elements" ,element)
                 (list :action "view" :id id :part "element" :element element))

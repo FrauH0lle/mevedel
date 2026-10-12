@@ -1,10 +1,10 @@
 /* Packaged editor in an opaque iframe. All host access uses the bound port. */
 import * as Y from 'yjs';
 import { BoardPresence, BoardPreviews } from './presence.mjs';
-import { AssistantPanel } from './assistant.mjs';
+import { DiscussionPanel } from './discussions.mjs';
 import { documentControls } from './document-controls.mjs';
 import { imageTools } from './image-controls.mjs';
-import { captureContext, readComments } from './context.mjs';
+import { captureContext, readDiscussions } from './context.mjs';
 import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -132,9 +132,8 @@ const replies = new Map();
 let documentSelection = null,
   captureDocumentSelection = () => {},
   assistant,
-  comments = [],
-  /* Comments with their live anchor status, as the discussion panel shows them. */
-  commentStates = [],
+  /* Discussions with the live state of their targets, as the panel shows them. */
+  discussions = [],
   hoverShape = null;
 let recoveryWarning = '';
 // Set when changes the host committed could not be read after a skipped revision.
@@ -479,44 +478,47 @@ function draw() {
   // A box selection's area shows while drawn and while a draft carries it.
   $('selection').innerHTML = selectionSVG(scene, scale)
     + regionSVG(drag?.mode === 'marquee' ? drag.region : attachedRegion(), drag?.mode === 'marquee')
-    + hoverSVG(tool === 'comment' && !drag && scene.byId.get(hoverShape), scale)
+    + hoverSVG(tool === 'discuss' && !drag && scene.byId.get(hoverShape), scale)
     // Strokes in progress are authored content, drawn as the board will be.
     + `<g class="authored">${(pendingShape?.strokes.map(drawingPreview).join('') || '')
       + (drag?.mode === 'draw' ? drawingPreview(drag) : '')}</g>`;
-  drawCommentMarkers(scene, scale);
+  drawDiscussionMarkers(scene, scale);
   boardPresence?.animate();
-  $('selection-question').disabled = $('comment-selection').disabled = readOnly || !(selected.size || selectionRegion);
+  $('discuss-selection').disabled = readOnly || !(selected.size || selectionRegion);
   autoStyle();
   refresh();
 }
 function hoverSVG(item, scale) {
   if (!item?.box) return '';
   const [x, y, w, h] = item.box, gap = 4 / scale;
-  return `<rect class="comment-hover" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/>`;
+  return `<rect class="discussion-hover" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/>`;
 }
-/* The board box a comment refers to: its surviving objects and its area. */
-function commentAnchor(comment, scene) {
-  const live = scene.order.filter((s) => comment.selection?.includes(s.id));
-  const boxes = [...(live.length ? [extent(live, scene)] : []), ...(comment.region ? [comment.region] : [])];
+/* The board box a discussion refers to: its surviving objects and its area. */
+function discussionAnchor(discussion, scene) {
+  const target = discussion.target || {};
+  const live = scene.order.filter((s) => target.selection?.includes(s.id));
+  const boxes = [...(live.length ? [extent(live, scene)] : []), ...(target.region ? [target.region] : [])];
   if (!boxes.length) return null;
   const x = Math.min(...boxes.map((b) => b[0])), y = Math.min(...boxes.map((b) => b[1]));
   return [x, y, Math.max(...boxes.map((b) => b[0] + b[2])) - x, Math.max(...boxes.map((b) => b[1] + b[3])) - y];
 }
-/* Numbered pins at the top-right corner of each open comment's anchor. */
-function drawCommentMarkers(scene, scale) {
-  $('comment-markers').innerHTML = commentStates.filter((c) => !c.resolved).map((c, index) => {
-    const box = commentAnchor(c, scene);
+/* Numbered pins at the top-right corner of each open discussion's target. */
+function drawDiscussionMarkers(scene, scale) {
+  const anchored = discussions.filter((d) => d.target?.kind === 'objects' && !d.resolved);
+  $('discussion-markers').innerHTML = anchored.map((d, index) => {
+    const box = discussionAnchor(d, scene);
     if (!box) return '';
     const [x, y, w, h] = box, gap = 4 / scale;
-    // A ring turns around the pin while the assistant works on its thread;
+    // A ring turns around the pin while the assistant works on its discussion;
     // markers are redrawn often, so the ring keeps its phase from the clock.
-    const working = assistant?.working(c.id);
-    return `<g class="comment-marker" data-comment-id="${escape(c.id)}" data-status="${escape(c.anchorStatus)}"${working ? ' data-working="true"' : ''}><rect class="comment-outline" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/><g class="comment-pin" role="button" aria-label="Comment ${index + 1} by ${escape(c.actor.replace(/^Guest: /, ''))}${working ? ', assistant working' : ''}" transform="translate(${x + w} ${y}) scale(${1 / scale})">${working ? `<circle class="comment-spin" r="15" style="animation-delay:-${(performance.now() % 900) / 1000}s"/>` : ''}<circle r="11"/><text>${index + 1}</text></g></g>`;
+    const working = assistant?.working(d.id);
+    const author = String(d.messages[0]?.actor || '').replace(/^Guest: /, '');
+    return `<g class="discussion-marker" data-discussion-id="${escape(d.id)}" data-status="${escape(d.anchorStatus)}"${working ? ' data-working="true"' : ''}><rect class="discussion-outline" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/><g class="discussion-pin" role="button" aria-label="Discussion ${index + 1} by ${escape(author)}${working ? ', assistant working' : ''}" transform="translate(${x + w} ${y}) scale(${1 / scale})">${working ? `<circle class="discussion-spin" r="15" style="animation-delay:-${(performance.now() % 900) / 1000}s"/>` : ''}<circle r="11"/><text>${index + 1}</text></g></g>`;
   }).join('');
   // A pin removed under the pointer never reports the pointer leaving, so a
-  // peek at a comment resolved or removed elsewhere closes with its marker.
-  const peek = $('comment-peek');
-  if (!peek.hidden && ![...$('comment-markers').children].some((m) => m.dataset.commentId === peek.dataset.commentId))
+  // peek at a discussion resolved or removed elsewhere closes with its marker.
+  const peek = $('discussion-peek');
+  if (!peek.hidden && ![...$('discussion-markers').children].some((m) => m.dataset.discussionId === peek.dataset.discussionId))
     peek.hidden = true;
 }
 /* Show board BOX whole, clear of the zoom control floating over the canvas foot. */
@@ -527,11 +529,11 @@ function frame(box) {
   const [x, y, w, h] = box, scale = Math.min(c.width / w, room / h);
   view = [x - (c.width / scale - w) / 2, y - (room / scale - h) / 2, c.width / scale, c.height / scale];
 }
-function revealObjects(comment) {
-  const scene = currentScene(), box = commentAnchor(comment, scene);
-  if (!box) throw new Error('The commented objects were removed');
-  selected = new Set(shapeList().filter((s) => comment.selection?.includes(s.id)).map((s) => s.id));
-  selectionRegion = comment.region || null;
+function revealObjects(discussion) {
+  const scene = currentScene(), box = discussionAnchor(discussion, scene);
+  if (!box) throw new Error('The discussed objects were removed');
+  selected = new Set(shapeList().filter((s) => discussion.target.selection?.includes(s.id)).map((s) => s.id));
+  selectionRegion = discussion.target.region || null;
   frame([box[0] - 30, box[1] - 30, Math.max(100, box[2] + 60), Math.max(100, box[3] + 60)]);
   selectTool('select');
 }
@@ -612,11 +614,11 @@ function selectionSVG(scene, scale) {
       : `<rect data-handle="${name}" x="${hx - size / 2}" y="${hy - size / 2}" width="${size}" height="${size}" rx="${size / 4}" fill="#fff" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke" style="cursor:${cursor}"${frame.angle ? ` transform="rotate(${(frame.angle * 180) / Math.PI} ${hx} ${hy})"` : ''}/>`;
   return svg;
 }
-/* The board area attached to the open question or comment draft. */
+/* The board area attached to the open composer's message. */
 function attachedRegion() {
   if (!assistant || $('assistant').hidden) return null;
-  const draft = assistant.drafts[assistant.drafts.view === 'comments' ? 'comment' : 'question'];
-  return draft?.attachment?.snapshot?.scope === 'selection' ? draft.attachment.region || null : null;
+  const attachment = assistant.draft.attachment;
+  return attachment?.snapshot?.scope === 'selection' ? attachment.region || null : null;
 }
 /* Bound labels of the elements IDS. */
 const labelsOf = (ids) => shapeList().filter((s) => s.type === 'text' && ids.has(s.containerId)).map((s) => s.id);
@@ -1074,7 +1076,7 @@ function board() {
     ['text', 'Text', 'T'],
     ['erase', 'Eraser', 'E'],
     ['laser', 'Laser pointer', 'K'],
-    ['comment', 'Comment', 'M'],
+    ['discuss', 'Discuss', 'M'],
   ];
   const icons = {
     pan: 'M8 13V6a2 2 0 0 1 4 0v6-8a2 2 0 0 1 4 0v8-6a2 2 0 0 1 4 0v9c0 5-3 7-7 7-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 2',
@@ -1090,7 +1092,7 @@ function board() {
     text: 'M4 5h16M12 5v15M8 20h8',
     erase: 'm3 15 12-12 7 7-12 12H9Zm6-6 7 7M10 22h12',
     laser: 'm3 21 10-10 3 3L6 24ZM17 7l3-3M14 5V2M21 10h3',
-    comment: 'M4 4h16v12H10l-5 4v-4H4Z',
+    discuss: 'M4 4h16v12H10l-5 4v-4H4Z',
   };
   const commands = document.createElement('div');
   commands.className = 'board-commands';
@@ -1109,7 +1111,7 @@ function board() {
     if (readOnly && !['select', 'pan'].includes(value)) continue;
     const b = button(strip, '', () => selectTool(value));
     b.dataset.tool = value;
-    if (['rectangle', 'arrow', 'erase', 'comment'].includes(value)) b.classList.add('tool-group-start');
+    if (['rectangle', 'arrow', 'erase', 'discuss'].includes(value)) b.classList.add('tool-group-start');
     b.title = `${label} (${key})`;
     b.setAttribute('aria-label', label);
     b.setAttribute('aria-keyshortcuts', key.replace(' ', '+'));
@@ -1463,7 +1465,7 @@ function board() {
     autoshape: 'Draw a rectangle, diamond, ellipse, arrow or line by hand; it becomes a clean shape.',
     erase: 'Click an object to erase it. Undo restores it.',
     laser: 'Move to point; hold to draw a line for a few seconds. Nothing changes the board.',
-    comment: 'Click an object or drag across an area to comment on it.',
+    discuss: 'Click an object or drag across an area to discuss it.',
   };
   const refreshStyle = refresh;
   refresh = () => {
@@ -1536,7 +1538,7 @@ function board() {
     <section><h3>Working on the canvas</h3><dl>
     <div><dt>Select all</dt><dd>Ctrl / ⌘ A</dd></div><div><dt>Clear selection</dt><dd>Esc</dd></div>
     <div><dt>Select multiple</dt><dd>Shift + click</dd></div><div><dt>Box-select contained objects</dt><dd>Drag on empty canvas</dd></div><div><dt>Box-select touched objects</dt><dd>Alt + drag</dd></div><div><dt>Add a box to the selection</dt><dd>Shift + drag</dd></div><div><dt>Pan</dt><dd>Scroll / middle-button drag</dd></div><div><dt>Pan sideways</dt><dd>Shift + scroll</dd></div><div><dt>Zoom at pointer</dt><dd>Ctrl / ⌘ scroll / pinch</dd></div>
-    ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Duplicate</dt><dd>Ctrl / ⌘ D</dd></div><div><dt>Group / ungroup</dt><dd>Ctrl / ⌘ G / Shift G</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div><div><dt>Comment on the selection</dt><dd>Ctrl / ⌘ Alt M</dd></div>'}
+    ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Duplicate</dt><dd>Ctrl / ⌘ D</dd></div><div><dt>Group / ungroup</dt><dd>Ctrl / ⌘ G / Shift G</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div><div><dt>Discuss the selection</dt><dd>Ctrl / ⌘ Alt M</dd></div>'}
     </dl></section></div><div class="dialog-actions"><button>Close</button></div></form>`;
   document.body.append(shortcuts);
   button($('tools'), 'Shortcuts', () => shortcuts.showModal()).className = 'board-help';
@@ -1584,10 +1586,10 @@ function board() {
   };
   canvas.onpointerdown = (event) => {
     if (event.button !== 0 && event.button !== 1) return;
-    const pin = event.target.closest?.('.comment-pin');
+    const pin = event.target.closest?.('.discussion-pin');
     if (pin && event.button === 0) {
       event.preventDefault();
-      assistant?.openComment(pin.parentNode.dataset.commentId);
+      assistant?.openDiscussion(pin.parentNode.dataset.discussionId);
       return;
     }
     event.preventDefault();
@@ -1612,11 +1614,11 @@ function board() {
       };
       return;
     }
-    if (tool === 'comment' && !readOnly) {
-      // A click comments on an object; a drag comments on an area and its objects.
+    if (tool === 'discuss' && !readOnly) {
+      // A click discusses an object; a drag discusses an area and its objects.
       selectionRegion = null;
       selected = id ? withGroup(id) : new Set();
-      drag = { mode: 'marquee', comment: true, target: id, start: point,
+      drag = { mode: 'marquee', discuss: true, target: id, start: point,
         screen: [event.clientX, event.clientY], additive: false, base: new Set(selected), region: null };
       draw();
       return;
@@ -1701,7 +1703,7 @@ function board() {
     }
     if (event.pointerType !== 'touch' || drag)
       presence(point, tool === 'laser' ? 'laser' : 'cursor');
-    if (!drag && tool === 'comment' && event.pointerType !== 'touch') {
+    if (!drag && tool === 'discuss' && event.pointerType !== 'touch') {
       const hover = hitAt(event) || null;
       if (hover !== hoverShape) { hoverShape = hover; draw(); }
     }
@@ -1825,7 +1827,7 @@ function board() {
         selectionRegion = d.region;
       }
       draw();
-      if (d.comment && (d.region || d.target)) assistant.begin('selection', 'comment');
+      if (d.discuss && (d.region || d.target)) assistant.begin('selection');
       return;
     }
     if (readOnly || d.mode === 'pan' || d.mode === 'laser') return;
@@ -1858,24 +1860,25 @@ function board() {
     if (!drag) stopPointing();
     if (hoverShape) { hoverShape = null; draw(); }
   };
-  const peek = $('comment-peek');
+  const peek = $('discussion-peek');
   canvas.addEventListener('pointerover', (event) => {
-    const marker = event.target.closest?.('.comment-pin')?.parentNode;
-    const comment = marker && commentStates.find((c) => c.id === marker.dataset.commentId);
-    if (!comment) return;
+    const marker = event.target.closest?.('.discussion-pin')?.parentNode;
+    const discussion = marker && discussions.find((d) => d.id === marker.dataset.discussionId);
+    if (!discussion) return;
     const line = (tag, text) => { const node = document.createElement(tag); node.textContent = text; return node; };
-    const replies = comment.replies?.length || 0;
-    peek.replaceChildren(line('small', comment.actor.replace(/^Guest: /, '')), line('p', comment.text),
+    const [first] = discussion.messages, replies = discussion.messages.length - 1;
+    peek.replaceChildren(line('small', String(first?.actor || '').replace(/^Guest: /, '')),
+      line('p', first?.alone ? 'Sent the selection as the request' : first?.text || ''),
       line('small', [replies ? `${replies} repl${replies === 1 ? 'y' : 'ies'}` : '',
-        comment.anchorStatus === 'changed' ? 'Objects changed since posting' : ''].filter(Boolean).join(' · ')));
-    peek.dataset.commentId = comment.id;
+        discussion.anchorStatus === 'changed' ? 'Objects changed since posting' : ''].filter(Boolean).join(' · ')));
+    peek.dataset.discussionId = discussion.id;
     peek.hidden = false;
-    const pin = marker.querySelector('.comment-pin').getBoundingClientRect(), host = $('board').getBoundingClientRect();
+    const pin = marker.querySelector('.discussion-pin').getBoundingClientRect(), host = $('board').getBoundingClientRect();
     peek.style.left = `${Math.max(8, Math.min(pin.right + 6 - host.left, host.width - peek.offsetWidth - 8))}px`;
     peek.style.top = `${Math.max(8, Math.min(pin.top - host.top, host.height - peek.offsetHeight - 8))}px`;
   });
   canvas.addEventListener('pointerout', (event) => {
-    if (event.target.closest?.('.comment-pin')) peek.hidden = true;
+    if (event.target.closest?.('.discussion-pin')) peek.hidden = true;
   });
   canvas.onpointercancel = () => {
     outgoingPreview = null;
@@ -1957,7 +1960,7 @@ function board() {
       n: 'stickynote',
       e: 'erase',
       k: 'laser',
-      m: 'comment',
+      m: 'discuss',
       1: 'select',
       2: 'rectangle',
       3: 'diamond',
@@ -2054,16 +2057,17 @@ function documentEditor() {
                           }),
                         );
                     });
-                  for (const comment of comments) {
-                    if (comment.resolved) continue;
+                  for (const discussion of discussions) {
+                    if (discussion.resolved || discussion.target?.kind !== 'passage') continue;
                     try {
-                      const [from, to] = selectionPositions(doc, comment.range,
+                      const [from, to] = selectionPositions(doc, discussion.target.range,
                         ySyncPluginKey.getState(state)?.binding);
                       decorations.push(Decoration.inline(from, to, {
-                        class: 'comment-anchor', 'data-comment-id': comment.id,
-                        title: comment.text,
+                        class: 'discussion-anchor', 'data-discussion-id': discussion.id,
+                        title: discussion.messages[0]?.alone ? 'Sent the selection as the request'
+                          : discussion.messages[0]?.text || '',
                       }));
-                    } catch { /* A deleted anchor remains visible in the comments list. */ }
+                    } catch { /* A deleted anchor remains visible in the discussions list. */ }
                   }
                   return DecorationSet.create(state.doc, decorations);
                 },
@@ -2086,7 +2090,7 @@ function documentEditor() {
                       const [from, to] = selectionPositions(doc, range,
                         ySyncPluginKey.getState(state)?.binding);
                       markers = DecorationSet.create(state.doc, [Decoration.inline(from, to, {
-                        class: 'discussion-anchor',
+                        class: 'discussion-draft',
                       })]);
                     }
                   } catch { /* The attached passage was deleted; keep its draft available. */ }
@@ -2157,7 +2161,7 @@ function documentEditor() {
         head: relative(head),
       };
     }
-    $('comment-selection').disabled = $('selection-question').disabled = readOnly || !documentSelection;
+    $('discuss-selection').disabled = readOnly || !documentSelection;
     const toolbar = $('selection-actions');
     toolbar.hidden = readOnly || !documentSelection;
     if (documentSelection) {
@@ -2186,11 +2190,13 @@ function documentEditor() {
   editor.on('blur', captureDocumentSelection);
 }
 function captureAttachment(scope, previous) {
-  const range = scope === 'selection' && editor ? previous?.range || documentSelection : undefined;
+  // PREVIOUS is an earlier attachment, or a discussion whose target is resent.
+  const target = previous?.target || previous;
+  const range = scope === 'selection' && editor ? target?.range || documentSelection : undefined;
   const board = scope === 'selection' && !editor;
-  // A comment resends the objects of its anchor that still exist.
-  const selection = board ? previous?.liveSelection || previous?.selection || [...selected] : [];
-  const region = board ? (previous ? previous.region : selectionRegion) || undefined : undefined;
+  // A discussion resends the objects of its target that still exist.
+  const selection = board ? previous?.liveSelection || target?.selection || [...selected] : [];
+  const region = board ? (previous ? target.region : selectionRegion) || undefined : undefined;
   if (scope === 'selection' && !range && !selection.length && !region) throw new Error('Select content first');
   const captured = captureContext(doc, { range, selection, region });
   return { ...captured, range, selection, region, revision };
@@ -2204,10 +2210,9 @@ async function saveBeforeQuestion() {
   if (!online || failed || pending.length || inflight || updates.length)
     throw new Error('Edits are not saved. Your question draft is kept; retry the save first.');
 }
-function setComments(value) {
-  comments = value;
-  commentStates = readComments(doc, comments);
-  assistant?.setComments(commentStates);
+function setDiscussions(value) {
+  discussions = readDiscussions(doc, value);
+  assistant?.setDiscussions(discussions);
   if (editor) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
   else draw();
 }
@@ -2278,7 +2283,7 @@ async function start(event) {
       revision = Math.max(revision, data.revision);
       if (document.activeElement !== $('title')) $('title').value = doc.getMap('meta').get('title');
       if (data.transactions) history(data.transactions);
-      if (data.comments) setComments(data.comments);
+      if (data.discussions) setDiscussions(data.discussions);
       return;
     }
     if (data.type === 'sync') {
@@ -2290,7 +2295,7 @@ async function start(event) {
       online = true;
       failed = false;
       history(data.item.transactions);
-      setComments(data.item.comments || []);
+      setDiscussions(data.item.discussions || []);
       flush();
       return;
     }
@@ -2447,19 +2452,18 @@ async function start(event) {
     });
   };
 
-  assistant = new AssistantPanel({
+  assistant = new DiscussionPanel({
     capture: captureAttachment, request, save: saveBeforeQuestion,
     changed: () => {
       draft();
       if (editor) {
-        const attachment = !$('assistant').hidden && assistant.drafts[
-          assistant.drafts.view === 'comments' ? 'comment' : 'question'
-        ].attachment;
+        const attachment = !$('assistant').hidden && assistant.draft.attachment;
         editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false)
           .setMeta(discussionHighlight, attachment?.range || null));
       } else if (doc) draw();
     },
-    reveal: comment => editor ? revealPassage(comment.range) : revealObjects(comment), state: () => ({ readOnly, online }), restored: recovery?.assistant,
+    reveal: discussion => editor ? revealPassage(discussion.target.range) : revealObjects(discussion),
+    stored: setDiscussions, state: () => ({ readOnly, online }), restored: recovery?.assistant,
     onConversation: () => { if (!editor && doc) draw(); },
   });
   assistant.renderDraft();
@@ -2468,26 +2472,24 @@ async function start(event) {
     else assistant.begin('whole');
     document.activeElement?.blur();
   } else if (!editor) requestAnimationFrame(() => { frame(bounds(shapeList())); draw(); });
-  setComments(item.comments || []);
-  $('comment-selection').hidden = readOnly;
-  $('selection-question').hidden = readOnly;
-  $('ask-toggle').textContent = editor ? 'Discussion' : 'Assistant';
+  setDiscussions(item.discussions || []);
+  $('discuss-selection').hidden = readOnly;
   if (editor) {
     $('document').after($('selection-actions'));
     $('selection-actions').classList.add('document-selection-actions');
     $('selection-actions').hidden = true;
   }
-  $('hint').textContent = editor ? 'Select text to comment or ask the assistant.' : 'Select objects or drag across an area to comment or ask the assistant.';
-  $('comment-selection').onclick = () => assistant.begin('selection', 'comment');
-  $('selection-question').onclick = () => assistant.begin('selection');
+  $('hint').textContent = editor ? 'Select text to discuss it with the room and the assistant.'
+    : 'Select objects or drag across an area to discuss them with the room and the assistant.';
+  $('discuss-selection').onclick = () => assistant.begin('selection');
   $('document').addEventListener('click', event => {
-    const id = event.target.closest('[data-comment-id]')?.dataset.commentId;
+    const id = event.target.closest('[data-discussion-id]')?.dataset.discussionId;
     if (!id) return;
-    assistant.openComment(id);
+    assistant.openDiscussion(id);
   });
   document.addEventListener('keydown', event => {
     if (!readOnly && (event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'm') {
-      event.preventDefault(); if (editor) captureDocumentSelection(); assistant.begin('selection', 'comment');
+      event.preventDefault(); if (editor) captureDocumentSelection(); assistant.begin('selection');
     }
   });
   history(item.transactions);

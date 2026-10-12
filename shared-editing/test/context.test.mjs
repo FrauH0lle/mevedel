@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as Y from 'yjs';
 import { handle } from '../host.mjs';
 import { restore } from '../model.mjs';
-import { captureContext, checkContext, readComments } from '../context.mjs';
+import { captureContext, checkContext, readDiscussions } from '../context.mjs';
 import { selectionPositions } from '../document.mjs';
 import { contentHash } from '../view.mjs';
 const load = state => restore(Buffer.from(state.crdt, 'base64'));
@@ -15,7 +15,7 @@ const rangeFor = (start, from, end, to) => ({
   head:Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(end, to, -1)),
 });
 
-test('comments retain original quotes while live anchors move, change and disappear', async () => {
+test('discussions retain original quotes while live anchors move, change and disappear', async () => {
   let {state} = await handle({action:'create',id:'doc',opId:'create',actor:'Guest: Alice',kind:'document',
     content:{type:'doc',content:[{type:'paragraph',attrs:{id:'a'},content:[{type:'text',text:'A useful passage.'}]}]}});
   const doc = load(state), text = doc.getXmlFragment('document').get(0).get(0);
@@ -24,29 +24,36 @@ test('comments retain original quotes while live anchors move, change and disapp
     assert.deepEqual(selectionPositions(doc, range), [3,9]);
     const captured = captureContext(doc, {range});
     assert.equal(captured.quote, 'useful');
-    const request = {action:'comment',opId:'comment-a',actor:'Guest: Alice',text:'Explain this',range,expected:contentHash(captured.snapshot)};
+    const request = {action:'discussion-post',opId:'message-a',messageId:'message-a',discussionId:'discussion-a',
+      actor:'Alice',text:'Explain this',target:{kind:'passage',range},expected:contentHash(captured.snapshot)};
     ({state} = await handle({...request, state}));
-    assert.equal(state.comments[0].quote, 'useful');
-    assert.equal(state.comments[0].actor, 'Guest: Alice');
+    assert.equal(state.discussions[0].quote, 'useful');
+    assert.deepEqual(state.discussions[0].target, {kind:'passage', range});
+    assert.equal(state.discussions[0].messages[0].actor, 'Alice');
+    assert.equal(state.discussions[0].messages[0].id, 'message-a');
     const duplicate = await handle({...request, state});
-    assert.equal(duplicate.state.comments.length, 1);
+    assert.equal(duplicate.state.discussions.length, 1);
     assert.equal(duplicate.state.revision, state.revision);
     text.insert(0, 'Prefix ');
-    assert.equal(readComments(doc, state.comments)[0].anchorStatus, 'current');
+    assert.equal(readDiscussions(doc, state.discussions)[0].anchorStatus, 'current');
     text.insert(11, 'very ');
-    assert.equal(readComments(doc, state.comments)[0].anchorStatus, 'changed');
+    assert.equal(readDiscussions(doc, state.discussions)[0].anchorStatus, 'changed');
     assert.throws(() => checkContext(doc, {range,expected:contentHash(captured.snapshot)}), /Content changed/);
     ({state} = await handle({action:'update',opId:'edit',actor:'Guest: Bob',state,update:Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64')}));
     const read = await handle({action:'read',state});
-    assert.equal(read.result.comments[0].quote, 'useful');
-    assert.match(read.result.comments[0].liveQuote, /very/);
-    ({state} = await handle({action:'resolve-comment',state,opId:'resolve',actor:'Guest: Bob',commentId:'comment-a',resolved:true}));
-    assert.equal(state.comments[0].resolved, true);
+    assert.equal(read.result.discussions[0].quote, 'useful');
+    assert.match(read.result.discussions[0].liveQuote, /very/);
+    ({state} = await handle({action:'discussion-resolve',state,opId:'resolve',actor:'Bob',discussionId:'discussion-a',resolved:true}));
+    assert.equal(state.discussions[0].resolved, true);
+    assert.equal(state.discussions[0].resolvedBy, 'Bob');
+    ({state} = await handle({action:'discussion-resolve',state,opId:'reopen',actor:'Bob',discussionId:'discussion-a',resolved:false}));
+    assert.equal(state.discussions[0].resolved, false);
+    assert.equal(state.discussions[0].resolvedBy, undefined);
     text.delete(0, text.length);
-    assert.equal(readComments(doc, state.comments)[0].anchorStatus, 'deleted');
+    assert.equal(readDiscussions(doc, state.discussions)[0].anchorStatus, 'deleted');
     assert.throws(() => captureContext(doc, {range}), /no longer available/);
     const exported = await handle({action:'export',format:'native',state});
-    assert.doesNotMatch(exported.result.text, /Explain this|comment-a|Guest: Alice/);
+    assert.doesNotMatch(exported.result.text, /Explain this|discussion-a|Alice/);
   } finally { doc.destroy(); }
 });
 
@@ -73,7 +80,8 @@ test('cross-block and reversed selections capture exact text and committed item 
       'Selected text:', '"passage\\nSecond"', 'Blocks containing it (HASH BLOCK-JSON):']);
     assert.match(result.prompt, /\n[0-9a-f]{12} \{"type":"paragraph","attrs":\{"id":"a"\}.*\n[0-9a-f]{12} \{"type":"paragraph","attrs":\{"id":"b"\}/);
     await assert.rejects(handle({action:'read',state,question:true,expected:contentHash(captured.snapshot)}), /Content changed/);
-    await assert.rejects(handle({action:'comment',state,actor:'Alice',opId:'bad',range,text:'',expected:contentHash(captured.snapshot)}), /comment is required/);
+    await assert.rejects(handle({action:'discussion-post',state,actor:'Alice',opId:'bad',messageId:'bad',discussionId:'d',
+      target:{kind:'passage',range},text:'',expected:contentHash(captured.snapshot)}), /message is required/);
   } finally { doc.destroy(); }
 });
 
@@ -112,35 +120,89 @@ test('board context keeps selection identities, rejects deleted targets and boun
   } finally { largeDoc.destroy(); }
 });
 
-test('thread replies are attributed, retry-safe and included in explicit questions at the reviewed version', async () => {
+test('discussion replies are attributed, retry-safe and asked about at the reviewed version', async () => {
   let {state} = await handle({action:'create',id:'doc',opId:'create',actor:'Alice',kind:'document',
     content:{type:'doc',content:[{type:'paragraph',attrs:{id:'a'},content:[{type:'text',text:'A data model.'}]}]}});
   const doc = load(state);
   try {
     const text = doc.getXmlFragment('document').get(0).get(0);
     const range = rangeFor(text,2,text,12), expected = contentHash(captureContext(doc,{range}).snapshot);
-    ({state} = await handle({action:'comment',state,opId:'thread',actor:'Guest: Alice',range,expected,text:'What does this mean?'}));
-    const reply = {action:'reply-comment',opId:'reply',actor:'Guest: Bob',commentId:'thread',text:'Please include an example.'};
+    ({state} = await handle({action:'discussion-post',state,opId:'first',messageId:'first',discussionId:'thread',
+      actor:'Alice',target:{kind:'passage',range},expected,text:'What does this mean?'}));
+    const reply = {action:'discussion-reply',opId:'reply',messageId:'reply',actor:'Bob',discussionId:'thread',
+      text:'Please include an example.'};
     ({state} = await handle({...reply,state}));
-    assert.equal(state.comments[0].replies[0].actor,'Guest: Bob');
-    assert.equal((await handle({...reply,state})).state.comments[0].replies.length,1);
-    const ask = {action:'read',state,question:true,commentId:'thread',commentVersion:'reply',range,expected};
+    assert.deepEqual(state.discussions[0].messages.map(m => [m.id, m.actor]), [['first','Alice'],['reply','Bob']]);
+    assert.equal((await handle({...reply,state})).state.discussions[0].messages.length,2);
+    const ask = {action:'read',state,question:true,discussionId:'thread',version:'reply',range,expected};
     const {result} = await handle(ask);
-    assert.deepEqual(result.snapshot.discussion,[{actor:'Guest: Alice',text:'What does this mean?'},
-      {actor:'Guest: Bob',text:'Please include an example.'}]);
-    assert.match(result.prompt, /\nDiscussion:\nGuest: Alice: "What does this mean\?"\nGuest: Bob: "Please include an example\."\nSelected text:/);
-    await assert.rejects(handle({...ask,commentVersion:'thread'}),/Discussion changed/);
-    await assert.rejects(handle({...reply,state,opId:'empty',text:' '}),/reply is required/);
-    await assert.rejects(handle({...reply,state,opId:'unknown',commentId:'missing'}),/no longer available/);
-    ({state} = await handle({action:'resolve-comment',state,opId:'resolve',actor:'Bob',commentId:'thread',resolved:true}));
-    await assert.rejects(handle({...reply,state,opId:'closed'}),/Reopen/);
-    ({state} = await handle({action:'resolve-comment',state,opId:'reopen',actor:'Bob',commentId:'thread',resolved:false}));
-    ({state} = await handle({...reply,state,opId:'reply-two',text:'And a diagram?'}));
-    assert.equal(state.comments[0].replies.length,2);
-    assert.deepEqual(result.snapshot.discussion.map(m=>m.text),['What does this mean?','Please include an example.']);
+    // Emacs adds the discussion; the host describes the content.
+    assert.equal(result.snapshot.discussion, undefined);
+    assert.match(result.prompt, /the question is about a selection\.\nSelected text:/);
+    await assert.rejects(handle({...ask,version:'first'}),/Discussion changed/);
+    await assert.rejects(handle({...ask,discussionId:'missing'}),/no longer available/);
+    await assert.rejects(handle({...reply,state,opId:'empty',messageId:'empty',text:' '}),/message is required/);
+    await assert.rejects(handle({...reply,state,opId:'unknown',messageId:'unknown',discussionId:'missing'}),/no longer available/);
+    ({state} = await handle({action:'discussion-resolve',state,opId:'resolve',actor:'Bob',discussionId:'thread',resolved:true}));
+    await assert.rejects(handle({...reply,state,opId:'closed',messageId:'closed'}),/Reopen/);
+    await assert.rejects(handle({...ask,state,version:'reply'}),/Reopen/);
+    ({state} = await handle({action:'discussion-resolve',state,opId:'reopen',actor:'Bob',discussionId:'thread',resolved:false}));
+    ({state} = await handle({...reply,state,opId:'reply-two',messageId:'reply-two',text:'And a diagram?'}));
+    assert.equal(state.discussions[0].messages.length,3);
+    ({state} = await handle({action:'discussion-answered',state,opId:'answered',actor:'Alice',discussionId:'thread',
+      session:'s1',sessionName:'Design chat'}));
+    assert.deepEqual([state.discussions[0].session, state.discussions[0].sessionName], ['s1','Design chat']);
     const exported = await handle({action:'export',format:'native',state});
     assert.doesNotMatch(exported.result.text,/Please include|And a diagram/);
   } finally { doc.destroy(); }
+});
+
+test('the general discussion collects whole-item messages; a selection may be sent alone', async () => {
+  let {state} = await handle({action:'create',id:'board',opId:'create',actor:'Alice',kind:'whiteboard',
+    content:[...shape('a', 0, 'A')]});
+  const post = (fields) => handle({action:'discussion-post',actor:'Alice',state,...fields});
+  for (const id of ['g1','g2'])
+    ({state} = await post({opId:id,messageId:id,target:{kind:'whole'},text:`Message ${id}`}));
+  assert.equal(state.discussions.length, 1);
+  assert.equal(state.discussions[0].id, 'general');
+  assert.deepEqual(state.discussions[0].target, {kind:'whole'});
+  assert.deepEqual(state.discussions[0].messages.map(m => m.id), ['g1','g2']);
+  // A message about the whole item needs words, and it stays open.
+  await assert.rejects(post({opId:'g3',messageId:'g3',target:{kind:'whole'},text:'',alone:true}), /Only a selection/);
+  await assert.rejects(post({opId:'g4',messageId:'g4',target:{kind:'whole'},text:' '}), /message is required/);
+  await assert.rejects(handle({action:'discussion-resolve',state,opId:'r',actor:'Alice',discussionId:'general',
+    resolved:true}), /stays open/);
+  // Asking about the general discussion sends the whole item.
+  const asked = await handle({action:'read',state,question:true,discussionId:'general',version:'g2',whole:true});
+  assert.equal(asked.result.snapshot.scope, 'whole');
+  await assert.rejects(handle({action:'read',state,question:true,discussionId:'general',version:'g2',
+    selection:['a']}), /no longer available/);
+  // A selection sent alone carries no text, and only alone may it be empty.
+  const doc = load(state);
+  const expected = contentHash(captureContext(doc, {selection:['a']}).snapshot);
+  doc.destroy();
+  ({state} = await post({opId:'s1',messageId:'s1',discussionId:'alone',target:{kind:'objects',selection:['a']},
+    text:'',alone:true,expected}));
+  const alone = state.discussions.find(d => d.id === 'alone');
+  assert.deepEqual(alone.messages.map(m => [m.text, m.alone]), [['', true]]);
+  assert.equal(alone.target.kind, 'objects');
+  await assert.rejects(post({opId:'s2',messageId:'s2',discussionId:'words',target:{kind:'objects',selection:['a']},
+    text:'Draw it',alone:true,expected}), /message is required/);
+  // The assistant resolves a selection sent alone only while nobody wrote in it.
+  const settle = (from, opId) => handle({action:'discussion-resolve',state:from,opId,actor:'Assistant',
+    discussionId:'alone',resolved:true,ifAlone:true});
+  const done = (await settle(state, 'settle-1')).state;
+  assert.deepEqual([done.discussions.find(d => d.id === 'alone').resolved,
+    done.discussions.find(d => d.id === 'alone').resolvedBy], [true, 'Assistant']);
+  ({state} = await handle({action:'discussion-reply',state,opId:'n1',actor:'Bob',discussionId:'alone',
+    messageId:'n1',text:'Keep the legend'}));
+  const kept = (await settle(state, 'settle-2')).state ?? state;
+  assert.equal(kept.discussions.find(d => d.id === 'alone').resolved, false);
+  // Comments of the earlier mechanism go with the next commit.
+  const legacy = {...state, comments:[{id:'old',text:'Old',selection:['a']}]};
+  const next = await post({state:legacy,opId:'g5',messageId:'g5',target:{kind:'whole'},text:'Next'});
+  assert.equal(next.state.comments, undefined);
+  assert.equal((await handle({action:'read',state:legacy})).result.comments, undefined);
 });
 
 test('board areas carry their region, nearby objects without image bytes and a cropped PNG', async () => {
@@ -180,7 +242,7 @@ test('board areas carry their region, nearby objects without image bytes and a c
   } finally { doc.destroy(); }
 });
 
-test('board comments anchor to objects and areas, track changes and send surviving objects', async () => {
+test('board discussions anchor to objects and areas, track changes and send surviving objects', async () => {
   let {state} = await handle({action:'create',id:'board',opId:'create',actor:'Alice',kind:'whiteboard',content:[
     ...shape('a', 0, 'A'), ...shape('b', 300, 'B')]});
   const commit = async (edit) => {
@@ -191,24 +253,25 @@ test('board comments anchor to objects and areas, track changes and send survivi
         update:Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64')}));
     } finally { doc.destroy(); }
   };
-  const statuses = () => { const doc = load(state); try { return readComments(doc, state.comments); } finally { doc.destroy(); } };
+  const statuses = () => { const doc = load(state); try { return readDiscussions(doc, state.discussions); } finally { doc.destroy(); } };
   let doc = load(state);
   const objects = contentHash(captureContext(doc, {selection:['a','b']}).snapshot);
   const area = contentHash(captureContext(doc, {region:[500,0,80,60]}).snapshot);
   doc.destroy();
-  ({state} = await handle({action:'comment',state,opId:'objects',actor:'Guest: Alice',text:'Align these',
-    selection:['a','b'],expected:objects}));
-  ({state} = await handle({action:'comment',state,opId:'area',actor:'Guest: Alice',text:'Legend here',
-    selection:[],region:[500,0,80,60],expected:area}));
-  await assert.rejects(handle({action:'comment',state,opId:'none',actor:'Guest: Alice',text:'?',selection:[],
-    expected:objects}), /Select objects or an area/);
-  assert.deepEqual(state.comments[0].selection, ['a','b']);
-  assert.match(state.comments[0].signature, /^[0-9a-f]{16}$/);
-  assert.equal(state.comments[0].quote, '2 objects\nrectangle: A\nrectangle: B');
-  assert.deepEqual(state.comments[1].region, [500,0,80,60]);
+  const post = (fields) => handle({action:'discussion-post',state,actor:'Alice',...fields});
+  ({state} = await post({opId:'objects',messageId:'objects',discussionId:'objects',text:'Align these',
+    target:{kind:'objects',selection:['a','b']},expected:objects}));
+  ({state} = await post({opId:'area',messageId:'area',discussionId:'area',text:'Legend here',
+    target:{kind:'objects',selection:[],region:[500,0,80,60]},expected:area}));
+  await assert.rejects(post({opId:'none',messageId:'none',discussionId:'none',text:'?',
+    target:{kind:'objects',selection:[]},expected:objects}), /Select objects or an area/);
+  assert.deepEqual(state.discussions[0].target.selection, ['a','b']);
+  assert.match(state.discussions[0].target.signature, /^[0-9a-f]{16}$/);
+  assert.equal(state.discussions[0].quote, '2 objects\nrectangle: A\nrectangle: B');
+  assert.deepEqual(state.discussions[1].target.region, [500,0,80,60]);
   assert.deepEqual(statuses().map(c => c.anchorStatus), ['current','current']);
   await commit(shapes => shapes.get('label-b').set('text', 'B2'));
-  assert.deepEqual(statuses().map(c => c.anchorStatus), ['changed','current'], 'an edited label changes its thread');
+  assert.deepEqual(statuses().map(c => c.anchorStatus), ['changed','current'], 'an edited label changes its discussion');
   await commit(shapes => shapes.delete('b'));
   const [thread] = statuses();
   assert.equal(thread.anchorStatus, 'changed');
@@ -217,12 +280,11 @@ test('board comments anchor to objects and areas, track changes and send survivi
   doc = load(state);
   const surviving = contentHash(captureContext(doc, {selection:thread.liveSelection}).snapshot);
   doc.destroy();
-  const ask = {action:'read',state,question:true,commentId:'objects',commentVersion:'objects',
+  const ask = {action:'read',state,question:true,discussionId:'objects',version:'objects',
     selection:['a'],expected:surviving};
-  const {result} = await handle(ask);
-  assert.deepEqual(result.snapshot.discussion, [{actor:'Guest: Alice',text:'Align these'}]);
+  assert.equal((await handle(ask)).result.snapshot.scope, 'selection');
   await assert.rejects(handle({...ask,selection:['a','intruder']}), /no longer available/);
-  await assert.rejects(handle({...ask,commentId:'area',commentVersion:'area',region:[0,0,10,10]}), /no longer available/);
+  await assert.rejects(handle({...ask,discussionId:'area',version:'area',region:[0,0,10,10]}), /no longer available/);
   await commit(shapes => shapes.delete('a'));
   assert.deepEqual(statuses().map(c => c.anchorStatus), ['deleted','current'], 'an area outlives its objects');
 });

@@ -20,10 +20,11 @@ class Box extends Element {
 
 const ids = ['artifacts-box', 'artifacts-summary', 'artifacts', 'artifact-panel',
              'artifact-title', 'artifact-meta', 'artifact-tab', 'artifact-download',
-             'artifact-close', 'artifact-body', 'artifact-comment'];
+             'artifact-close', 'artifact-body', 'artifact-discussion', 'artifact-general'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Box('div')]));
 nodes['artifact-panel'].hidden = true;
-nodes['artifact-comment'].hidden = true;
+nodes['artifact-discussion'].hidden = true;
+nodes['artifact-general'].hidden = true;
 const listeners = {};
 const document = {
   getElementById: id => nodes[id],
@@ -41,7 +42,7 @@ const context = {
   localStorage: {getItem: () => null, setItem: () => {}},
   addEventListener: (type, callback) => (listeners[type] ||= []).push(callback),
 };
-load('relay/viewer/viewer-artifact-comments.js', context);
+load('relay/viewer/viewer-artifact-discussions.js', context);
 load('relay/viewer/viewer-artifact.js', context);
 
 const revealed = [];
@@ -52,7 +53,7 @@ const controller = window.mevedelArtifactView.create({
   el: (tag, className, text) => element(document, tag, className, text),
   flash: () => {}, summarize: () => {},
   reveal: id => revealed.push({id, panelHidden: nodes['artifact-panel'].hidden}),
-  canComment: () => true,
+  canDiscuss: () => true,
   busy: () => busy,
 });
 
@@ -62,8 +63,8 @@ controller.handle({reqId: 1, mime: 'text/html', size: html.length,
                    data: Buffer.from(html).toString('base64'), final: true});
 const frame = nodes['artifact-body'].children[0];
 // Only the panel frame carries the picker, ahead of the artifact.
-assert.match(frame.srcdoc, /mevedelArtifactCommentRuntime[^]*<p id="lead">Hello<\/p>$/);
-assert.equal(nodes['artifact-comment'].hidden, false);
+assert.match(frame.srcdoc, /mevedelArtifactDiscussionRuntime[^]*<p id="lead">Hello<\/p>$/);
+assert.equal(nodes['artifact-discussion'].hidden, false);
 const posted = [];
 frame.contentWindow = {postMessage: data => posted.push(data)};
 
@@ -87,7 +88,7 @@ controller.render([
    shared: {kind: 'artifact', title: 'page.html', questionId: 'c1-m', discussionId: 'c1', text: 'Wave'}},
   {id: 'a1', kind: 'assistant', text: 'Waved.'},
 ]);
-const markers = posted.filter(message => message.t === 'comment-markers').at(-1);
+const markers = posted.filter(message => message.t === 'discussion-markers').at(-1);
 assert.deepEqual(JSON.parse(JSON.stringify(markers.markers)),
                  [{id: 'c1', n: 1, anchor, state: 'answered'}]);
 
@@ -95,7 +96,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(markers.markers)),
 // that request, through its first reply until the turn ends; a queued one
 // spins too, a later user turn is someone else's work, and a turn that ended
 // without a reply leaves the thread merely sent.
-const lastMarker = () => posted.filter(message => message.t === 'comment-markers').at(-1).markers[0];
+const lastMarker = () => posted.filter(message => message.t === 'discussion-markers').at(-1).markers[0];
 const delivered = [
   {id: 'tool-1', kind: 'tool', artifact: 'page.html'},
   {id: 'u1', kind: 'user', guest: 'Alice',
@@ -125,12 +126,12 @@ controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}])
 
 // A marker message from any other window opens nothing.
 const message = data => listeners.message.forEach(listener => listener(data));
-message({source: {}, data: {mevedelComment: 'open', id: 'c1',
+message({source: {}, data: {mevedelDiscussion: 'open', id: 'c1',
                             rect: {left: 1, top: 1, width: 1, height: 1}}});
 assert.equal(nodes['artifact-body'].children.length, 1);
 message({source: frame.contentWindow,
-         data: {mevedelComment: 'open', id: 'c1', rect: {left: 1, top: 1, width: 1, height: 1}}});
-const card = nodes['artifact-body'].children.find(child => child.className === 'artifact-comment-card');
+         data: {mevedelDiscussion: 'open', id: 'c1', rect: {left: 1, top: 1, width: 1, height: 1}}});
+const card = nodes['artifact-body'].children.find(child => child.className === 'artifact-discussion-card');
 assert.match(textOf(card), /Alice · Answered/);
 assert.match(textOf(card), /Waved\./);
 
@@ -140,23 +141,53 @@ controller.storedDiscussions({item: 'artifact:page', discussions: [
   {id: 'c5', target: anchor, quote: 'Hello', resolved: false,
    messages: [{id: 'c5-m', actor: 'Alice', text: '', alone: true}]}]});
 message({source: frame.contentWindow,
-         data: {mevedelComment: 'open', id: 'c5', rect: {left: 1, top: 1, width: 1, height: 1}}});
+         data: {mevedelDiscussion: 'open', id: 'c5', rect: {left: 1, top: 1, width: 1, height: 1}}});
 assert.match(textOf(nodes['artifact-body'].children.find(
-  child => child.className === 'artifact-comment-card')), /Sent the selection as the request/);
+  child => child.className === 'artifact-discussion-card')), /Sent the selection as the request/);
 
 // A discussion answered in another session says where.
 controller.storedDiscussions({item: 'artifact:page', discussions: [
   discussion('c1', 'Alice', 'Wave'),
   discussion('c9', 'Bob', 'Elsewhere', {session: 's2', sessionName: 'Design chat'})]});
 message({source: frame.contentWindow,
-         data: {mevedelComment: 'open', id: 'c9', rect: {left: 1, top: 1, width: 1, height: 1}}});
+         data: {mevedelDiscussion: 'open', id: 'c9', rect: {left: 1, top: 1, width: 1, height: 1}}});
 const answeredCard = nodes['artifact-body'].children.find(
-  child => child.className === 'artifact-comment-card');
+  child => child.className === 'artifact-discussion-card');
 assert.match(textOf(answeredCard), /answered in Design chat/);
 controller.storedDiscussions({item: 'artifact:page', discussions: [
   discussion('c9', 'Bob', 'Elsewhere', {session: 's3', sessionName: 'Artifact chat'})]});
 assert.match(textOf(answeredCard), /answered in Artifact chat/,
              'an open thread follows a changed answering session');
+
+const findNode = (node, text) => node.textContent === text ? node
+  : node.children.map(child => typeof child === 'string' ? null : findNode(child, text)).find(Boolean);
+// The general discussion about the whole artifact opens from its own button,
+// lists its messages and the latest answer, writes to the whole artifact and
+// stays open.
+const wholeButton = nodes['artifact-general'];
+assert.equal(wholeButton.hidden, false);
+controller.storedDiscussions({item: 'artifact:page', discussions: [
+  {id: 'general', target: {kind: 'whole'}, quote: '', resolved: false,
+   messages: [{id: 'g1', actor: 'Alice', text: 'Overall?'},
+              {id: 'g2', actor: 'Bob', text: 'Shorter, please'}]}]});
+assert.equal(wholeButton.textContent, 'Whole artifact · 2');
+controller.render([{id: 'u9', kind: 'user', guest: 'Bob', shared: {kind: 'artifact', title: 'page.html',
+  questionId: 'g2', discussionId: 'general', messageId: 'g2', text: 'Shorter, please'}},
+                   {id: 'a9', kind: 'assistant', text: 'Shortened.'}]);
+wholeButton.dispatch('click');
+const wholeCard = nodes['artifact-body'].children.find(child => child.className === 'artifact-discussion-card');
+assert.equal(wholeCard.dataset.discussion, 'general');
+assert.match(textOf(wholeCard), /Whole artifact/);
+assert.match(textOf(wholeCard), /Alice: Overall\?[^]*Bob: Shorter, please/);
+assert.match(textOf(wholeCard), /Shortened\./);
+assert.equal(findNode(wholeCard, 'Resolve'), undefined, 'the general discussion stays open');
+const wholeForm = wholeCard.children.find(child => child.className === 'artifact-discussion-reply-form');
+wholeForm.children.find(child => child.className === 'artifact-discussion-input').value = 'Also the footer';
+wholeForm.dispatch('submit', {preventDefault() {}});
+assert.deepEqual(JSON.parse(JSON.stringify(sentFrames.at(-1))),
+                 {t: 'discussion', reqId: sentFrames.at(-1).reqId, action: 'post', item: 'tool-1',
+                  target: {kind: 'whole'}, messageId: sentFrames.at(-1).messageId,
+                  text: 'Also the footer', toAssistant: true});
 
 const find = (node, text) => node.textContent === text ? node
   : node.children.map(child => typeof child === 'string' ? null : find(child, text)).find(Boolean);

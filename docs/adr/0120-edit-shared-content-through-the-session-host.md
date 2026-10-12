@@ -30,7 +30,7 @@ delivery defer cancellation settlement so a committed edit cannot be reported
 as rolled back. Sessions only attach to items, so session lifecycle operations
 neither copy nor roll them back.
 
-Full and owner bearers may create, import, rename, edit, comment, ask, and point through
+Full and owner bearers may create, import, rename, edit, discuss, and point through
 typed room actions. View bearers may read and export. Model tools use the
 ordinary permission pipeline, including Plan and read-only restrictions.
 Neither adapter receives arbitrary paths or execution authority. The packaged
@@ -241,18 +241,16 @@ before submission. Browser and host share the capture implementation; the host
 checks exact content after pending edits commit, then adds item identity and the
 committed revision. Stale captures fail visibly and require explicit refresh.
 
-Document comments are a bounded, host-authored annotation list with Yjs relative
-anchors, original quote, attributed human replies, and resolution state. This keeps guest authorship
-out of browser-controlled CRDT fields while ordinary concurrent edits move the
-anchors. Comments persist with the item but are excluded from content exports.
-Posting comments and replies never starts a model turn. A selection toolbar
-provides separate comment and assistant entry points. The sidebar has distinct
-Comments and Assistant views and independently persisted drafts. Sending a
-thread submits its posted human messages and passage through the existing
-question queue; the host verifies both captured content and the last reviewed
-reply identity. Canonical AI answers render inside that thread, correlated with
-the message version sent, rather than being copied into comment storage.
-Resolution remains an explicit participant action.
+Discussions are a bounded, host-authored list in the item state with Yjs
+relative anchors or board object fingerprints, original quote, attributed
+messages, and resolution state ([ADR 0125](0125-discuss-items-through-one-mechanism.md)).
+This keeps guest authorship out of browser-controlled CRDT fields while
+ordinary concurrent edits move the anchors. Discussions persist with the item
+but are excluded from content exports. A message starts a model turn only
+with **Ask assistant**; the host verifies both the captured content and the
+discussion's latest message identity. Canonical AI answers render beneath the
+message they answer, correlated by the request's attribution, rather than
+being copied into discussion storage.
 Live anchors describe the current passage; sent snapshots describe the prior
 question and never track later edits.
 Large snapshots overwhelmed the Emacs and room transcripts while the sidebar
@@ -278,8 +276,8 @@ room work and let item snapshots accumulate in ordinary chat. Each item's truste
 question attribution now selects its model context before reminder delivery:
 current reviewed question plus recent same-item turns. Ordinary room requests
 and compaction evidence exclude these turns, while the canonical chronology and
-operational queue remain shared. Comment questions participate in their item's
-conversation; comments remain their presentation subthreads.
+operational queue remain shared. Requests from every discussion participate in
+their item's conversation; discussions are their presentation.
 
 Archived canonical segments restore prior item turns after compaction and reload.
 Question identities deduplicate preserved tails. Prior history has a complete-turn
@@ -295,17 +293,17 @@ stream, replied there, and reached the room's model, which had never seen the
 whiteboard turns and attached the correction to an unrelated artifact comment.
 Records therefore carry their item as they carry a directive, the room filter
 lists items beside directives, and a room message with an item selected is a
-whole-item question in that item's conversation. Only the routing layer is
+message to the assistant in that item's general discussion. Only the routing layer is
 shared: each discussion kind keeps its own handler and context policy, so
 directive discussions stay read-only and item questions can still edit. A
 room message has no reviewed snapshot, so its whole-item question captures the
 committed content; editor questions keep the reviewed-snapshot check.
 
-Session artifacts are items in this sense too. Their comments first existed only
+Session artifacts are items in this sense too. Their discussions first existed only
 as transcript turns in the main conversation, which gave them no people-only
 notes, no replies or resolution, and let artifact back-and-forth fill room chat.
-An artifact's messages are now item questions about `artifact:NAME` and its
-comments live in a per-artifact store beside the shared items. Unlike a
+An artifact's messages are now item requests about `artifact:ID` and its
+discussions live in the artifact store beside the shared items. Unlike a
 whiteboard or document, whose reviewed content travels with each question
 within a bound and names its address for the rest, an artifact can be megabytes of HTML: the request names its file and
 frames it as untrusted content, and the model reads what it needs.
@@ -462,3 +460,15 @@ Extracting a lease core shared with sessions was examined and rejected: the
 session functions bind publication, unsettled-mutation, release-pending and
 transfer state into about 610 race-critical lines, while the item lease needs
 only acquire, renew, release and a fenced write on the existing primitives.
+
+## Decision history
+
+- **Comments and questions as separate pathways.** The editor first offered
+  **Add comment** and **Ask about selection** for one selection, with
+  separate **Comments** and **Assistant** views and drafts; comments lived in
+  host-side comment storage, questions only in the transcript, and resolution
+  was always an explicit participant action. Both carried a target and reached
+  the same queue and conversation, and the user found the split confusing.
+  [ADR 0125](0125-discuss-items-through-one-mechanism.md) replaced both with
+  one discussion model shared with HTML artifacts, and resolves a selection
+  sent alone once its turn completes.

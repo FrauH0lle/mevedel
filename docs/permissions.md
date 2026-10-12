@@ -230,7 +230,7 @@ never broaden the child sandbox.
 `mevedel-protected-paths` is an alist from glob to `read-only` or
 `inaccessible`. The default `.git` glob is read-only, and so is the
 [artifact store](view.md#artifact-store)'s bookkeeping under
-`.mevedel/artifacts/.state/` -- metadata, shared item state, comments and versions -- and
+`.mevedel/artifacts/.state/` -- metadata, shared item state, discussions and versions -- and
 `.mevedel/leases/`, so a model write cannot bypass an item's lease, versions
 and validation. These directory boundaries cover future artifact ids and missing
 bookkeeping files too. Authored files under `.mevedel/artifacts/ID/` stay writable,
