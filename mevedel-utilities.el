@@ -25,6 +25,16 @@
 (defvar gptel-response-prefix-alist)
 (defvar gptel-response-separator)
 
+;; `mevedel-acp-turn'
+(declare-function mevedel-acp-turn--close-reasoning "mevedel-acp-turn" (request))
+(autoload 'mevedel-acp-turn--close-reasoning "mevedel-acp-turn")
+
+;; `mevedel-engine'
+(declare-function mevedel-engine-info "mevedel-engine" (owner))
+(declare-function mevedel-engine-owner "mevedel-engine" (request))
+(autoload 'mevedel-engine-info "mevedel-engine")
+(autoload 'mevedel-engine-owner "mevedel-engine")
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-start-helper
                   "mevedel-execution"
@@ -40,6 +50,12 @@
                   "mevedel-execution-target" (target))
 (autoload 'mevedel-execution-target-label "mevedel-execution-target")
 
+;; `mevedel-gptel-stream-bridge'
+(declare-function mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
+                  "mevedel-gptel-stream-bridge" (info))
+(autoload 'mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
+  "mevedel-gptel-stream-bridge")
+
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges
                   "mevedel-mention-bindings" (text))
@@ -47,6 +63,11 @@
                   "mevedel-mention-bindings"
                   (start end binding &optional object))
 (autoload 'mevedel-mention-bindings-ranges "mevedel-mention-bindings")
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-turn-owner "mevedel-reminders"
+                  (&optional buffer))
+(autoload 'mevedel-reminders-turn-owner "mevedel-reminders")
 
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-physical-path
@@ -57,6 +78,7 @@
 (autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
@@ -1287,6 +1309,35 @@ so later response insertion happens after the synthetic user turn."
     (cond
      ((mevedel--live-buffer-marker-p tracking buffer) tracking)
      ((mevedel--live-buffer-marker-p position buffer) position))))
+
+(defun mevedel--insert-at-active-response (buffer text)
+  "Insert TEXT at BUFFER's running response position and return its start.
+Text the turn received earlier, including batched stream chunks, stays
+before TEXT, and an open reasoning block closes first; the turn's later
+output follows it.  Return nil without inserting when BUFFER has no
+running turn or its response has no live marker there."
+  (when-let* (((buffer-live-p buffer))
+              (turn-owner (mevedel-reminders-turn-owner buffer))
+              (owner (if (mevedel-request-p turn-owner)
+                         (mevedel-engine-owner turn-owner)
+                       turn-owner))
+              (info (mevedel-engine-info owner))
+              ((mevedel--active-response-marker info buffer)))
+    (with-current-buffer buffer
+      (save-restriction
+        (widen)
+        (let ((inhibit-read-only t))
+          (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info)
+          (if (plist-get info :mevedel-acp-reasoning)
+              (mevedel-acp-turn--close-reasoning owner)
+            (mevedel--split-open-reasoning-before-user-input info))
+          ;; Closing reasoning may replace the response marker.
+          (when-let* ((marker (mevedel--active-response-marker info buffer)))
+            (save-excursion
+              (goto-char marker)
+              (prog1 (point)
+                (insert text)
+                (set-marker marker (point))))))))))
 
 (defun mevedel--split-open-reasoning-before-user-input (info)
   "Close INFO's open reasoning block before injecting user input."

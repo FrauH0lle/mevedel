@@ -28,7 +28,13 @@ duplicate output. Inside an activity run it folds into that run's group as a
 counted completion rather than a line of its own: standalone breadcrumbs
 stacked up beside the groups they belonged to, several per turn, while the
 original rows already showed each outcome. The record stays durable, because
-it marks when the model learned of a completion it may react to. Running
+it marks when the model learned of a completion it may react to. While the
+receiving transcript's turn runs, the record goes where that turn's
+response currently ends, so the turn's later output follows it; an idle
+transcript receives it at its end. Appending at the end during a running turn
+put every completion behind the turn's final answer: one session stacked
+twelve completions, emitted over eighty minutes, just before the next prompt,
+where no activity group could count them. Running
 background commands are listed only transiently, in the view's status zone. Its identity is scoped to session, owner, and execution, not
 command text. Execution IDs carry a fresh per-state prefix so resumed sessions
 cannot reuse the earlier state's counter in durable records or output paths.

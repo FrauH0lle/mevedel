@@ -543,6 +543,108 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
+(defun mevedel-view-stream-test--check-mid-turn-breadcrumb (threshold expected)
+  "Check a completion during a running turn with group THRESHOLD.
+EXPECTED is the view text that must show the completion once, before the
+turn's later text, live and after reconstruction."
+  (mevedel-view-stream-test--with-buffers
+    (let ((session (mevedel-session--create :name "mid-turn-breadcrumb"))
+          (mevedel-view-tool-group-collapse-threshold threshold)
+          (draft "> quoted\nsecond line")
+          data-turn-start tracking info)
+      (dolist (buffer (list data-buf view-buf))
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)))
+      (mevedel-view-stream-test--insert-data data-buf "Run the checks\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (point) nil)))
+      (with-current-buffer view-buf
+        (mevedel-view--begin-external-turn "Run the checks" data-turn-start))
+      (mevedel-view-stream-test--insert-data
+       data-buf "Starting both checks.\n" 'response)
+      (with-current-buffer data-buf
+        (dolist (call '(("call-slow" . "make slow") ("call-fast" . "make fast")))
+          (insert (format "#+begin_tool (Bash :command %S)\n" (cdr call)))
+          (let ((start (point)))
+            (insert (format "(:name \"Bash\" :args (:command %S))\n\nyielded\n"
+                            (cdr call)))
+            (put-text-property start (point) 'gptel (cons 'tool (car call))))
+          (insert "#+end_tool\n"))
+        ;; gptel keeps a newline after its response marker while streaming.
+        (setq tracking (copy-marker (point) nil))
+        (insert "\n")
+        (setq info (list :buffer data-buf :position (copy-marker tracking)
+                         :tracking-marker tracking))
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :fsm (gptel-make-fsm :info info))))
+      (with-current-buffer view-buf
+        (mevedel-view-render-live-update data-buf)
+        (mevedel-view-stream-test--insert-composer-draft draft 4))
+      (mevedel-view-stream-test--with-visible-view
+        (mevedel-view-stream-handle-execution-event
+         (list :type 'terminal :delivery 'mailbox :session session
+               :data-buffer data-buf :owner "main" :tool-use-id "call-slow"
+               :tool-args '(:command "make slow") :whole-output "done"
+               :facts '(:execution-id "exec-slow" :command "make slow"
+                        :state completed :termination exited :exit-code 0
+                        :outcome success)))
+        (let ((visible (buffer-substring-no-properties
+                        (point-min) (mevedel-view--input-start))))
+          (ert-info ((format "View after completion:\n%s" visible))
+            (should-not (string-search "Finished: make slow" visible))))
+        ;; Flush only what the completion itself scheduled.
+        (mevedel-view--flush-scheduled-render view-buf t)
+        (let ((visible (buffer-substring-no-properties
+                        (point-min) (mevedel-view--input-start))))
+          (ert-info ((format "View after its render:\n%s" visible))
+            (should (= 1 (mevedel-view-stream-test--count-substring
+                          expected visible)))))
+        (with-current-buffer data-buf
+          (save-excursion
+            (goto-char tracking)
+            (let ((start (point)))
+              (insert "Both checks are done.")
+              (put-text-property start (point) 'gptel 'response)
+              (set-marker tracking (point)))))
+        (mevedel-view-render-live-update data-buf)
+        (let ((visible (buffer-substring-no-properties
+                        (point-min) (mevedel-view--input-start))))
+          (ert-info ((format "View:\n%s" visible))
+            (should (= 1 (mevedel-view-stream-test--count-substring
+                          expected visible)))
+            ;; A folded completion is not repeated as its own line.
+            (should (= (if (string-prefix-p "Finished" expected) 1 0)
+                       (mevedel-view-stream-test--count-substring
+                        "Finished: make slow" visible)))
+            (should (< (string-search expected visible)
+                       (string-search "Both checks are done." visible))))
+          (when (string-search "[Show result]" expected)
+            (save-excursion
+              (goto-char (point-min))
+              (search-forward "[Show result]")
+              (let ((at (match-beginning 0)))
+                (should (eq 'execution-breadcrumb
+                            (get-text-property at 'mevedel-view-type)))
+                (should (equal "exec-slow"
+                               (plist-get
+                                (get-text-property
+                                 at 'mevedel-view-execution-breadcrumb)
+                                :execution-id))))))
+          (should (equal draft (mevedel-view--input-text)))
+          (should (= 4 (- (point) (mevedel-view--input-start)))))
+        (mevedel-view--cancel-scheduled-render))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request nil))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((visible (buffer-substring-no-properties
+                        (point-min) (mevedel-view--input-start))))
+          (ert-info ((format "Reconstructed view:\n%s" visible))
+            (should (= 1 (mevedel-view-stream-test--count-substring
+                          expected visible)))
+            (should (< (string-search expected visible)
+                       (string-search "Both checks are done." visible)))))))))
+
 (mevedel-deftest mevedel-view-stream-terminal-breadcrumb-live ()
   ,test
   (test)
@@ -611,7 +713,12 @@
         (should (= 4 (- (point) (mevedel-view--input-start)))))
       (with-current-buffer data-buf
         (should (= 1 (length (mevedel-transcript-audit-records
-                              (buffer-string) 'execution-breadcrumb))))))))
+                              (buffer-string) 'execution-breadcrumb)))))))
+  :doc "a mid-turn completion folds into its turn's activity, before later text"
+  (mevedel-view-stream-test--check-mid-turn-breadcrumb 1 "1 command finished")
+  :doc "an ungrouped mid-turn completion is one line before later text"
+  (mevedel-view-stream-test--check-mid-turn-breadcrumb
+   0 "Finished: make slow · main  [Show result]"))
 
 (mevedel-deftest mevedel-view-stream-terminal-breadcrumb-projection ()
   ,test

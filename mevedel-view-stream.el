@@ -1599,44 +1599,54 @@ requests generic recovery, without a particular source identity to check."
   "Project EVENT's newly persisted breadcrumb into an open current view.
 Only the transcript audit supplies its identity and source range.  A view
 opened later, or one inspecting a historical segment, uses normal source
-projection instead of maintaining a second completion registry."
+projection instead of maintaining a second completion registry.  While
+the view renders a live turn, its tail renders the record from source
+wherever the transcript placed it, so an activity group can count it."
   (when-let* ((data (plist-get event :data-buffer))
               ((buffer-live-p data))
-              (view (mevedel-view-stream--execution-view-buffer data))
-              (execution-id (plist-get (plist-get event :facts) :execution-id))
-              (record
-               (with-current-buffer data
-                 (save-restriction
-                   (widen)
-                   (save-excursion
-                     (goto-char (point-max))
-                     (when (search-backward mevedel--hook-audit-open nil t)
-                       (cl-find-if
-                        (lambda (item)
-                          (and (equal execution-id
-                                      (plist-get item :execution-id))
-                               (equal (plist-get event :tool-use-id)
-                                      (plist-get item :tool-use-id))))
-                        (mevedel-view--hook-audit-records-from-text
-                         (buffer-substring (point) (point-max))
-                         'execution-breadcrumb data (point)))))))))
+              (view (mevedel-view-stream--execution-view-buffer data)))
     (with-current-buffer view
       (when (eq data (mevedel-view-segments-display-buffer))
-        (mevedel-view-render-mutate
-         (list 'execution-breadcrumb execution-id)
-         (lambda ()
-           (unless (mevedel-view-audit-breadcrumb-present-p
-                    record (mevedel-view--history-insertion-marker))
-             (mevedel-view--call-preserving-user-view-state
-              (lambda ()
-                (mevedel-view--call-with-render-boundaries-advancing
-                 (lambda ()
-                   (let ((inhibit-read-only t)
-                         (inhibit-modification-hooks t))
-                     (save-excursion
-                       (goto-char (mevedel-view--history-insertion-marker))
-                       (mevedel-view--insert-hook-audit-block
-                        record (plist-get record :source)))))))))))))))
+        (if (and (mevedel-view-stream-in-flight-turn-start-position)
+                 (markerp mevedel-view--data-turn-start))
+            (mevedel-view--schedule-tool-boundary-render data)
+          ;; Without a live turn the transcript received the record at its
+          ;; end, as its last audit block.
+          (when-let* ((execution-id
+                       (plist-get (plist-get event :facts) :execution-id))
+                      (record
+                       (with-current-buffer data
+                         (save-restriction
+                           (widen)
+                           (save-excursion
+                             (goto-char (point-max))
+                             (when (search-backward mevedel--hook-audit-open nil t)
+                               (cl-find-if
+                                (lambda (item)
+                                  (and (equal execution-id
+                                              (plist-get item :execution-id))
+                                       (equal (plist-get event :tool-use-id)
+                                              (plist-get item :tool-use-id))
+                                       (equal (plist-get event :owner)
+                                              (plist-get item :owner))))
+                                (mevedel-view--hook-audit-records-from-text
+                                 (buffer-substring (point) (point-max))
+                                 'execution-breadcrumb data (point)))))))))
+            (mevedel-view-render-mutate
+             (list 'execution-breadcrumb execution-id)
+             (lambda ()
+               (unless (mevedel-view-audit-breadcrumb-present-p
+                        record (mevedel-view--history-insertion-marker))
+                 (mevedel-view--call-preserving-user-view-state
+                  (lambda ()
+                    (mevedel-view--call-with-render-boundaries-advancing
+                     (lambda ()
+                       (let ((inhibit-read-only t)
+                             (inhibit-modification-hooks t))
+                         (save-excursion
+                           (goto-char (mevedel-view--history-insertion-marker))
+                           (mevedel-view--insert-hook-audit-block
+                            record (plist-get record :source)))))))))))))))))
 
 (defun mevedel-view-stream-handle-execution-event (event)
   "Apply Bash EVENT to its authoritative row and visible view.

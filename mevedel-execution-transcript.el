@@ -81,6 +81,8 @@
 (autoload 'mevedel-transcript-restore-properties "mevedel-transcript-restore")
 
 ;; `mevedel-utilities'
+(declare-function mevedel--insert-at-active-response
+                  "mevedel-utilities" (buffer text))
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
@@ -221,7 +223,10 @@ the matching original Bash row; do not publish an unsent in-memory draft."
 (defun mevedel-execution-transcript--record-breadcrumb (event)
   "Record one chronological completion for terminal yielded EVENT.
 The event's execution identity is absent for foreground commands.  This
-record carries no output copy: the tool row and retained artifact own it."
+record carries no output copy: the tool row and retained artifact own it.
+While the transcript's turn runs, the record goes where its response
+currently ends, so the turn's later output follows it; an idle transcript
+receives it at its end."
   (when-let* ((data-buffer (plist-get event :data-buffer))
               ((buffer-live-p data-buffer))
               (facts (plist-get event :facts))
@@ -254,9 +259,11 @@ record carries no output copy: the tool row and retained artifact own it."
                               execution-id (error-message-string err))
                       :warning)
                      nil)))
-            (save-excursion
-              (goto-char (point-max))
-              (insert (mevedel--format-hook-audit-record record)))
+            (let ((text (mevedel--format-hook-audit-record record)))
+              (unless (mevedel--insert-at-active-response data-buffer text)
+                (save-excursion
+                  (goto-char (point-max))
+                  (insert text))))
             (set-buffer-modified-p (or modified-p (not persisted-p)))))))))
 
 (defun mevedel-execution-transcript--replace-archived-record

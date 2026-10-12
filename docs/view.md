@@ -670,8 +670,11 @@ their result links resolve the execution ID across the current transcript and
 readable older segments, including nested ToolCall Bash children. Failed control
 operations do not disappear. A command's failed exit is attributed
 to the command instead of to its successful input or poll. A terminal event
-projects its durable breadcrumb into an open current view immediately, without
-waiting for a full rerender; views opened later reconstruct it from the
+of an idle transcript projects its durable breadcrumb into an open current view
+immediately, without waiting for a full rerender. During a running turn the
+breadcrumb is recorded at the turn's response position, and the live tail's
+next incremental render shows it in place, folded into its activity group when
+one forms. Views opened later reconstruct it from the
 transcript. Source-backed disclosure choices and reader/composer positions
 survive progress and completion. Folding a turn retains its projected
 breadcrumb for retry deduplication. Deduplication against older segments reads

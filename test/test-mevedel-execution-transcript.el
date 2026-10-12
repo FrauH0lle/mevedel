@@ -274,7 +274,116 @@
       (should (string-match-p "simulated publication failure" warning))
       (should (buffer-modified-p))
       (should (= 1 (length (mevedel-transcript-audit-records
-                            (buffer-string) 'execution-breadcrumb)))))))
+                            (buffer-string) 'execution-breadcrumb))))))
+  :doc "places a mid-turn completion where it finished, before later output"
+  (with-temp-buffer
+    (org-mode)
+    (let ((info (list :buffer (current-buffer) :position (point-marker)))
+          (event (list :data-buffer (current-buffer) :owner "/root"
+                       :tool-use-id "call-mid"
+                       :facts '(:execution-id "exec-mid" :command "sleep 15"
+                                :state completed :outcome success))))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :fsm (gptel-make-fsm :info info)))
+      (gptel-curl--stream-insert-response "Earlier text." info)
+      (mevedel-execution-transcript--record-breadcrumb event)
+      (mevedel-execution-transcript--record-breadcrumb event)
+      (gptel-curl--stream-insert-response " Later text." info)
+      (let ((spans (mevedel-transcript-audit-buffer-spans
+                    'execution-breadcrumb)))
+        (should (= 1 (length spans)))
+        (goto-char (point-min))
+        (should (< (search-forward "Earlier text.")
+                   (plist-get (car spans) :start)
+                   (search-forward " Later text."))))))
+  :doc "places a forwarded child completion at the parent's running response"
+  (with-temp-buffer
+    (org-mode)
+    (let ((info (list :buffer (current-buffer) :position (point-marker))))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :fsm (gptel-make-fsm :info info)))
+      (gptel-curl--stream-insert-response "Parent text." info)
+      (mevedel-execution-transcript--record-breadcrumb
+       (list :data-buffer (current-buffer) :owner "/root/worker"
+             :tool-use-id "call-child"
+             :facts '(:execution-id "exec-child" :command "make"
+                      :state completed :outcome success)))
+      (gptel-curl--stream-insert-response " Parent later." info)
+      (let ((span (car (mevedel-transcript-audit-buffer-spans
+                        'execution-breadcrumb))))
+        (should (equal "/root/worker" (plist-get (plist-get span :record) :owner)))
+        (goto-char (point-min))
+        (should (< (search-forward "Parent text.")
+                   (plist-get span :start)
+                   (search-forward " Parent later."))))))
+  :doc "places an agent's mid-turn completion at the agent's response"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Agent text.")
+    (let ((position (point-marker)))
+      (insert "\nunrelated tail\n")
+      (setq-local mevedel--current-request nil)
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create
+                   :runtime-context (list :buffer (current-buffer)
+                                          :position position)))
+      (mevedel-execution-transcript--record-breadcrumb
+       (list :data-buffer (current-buffer) :owner "/root/explorer"
+             :tool-use-id "call-agent"
+             :facts '(:execution-id "exec-agent" :command "make"
+                      :state completed :outcome success)))
+      (let ((span (car (mevedel-transcript-audit-buffer-spans
+                        'execution-breadcrumb))))
+        (goto-char (point-min))
+        (should (< (search-forward "Agent text.")
+                   (plist-get span :start)
+                   (search-forward "unrelated tail"))))))
+  :doc "publishes a mid-turn completion and keeps it at the response marker"
+  (let* ((path (make-temp-file "mevedel-execution-breadcrumb-mid-"))
+         (buffer (find-file-noselect path))
+         (session (mevedel-session--create :authority-mode 'pid-lock
+                                           :name "breadcrumb-mid")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (delay-mode-hooks (org-mode))
+          (setq-local mevedel--session session)
+          (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+          (let ((info (list :buffer buffer :position (point-marker))))
+            (setq-local mevedel--current-request
+                        (mevedel-request--create
+                         :fsm (gptel-make-fsm :info info)))
+            (gptel-curl--stream-insert-response "Running." info)
+            (write-region (point-min) (point-max) path nil 'silent)
+            (set-buffer-modified-p nil)
+            (set-visited-file-modtime)
+            (mevedel-execution-transcript--record-breadcrumb
+             (list :data-buffer buffer :owner "/root" :tool-use-id "call-pub"
+                   :facts '(:execution-id "exec-pub" :command "true"
+                            :state completed :outcome success)))
+            (should (= 1 (length
+                          (mevedel-execution-transcript-test--audit-records-in-file
+                           path 'execution-breadcrumb))))
+            (let ((span (car (mevedel-transcript-audit-buffer-spans
+                              'execution-breadcrumb))))
+              (should (= (mevedel-transcript--audit-block-end
+                          buffer (plist-get span :end))
+                         (mevedel--active-response-marker info buffer)))
+              (should (< (plist-get span :end) (point-max))))
+            ;; The next ordinary save writes the record before later output.
+            (gptel-curl--stream-insert-response " Later." info)
+            (mevedel-session-persistence-write-current-buffer-atomically path)
+            (with-temp-buffer
+              (insert-file-contents path)
+              (let ((record (string-search "mevedel-hook-audit" (buffer-string))))
+                (should (< (string-search "Running." (buffer-string))
+                           record
+                           (string-search " Later." (buffer-string))))))
+            (set-buffer-modified-p nil)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-file path))))
 
 (mevedel-deftest mevedel-execution-transcript--breadcrumb-archived-retry ()
   ,test

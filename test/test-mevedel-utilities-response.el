@@ -5,7 +5,9 @@
 ;;; Code:
 
 (require 'gptel)
+(require 'mevedel-agents)
 (require 'mevedel-gptel-stream-bridge)
+(require 'mevedel-structs)
 (require 'mevedel-transcript)
 (require 'mevedel-utilities)
 (require 'org)
@@ -45,6 +47,117 @@
                   (mevedel--active-response-marker info (current-buffer))))
       (set-marker position nil)
       (should-not (mevedel--active-response-marker info (current-buffer))))))
+
+(mevedel-deftest mevedel--insert-at-active-response ()
+  ,test
+  (test)
+  :doc "inserts at a running gptel response, before text streamed later"
+  (with-temp-buffer
+    (org-mode)
+    (let ((info (list :buffer (current-buffer) :position (point-marker))))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :fsm (gptel-make-fsm :info info)))
+      (gptel-curl--stream-insert-response "before" info)
+      (let ((start (mevedel--insert-at-active-response
+                    (current-buffer) "RECORD")))
+        (should (equal "RECORD" (buffer-substring start (+ start 6))))
+        (should (= (+ start 6) (plist-get info :tracking-marker))))
+      (gptel-curl--stream-insert-response " after" info)
+      (should (equal "beforeRECORD after\n" (buffer-string)))))
+  :doc "leaves an idle transcript unchanged"
+  (with-temp-buffer
+    (insert "settled\n")
+    (setq-local mevedel--current-request nil)
+    (should-not (mevedel--insert-at-active-response (current-buffer) "RECORD"))
+    (should (equal "settled\n" (buffer-string))))
+  :doc "leaves a running request without a live response marker unchanged"
+  (with-temp-buffer
+    (insert "starting\n")
+    (setq-local mevedel--current-request
+                (mevedel-request--create
+                 :fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+    (should-not (mevedel--insert-at-active-response (current-buffer) "RECORD"))
+    (should (equal "starting\n" (buffer-string))))
+  :doc "uses an external engine context that has no native state machine"
+  (with-temp-buffer
+    (insert "head")
+    (let ((position (point-marker)))
+      (insert "\ntail")
+      (setq-local mevedel--current-request
+                  (mevedel-request--create
+                   :context (list :buffer (current-buffer) :position position)))
+      (mevedel--insert-at-active-response (current-buffer) "RECORD")
+      (should (equal "headRECORD\ntail" (buffer-string)))
+      (should (= 11 position))))
+  :doc "uses a running agent invocation and ignores a settled one"
+  (with-temp-buffer
+    (insert "agent")
+    (let* ((position (point-marker))
+           (invocation
+            (mevedel-agent-invocation--create
+             :runtime-context (list :buffer (current-buffer)
+                                    :position position))))
+      (insert "\n")
+      (setq-local mevedel--current-request nil)
+      (setq-local mevedel--agent-invocation invocation)
+      (mevedel--insert-at-active-response (current-buffer) "RECORD")
+      (should (equal "agentRECORD\n" (buffer-string)))
+      (setf (mevedel-agent-invocation-runtime-settled-p invocation) t)
+      (should-not
+       (mevedel--insert-at-active-response (current-buffer) "LATE"))
+      (should (equal "agentRECORD\n" (buffer-string)))))
+  :doc "closes an open gptel reasoning block before the record"
+  (with-temp-buffer
+    (org-mode)
+    (let ((info (list :buffer (current-buffer) :position (point-marker)
+                      :include-reasoning 'ignore :reasoning-block 'in)))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :fsm (gptel-make-fsm :info info)))
+      (gptel--display-reasoning-stream "thinking" info)
+      (let ((start (mevedel--insert-at-active-response
+                    (current-buffer) "RECORD")))
+        (goto-char (point-min))
+        (should (< (search-forward "#+end_reasoning") start))
+        (should-not (plist-get info :reasoning-block)))))
+  :doc "closes an open external reasoning block before the record"
+  (with-temp-buffer
+    (org-mode)
+    (let ((info (list :buffer (current-buffer) :position (point-marker)
+                      :include-reasoning 'ignore :reasoning-block 'in
+                      :mevedel-acp-reasoning t)))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :context info))
+      (gptel--display-reasoning-stream "thinking" info)
+      (let ((start (mevedel--insert-at-active-response
+                    (current-buffer) "RECORD")))
+        (goto-char (point-min))
+        (should (< (search-forward "#+end_reasoning") start))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "#+end_reasoning" (buffer-string))))
+        (should-not (plist-get info :mevedel-acp-reasoning)))))
+  :doc "flushes batched stream text before the record"
+  (with-temp-buffer
+    (org-mode)
+    (setq-local mevedel--session 'test)
+    (let* ((mevedel-gptel-stream-bridge-insert-batch-delay 60)
+           (info (list :buffer (current-buffer) :position (point-marker)))
+           (advice
+            #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)
+           (installed
+            (advice-member-p advice 'gptel-curl--stream-insert-response)))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :fsm (gptel-make-fsm :info info)))
+      (unwind-protect
+          (progn
+            (unless installed
+              (advice-add 'gptel-curl--stream-insert-response :around advice))
+            (gptel-curl--stream-insert-response "first" info)
+            (gptel-curl--stream-insert-response " batch" info)
+            (mevedel--insert-at-active-response (current-buffer) "RECORD")
+            (should (string-prefix-p "first batchRECORD" (buffer-string))))
+        (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info)
+        (unless installed
+          (advice-remove 'gptel-curl--stream-insert-response advice))))))
 
 (mevedel-deftest mevedel--split-open-reasoning-before-user-input ()
   ,test
