@@ -1562,7 +1562,13 @@ parent commit that may still carry the old position, so samples could run
 free there; each move now waits for a callback requested after it. An error or
 refused surface for one label closed every surface opened before it, and the
 next semantic update reopened them all, about once a second; such a label now
-falls back alone and stays with text until it changes or animation stops.
+falls back alone. A refused surface is remembered by its signature (label,
+style, font, colors and geometry) and tried again once one changes; a label
+whose preparation signaled stays with text until it changes or animation
+stops. Remembering the label alone, as first written, kept a real Claude Code
+turn on text for its whole duration: its label's first placement reported a
+height of 0 before the row was laid out, which the module refuses. Such a
+placement is now no placement at all, retried at the next update.
 
 A profile of a streamed request (in the harness of the next entries) put
 10-13% of samples in native placement: two `posn-at-point` walks from the

@@ -94,9 +94,12 @@ every sample again.")
   "Alist of each window's layout inputs when its surfaces were last verified.")
 
 (defvar-local mevedel-view-native--failed nil
-  "Recent (STYLE LABEL FACE PERIOD) specs whose surface failed to open.
-They keep text animation until their label changes or animation stops,
-instead of reopening every surface before them on each semantic update.")
+  "Recent surface signatures the module refused, and specs that signaled.
+A signature holds the label, its style, font, colors and geometry, so
+the same label is tried again once its layout changes.  A spec, (STYLE
+LABEL FACE PERIOD), stays with text animation until its label changes or
+animation stops.  Either way the surfaces before it are not reopened on
+each semantic update.")
 
 (defun mevedel-view-native--overlays (window)
   "Return the overlays that can move this view's surfaces in WINDOW.
@@ -421,7 +424,9 @@ The placement is (FRAME GEOMETRY FONT BACKGROUND)."
                (slant (font-get font :slant))
                (size (font-get font :size))
                (background (mevedel-view-native--background start window)))
-          (when (and background (> width 0) (<= (+ x width) (nth 2 edges))
+          ;; A row just inserted can report no height before it is laid
+          ;; out; that is a later placement, not a failure.
+          (when (and background (> width 0) (> height 0) (<= (+ x width) (nth 2 edges))
                      (>= y (cadr edges)) (<= (+ y height) (nth 3 edges)))
             (list frame (vector x y width height ascent)
                   (format "%s %s %s %spx" family
@@ -630,7 +635,8 @@ animation stops: retrying reopened it about once a second."
                                                   (not (assq (caar entry) specs))))
                                            mevedel-view-native--entries)))
                                  handle)
-                            (when (and placement colors (mevedel-view-native-available-p frame))
+                            (when (and placement colors (mevedel-view-native-available-p frame)
+                                       (not (member signature mevedel-view-native--failed)))
                               (when (and old (equal signature (cadr old))
                                          (mevedel-view-native--move (nth 2 old)
                                                                     (aref geometry 0) (aref geometry 1)))
@@ -641,16 +647,18 @@ animation stops: retrying reopened it about once a second."
                                               background
                                               (mevedel-view-native--timeline style label period face frame)
                                               (float elapsed)))
-                                (if handle (push handle opened) (setq refused t))))
+                                (if handle
+                                    (push handle opened)
+                                  (setq refused (copy-tree signature)))))
                             (if handle (push (list key signature handle placement
                                                    (buffer-substring-no-properties
                                                     (car target) (cdr target))) candidates)
                               (setq failed t)))))
-                    (error (setq refused t))))
+                    (error (setq refused (copy-sequence (cdr spec))))))
                 (when refused
                   (setq failed t
                         mevedel-view-native--failed
-                        (seq-take (cons (copy-sequence (cdr spec)) mevedel-view-native--failed) 8)))
+                        (seq-take (cons refused mevedel-view-native--failed) 8)))
                 (if (or failed (not candidates))
                     (dolist (handle (delete-dups (append opened (mapcar #'caddr candidates))))
                       (mevedel-view-native--close handle))

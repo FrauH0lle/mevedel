@@ -488,9 +488,11 @@ reported once per session in the echo area, naming the next step; the internal
 retries. Labels that contain characters XML
 cannot carry, such as control characters from tool arguments, change width once
 escaped, so they keep the ordinary renderer. An error or a refused surface
-hands only that label back to text animation, closing its own surfaces, and
-it stays there until its label changes or animation stops: retrying reopened
-the surfaces before it on every semantic update.
+hands only that label back to text animation, closing its own surfaces;
+retrying reopened the surfaces before it on every semantic update. A refused
+surface is tried again once its font, colors or geometry change; a label whose
+preparation signaled stays with text until it changes or animation stops. A
+row not yet laid out (reporting no height) is not placed, rather than refused.
 
 The presenter matches the frame's opaque window ID against live GTK toplevels;
 it never dereferences that ID. Native ownership includes three bounded pixel
