@@ -89,7 +89,7 @@ ROOT is the package and user directory; PATH is where the prebuilt goes."
     (should (equal path (mevedel-native--verified-prebuilt)))))
 
 (mevedel-deftest mevedel-native-install
-  (:doc "Writes and loads a download only after it matches its pin.")
+  (:doc "Writes and loads a download only after it matches its pin, once.")
   (progn
     (mevedel-native-test--with-prebuilt "module bytes"
       (let (loaded urls)
@@ -108,7 +108,13 @@ ROOT is the package and user directory; PATH is where the prebuilt goes."
               (mevedel-native-install))
             (should (string-search "installed" messages)))
           (should (equal (list path) loaded))
-          (should (eq 'ready mevedel-native--load-state)))))
+          (should (eq 'ready mevedel-native--load-state))
+          ;; A loaded module is never joined by a second one.
+          (let (messages)
+            (mevedel-test--with-captured-diagnostics messages
+              (mevedel-native-install))
+            (should (string-search "next Emacs session" messages)))
+          (should (equal (list path) loaded)))))
     (mevedel-native-test--with-tree '(("a.c" . "unpinned"))
       (should-error (mevedel-native-install) :type 'user-error))))
 

@@ -509,8 +509,8 @@ running Emacs (its prefix's `include` directory or its build tree) before the
 compiler's default path, and does not treat warnings as errors, so newer headers
 cannot disable the module. `mevedel-view-native-enabled` disables the
 presenter; unsupported displays or build/placement failures retain ordinary
-text animation. A cached local build is loaded first, then a downloaded
-prebuilt module, then a new local build. `mevedel-native-install` downloads the
+text animation. A downloaded prebuilt module that matches its pin is loaded
+first, then a cached local build, then a new local build. `mevedel-native-install` downloads the
 prebuilt module for the current source revision and architecture from the
 project's GitHub release `native-HASH` (HASH is the first 16 hex digits of the
 SHA-256 of `native/*.c` concatenated in byte order) and loads it only when
@@ -518,7 +518,7 @@ its SHA-256 matches `native/prebuilt.eld`. The sources share no header, so
 package recipes that list `native/*.c` build it. CI
 (`.github/workflows/native.yml`) builds the x86_64 and aarch64 modules on
 Ubuntu 22.04 against its older `emacs-module.h`, so they load into any newer
-Emacs and glibc 2.27 or later, and records their checksums there. A failure is
+Emacs and glibc 2.34 or later, and records their checksums there. A failure is
 reported once per session in the echo area, naming the next step; the internal
 `mevedel-native--load-state` retains its reason, and setting it to nil
 retries. Labels that contain characters XML

@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: native-module
@@ -50,6 +50,9 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    # Only this job publishes; the builds run third-party code.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
@@ -61,15 +64,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          hash=$(LC_ALL=C ls native/*.c | LC_ALL=C sort | xargs cat | sha256sum | cut -c1-16)
+          source_hash() { LC_ALL=C ls native/*.c | LC_ALL=C sort | xargs cat | sha256sum | cut -c1-16; }
+          hash=$(source_hash)
           tag="native-$hash"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag exists; its pinned modules stand."
+          # Pin onto the current master; newer sources are a later run's.
+          git pull --rebase origin master
+          if [ "$(source_hash)" != "$hash" ]; then
+            echo "Sources changed since $hash; a later run pins them."
             exit 0
           fi
-          gh release create "$tag" --title "Native module $hash" \
-            --notes "Prebuilt native modules for source $hash." \
-            dist/mevedel-native-*.so
+          if grep -q "\"$hash\"" native/prebuilt.eld; then
+            echo "Source $hash is pinned."
+            exit 0
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # An earlier run published but lost its push: pin what it published.
+            rm -rf dist && mkdir dist
+            gh release download "$tag" --dir dist --pattern 'mevedel-native-*.so'
+            (cd dist && for file in mevedel-native-*.so; do sha256sum "$file" > "$file.sha256"; done)
+          else
+            gh release create "$tag" --title "Native module $hash" \
+              --notes "Prebuilt native modules for source $hash." \
+              dist/mevedel-native-*.so
+          fi
           entry="(\"$hash\""
           for file in dist/mevedel-native-*.so.sha256; do
             arch=$(basename "$file" .so.sha256 | sed 's/^mevedel-native-//')
@@ -81,7 +98,6 @@ jobs:
           path = pathlib.Path("native/prebuilt.eld")
           lines = path.read_text().splitlines()
           head = [line for line in lines if line.startswith(";;")]
-          body = "\n".join(line for line in lines if not line.startswith(";;")).strip()
           # Only the current source's entry is kept: older revisions of
           # mevedel ship their own pins.
           path.write_text("\n".join(head) + "\n(" + sys.argv[1] + ")\n")

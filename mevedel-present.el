@@ -42,8 +42,7 @@ text animation runs at the power-aware frame rate instead of 8 fps."
   "Enable cheaper presentation once, when FRAME is a PGTK frame.
 Return non-nil when it is active."
   (when (and mevedel-present-enabled (not mevedel-present--state)
-             (not noninteractive) (eq (framep frame) 'pgtk)
-             (fboundp 'module-load) module-file-suffix)
+             (not noninteractive) (eq (framep frame) 'pgtk))
     (setq mevedel-present--state
           (if (mevedel-native-load)
               (let ((result (mevedel-present--enable)))

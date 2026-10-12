@@ -5,17 +5,16 @@
 ;; mevedel's optional native module serves PGTK frames on Wayland: cheaper
 ;; presentation (`mevedel-present') and independent animation surfaces
 ;; (`mevedel-view-native').  Every C source under native/ builds into one
-;; library, without shared headers: package recipes list native/*.c.  Loading prefers a cached local build, then a prebuilt download
-;; that matches the checksum pinned in native/prebuilt.eld, then a new local
-;; build.  A failure is reported once per session.
+;; library, without shared headers: package recipes list native/*.c.
+;; Loading prefers a downloaded prebuilt module that matches the checksum
+;; pinned in native/prebuilt.eld, then a cached local build, then a new
+;; local build.  A failure is reported once per session.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-structs)
 (require 'mevedel-utilities)
-
-;; `mevedel-structs'
-(defvar mevedel-user-dir)
 
 ;; `url'
 (declare-function url-retrieve-synchronously "url" (url &optional silent inhibit-cookies timeout))
@@ -137,10 +136,12 @@ Without it, PGTK presentation and animation cost several times the CPU."
 
 (defun mevedel-native-load ()
   "Load the optional native module once, at its first use.
-A cached local build comes first, then a verified prebuilt download, then
+A verified prebuilt download comes first, then a cached local build, then
 a new local build.  A failure is reported once and not retried.  Return
-non-nil when the module is loaded."
-  (unless mevedel-native--load-state
+non-nil when the module is loaded; an Emacs without module support never
+tries."
+  (when (and (fboundp 'module-load) module-file-suffix
+             (not mevedel-native--load-state))
     (setq mevedel-native--load-state
           (condition-case err
               (progn
@@ -172,7 +173,8 @@ non-nil when the module is loaded."
 (defun mevedel-native-install ()
   "Download the prebuilt native module for this system and load it.
 For systems without a C compiler or the GTK 3/Wayland development files.
-The download must match the checksum pinned in mevedel's source."
+The download must match the checksum pinned in mevedel's source.  With a
+module already loaded, the download loads in the next session."
   (interactive)
   (let ((pin (or (mevedel-native--pin)
                  (user-error "No prebuilt module for %s at this mevedel revision"
@@ -191,10 +193,14 @@ The download must match the checksum pinned in mevedel's source."
               (write-region data nil temporary nil 'silent)
               (rename-file temporary path t))
           (when (file-exists-p temporary) (delete-file temporary)))))
-    (setq mevedel-native--load-state nil)
-    (if (mevedel-native-load)
-        (message "Native module installed")
-      (user-error "Native module did not load: %s" mevedel-native--load-state))))
+    (cond
+     ;; A second module would run beside the loaded one, whose surfaces and
+     ;; hooks it cannot see.
+     ((eq mevedel-native--load-state 'ready)
+      (message "Native module installed; it loads in the next Emacs session"))
+     ((progn (setq mevedel-native--load-state nil) (mevedel-native-load))
+      (message "Native module installed"))
+     (t (user-error "Native module did not load: %s" mevedel-native--load-state)))))
 
 (provide 'mevedel-native)
 ;;; mevedel-native.el ends here

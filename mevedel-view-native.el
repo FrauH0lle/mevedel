@@ -140,7 +140,6 @@ covers through its own translucency."
   (and mevedel-view-native-enabled (not noninteractive)
        (eq (framep frame) 'pgtk) (not (frame-parent frame))
        (mevedel-view-native--opaque-p frame)
-       (fboundp 'module-load) module-file-suffix
        (mevedel-native-load)
        (mevedel-view-native--supported-p (frame-parameter frame 'window-id))))
 
