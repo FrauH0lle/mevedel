@@ -30,6 +30,7 @@
 (require 'mevedel-transcript)
 (require 'mevedel-transport)
 (require 'mevedel-utilities)
+(require 'mevedel-view-animation)
 (require 'mevedel-view-zone)
 
 ;; `browse-url'
@@ -289,7 +290,6 @@
                   "mevedel-view-stream" (&optional resumed))
 (declare-function mevedel-view--recheck-spinner-after-redisplay "mevedel-view-stream" ())
 (declare-function mevedel-view--spinner-active-p "mevedel-view-stream" ())
-(declare-function mevedel-view--content-tick "mevedel-view-stream" ())
 (declare-function mevedel-view-stream--schedule-execution-row-recovery
                   "mevedel-view-stream" (data-buffer tool-use-id))
 
@@ -1284,9 +1284,7 @@ changes: size, wrapping, text scale, line spacing or font."
   (let ((key (list (current-buffer)
                    ;; Animation frames rewrite display properties but move
                    ;; nothing a header depends on.
-                   (if (fboundp 'mevedel-view--content-tick)
-                       (mevedel-view--content-tick)
-                     (buffer-modified-tick))
+                   (mevedel-view--content-tick)
                    buffer-invisibility-spec (window-start window)
                    (mevedel--window-text-layout window)
                    (mevedel-view--input-marker-position)))

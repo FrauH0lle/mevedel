@@ -335,9 +335,11 @@ checks from inside redisplay for ordinary text animation. The native presenter
 also validates pixel placement at semantic boundaries: it covers only a fully
 visible, single-line span with matching font geometry. If any window showing
 part of the label cannot host it, ordinary animation continues for that target.
-A local pre-redisplay guard hides stale native pixels after text, geometry or
-cursor/selection changes. There is no per-frame Lisp callback and no
-horizontal/pixel-scroll primitive observer.
+A local pre-redisplay guard hides stale native pixels after text, text
+property (decorative frames aside), overlay, invisibility, wrapping, geometry
+or cursor/selection changes, and replaces a surface the module closed itself
+(its frame unmapped or changed scale, or drawing failed). There is no
+per-frame Lisp callback and no horizontal/pixel-scroll primitive observer.
 
 The elapsed suffix uses the same range check and retains its once-per-second
 semantic refresh independently of decorative motion. Focus, window and normal
@@ -392,9 +394,13 @@ breathe and bounce use a continuous 3.6-second cycle sampled at at most 8 fps.
 Breathe starts at normal foreground, fades toward the background, and returns;
 bounce moves a faded band over otherwise normal text. Prepared frames are
 cached with a bounded animated prefix so long labels remain readable. Color
-resolution honors buffer-local face remapping, including the background painted
-by native surfaces, so indicators blend into views styled by Solaire or buffer
-faces. Prepared banks distinguish each view's remapping specs. A live view reserves a prepared bank for every registered tool label, including
+resolution honors the view's buffer-local face remapping, also while the
+frame's selected window shows another buffer, so indicators blend into views
+styled by Solaire or buffer faces. A native surface paints the background
+redisplay draws at the label's start: overlay faces for every window or for
+that window (such as `hl-line`), then text faces, then the remapped default.
+Translucent frames (`alpha` or `alpha-background` below opaque) keep ordinary
+text animation, since an opaque box would show there. Prepared banks distinguish each view's remapping specs. A live view reserves a prepared bank for every registered tool label, including
 the overflow row, plus the main label (with a four-bank minimum). This working
 set is bounded by the visible-tool row cap and retained independently of the
 shared six-bank reuse cache, so other views cannot evict active frames. The
@@ -481,8 +487,10 @@ reported once per session in the echo area, naming the next step; the internal
 `mevedel-view-native--load-state` retains its reason, and setting it to nil
 retries. Labels that contain characters XML
 cannot carry, such as control characters from tool arguments, change width once
-escaped, so they keep the ordinary renderer; an error while placing surfaces
-closes those already opened and hands every target back to text animation.
+escaped, so they keep the ordinary renderer. An error or a refused surface
+hands only that label back to text animation, closing its own surfaces, and
+it stays there until its label changes or animation stops: retrying reopened
+the surfaces before it on every semantic update.
 
 The presenter matches the frame's opaque window ID against live GTK toplevels;
 it never dereferences that ID. Native ownership includes three bounded pixel
@@ -492,7 +500,12 @@ parents release native work. Cursor/selection overlap, child frames, clipping,
 wrapping and incompatible font metrics retain the ordinary text renderer.
 Creation and movement keep the child surface synchronized until a parent frame
 callback confirms that its position has been committed. Only then do native
-frames run independently, preventing a brief image at the initial `(0, 0)`.
+frames run independently, preventing a brief image at the initial `(0, 0)`. A
+move while that callback is pending waits for the commit carrying the new
+position instead, so frames never run free at the old one. When a Wayland
+display closes, the module closes its surfaces and releases that display's
+globals; a later display binds its own. `test/test-mevedel-view-native-wayland.el`
+exercises the module on a headless nested KWin where one is installed.
 
 Projection writers inhibit redisplay while deleting and reconstructing rows.
 Native synchronization coalesces to their latest intent at the parent redisplay

@@ -39,42 +39,11 @@ unattended render timers were reduced for this (ADR 0119; `telemetry.md`,
 `tools.md` and `sessions.md` for the heartbeat, Bash and collection). Still
 open:
 
-- Investigate animation presentation cost on non-PGTK displays before adding
-  another native backend. They keep the accepted 8-fps breathe/bounce and
-  half-speed glyph cadences; native surfaces cover PGTK/Wayland only.
-  Burst-and-pause glyph variants were rejected.
-- The whole-surface repaint itself is an Emacs pgtk behavior worth reporting
-  upstream.
 - Streaming still costs 16-23% editor CPU after read pacing (ADR 0119), for
   gptel and Claude Code alike, mostly the per-wakeup pgtk presentation of the
   0.4-second cycle. An upstream pgtk fix (draw only damaged areas) would help
   every case. The measured Claude Code chunk rates come from a scripted peer;
   check a real adapter's rate and burst sizes.
-- Native surfaces recheck placement only when their layout inputs change;
-  invisibility or overlay changes that leave the character tick alone keep a
-  stale position until the next edit, scroll or resize.
-
-### Animation and native presenter follow-ups
-
-- The native surface paints the frame's default background, ignoring
-  buffer-local face remapping, `hl-line` and `alpha-background`; such rows
-  show a mismatched box.
-- The C module caches the Wayland display and globals for the session and
-  never resets them when that display closes (daemon, `delete-terminal`).
-  Reset on the GDK display's `closed` signal.
-- A native surface the module closes itself (unmap, scale change, cairo
-  failure) stays excluded from Lisp ticks until the view's next semantic
-  update; with only pending-tool rows and no status label nothing triggers
-  one.
-- A move while the previous position callback is pending can show one or two
-  frames at the old position.
-- Native placement, geometry translation and the C module have no automated
-  coverage beyond mocks; their earlier lab scripts were machine-local working
-  material, not part of the repository.
-- A label whose native placement or timeline keeps failing reopens and closes
-  the surfaces of the labels before it on each semantic update (about once a
-  second). Remember failing signatures until the label changes.
-
 
 ## Request lifecycle
 

@@ -21,6 +21,7 @@ struct pixels {
 };
 struct sample {double at; PangoLayout *layout;};
 struct animation {
+  struct animation *next, *prev;
   int closed, counted, width, height, scale, ascent, x, y, previous;
   size_t bytes;
   double cycle, epoch, displayed;
@@ -40,6 +41,8 @@ static struct wl_compositor *compositor;
 static struct wl_subcompositor *subcompositor;
 static struct wl_shm *shm;
 static unsigned long active, submitted, released, dropped;
+/* Open surfaces, closed with their display. */
+static struct animation *live;
 
 static int exited(emacs_env *env) {
   return env->non_local_exit_check(env) != emacs_funcall_exit_return;
@@ -66,11 +69,13 @@ static void registry_remove(void *data, struct wl_registry *registry, uint32_t n
   (void)data;(void)registry;(void)name;
 }
 static const struct wl_registry_listener registry_listener={registry_add,registry_remove};
+static void display_closed(GdkDisplay *gdk, gboolean is_error, gpointer data);
 static int connect_display(GdkDisplay *gdk) {
   if (!GDK_IS_WAYLAND_DISPLAY(gdk)) return 0;
   struct wl_display *candidate=gdk_wayland_display_get_wl_display(gdk);
   if (display) return candidate==display && compositor && subcompositor && shm;
   display=candidate;
+  g_signal_connect(gdk,"closed",G_CALLBACK(display_closed),NULL);
   struct wl_registry *registry=wl_display_get_registry(display);
   if (!registry) return 0;
   wl_registry_add_listener(registry,&registry_listener,NULL);
@@ -129,8 +134,24 @@ static void close_animation(struct animation *a) {
     for (ptrdiff_t i=0;i<a->count;i++) if (a->samples[i].layout) g_object_unref(a->samples[i].layout);
     free(a->samples);a->samples=NULL;
   }
-  if (a->counted) {active--;a->counted=0;}
+  if (a->counted) {
+    active--;a->counted=0;
+    if (a->prev) a->prev->next=a->next; else live=a->next;
+    if (a->next) a->next->prev=a->prev;
+    a->next=a->prev=NULL;
+  }
   if (display) wl_display_flush(display);
+}
+/* GDK emits this before disconnecting, so the proxies are still valid.  A
+   later display, after a daemon's terminal closed, binds its own globals. */
+static void display_closed(GdkDisplay *gdk, gboolean is_error, gpointer data) {
+  (void)is_error;(void)data;
+  if (!GDK_IS_WAYLAND_DISPLAY(gdk) || gdk_wayland_display_get_wl_display(gdk)!=display) return;
+  while (live) close_animation(live);
+  if (compositor) wl_compositor_destroy(compositor);
+  if (subcompositor) wl_subcompositor_destroy(subcompositor);
+  if (shm) wl_shm_destroy(shm);
+  compositor=NULL;subcompositor=NULL;shm=NULL;display=NULL;
 }
 static void finalize(void *data) {close_animation(data);free(data);}
 static void parent_unavailable(GtkWidget *widget, gpointer data) {
@@ -161,13 +182,15 @@ static int place(struct animation *a, int x, int y) {
      child first would briefly show it at (0, 0), or at its old position. */
   wl_subsurface_set_sync(a->subsurface);
   wl_subsurface_set_position(a->subsurface,sx,sy);
-  if (!a->positioned) {
-    struct wl_surface *parent=gdk_wayland_window_get_wl_surface(gtk_widget_get_window(a->parent));
-    if (!parent) return 0;
-    a->positioned=wl_surface_frame(parent);
-    if (!a->positioned) return 0;
-    wl_callback_add_listener(a->positioned,&position_listener,a);
-  }
+  /* A callback still pending belongs to an earlier parent commit, which may
+     carry the old position: desynchronizing on it would present samples
+     there.  Wait for the commit that carries this one instead. */
+  if (a->positioned) {wl_callback_destroy(a->positioned);a->positioned=NULL;}
+  struct wl_surface *parent=gdk_wayland_window_get_wl_surface(gtk_widget_get_window(a->parent));
+  if (!parent) return 0;
+  a->positioned=wl_surface_frame(parent);
+  if (!a->positioned) return 0;
+  wl_callback_add_listener(a->positioned,&position_listener,a);
   a->x=x;a->y=y;
   /* Subsurface positions apply with the next parent commit. */
   gtk_widget_queue_draw(fixed);
@@ -321,6 +344,7 @@ static emacs_value open_animation(emacs_env *env, ptrdiff_t nargs, emacs_value *
   a->scale_hook=g_signal_connect(a->parent,"notify::scale-factor",G_CALLBACK(scale_changed),a);
   a->focus_hook=g_signal_connect(a->parent,"notify::is-active",G_CALLBACK(focus_changed),a);
   a->counted=1;active++;a->previous=-1;
+  a->next=live;if (live) live->prev=a;live=a;
   free(id);free(font);free(background);
   pango_font_description_free(description);g_object_unref(context);
   tick(a);
@@ -353,6 +377,11 @@ static emacs_value stop_animation(emacs_env *env, ptrdiff_t nargs, emacs_value *
   if (!exited(env)) close_animation(a);
   return nil(env);
 }
+static emacs_value live_p(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data) {
+  (void)nargs;(void)data;
+  struct animation *a=handle(env,args[0]);
+  return env->intern(env,!exited(env) && a && !a->closed?"t":"nil");
+}
 static emacs_value sample_seconds(emacs_env *env, ptrdiff_t nargs, emacs_value *args, void *data) {
   (void)nargs;(void)data;
   struct animation *a=handle(env,args[0]);
@@ -377,6 +406,7 @@ int emacs_module_init(struct emacs_runtime *runtime) {
     {"mevedel-view-native--open",6,open_animation,"Present a timed styled-text sequence."},
     {"mevedel-view-native--move",3,move_animation,"Move a live surface; nil means it was closed."},
     {"mevedel-view-native--close",1,stop_animation,"Close a surface and release its timer and buffers."},
+    {"mevedel-view-native--live-p",1,live_p,"Whether a surface is still presenting; the module closes some itself."},
     {"mevedel-view-native--sample",1,sample_seconds,"Return the elapsed time of the last submitted sample."},
     {"mevedel-view-native--stats",0,statistics,"Return active, submitted, released and dropped counts."}
   };

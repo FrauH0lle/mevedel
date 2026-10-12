@@ -588,26 +588,6 @@ FACE defaults to `mevedel-view-spinner'."
       (mevedel-view--request-progress-visible-p)
       (mevedel-view--request-progress-active-p)))
 
-(defvar-local mevedel-view--decorative-tick nil
-  "(TICK . CONTENT) after the latest decorative display write.
-TICK is `buffer-modified-tick' right after it; CONTENT is the tick of the
-last change that was not decorative.")
-
-(defun mevedel-view--content-tick ()
-  "Return the buffer's modification tick, discounting decorative frames.
-Every animation frame rewrites a display property, which advances
-`buffer-modified-tick'; caches keyed on the tick, such as header-line
-answers, must not be invalidated by frames that change only a color."
-  (if (eql (buffer-modified-tick) (car mevedel-view--decorative-tick))
-      (cdr mevedel-view--decorative-tick)
-    (buffer-modified-tick)))
-
-(defun mevedel-view--put-decorative-display (start end value)
-  "Set START..END's display to animation frame VALUE as a decorative write."
-  (let ((content (mevedel-view--content-tick)))
-    (put-text-property start end 'display value)
-    (setq mevedel-view--decorative-tick (cons (buffer-modified-tick) content))))
-
 (defun mevedel-view--release-animation-targets (&rest targets)
   "Detach the markers of every (START . END) span in TARGETS.
 Spans are recaptured on every semantic render, about once a second for

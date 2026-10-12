@@ -1506,3 +1506,81 @@ process output in one callback while a sibling falls due. The host timer object
 is reused rather than recreated, so a tick without a wait creates no timer:
 1 member, 3.5 µs and two activations per tick against 2.9 µs, one creation and
 one activation before; 5 members, 7.9 µs against 8.0 µs.
+
+### October 2026: other displays need no native presenter
+
+Native surfaces cover pgtk only, so the cost on other displays was measured
+before considering another backend. In a headless nested KWin (6.7, a
+3200x2000 output at 2x), an `emacs -Q` frame of 1568x884 logical pixels ran
+Emacs 31.1 pgtk and the same release built for X with GTK 3 under Xwayland.
+Editor CPU, pgtk against X: idle 1.2% and 0.1%; a no-op 10-Hz timer 14.5% and
+0.2%; an 8-fps color change on an 11-character label 11.9% and 0.1%; the same
+at 30 fps 41.1% and 3.0%, with the compositor at 16.9% and 2.0%. The nested
+pgtk figures match the desktop session's (15.6% for the 10-Hz timer). The X
+build's `frame_up_to_date` flips only a frame that needs it and draws only
+damaged glyphs, so ordinary text animation costs little there. No native
+backend is planned for it. The 8-fps breathe/bounce ceiling and half-speed
+glyphs, accepted to bound pgtk's cost, also apply under X, where they save
+little; raising them there was left out because the measured setups run pgtk.
+Measurements of presentation need a presenting compositor: a locked session
+turns its outputs off, and the same probes then cost nothing on pgtk too.
+
+### October 2026: native surfaces follow layout, background and their own lifecycle
+
+Several native gaps were found by review rather than reported. Placement was
+rechecked only when the character tick, window geometry or remapping changed,
+so a disclosure toggled by text properties, an overlay hiding or inserting
+text, or a changed invisibility spec left a surface at its old position until
+the next edit or scroll. The layout key now also holds the content tick (text
+properties without decorative frames), the invisibility spec and the
+extent and hiding or inserting properties of overlays between the window start
+and the last surface. Overlay edits change no Lisp-visible tick; Emacs's own
+overlay counter is internal.
+
+The surface painted the frame's default background through the remapping of
+whichever buffer the frame's selected window showed, since selecting a frame
+makes that buffer current. It now paints the background redisplay draws at the
+label's start: overlay faces for every window or for that window (`hl-line`
+among them) by priority, then text faces, then the view's remapped default.
+Translucent frames keep ordinary text animation: an opaque box would show over
+their translucent text, and a translucent one would show the text it covers.
+
+The module closes a surface itself when its frame unmaps or changes scale, or
+drawing fails, and Lisp noticed only at its next semantic update; tool rows
+without an elapsed-time label might never have one. The pre-redisplay guard
+now asks the module whether each surface is live, which a redisplay after
+remapping or rescaling reaches. A Wayland display that closes closes its
+surfaces and drops the cached globals, which otherwise pointed into a
+disconnected display; GDK emits `closed` before disconnecting, so the
+proxies are still valid then. This path is a safeguard, not exercised end to
+end: pgtk keeps a display's terminal when its last frame is deleted, a lost
+connection exits Emacs, and an Emacs 31.1 pgtk daemon aborted on
+`delete-terminal` for a frame that had been displayed or unmapped, with or
+without the module. A move while the position
+callback of an earlier move was pending kept that callback, which belongs to a
+parent commit that may still carry the old position, so samples could run
+free there; each move now waits for a callback requested after it. An error or
+refused surface for one label closed every surface opened before it, and the
+next semantic update reopened them all, about once a second; such a label now
+falls back alone and stays with text until it changes or animation stops.
+
+A profile of a streamed request (in the harness of the next entries) put
+10-13% of samples in native placement: two `posn-at-point` walks from the
+window start per check, and a second check in the same pre-redisplay right
+after presenting had placed every surface. The check is now skipped after
+presenting, and the label's end is measured with one screen line of
+`vertical-motion` and `window-text-pixel-size` instead of a second walk, 0.7
+ms of a 1.2-ms placement. Placement fell from 160 to 60 of about 1,250
+samples; editor CPU from 12.0% to 10.9% at 8 chunks a second and from 13.0%
+to 12.0% at 32 (three interleaved rounds each).
+
+These paths had only mocked coverage. An integration test now runs the module
+in a pgtk daemon against a headless nested KWin when `kwin_wayland` is
+installed (it is skipped elsewhere, including CI). It opens a surface, moves it
+twice before its position callback, moves it with text and an invisible
+overlay above, closes it behind Lisp's back and requires the next redisplay
+to replace it, and checks the Wayland trace for the translated position and
+for desynchronizing only after a parent callback requested since the last
+move. Restoring the previous move, liveness or overlay behavior each fails it.
+`x-focus-frame` also aborted that daemon, so it relies on the compositor
+focusing new windows.

@@ -118,6 +118,27 @@ also retries a fallback bank when a frame gains color support."
 (add-hook 'enable-theme-functions #'mevedel-view-animation-invalidate)
 (add-hook 'disable-theme-functions #'mevedel-view-animation-invalidate)
 
+(defvar-local mevedel-view--decorative-tick nil
+  "(TICK . CONTENT) after the latest decorative display write.
+TICK is `buffer-modified-tick' right after it; CONTENT is the tick of the
+last change that was not decorative.")
+
+(defun mevedel-view--content-tick ()
+  "Return the buffer's modification tick, discounting decorative frames.
+Every animation frame rewrites a display property, which advances
+`buffer-modified-tick'; caches keyed on the tick, such as header-line
+answers and native surface placement, must not be invalidated by frames
+that change only a color."
+  (if (eql (buffer-modified-tick) (car mevedel-view--decorative-tick))
+      (cdr mevedel-view--decorative-tick)
+    (buffer-modified-tick)))
+
+(defun mevedel-view--put-decorative-display (start end value)
+  "Set START..END's display to animation frame VALUE as a decorative write."
+  (let ((content (mevedel-view--content-tick)))
+    (put-text-property start end 'display value)
+    (setq mevedel-view--decorative-tick (cons (buffer-modified-tick) content))))
+
 (defun mevedel-view-animation-sweep-phase (seconds)
   "Return seconds into the shimmer sweep at animation SECONDS, or nil at rest."
   (let ((since (- seconds mevedel-view-animation--sweep-delay)))
@@ -183,16 +204,20 @@ animation; use the glyph fallback instead of scheduling invisible frames."
       (when (and (display-color-p frame)
                  (or (display-graphic-p frame)
                      (>= (or (display-color-cells frame) 0) 256)))
-        (with-selected-frame (or frame (selected-frame))
-          (let* ((attributes (face-attributes-as-vector (list face 'default)))
-                 (foreground (aref attributes
-                                   (cl-position :foreground internal-lisp-face-attributes)))
-                 (background (aref attributes
-                                   (cl-position :background internal-lisp-face-attributes))))
-            (when (and (stringp foreground) (stringp background)
-                       (color-name-to-rgb foreground frame)
-                       (color-name-to-rgb background frame))
-              (cons foreground background)))))
+        (let ((buffer (current-buffer)))
+          (with-selected-frame (or frame (selected-frame))
+            ;; Selecting a frame makes its selected window's buffer current;
+            ;; the remapping that applies is the caller's.
+            (with-current-buffer buffer
+              (let* ((attributes (face-attributes-as-vector (list face 'default)))
+                     (foreground (aref attributes
+                                       (cl-position :foreground internal-lisp-face-attributes)))
+                     (background (aref attributes
+                                       (cl-position :background internal-lisp-face-attributes))))
+                (when (and (stringp foreground) (stringp background)
+                           (color-name-to-rgb foreground frame)
+                           (color-name-to-rgb background frame))
+                  (cons foreground background)))))))
     (error nil)))
 
 (defun mevedel-view-animation--palette (foreground background &optional frame)
