@@ -447,7 +447,19 @@ together; a test flushes at once instead of waiting for the pair."
         (mevedel-gptel-stream-bridge-test--batch-falls-due process)
         (should-error (mevedel-gptel-stream-bridge--flush-batch-due info))
         (should rendered)
-        (should-not mevedel-transport--paused)))))
+        (should-not mevedel-transport--paused))))
+
+  :doc "continues every stream when batching was turned off meanwhile"
+  (mevedel-gptel-stream-bridge-test--with-paced-stream
+    (cl-labels ((orig (&rest _) nil))
+      (mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
+       #'orig "chunk" info)
+      (mevedel-gptel-stream-bridge--note-stream-start process)
+      (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
+      (should (memq process mevedel-transport--paused))
+      (let ((mevedel-gptel-stream-bridge-insert-batch-delay nil))
+        (mevedel-gptel-stream-bridge--flush-batch-due info))
+      (should-not mevedel-transport--paused))))
 
 (mevedel-deftest mevedel-gptel-stream-bridge-after-flush ()
   ,test

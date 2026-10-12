@@ -311,8 +311,10 @@ render keeps its pending kind without running. Skipped tool-row refreshes
 retain each changed tool-use ID once; focus return reads the latest progress
 or terminal state and refreshes those rows. An incremental render also drains
 these row updates, including executions before its live tail. A full render
-subsumes them. A turn that settles or stops projects only its own range, so
-it keeps the pending IDs for their own refresh; view teardown discards them.
+subsumes them. A turn that settles, stops or begins projects only its own
+range, so it keeps the pending IDs for their own refresh, and a pending full
+render, such as a Goal checkpoint's before its continuation turn, still runs;
+view teardown discards them.
 Focus returning to a frame
 (`after-focus-change-function`) or a window redisplaying the buffer
 (`window-buffer-change-functions`) reschedules the pending render.  A view
@@ -493,7 +495,7 @@ redraws one pixel of its frame, enough for the parent commit that applies the
 position. The module refuses, with a
 reason kept in `mevedel-present--state`, on displays other than Wayland,
 architectures other than x86_64 and aarch64, and executables that do not
-import every redirected call or that import a drawing call it does not track
+import the calls it requires or that import a drawing call it does not track
 (`cairo_show_text`, `cairo_paint_with_alpha` and the like). While it is active,
 text breathe/bounce use the power-aware ceiling instead of 8 fps.
 `test/test-mevedel-present-wayland.el` checks the protocol on a headless nested

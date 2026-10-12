@@ -221,7 +221,8 @@ One timer pass inserts, renders and continues the paced curl or Claude
 Code adapter process: its own resume timer, due at another time, would
 cost one more redisplay per batch.  The stream feeding this batch was
 paused for the batch delay when the batch began, so the flush continues
-processes due within half that delay.  Continuing every paused stream
+processes due within half that delay, or 100 ms: the Claude Code adapter
+stays stopped 50 ms past its batch.  Continuing every paused stream
 read each of N concurrent streams N times per delay; a stream continued
 early falls in step with this one, sharing its passes from then on."
   (let ((after (list nil)))
@@ -233,8 +234,9 @@ early falls in step with this one, sharing its passes from then on."
             (funcall function)
           (error (message "mevedel: stream batch follow-up failed: %s"
                           (error-message-string err)))))
-      (mevedel-transport-resume-paused
-       (/ mevedel-gptel-stream-bridge-insert-batch-delay 2.0)))))
+      (let ((delay mevedel-gptel-stream-bridge-insert-batch-delay))
+        (mevedel-transport-resume-paused
+         (and (numberp delay) (> delay 0) (max (/ delay 2.0) 0.1)))))))
 
 (defun mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch (info)
   "Flush any pending batched string stream insert on INFO."

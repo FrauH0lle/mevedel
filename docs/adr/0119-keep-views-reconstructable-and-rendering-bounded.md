@@ -1615,7 +1615,8 @@ the batch is inserted, through `mevedel-gptel-stream-bridge-after-flush`, and
 continues the paced process feeding it (curl or the Claude Code adapter); its
 resume timer remains the fallback when nothing is queued. The read that paused
 that process started the batch, so the flush continues every process due to
-continue within half a batch delay. Continuing every paused process instead
+continue within half a batch delay, at least 100 ms to cover the adapter's
+50 ms margin. Continuing every paused process instead
 read each of N concurrent streams, such as parallel agents, N times per batch
 delay; a stream continued early now falls in step with the one flushing, and
 the two share their passes from then on. A flush that fails still renders and
@@ -1670,8 +1671,8 @@ stay current there: Emacs runs `gtk_main_iteration` itself while waiting for a
 frame's map event, so a Lisp thread showing a frame painted with the context
 still current on the main thread and segfaulted (exit 139). Every dispatch and
 iteration now releases the context, so GDK makes it current on whichever
-thread paints; at a 30 Hz change editor CPU was 6.1-6.2% with and without the
-release. Stock pgtk itself hangs when a thread shows a frame after another
+thread paints; at a 30 Hz change editor CPU was 6.0-6.2% with the release and
+6.1-6.2% without. Stock pgtk itself hangs when a thread shows a frame after another
 thread waited in `sleep-for`, so that case is checked by hand.
 
 An Emacs patch did all three and passed mevedel's suite, but changes to Emacs
