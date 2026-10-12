@@ -1590,3 +1590,40 @@ for desynchronizing only after a parent callback requested since the last
 move. Restoring the previous move, liveness or overlay behavior each fails it.
 `x-focus-frame` also aborted that daemon, so it relies on the compositor
 focusing new windows.
+
+### October 2026: one timer pass per streamed batch
+
+A streamed batch still cost three timer passes. Emacs redisplays after each
+pass over its due timers, and `timer_check` runs only the timers that existed
+when the pass began, so the zero-delay timer that rendered a flushed batch ran
+in a second pass after a redisplay; the paced process's resume timer, due at
+its own time, added a third. The batch's timer now runs the render itself once
+the batch is inserted, through `mevedel-gptel-stream-bridge-after-flush`, and
+continues every paced process (curl and the Claude Code adapter alike); their
+resume timers remain the fallback when nothing is queued. Continuing another
+stream early only reads it once more before it pauses.
+
+In the headless nested KWin harness (Emacs 31.1 pgtk, a 1536x888 frame, native
+bounce label, a mock OpenAI-compatible stream through the real curl pacing),
+three interleaved rounds gave, in editor CPU: silent request 4.8% before this
+day's changes, 3.7% after (the lag heartbeat); 8 chunks a second 15.9%, 14.5%
+and 11.2% with this change; 32 chunks a second 16.7%, 15.7% and 12.9%.
+Compositor CPU fell from about 5.2% to 3.5%.
+
+Reading the resumed burst inside the same pass (waiting up to 15 ms for
+output) cut redisplays from about 140 to 100 per 15 s but not CPU: 11.5% and
+11.6%. Two redisplays within one frame interval share one GTK presentation, so
+the burst's own redisplay was already nearly free, as the earlier experiment
+found; it was not kept. The rest of a stream's cost is the batch's real
+change, rendered and presented about 2.5 times a second.
+
+Real Claude Code turns (Sonnet, about 900 words of prose, no tools) read the
+paced adapter about 6.2 times a second: median 700 bytes, 90th percentile
+7.5 KB, largest 19 KB after a pause. Text reaches the transcript from acp.el's
+drain, a pass after the read, so its batch fell due just after the adapter's
+own resume timer and each ran in its own pass; the adapter now stays stopped
+50 ms past the batch delay, and its flush continues it (separate resume
+passes fell from 13 per 32 batches to 3 per 46). Such a turn cost 16.5-16.8%
+editor CPU with native animation; it had run on text animation at
+19.6-22.6% while the native failure memory still keyed on the bare label.
+

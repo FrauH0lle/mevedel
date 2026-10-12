@@ -77,6 +77,9 @@ cost 59% editor CPU unpaced, 27% at 0.2 s and 17% at 0.4 s."
 Stream observers can render at once: the batch already coalesced the
 chunks.")
 
+(defvar mevedel-gptel-stream-bridge--after-flush nil
+  "Box (FUNCTIONS) for work after a batch its own timer is flushing, or nil.")
+
 (defvar mevedel-gptel-stream-bridge--insert-batching-suspended nil
   "Non-nil means nested gptel stream insert calls should not batch.")
 
@@ -199,8 +202,34 @@ chunk when that stale transformer fails."
      info :mevedel-stream-insert-timer
      (mevedel-transport-run-at-time
       mevedel-gptel-stream-bridge-insert-batch-delay
-      #'mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
-                  info))))
+      #'mevedel-gptel-stream-bridge--flush-batch-due info))))
+
+(defun mevedel-gptel-stream-bridge-after-flush (function)
+  "Call FUNCTION once the batch being flushed has been inserted.
+In the batch's own timer FUNCTION runs before that timer returns.  Emacs
+redisplays after each pass over its due timers, and a timer created during
+one runs in the next pass, so a zero-delay timer cost a second redisplay
+per batch, which pgtk presents in full.  Elsewhere FUNCTION runs from a
+zero-delay timer."
+  (if mevedel-gptel-stream-bridge--after-flush
+      (push function (car mevedel-gptel-stream-bridge--after-flush))
+    (mevedel-transport-run-at-time 0 function)))
+
+(defun mevedel-gptel-stream-bridge--flush-batch-due (info)
+  "Insert INFO's due batch, run its follow-up work and continue paced streams.
+One timer pass inserts, renders and continues the paced curl or Claude
+Code adapter processes: their own resume timers, due at other times, each
+cost one more redisplay per batch.  Continuing another stream early only
+means it is read once more before it pauses again."
+  (let ((after (list nil)))
+    (let ((mevedel-gptel-stream-bridge--after-flush after))
+      (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info))
+    (dolist (function (nreverse (car after)))
+      (condition-case-unless-debug err
+          (funcall function)
+        (error (message "mevedel: stream batch follow-up failed: %s"
+                        (error-message-string err))))))
+  (mevedel-transport-resume-paused))
 
 (defun mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch (info)
   "Flush any pending batched string stream insert on INFO."
@@ -273,11 +302,13 @@ and continue events."
   (cond
    ((mevedel-gptel-stream-bridge--stream-ended-p process)
     (mevedel-transport-resume-process process))
-   ((and (< (string-bytes output) mevedel-gptel-stream-bridge--pace-backlog-bytes)
-         (mevedel-gptel-stream-bridge--gptel-stream-info-p
-          (mevedel-gptel-stream-bridge--stream-info process)))
-    (mevedel-transport-pause-process
-     process mevedel-gptel-stream-bridge-insert-batch-delay))))
+   ((< (string-bytes output) mevedel-gptel-stream-bridge--pace-backlog-bytes)
+    (when (mevedel-gptel-stream-bridge--gptel-stream-info-p
+           (mevedel-gptel-stream-bridge--stream-info process))
+      ;; The batch's flush continues PROCESS; its own resume timer is the
+      ;; fallback when no text is queued.
+      (mevedel-transport-pause-process
+       process mevedel-gptel-stream-bridge-insert-batch-delay)))))
 
 (defun mevedel-gptel-stream-bridge--gptel-stream-cleanup-advice (orig-fn process status)
   "Call ORIG-FN after wrapping stream transformers for PROCESS.

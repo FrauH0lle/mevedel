@@ -71,6 +71,15 @@
           (mevedel-acp--pace connection process text)
           (should (memq process mevedel-transport--paused))
           (mevedel-acp--wake connection)
+          ;; The text batch, armed a pass after the read, falls due first.
+          (let ((mevedel-gptel-stream-bridge-insert-batch-delay 0.2)
+                (start (float-time)))
+            (mevedel-acp--pace connection process text)
+            (should (< 0.24 (- (float-time
+                                (timer--time (process-get process 'mevedel-transport--resume-timer)))
+                               start)
+                       0.26))
+            (mevedel-acp--wake connection))
           (should-not mevedel-transport--paused)
           (setf (mevedel-acp-state connection) 'idle)
           (mevedel-acp--pace connection process text)

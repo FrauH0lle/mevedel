@@ -14,6 +14,7 @@
           "helpers"))
 (require 'gptel)
 (require 'mevedel-gptel-stream-bridge)
+(require 'mevedel-transport)
 (require 'mevedel-structs)
 
 (defmacro mevedel-gptel-stream-bridge-test--with-data-buffer (&rest body)
@@ -382,6 +383,61 @@ gptel's sentinel through the cleanup advice."
               (mevedel-gptel-stream-bridge--pace-reading process "x")))
           (should-not signals))
       (delete-process process))))
+
+(mevedel-deftest mevedel-gptel-stream-bridge--flush-batch-due ()
+  ,test
+  (test)
+  :doc "renders and continues the stream in the batch's own timer"
+  (mevedel-gptel-stream-bridge-test--with-paced-stream
+    (let ((events nil)
+          (timers (length timer-list)))
+      (cl-labels ((orig (response _info &optional _raw)
+                    (push (list 'insert response) events)
+                    ;; What the view's stream hook does during the flush.
+                    (should mevedel-gptel-stream-bridge-flushing)
+                    (mevedel-gptel-stream-bridge-after-flush
+                     (lambda ()
+                       (should-not mevedel-gptel-stream-bridge-flushing)
+                       (push 'render events)))
+                    (mevedel-gptel-stream-bridge-after-flush
+                     (lambda () (error "Injected follow-up failure")))
+                    (mevedel-gptel-stream-bridge-after-flush
+                     (lambda () (push 'second events)))))
+        (mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
+         #'orig "chunk" info)
+        (let ((timer (plist-get info :mevedel-stream-insert-timer)))
+          (should (eq #'mevedel-gptel-stream-bridge--flush-batch-due
+                      (timer--function timer)))
+          (mevedel-gptel-stream-bridge--note-stream-start process)
+          (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
+          (should (eq 'stop (mevedel-gptel-stream-bridge-test--await-status
+                             process 'stop)))
+          (let (messages)
+            (mevedel-test--with-captured-diagnostics messages
+              (mevedel-gptel-stream-bridge--flush-batch-due info))
+            (should (string-match-p "Injected follow-up failure" messages)))
+          ;; Inserted, rendered and continued: no timer is left for any of it.
+          (should (equal '(second render (insert "chunk")) events))
+          (should-not mevedel-transport--paused)
+          (should-not (process-get process 'mevedel-transport--resume-timer))
+          (should (= timers (length timer-list)))
+          (should (eq 'run (mevedel-gptel-stream-bridge-test--await-status
+                            process 'run))))))))
+
+(mevedel-deftest mevedel-gptel-stream-bridge-after-flush ()
+  ,test
+  (test)
+  :doc "defers to a zero-delay timer outside a batch's own flush"
+  (let* ((ran nil)
+         (timer (mevedel-gptel-stream-bridge-after-flush (lambda () (setq ran t)))))
+    (unwind-protect
+        (progn
+          (should (timerp timer))
+          (should-not ran)
+          (with-timeout (2 nil)
+            (while (not ran) (accept-process-output nil 0.01)))
+          (should ran))
+      (cancel-timer timer))))
 
 (mevedel-deftest mevedel-gptel-stream-bridge--gptel-stream-filter-advice ()
   ,test

@@ -41,6 +41,9 @@
 A tool phase alternates short status text with tool frames; pausing there
 only delayed each step, by up to a pause per tool call.")
 
+(defconst mevedel-acp--pace-margin 0.05
+  "Seconds a paced agent stays stopped beyond its text batch's delay.")
+
 (defun mevedel-acp--process (connection)
   "Return CONNECTION's agent process, or nil."
   (alist-get :process (mevedel-acp-client connection)))
@@ -89,8 +92,13 @@ acp.el's sentinel ignores stop and continue events."
              (>= (process-get process 'mevedel-acp--text-reads)
                  mevedel-acp--pace-after-text-reads)
              (boundp 'mevedel-gptel-stream-bridge-insert-batch-delay))
+    ;; acp.el inserts this text from a drain one timer pass after the read,
+    ;; so the batch it starts falls due just after a pause of the same
+    ;; length, and the two would each cost a redisplay.  The batch's flush
+    ;; continues the agent; this pause only bounds a read with no text.
     (mevedel-transport-pause-process
-     process mevedel-gptel-stream-bridge-insert-batch-delay)))
+     process (+ mevedel-gptel-stream-bridge-insert-batch-delay
+                mevedel-acp--pace-margin))))
 
 (defun mevedel-acp--pace-output (connection)
   "Pace CONNECTION's agent output during turns, once per process."

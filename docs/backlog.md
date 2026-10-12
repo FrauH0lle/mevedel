@@ -27,24 +27,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   session-transfer control programs in prompt admission before it is
   inserted. Same evidence.
 
-## Editor CPU
-
-### Remaining per-wakeup costs
-
-On the measured pgtk build, Lisp/process wakeups present the whole frame surface, even
-when nothing changed: about 2% editor CPU and 1% compositor per wakeup per
-second on a 2x-scaled 1536x888 frame. The heartbeat, shimmer cadence, tool
-rows, Bash progress and watch timers, stream batching, collection pacing and
-unattended render timers were reduced for this (ADR 0119; `telemetry.md`,
-`tools.md` and `sessions.md` for the heartbeat, Bash and collection). Still
-open:
-
-- Streaming still costs 16-23% editor CPU after read pacing (ADR 0119), for
-  gptel and Claude Code alike, mostly the per-wakeup pgtk presentation of the
-  0.4-second cycle. An upstream pgtk fix (draw only damaged areas) would help
-  every case. The measured Claude Code chunk rates come from a scripted peer;
-  check a real adapter's rate and burst sizes.
-
 ## Request lifecycle
 
 ### Prevent system sleep during active requests

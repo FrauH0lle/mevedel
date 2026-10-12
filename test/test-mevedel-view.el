@@ -18,6 +18,7 @@
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-executions-list)
+(require 'mevedel-gptel-stream-bridge)
 (require 'mevedel-view)
 (require 'mevedel-view-segments)
 (require 'mevedel-view-stream)
@@ -178,7 +179,7 @@
             (should (= 1 incremental-count)))
         (mapc #'cancel-timer fake-timers))))
 
-  :doc "renders a flushed stream batch in the same wakeup"
+  :doc "renders a flushed stream batch in its own timer's pass"
   (mevedel-view-test--with-buffers
     (let ((mevedel-view-stream-render-delay 1)
           (incremental-count 0)
@@ -195,13 +196,24 @@
                    'timer))
                 ((symbol-function 'mevedel-view--render-stream-update)
                  (lambda (_data-buffer) (cl-incf incremental-count))))
+        ;; In the batch's own timer, the render joins that timer's pass.
+        (let ((after (list nil)))
+          (with-current-buffer data-buf
+            (let ((mevedel-gptel-stream-bridge-flushing t)
+                  (mevedel-gptel-stream-bridge--after-flush after))
+              (mevedel-view-stream-schedule)))
+          (should-not delays)
+          (should (= 1 (length (car after))))
+          (funcall (caar after))
+          (should (= 1 incremental-count)))
+        ;; A flush elsewhere renders from a zero-delay timer.
         (with-current-buffer data-buf
           (let ((mevedel-gptel-stream-bridge-flushing t))
             (mevedel-view-stream-schedule)))
         (should (equal delays '(0)))
-        (should (= 0 incremental-count))
+        (should (= 1 incremental-count))
         (funcall callback)
-        (should (= 1 incremental-count)))))
+        (should (= 2 incremental-count)))))
 
   :doc "defers timer flushes while a remote operation is already in flight"
   (mevedel-view-test--with-buffers

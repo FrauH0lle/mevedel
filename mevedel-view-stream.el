@@ -31,6 +31,10 @@
 (declare-function mevedel-execution-transcript-retry-pending-terminals
                   "mevedel-execution-transcript" (data-buffer))
 
+;; `mevedel-gptel-stream-bridge'
+(declare-function mevedel-gptel-stream-bridge-after-flush
+                  "mevedel-gptel-stream-bridge" (function))
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-elapsed-seconds
                   "mevedel-structs" (request &optional now))
@@ -50,11 +54,6 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-segment-bounds
                   "mevedel-tool-render-data" (tool-use-id))
-
-;; `mevedel-transport'
-(declare-function mevedel-transport-run-at-time
-                  "mevedel-transport" (seconds function &rest args))
-(autoload 'mevedel-transport-run-at-time "mevedel-transport")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--duration-label "mevedel-utilities" (seconds))
@@ -1702,11 +1701,11 @@ sooner."
       (when (and (mevedel-view-stream-in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
         (if (bound-and-true-p mevedel-gptel-stream-bridge-flushing)
-            (mevedel-transport-run-at-time
-             0 (lambda ()
-                 (when (buffer-live-p view-buf)
-                   (with-current-buffer view-buf
-                     (mevedel-view--schedule-render 'incremental data-buf 0)))))
+            (mevedel-gptel-stream-bridge-after-flush
+             (lambda ()
+               (when (buffer-live-p view-buf)
+                 (with-current-buffer view-buf
+                   (mevedel-view--schedule-render 'incremental data-buf 0)))))
           (mevedel-view--schedule-render
            'incremental data-buf mevedel-view-stream-render-delay)))))
   nil)
