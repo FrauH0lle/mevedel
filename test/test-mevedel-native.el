@@ -116,7 +116,12 @@ ROOT is the package and user directory; PATH is where the prebuilt goes."
             (should (string-search "next Emacs session" messages)))
           (should (equal (list path) loaded)))))
     (mevedel-native-test--with-tree '(("a.c" . "unpinned"))
-      (should-error (mevedel-native-install) :type 'user-error))))
+      (should-error (mevedel-native-install) :type 'user-error))
+    ;; Nothing is downloaded for an Emacs that cannot load it.
+    (let ((module-file-suffix nil))
+      (cl-letf (((symbol-function 'mevedel-native--download)
+                 (lambda (_url) (error "Downloaded"))))
+        (should-error (mevedel-native-install) :type 'user-error)))))
 
 (mevedel-deftest mevedel-native--include-flags
   (:doc "Finds emacs-module.h in the running Emacs's prefix or build tree.")

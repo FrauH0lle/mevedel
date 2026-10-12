@@ -64,6 +64,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [ "$GITHUB_REF" != refs/heads/master ]; then
+            echo "Pins are published from master only."
+            exit 0
+          fi
           source_hash() { LC_ALL=C ls native/*.c | LC_ALL=C sort | xargs cat | sha256sum | cut -c1-16; }
           hash=$(source_hash)
           tag="native-$hash"

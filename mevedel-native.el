@@ -176,6 +176,8 @@ For systems without a C compiler or the GTK 3/Wayland development files.
 The download must match the checksum pinned in mevedel's source.  With a
 module already loaded, the download loads in the next session."
   (interactive)
+  (unless (and (fboundp 'module-load) module-file-suffix)
+    (user-error "This Emacs cannot load modules"))
   (let ((pin (or (mevedel-native--pin)
                  (user-error "No prebuilt module for %s at this mevedel revision"
                              (mevedel-native--arch))))
