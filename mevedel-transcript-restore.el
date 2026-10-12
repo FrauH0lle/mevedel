@@ -77,8 +77,49 @@ Return non-nil when the property drawer changed."
             (setq sanitized (nreverse sanitized))
             (unless (equal sanitized bounds)
               (if sanitized
-                  (org-entry-put (point-min) "GPTEL_BOUNDS"
-                                 (prin1-to-string sanitized))
+                  (let ((print-length nil)
+                        (print-level nil)
+                        (markers
+                         (mapcar
+                          (lambda (entry)
+                            (cons (car entry)
+                                  (mapcar
+                                   (lambda (range)
+                                     (append
+                                      (list (copy-marker (car range))
+                                            (copy-marker (cadr range)))
+                                      (cddr range)))
+                                   (cdr entry))))
+                          sanitized))
+                        last
+                        (attempts 0))
+                    ;; Drawer rewrites move transcript positions.  Keep the
+                    ;; repaired ranges anchored until serialization settles.
+                    (unwind-protect
+                        (while (< attempts 8)
+                          (setq attempts (1+ attempts))
+                          (let ((serialized
+                                 (prin1-to-string
+                                  (mapcar
+                                   (lambda (entry)
+                                     (cons (car entry)
+                                           (mapcar
+                                            (lambda (range)
+                                              (append
+                                               (list (marker-position (car range))
+                                                     (marker-position (cadr range)))
+                                               (cddr range)))
+                                            (cdr entry))))
+                                   markers))))
+                            (if (equal serialized last)
+                                (setq attempts 8)
+                              (setq last serialized)
+                              (org-entry-put (point-min) "GPTEL_BOUNDS"
+                                             serialized))))
+                      (dolist (entry markers)
+                        (dolist (range (cdr entry))
+                          (set-marker (car range) nil)
+                          (set-marker (cadr range) nil)))))
                 (org-entry-delete (point-min) "GPTEL_BOUNDS"))
               (setq changed t)))))
       changed)))

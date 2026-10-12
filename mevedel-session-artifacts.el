@@ -1665,7 +1665,9 @@ bounds no longer change."
     (save-excursion
       (save-restriction
         (widen)
-        (let ((last nil)
+        (let ((print-length nil)
+              (print-level nil)
+              (last nil)
               (done nil)
               (attempts 0))
           ;; Drawer edits shift existing properties along with the text.

@@ -67,6 +67,36 @@
           (should-error (mevedel-session-artifacts--obsolete-snapshot-artifacts session t)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-session-artifacts-stabilize-gptel-bounds ()
+  ,test
+  (test)
+  :doc "round-trips every range under restricted printer settings"
+  (let ((file (make-temp-file "mevedel-bounds-" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:END:\n\n")
+            (dotimes (_ 12)
+              (insert "Prompt\n")
+              (insert (propertize "Answer\n" 'gptel 'response)))
+            (let ((print-length 3) (print-level 2))
+              (mevedel-session-artifacts-stabilize-gptel-bounds))
+            (write-region (point-min) (point-max) file nil 'silent))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (org-mode)
+            (mevedel-transcript-restore-properties)
+            (should (= 12 (length (alist-get
+                                  'response
+                                  (read (org-entry-get
+                                         (point-min) "GPTEL_BOUNDS"))))))
+            (goto-char (point-min))
+            (while (search-forward "Answer" nil t)
+              (should (eq 'response (get-text-property
+                                     (match-beginning 0) 'gptel))))))
+      (delete-file file))))
+
 (mevedel-deftest mevedel-session-artifacts--finalize-segment-file ()
   ,test
   (test)

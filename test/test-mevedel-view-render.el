@@ -959,6 +959,36 @@
                         (point-max))))))
       (should (string-match-p "Response" (buffer-string)))))
 
+  :doc "restored truncated bounds do not leak render data or audit text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert ":PROPERTIES:\n:END:\n\nPrompt\n")
+      (insert (propertize "Visible answer.\n" 'gptel 'response))
+      (insert (mevedel-tool-render-data-format
+               '(:kind request-summary :elapsed-seconds 49.0)))
+      (insert (mevedel--format-hook-audit-record
+               '(:type fork-point :fork-point-id "test-point"
+                 :segment 1 :turn 1 :file-turn 1 :cum-turn 1)))
+      ;; Model the saved truncated list, with correct pre-repair offsets.
+      (dotimes (_ 5)
+        (let ((bounds (gptel--get-buffer-bounds)))
+          (setcdr (assq 'response bounds)
+                  (append (cdr (assq 'response bounds)) (list (intern "..."))))
+          (org-entry-put (point-min) "GPTEL_BOUNDS" (prin1-to-string bounds))))
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (erase-buffer)
+        (insert text))
+      (mevedel-transcript-restore-properties))
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (mevedel-view--full-rerender-reset data-buf data-buf nil nil)
+        (mevedel-view--full-rerender-project
+         data-buf data-buf view-buf nil nil nil))
+      (should (string-match-p "Visible answer" (buffer-string)))
+      (should-not (string-match-p
+                   "mevedel-render-data\\|mevedel-hook-audit\\|elapsed-seconds"
+                   (buffer-string)))))
+
   :doc "reports the current assistant turn's data start for reanchoring"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Prompt\n" nil)

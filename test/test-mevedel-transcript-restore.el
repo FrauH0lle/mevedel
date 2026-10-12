@@ -44,6 +44,34 @@
       (dolist (entry bounds)
         (dolist (range (cdr entry))
           (should (<= (cadr range) max))))))
+  :doc "keeps side-channel bounds anchored when removing truncated entries"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+            "Answer.\n"
+            (mevedel-tool-render-data-format
+             '(:kind request-summary :elapsed-seconds 49.0)))
+    (dotimes (_ 4)
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward "Answer.")
+        (let ((answer-start (match-beginning 0)))
+          (search-forward "<!-- mevedel-render-data -->")
+          (org-entry-put
+           (point-min) "GPTEL_BOUNDS"
+           (prin1-to-string
+            `((response (,answer-start ,(match-beginning 0)) ...)
+              (mevedel-render-data (,(match-beginning 0) ,(point-max)))))))))
+    (set-buffer-modified-p nil)
+    (let ((print-length 1) (print-level 1))
+      (mevedel-transcript-restore-properties))
+    (should-not (buffer-modified-p))
+    (goto-char (point-min))
+    (search-forward "<!-- mevedel-render-data -->")
+    (should (eq (get-text-property (match-beginning 0) 'gptel)
+                'mevedel-render-data))
+    (should-not (string-match-p "\\.\\.\\."
+                                (org-entry-get (point-min) "GPTEL_BOUNDS"))))
   :doc "deletes unreadable GPTEL_BOUNDS"
   (with-temp-buffer
     (org-mode)

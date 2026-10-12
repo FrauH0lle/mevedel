@@ -32,6 +32,12 @@ requires explicit confirmation and does not rewrite historical checkpoints.
 Sessions materialize lazily and save at turn settlement, including errors and
 aborts. Compaction rotates segments rather than rewriting in place.
 
+Transcript bounds are serialized without Lisp printer length or depth limits.
+On restoration, sanitation of malformed bounds keeps the surviving ranges
+anchored while rewriting the property drawer, so hidden metadata does not become
+visible merely because the drawer changes size. Missing ranges in an already
+truncated transcript cannot be recovered from the bounds alone.
+
 Request cancellation is terminal before cleanup callbacks run. Later canceller
 registrations run immediately rather than reopening the request. Permission
 admission rejects that cancelled request even if cancellation happened before
