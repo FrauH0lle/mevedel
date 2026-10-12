@@ -413,9 +413,6 @@
 (defvar mevedel-view--side-conversation-p)
 (defvar mevedel-view--status-marker)
 
-;; `mevedel-view-agent'
-(defvar mevedel-view--agent-transcript-p)
-
 ;; `mevedel-view-audit'
 (declare-function mevedel-view--prompt-rewrite-audit-record
 		  "mevedel-view-audit"
@@ -902,7 +899,7 @@ This covers the interval before the prompt has been accepted and before
   (and (boundp 'mevedel-view--input-marker)
        (markerp mevedel-view--input-marker)
        (marker-buffer mevedel-view--input-marker)
-       (not (bound-and-true-p mevedel-view--agent-transcript-p))
+       (not mevedel-view--agent-transcript-p)
        (ignore-errors
          (>= position (mevedel-view--input-start)))))
 
@@ -940,7 +937,7 @@ History/status rendering should only change text above
 `mevedel-view--input-marker'.  This guard restores the input body if a
 late callback accidentally inserts transcript content below the prompt."
   (let* ((preserve-p
-          (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
+          (and (not mevedel-view--agent-transcript-p)
                (markerp mevedel-view--input-marker)
                (marker-buffer mevedel-view--input-marker)))
          (text (and preserve-p
@@ -1267,7 +1264,7 @@ can no longer be trusted."
   "Keep only composer edits on the current view's undo list."
   (when (and (derived-mode-p 'mevedel-view-mode)
              (consp buffer-undo-list))
-    (if (or (bound-and-true-p mevedel-view--agent-transcript-p)
+    (if (or mevedel-view--agent-transcript-p
             (not (and (markerp mevedel-view--input-marker)
                       (marker-buffer mevedel-view--input-marker))))
         (setq buffer-undo-list nil)

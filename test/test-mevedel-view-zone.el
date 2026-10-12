@@ -16,7 +16,6 @@
           "helpers"))
 (require 'mevedel-view-zone)
 
-(defvar-local mevedel-view--agent-transcript-p nil)
 (defvar-local mevedel-view--input-marker nil)
 (defvar-local mevedel-view--interaction-marker nil)
 (defvar-local mevedel-view--status-marker nil)

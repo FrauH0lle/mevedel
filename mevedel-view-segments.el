@@ -10,6 +10,8 @@
 
 (eval-when-compile (require 'cl-lib))
 
+(require 'mevedel-structs)
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-collect-prompts
                   "mevedel-session-artifacts" (buffer))
@@ -35,9 +37,6 @@
                   "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
-
-;; `mevedel-view-agent'
-(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view'
 (declare-function mevedel-view--jump-to-pinned-prompt

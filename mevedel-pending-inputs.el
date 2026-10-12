@@ -191,9 +191,6 @@
 ;; `mevedel-view'
 (defvar mevedel-view--side-conversation-p)
 
-;; `mevedel-view-agent'
-(defvar mevedel-view--agent-transcript-p)
-
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
                   "mevedel-view-composer" (&optional allow-armed-fork))

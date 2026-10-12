@@ -73,7 +73,6 @@
                   "mevedel-view-agent" (agent-path))
 (autoload 'mevedel-view-open-agent-transcript "mevedel-view-agent")
 (defvar mevedel-view--agent-path)
-(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-go-to-segment "mevedel-view-segments"

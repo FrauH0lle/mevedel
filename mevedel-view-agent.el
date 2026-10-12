@@ -455,7 +455,7 @@ running in the UI."
 
 (defun mevedel-view-agent-handle-view-kill ()
   "Clean up the current transcript view and return non-nil when handled."
-  (when (bound-and-true-p mevedel-view--agent-transcript-p)
+  (when mevedel-view--agent-transcript-p
     (let ((data-buffer mevedel--data-buffer)
           (view-buffer (current-buffer))
           (live-p (plist-get mevedel-view--agent-transcript-info
@@ -477,7 +477,7 @@ running in the UI."
   "Return non-nil when BUFFER is an agent transcript inspection view."
   (and (buffer-live-p buffer)
        (with-current-buffer buffer
-         (bound-and-true-p mevedel-view--agent-transcript-p))))
+         mevedel-view--agent-transcript-p)))
 
 (defun mevedel-view--agent-transcript-views-for-parent (parent-view)
   "Return transcript inspection views opened from PARENT-VIEW."

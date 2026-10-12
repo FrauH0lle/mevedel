@@ -85,7 +85,6 @@
 (declare-function mevedel-view-reset-agent-ephemeral-state
                   "mevedel-view-agent" (&optional view-buffer))
 (autoload 'mevedel-view-reset-agent-ephemeral-state "mevedel-view-agent")
-(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-load "mevedel-view-history"
@@ -106,6 +105,7 @@
 
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-session-control-transfer)
+(require 'mevedel-structs)
 
 
 ;;

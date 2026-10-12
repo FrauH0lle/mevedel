@@ -14,6 +14,7 @@
 (require 'ring)
 (require 'subr-x)
 (require 'mevedel-mention-bindings)
+(require 'mevedel-structs)
 (require 'mevedel-utilities)
 (require 'mevedel-transport)
 
@@ -49,9 +50,6 @@
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
-
-;; `mevedel-view-agent'
-(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
@@ -110,7 +108,7 @@
 (defun mevedel-view-history--input-active-p ()
   "Return non-nil when point is in the editable composer."
   (and (derived-mode-p 'mevedel-view-mode)
-       (not (bound-and-true-p mevedel-view--agent-transcript-p))
+       (not mevedel-view--agent-transcript-p)
        (boundp 'mevedel--data-buffer)
        mevedel--data-buffer
        (ignore-errors

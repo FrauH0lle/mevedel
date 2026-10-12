@@ -90,7 +90,6 @@
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--agent-status-counts "mevedel-view-agent" ())
-(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--agent-fsm-p

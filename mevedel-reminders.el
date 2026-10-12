@@ -546,8 +546,7 @@ the current chat buffer has no request-local agent roster yet."
              (not (mevedel-agent-invocation-runtime-settled-p
                    mevedel--agent-invocation))
              mevedel--agent-invocation)
-        (and (boundp 'mevedel--current-request)
-             mevedel--current-request))))
+        mevedel--current-request)))
 
 (defun mevedel-reminders-queue-turn-event (buffer key body &optional commit)
   "Queue BODY under KEY for BUFFER's current model turn.

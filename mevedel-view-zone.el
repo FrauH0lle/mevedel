@@ -20,12 +20,11 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'mevedel-structs)
+
 ;; `mevedel-view'
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
-
-;; `mevedel-view-agent'
-(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
@@ -519,7 +518,7 @@ priorities."
 
 (defun mevedel-view-zone--composer-live-p ()
   "Return non-nil when the current view has an editable composer."
-  (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
+  (and (not mevedel-view--agent-transcript-p)
        (boundp 'mevedel-view--input-marker)
        (markerp mevedel-view--input-marker)
        (eq (marker-buffer mevedel-view--input-marker) (current-buffer))))

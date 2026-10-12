@@ -332,9 +332,6 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 
-;; `mevedel-view-agent'
-(defvar mevedel-view--agent-transcript-p)
-
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace-ensure-generated-state-ignored "mevedel-workspace" (workspace))

@@ -257,7 +257,6 @@
                   "mevedel-view-agent" ())
 (defvar mevedel-view--agent-handle-map)
 (defvar mevedel-view--agent-label-map)
-(defvar mevedel-view--agent-transcript-p)
 (defvar mevedel-view--agent-path)
 
 ;; `mevedel-view-composer'

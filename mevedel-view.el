@@ -181,7 +181,6 @@
                   "mevedel-view-agent" ())
 (declare-function mevedel-view-open-agent-transcript-at-point
                   "mevedel-view-agent" (&optional event))
-(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--effective-permission-mode
