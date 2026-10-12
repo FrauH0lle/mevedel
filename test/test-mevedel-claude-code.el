@@ -93,6 +93,7 @@
       (should (equal [] (alist-get 'tools options)))
       (should (equal [] (alist-get 'settingSources options)))
       (should (eq t (alist-get 'strictMcpConfig options)))
+      (should (eq #'mevedel-claude-code--prompt-retry-delay (plist-get launch :prompt-retry-delay)))
       (should (eq t (alist-get 'includeHookEvents options)))
       (should (functionp (plist-get launch :observe)))
       (should (functionp (plist-get launch :check-context)))
@@ -618,6 +619,16 @@
                                                mevedel-claude-code--cli-version))
     (should-not (mevedel-claude-code--version "v20.0.0" "22.0.0"))
     (should-not (mevedel-claude-code--version "unknown" "22.0.0"))))
+
+(mevedel-deftest mevedel-claude-code--prompt-retry-delay ()
+  (progn
+    (should (= 30 (mevedel-claude-code--prompt-retry-delay
+                   '((code . -32603)
+                     (message . "Internal error: Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.")))))
+    (should-not (mevedel-claude-code--prompt-retry-delay
+                 '((code . -32603) (message . "Internal error: Failed to refresh OAuth token: invalid_grant"))))
+    (should-not (mevedel-claude-code--prompt-retry-delay '((code . -32000) (message . "Authentication required"))))
+    (should-not (mevedel-claude-code--prompt-retry-delay '((code . -32603))))))
 
 (provide 'test-mevedel-claude-code)
 ;;; test-mevedel-claude-code.el ends here

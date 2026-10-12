@@ -133,6 +133,19 @@ exit and may resume after repair, while submitted failure or interruption requir
 explicit continuation. Native history recovery still requires an idle conversation and
 preserves the transcript and effects.
 
+One prompt failure is absorbed instead of returned. Every Claude process on the
+host shares one credential store. A prompt that needs a token refresh while
+another process holds the refresh lock, or left it stale by exiting, fails with
+the CLI's "another Claude Code process is refreshing it" refusal before any
+model request. A planning agent was lost this way with zero tool calls, and the
+lock had cleared a minute later, so failing the turn only handed the caller a
+wait. The Claude launch recognizes that refusal and the ACP prompt re-sends the
+same prompt once, 30 seconds later, in the same conversation. It does so only
+while the prompt has reported no tool call, so the replay repeats no effect.
+The streamed refusal stays in the transcript, and cancelling during the wait
+settles the turn at once. Any other failure, a second refusal, or a refusal
+after a tool call still ends the turn.
+
 Queued input records one durable delivery intent, a sidecar-only `dispatching`
 mark, before dispatch; delivery writes nothing further, so a committed prompt
 cannot return to the runnable queue. Other queue and pause changes use the

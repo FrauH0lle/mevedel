@@ -57,6 +57,7 @@ sdk_before_batches = []
 sdk_after_batches = []
 continuation_prompts = []
 prompt_number = 0
+refresh_attempts = 0
 session_info = {}
 config_behavior = None
 applied = {}
@@ -221,6 +222,22 @@ for line in sys.stdin:
                     print(json.dumps(receipt), flush=True)
             elif prompt == "wait-silent":
                 pending = request_id
+            elif prompt.startswith("refresh-race"):
+                # The Claude CLI streams its refusal, then fails the prompt
+                # while another process holds the credential refresh lock.
+                refresh_attempts += 1
+                if prompt == "refresh-race-after-tool":
+                    print(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": session_id, "update": {
+                            "sessionUpdate": "tool_call", "toolCallId": "native-1"}}}), flush=True)
+                if refresh_attempts == 1 or prompt != "refresh-race":
+                    chunk("Failed to refresh OAuth token")
+                    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {
+                        "code": -32603, "message": "Internal error: Failed to refresh OAuth token: "
+                        "another Claude Code process is refreshing it or exited mid-refresh."}}), flush=True)
+                else:
+                    chunk("answer:attempt-%d" % refresh_attempts)
+                    reply(request_id, {"stopReason": "end_turn"})
             elif tool_batches:
                 config = mcp_servers[0]
                 with subprocess.Popen([config["command"], *config["args"]],

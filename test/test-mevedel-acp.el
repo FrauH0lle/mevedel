@@ -171,6 +171,61 @@
        (mevedel-acp-prompt connection [((type . "text") (text . "again"))]
                            #'ignore #'ignore))))
 
+:doc "a prompt refused before any tool call is re-sent once when the launch accepts the failure"
+  (let ((mevedel-acp-test--launch-options
+         (list :prompt-retry-delay
+               (lambda (failure)
+                 (and (string-search "refreshing it" (alist-get 'message failure)) 0.05)))))
+    (mevedel-acp-test--with-connection nil
+      (let ((text "") outcomes)
+        (mevedel-acp-prompt
+         connection [((type . "text") (text . "refresh-race"))]
+         (lambda (notification)
+           (let ((update (alist-get 'update (alist-get 'params notification))))
+             (setq text (concat text (alist-get 'text (alist-get 'content update))))))
+         (lambda (outcome) (push outcome outcomes)))
+        (await (lambda () outcomes))
+        (should (= 1 (length outcomes)))
+        (should (eq 'success (plist-get (car outcomes) :status)))
+        ;; The streamed refusal stays visible ahead of the replayed answer.
+        (should (equal "Failed to refresh OAuth tokenanswer:attempt-2" text))
+        (should (eq 'idle (mevedel-acp-state connection))))))
+
+  :doc "a refused prompt that reported a tool call fails instead of replaying"
+  (let ((mevedel-acp-test--launch-options (list :prompt-retry-delay (lambda (_) 0.05))))
+    (mevedel-acp-test--with-connection nil
+      (let (outcomes)
+        (mevedel-acp-prompt connection [((type . "text") (text . "refresh-race-after-tool"))]
+                            #'ignore (lambda (outcome) (push outcome outcomes)))
+        (await (lambda () outcomes))
+        (should (= 1 (length outcomes)))
+        (should (eq 'error (plist-get (car outcomes) :status)))
+        (should (string-search "refreshing it" (plist-get (car outcomes) :message)))
+        (should (eq 'closed (mevedel-acp-state connection))))))
+
+  :doc "a second refusal fails the prompt; cancellation during the wait settles at once"
+  (let ((mevedel-acp-test--launch-options (list :prompt-retry-delay (lambda (_) 60))))
+    (mevedel-acp-test--with-connection nil
+      (let (outcomes timer)
+        (mevedel-acp-prompt connection [((type . "text") (text . "refresh-race"))]
+                            #'ignore (lambda (outcome) (push outcome outcomes)))
+        (await (lambda () (plist-get (mevedel-acp-active connection) :retry-timer)))
+        (setq timer (plist-get (mevedel-acp-active connection) :retry-timer))
+        (mevedel-acp-cancel connection)
+        (should (= 1 (length outcomes)))
+        (should (eq 'interrupted (plist-get (car outcomes) :status)))
+        (should-not (memq timer timer-list))
+        (should-not (mevedel-acp-timer connection))
+        (should (eq 'idle (mevedel-acp-state connection))))))
+  (let ((mevedel-acp-test--launch-options (list :prompt-retry-delay (lambda (_) 0.05))))
+    (mevedel-acp-test--with-connection nil
+      (let (outcomes)
+        (mevedel-acp-prompt connection [((type . "text") (text . "refresh-race-always"))]
+                            #'ignore (lambda (outcome) (push outcome outcomes)))
+        (await (lambda () outcomes))
+        (should (= 1 (length outcomes)))
+        (should (eq 'error (plist-get (car outcomes) :status))))))
+
   :doc "agent permission and filesystem requests are refused, never executed"
   (mevedel-acp-test--with-connection nil
     (let ((text "") outcome)

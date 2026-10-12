@@ -375,6 +375,9 @@ engine, native conversation ID, local installation directory, machine name and
 last known state. The installed Claude agent retains model history; mevedel
 retains the canonical transcript and tool effects. No credentials or process
 handles are stored in the sidecar.
+A prompt the Claude CLI refuses because another process holds its credential
+refresh lock is re-sent once after 30 seconds, provided it reported no tool call;
+every other prompt failure ends the turn.
 
 Sonnet, Opus, Fable and Haiku aliases remain available and resolve through Claude's
 current catalog. Each ACP session initialization refreshes an in-memory model

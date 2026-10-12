@@ -117,6 +117,8 @@ acp.el's sentinel ignores stop and continue events."
   (mevedel-acp--wake connection)
   (when (eq turn (mevedel-acp-active connection))
     (mevedel-acp--cancel-timer connection)
+    (when-let* ((retry (plist-get turn :retry-timer)))
+      (cancel-timer retry))
     (setf (mevedel-acp-active connection) nil)
     (unless (eq (mevedel-acp-state connection) 'closed)
       (setf (mevedel-acp-state connection) 'idle))
@@ -176,15 +178,16 @@ so a dead process fails the connection instead."
     (or (not process) (process-live-p process)
         (progn (mevedel-acp--fail connection "ACP agent process exited") nil))))
 
-(defun mevedel-acp--send (connection request success)
-  "Send REQUEST on CONNECTION and deliver SUCCESS, closing on failure."
+(defun mevedel-acp--send (connection request success &optional failure)
+  "Send REQUEST on CONNECTION and deliver SUCCESS.
+An error response goes to FAILURE, which closes CONNECTION by default."
   (mevedel-acp--wake connection)
   (condition-case err
       (when (mevedel-acp--live-p connection)
         (acp-send-request
          :client (mevedel-acp-client connection) :request request
          :on-success success
-         :on-failure (lambda (failure) (mevedel-acp--fail connection failure))))
+         :on-failure (or failure (lambda (failure) (mevedel-acp--fail connection failure)))))
     (error (mevedel-acp--fail connection (error-message-string err)))))
 
 (defun mevedel-acp--admit (connection)
@@ -281,6 +284,10 @@ Optional :initialize-only checks the protocol without creating a conversation.
 Optional :compaction advertises support for retained session summaries.
 Optional :normalize-outcome translates adapter-specific terminal metadata and
 usage into an outcome plist; generic ACP cannot infer its accounting scope.
+Optional :prompt-retry-delay receives a prompt's JSON-RPC error and returns
+seconds to wait before re-sending that prompt once, or nil to fail.  It is
+consulted only while the prompt has reported no tool call, so a replay
+repeats no effect.
 READY receives this connection after admission; FAILURE receives an error
 string and a CODE if startup fails.  CODE is the agent's JSON-RPC error code,
 the symbol `unavailable' when a launch check found the provider unusable
@@ -410,7 +417,9 @@ immediately."
   "Send CONTENT on idle CONNECTION, streaming to EVENT and settling COMPLETE.
 CONTENT is a vector of ACP content-block alists.  EVENT receives session-owned
 notifications.  COMPLETE receives one plist with :status, :stop-reason and raw
-:response, or :message on failure.  No failed prompt is retried automatically."
+:response, or :message on failure.  A failed prompt is re-sent once only when
+it reported no tool call and the launch's :prompt-retry-delay accepts the
+failure (see `mevedel-acp-open')."
   (unless (and (eq (mevedel-acp-state connection) 'idle)
                (process-live-p (alist-get :process (mevedel-acp-client connection))))
     (error "ACP conversation is not ready for a prompt"))
@@ -418,27 +427,53 @@ notifications.  COMPLETE receives one plist with :status, :stop-reason and raw
              (not (eq t (alist-get 'image (alist-get 'promptCapabilities
                                                      (mevedel-acp-capabilities connection))))))
     (user-error "ACP agent does not support image input"))
-  (let ((turn (list :event event :complete complete)))
-    (mevedel-acp--pace-output connection)
-    (setf (mevedel-acp-active connection) turn
-          (mevedel-acp-state connection) 'prompting)
-    (mevedel-acp--send
-     connection (acp-make-session-prompt-request
-                 :session-id (mevedel-acp-session-id connection) :prompt content)
-     (lambda (response)
-       (let ((reason (alist-get 'stopReason response)))
-         (mevedel-acp--finish
-          connection turn
-          (list :status (cond
-                         ((or (plist-get turn :cancelled)
-                              (equal reason "cancelled")) 'interrupted)
-                         ((equal reason "end_turn") 'success)
-                         (t 'error))
-                :stop-reason reason :response response)))))))
+  (let ((request (acp-make-session-prompt-request
+                  :session-id (mevedel-acp-session-id connection) :prompt content))
+        turn)
+    (cl-labels
+        ((observe (notification)
+           (when (equal "tool_call" (alist-get 'sessionUpdate
+                                               (alist-get 'update (alist-get 'params notification))))
+             (plist-put turn :acted t))
+           (funcall event notification))
+         (send ()
+           (mevedel-acp--send connection request #'settle #'failed))
+         (settle (response)
+           (let ((reason (alist-get 'stopReason response)))
+             (mevedel-acp--finish
+              connection turn
+              (list :status (cond
+                             ((or (plist-get turn :cancelled)
+                                  (equal reason "cancelled")) 'interrupted)
+                             ((equal reason "end_turn") 'success)
+                             (t 'error))
+                    :stop-reason reason :response response))))
+         (failed (failure)
+           (if-let* (((not (or (plist-get turn :acted) (plist-get turn :retried)
+                               (plist-get turn :cancelled))))
+                     (retry (plist-get (mevedel-acp-launch connection) :prompt-retry-delay))
+                     (delay (funcall retry failure)))
+               (plist-put turn :retry-timer
+                          (mevedel-transport-run-at-time
+                           delay (lambda ()
+                                   (when (eq turn (mevedel-acp-active connection))
+                                     (plist-put turn :retry-timer nil)
+                                     (plist-put turn :retried t)
+                                     (send)))))
+             (mevedel-acp--fail connection failure))))
+      (setq turn (list :event #'observe :complete complete))
+      (mevedel-acp--pace-output connection)
+      (setf (mevedel-acp-active connection) turn
+            (mevedel-acp-state connection) 'prompting)
+      (send))))
 
 (defun mevedel-acp-cancel (connection)
   "Request interruption of CONNECTION's active prompt.
 Wait for the terminal acknowledgement before accepting more input."
+  (when-let* ((turn (mevedel-acp-active connection))
+              ((plist-get turn :retry-timer)))
+    ;; No prompt is in flight to acknowledge the cancellation.
+    (mevedel-acp--finish connection turn '(:status interrupted)))
   (when-let* ((turn (mevedel-acp-active connection))
               ((not (plist-get turn :cancelled))))
     (setf (mevedel-acp-active connection) (plist-put turn :cancelled t))

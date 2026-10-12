@@ -507,6 +507,16 @@ rows include internal work and are not another copy of these prompt totals."
     (when (natnump cache) (setq tokens (append tokens (list :cache cache))))
     (plist-put outcome :tokens tokens)))
 
+(defun mevedel-claude-code--prompt-retry-delay (failure)
+  "Return seconds to wait before re-sending a prompt that met FAILURE, or nil.
+Every Claude process on the host shares one credential store.  A process that
+needs a refresh while another holds the refresh lock, or left it stale by
+exiting, fails before any model request; the lock clears within a minute."
+  (when-let* ((message (alist-get 'message failure))
+              ((stringp message))
+              ((string-search "another Claude Code process is refreshing it" message)))
+    30))
+
 (defun mevedel-claude-code--runtime-commands (runtime)
   "Return the local executables a Claude launch needs, given maintained RUNTIME.
 The plist has :cli, :adapter, :node and :python.  Every refusal is a
@@ -603,6 +613,7 @@ Return the generic ACP launch plist; no model request is made here."
               (mevedel-claude-code--prepare-session backend model effort buffer connection session ready))
             :tool-id-field :claudecode/toolUseId
             :normalize-outcome #'mevedel-claude-code--outcome
+            :prompt-retry-delay #'mevedel-claude-code--prompt-retry-delay
             :complete-prompt #'mevedel-claude-code--complete-prompt
             :control #'mevedel-claude-code--control
             :observe #'mevedel-claude-code--observe
