@@ -738,7 +738,9 @@ spacing or the font changes, so such keys add this list.  Every element
 is cheap to read: `window-font-width' realizes faces and cost 14% of
 samples when checked per redisplay, so the frame's font is represented
 by its character size and buffer-local fonts by the face remapping.
-Text scaling edits the remapping list in place, so it is copied."
+Text scaling edits the remapping list in place, so it is copied.  The
+line-number column widens only when lines are added, an edit every such
+key already covers."
   (list (copy-tree face-remapping-alist)
         line-spacing
         (frame-char-width (window-frame window))
