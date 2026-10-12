@@ -14,8 +14,9 @@
 - [Live view reentry during settlement duplicates rendered text](view-render-settlement-reentry.md) - Settlement injected while a live update is fontifying makes the older update resume, duplicate text, and recreate retained-tail state; natural seam still unproven
 - [Preserve the requested editing surface](preserve-requested-editing-surface.md) - A whiteboard redesign request means editing that whiteboard, not substituting a separate preview.
 - [Investigate history before recommending removal of a boundary](investigate-history-before-removing-boundaries.md) - Read the commits and ADRs that introduced a boundary before proposing to remove it
-- [Verify through the production path and the caller's identity](production-path-verification.md) - Test results must come from the real producer/parser path and start from only the identity the caller has
+- [Verify through the production path and the caller's identity](production-path-verification.md) - Test real producer/parser boundaries and caller identity; quoted payload delimiters are not structural
 - [Read-only verification can rest on independently checked artifacts](read-only-verification-artifacts.md) - Inability to rerun a writing check is not absence of verification evidence
 - [Execution UI: work-oriented default and minimal command row](execution-ui-presentation-preference.md) - User favors a work-oriented execution UI and A's minimal command row over B's result card with output preview; breadcrumb rule unconfirmed
 - [Keep live-state inspection probes bounded and non-perturbing](bounded-live-inspection-probes.md) - Return scalars or booleans from live Emacs probes; large object dumps and profiling workload distort what you are measuring
 - [Verify consumer-visible state, not intermediate signals](rendered-state-verification-feedback.md) - Assert rendered/consumed state, not internal flags, audit rows, or same-segment tests
+- [Judge inline image previews by displayed size](inline-image-size-feedback.md) - Compact previews are a visual requirement, not a preference for pixel or fractional settings
