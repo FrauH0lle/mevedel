@@ -355,7 +355,11 @@
                    (mevedel-memory-pass-schedule workspace)
                    (drain)
                    (should (= 1 calls))
-                   (should-not selected)))
+                   (should-not selected)
+                   (let (messages)
+                     (mevedel-test--with-captured-messages messages
+                       (mevedel-memory-pass-cancel workspace))
+                     (should (string-match-p "memory review cancelled" messages)))))
 
 (provide 'test-mevedel-memory-pass-scheduling)
 ;;; test-mevedel-memory-pass-scheduling.el ends here

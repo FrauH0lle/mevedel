@@ -2083,24 +2083,27 @@
 		       (mevedel-abort (current-buffer)))
 		     (should (= 0 save-count))))
 
-			 :doc "does not rewrite a Goal already paused for another reason"
-			 (with-temp-buffer
-			   (let* ((workspace (mevedel-workspace--create
-			                      :type 'project :id "/tmp/abort-paused/"
-			                      :root "/tmp/abort-paused/" :name "paused"))
-			          (goal (mevedel-goal--create
-			                 :id "g1" :objective "Ship" :status 'paused
-			                 :reason "Waiting for review"))
-			          (session (mevedel-session-create "main" workspace)))
-			     (setf (mevedel-session-goal session) goal)
-			     (setq-local mevedel--session session)
-			     (mevedel-request-begin session)
-                             (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
-                                        (lambda (&rest _) "saved")))
-			       (mevedel-abort (current-buffer)))
-			     (should (eq 'paused (mevedel-goal-status goal)))
-			     (should (equal "Waiting for review"
-			                    (mevedel-goal-reason goal)))))
+  :doc "does not rewrite a Goal already paused for another reason"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-chat-abort-paused-" t))))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((workspace (mevedel-workspace--create
+                             :type 'project :id root :root root :name "paused"))
+                 (goal (mevedel-goal--create
+                        :id "g1" :objective "Ship" :status 'paused
+                        :reason "Waiting for review"))
+                 (session (mevedel-session-create "main" workspace)))
+            (setf (mevedel-session-goal session) goal)
+            (setq-local mevedel--session session)
+            (mevedel-request-begin session)
+            (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
+                       (lambda (&rest _) "saved")))
+              (mevedel-abort (current-buffer)))
+            (should (eq 'paused (mevedel-goal-status goal)))
+            (should (equal "Waiting for review"
+                           (mevedel-goal-reason goal)))))
+      (delete-directory root t)))
 
 				 :doc "root abort leaves retained agent turns independent"
 			 (with-temp-buffer
