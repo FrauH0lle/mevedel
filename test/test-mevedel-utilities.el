@@ -115,6 +115,33 @@
       (mevedel--ui-timer-cancel first)
       (mevedel--ui-timer-cancel second)))
 
+  :doc "a yielded batch lets an ordinary due timer run before its remainder"
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        log busy first second ordinary)
+    (unwind-protect
+        (progn
+          ;; Busy members: a wait would run the ordinary timer itself.
+          (setq busy (lambda ()
+                       (push 'member log)
+                       (let ((until (time-add nil 0.03)))
+                         (while (time-less-p nil until))))
+                second (mevedel--run-periodic-timer 1 busy)
+                first (mevedel--run-periodic-timer 1 busy))
+          (timer-set-time first (time-subtract nil 2) 1)
+          (timer-set-time second (time-subtract nil 2) 1)
+          (mevedel--coalesced-timer-arm)
+          ;; Ripe, but sorted after the host timer in this timer pass.
+          (setq ordinary (run-at-time (time-subtract nil 1) nil
+                                      (lambda () (push 'ordinary log))))
+          (let ((deadline (time-add nil 1)))
+            (while (and (< (length log) 3) (time-less-p nil deadline))
+              (accept-process-output nil 0.05)))
+          (should (equal '(member ordinary member) (reverse log))))
+      (cancel-timer ordinary)
+      (mevedel--ui-timer-cancel first)
+      (mevedel--ui-timer-cancel second)))
+
   :doc "a callback waiting for process output lets due siblings run, never itself"
   (let ((mevedel--coalesced-timers nil)
         (mevedel--coalesced-timer nil)
@@ -133,7 +160,7 @@
                      (cl-incf waiter-calls)
                      ;; Due again during its own wait: must not re-enter.
                      (timer-set-time waiter (time-subtract nil 1) 1)
-                     (let ((deadline (time-add nil 5)))
+                     (let ((deadline (time-add nil 1)))
                        (while (and (not sibling-ran)
                                    (time-less-p nil deadline))
                          (accept-process-output process 0.01))))))

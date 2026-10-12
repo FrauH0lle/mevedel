@@ -808,8 +808,10 @@ This is for periodic observation, not deadlines or animation frames."
 (defun mevedel--coalesced-timer-arm (&optional due)
   "Arm one host timer for DUE, or for the earliest pending callback.
 Running callbacks are excluded, so the timer stays armed for their
-siblings while one waits.  The host timer object is reused until no
-callback remains."
+siblings while one waits.  A re-arm creates a new host timer: Emacs's
+timer pass works on a copy of `timer-list' and reruns any timer in it that
+is ripe and not marked triggered, so reactivating the running host would
+deliver a yielded batch's remainder before input or other timers."
   (let ((due (or due
                  (cl-loop with earliest = nil
                           for timer in mevedel--coalesced-timers
@@ -817,22 +819,18 @@ callback remains."
                           unless (memq timer mevedel--coalesced-timers-running)
                           when (or (null earliest) (time-less-p time earliest))
                           do (setq earliest time)
-                          finally return earliest)))
-        (host mevedel--coalesced-timer))
-    (unless (and due (timerp host)
-                 (equal due (timer--time host))
-                 (mevedel--ui-timer-pending-p host))
-      (mevedel--ui-timer-cancel host)
-      (cond
-       (due
-        (unless (timerp host)
-          (setq host (timer-create)
-                mevedel--coalesced-timer host)
-          (timer-set-function host #'mevedel--coalesced-timer-tick))
-        (timer-set-time host due)
-        (mevedel--ui-timer-activate host))
-       ((null mevedel--coalesced-timers)
-        (setq mevedel--coalesced-timer nil))))))
+                          finally return earliest))))
+    (unless (and due (timerp mevedel--coalesced-timer)
+                 (equal due (timer--time mevedel--coalesced-timer))
+                 (mevedel--ui-timer-pending-p mevedel--coalesced-timer))
+      (mevedel--ui-timer-cancel mevedel--coalesced-timer)
+      (setq mevedel--coalesced-timer nil)
+      (when due
+        (let ((timer (timer-create)))
+          (timer-set-time timer due)
+          (timer-set-function timer #'mevedel--coalesced-timer-tick)
+          (setq mevedel--coalesced-timer timer)
+          (mevedel--ui-timer-activate timer))))))
 
 (defun mevedel--coalesced-timer-call (timer)
   "Invoke TIMER while preserving the caller's current buffer.

@@ -1510,10 +1510,15 @@ that waited for input or output held every sibling until it returned; ordinary t
 now tracks the running callbacks instead: the host stays armed while they run,
 a tick inside a wait delivers due siblings and skips running callbacks, and the
 next arm targets the earliest non-running member. A regression test waits for
-process output in one callback while a sibling falls due. The host timer object
-is reused rather than recreated, so a tick without a wait creates no timer:
-1 member, 3.5 µs and two activations per tick against 2.9 µs, one creation and
-one activation before; 5 members, 7.9 µs against 8.0 µs.
+process output in one callback while a sibling falls due.
+
+Reusing the host timer object across arms broke yielding. Emacs's timer pass
+works on a copy of `timer-list` and reruns any ripe timer in it not marked
+triggered; reactivation clears that mark, so a batch that yielded for input
+or its 25 ms budget was resumed in the same pass, before input and ordinary
+timers. Every arm creates a new host timer again, which no running pass holds.
+Compiled, a tick costs 7.2 µs against 6.8 µs with reuse for one member and
+the same for five; a regression test delivers through the real timer pass.
 
 ### October 2026: other displays need no native presenter
 
