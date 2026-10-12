@@ -217,7 +217,8 @@ timer and its closure on every tick, even with an unchanged plan.")
   "Markers for the visible pending-tool indicator properties.")
 
 (defvar-local mevedel-view--spinner-tool-samples nil
-  "Last displayed tool phases, keyed by pending-tool zone id.")
+  "Tool phases to display, keyed by pending-tool zone id.
+A freeze replaces them with resting phases before they are drawn.")
 
 (defvar-local mevedel-view--spinner-last-second nil
   "Elapsed label last rendered on a timer tick.")
@@ -226,7 +227,9 @@ timer and its closure on every tick, even with an unchanged plan.")
   "Phase of the most recently sampled request-label display frame.")
 
 (defvar-local mevedel-view--spinner-theme-stale-p nil
-  "Non-nil when a theme change has invalidated the displayed color sample.")
+  "Non-nil when displayed colors need a repaint.
+A theme change or frame move invalidates the color sample, and a freeze
+moves spans drawn mid-sweep to their resting phase.")
 
 (defvar-local mevedel-view--spinner-sample-frame nil
   "Display frame used for the request label's last color sample.
@@ -310,8 +313,10 @@ immediately, then use this delay for the heavier transcript render."
   "Targets currently presented independently of Emacs redisplay.")
 
 (defun mevedel-view--capture-native-animation ()
-  "Retain the last native samples before freezing or rebuilding their spans."
-  (when (featurep 'mevedel-view-native)
+  "Retain the last native samples before freezing or rebuilding their spans.
+Once a freeze has latched its resting phases, native samples are stale."
+  (when (and (featurep 'mevedel-view-native)
+             (not mevedel-view--spinner-frozen-seconds))
     (dolist (target mevedel-view--native-animation-targets)
       (when-let* ((seconds (mevedel-view-native-sample target)))
         (if (eq target mevedel-view--spinner-label-target)
@@ -2016,10 +2021,8 @@ NO-PROGRESS suppresses active-turn presentation."
         mevedel-view--spinner-phase-start nil
         mevedel-view--spinner-frozen-seconds nil
         mevedel-view--spinner-last-sample-seconds nil)
-  ;; Retire obsolete streamed work, but keep a full recovery requested
-  ;; by the terminal render's error handler before this mandatory release.
-  (when (eq mevedel-view--pending-render-kind 'incremental)
-    (mevedel-view--cancel-scheduled-render t))
+  ;; Retire obsolete streamed work; a pending full render survives.
+  (mevedel-view--cancel-scheduled-render t)
   (mevedel-view--stop-spinner-timer)
   (when (markerp mevedel-view--in-flight-turn-start)
     (set-marker mevedel-view--in-flight-turn-start nil))

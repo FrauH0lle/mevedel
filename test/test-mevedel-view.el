@@ -368,12 +368,20 @@
           (setq mevedel-view--pending-tool-rows '("stale"))
           (mevedel-view--cancel-scheduled-render)
           (should-not mevedel-view--pending-tool-rows)
-          ;; A settling turn keeps retained rows as their own render.
-          (mevedel-view--schedule-render 'full data-buf 10)
+          ;; A settling turn retires streamed work but keeps retained
+          ;; rows as their own render.
+          (mevedel-view--schedule-render 'incremental data-buf 10)
           (setq mevedel-view--pending-tool-rows '("kept"))
           (mevedel-view--cancel-scheduled-render t)
           (should (equal '("kept") mevedel-view--pending-tool-rows))
-          (should (eq 'tools mevedel-view--pending-render-kind)))
+          (should (eq 'tools mevedel-view--pending-render-kind))
+          ;; A pending full render outlives the settling turn.
+          (mevedel-view--schedule-render 'full data-buf 10)
+          (let ((timer mevedel-view--render-timer))
+            (mevedel-view--cancel-scheduled-render t)
+            (should (eq 'full mevedel-view--pending-render-kind))
+            (should (eq timer mevedel-view--render-timer))
+            (should (mevedel--timer-pending-p timer))))
       (with-current-buffer view-buf (mevedel-view--cancel-scheduled-render)))))
 
 (mevedel-deftest mevedel-view--unattended-p ()

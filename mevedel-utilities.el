@@ -744,6 +744,7 @@ Text scaling edits the remapping list in place, so it is copied."
         (frame-char-width (window-frame window))
         (frame-char-height (window-frame window))
         truncate-lines word-wrap truncate-partial-width-windows
+        display-line-numbers tab-width
         (window-body-width window t) (window-body-height window t)))
 
 (defvar mevedel--coalesced-timers nil

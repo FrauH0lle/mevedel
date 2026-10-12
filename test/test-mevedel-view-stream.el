@@ -4663,8 +4663,9 @@
 ;; A freeze mid-sweep used to keep the faded band for the whole pause.
 (mevedel-deftest mevedel-view-animation-freeze-rests
   (:doc "Freezing a color label or tool row mid-motion repaints it at rest.")
-  (dolist (style '(shimmer breathe))
-    (let ((mevedel-view-animation--cache nil))
+  (dolist (case '((shimmer) (breathe) (shimmer . native)))
+    (let ((style (car case))
+          (mevedel-view-animation--cache nil))
       (cl-letf (((symbol-function 'mevedel-view-animation--colors)
                  (lambda (_face _frame) (cons "#ffffff" "#000000"))))
         (mevedel-view-stream-test--with-buffers
@@ -4700,8 +4701,15 @@
                                    'mevedel-view-ephemeral (selected-frame))))
                   (should-not (equal-including-properties moving-label rest-label))
                   (should-not (equal-including-properties moving-tool rest-tool))
-                  (setq mevedel-view-spinner-power-policy 'save)
-                  (mevedel-view--refresh-animation-options)
+                  ;; A natively presented row keeps sampling mid-sweep; the
+                  ;; freeze must not take that sample over its rest.
+                  (when (cdr case)
+                    (setq mevedel-view--native-animation-targets
+                          (list (car mevedel-view--spinner-tool-targets))))
+                  (cl-letf (((symbol-function 'mevedel-view-native-sample)
+                             (lambda (_target) 1.0)))
+                    (setq mevedel-view-spinner-power-policy 'save)
+                    (mevedel-view--refresh-animation-options))
                   (should (equal-including-properties
                            rest-label (get-text-property label 'display)))
                   (should (equal-including-properties
