@@ -341,21 +341,28 @@ The underlying phase continues to advance and resumes without restarting."
     (mevedel-view--capture-native-animation))
   (if (mevedel-view--animation-frozen-p)
       (or mevedel-view--spinner-frozen-seconds
-          (progn
-            ;; Rest instead of holding a faded band for the whole pause, and
-            ;; repaint spans already drawn mid-sweep at the next rearm.
-            (setq mevedel-view--spinner-tool-samples
-                  (mapcar (lambda (sample)
-                            (cons (car sample)
-                                  (mevedel-view-animation-rest-seconds
-                                   mevedel-view-tool-spinner-style (cdr sample))))
-                          mevedel-view--spinner-tool-samples)
-                  mevedel-view--spinner-theme-stale-p t)
+          (let* ((target mevedel-view--spinner-label-target)
+                 ;; Glyph fallbacks keep their phase: resting would move them.
+                 (rest (mevedel-view-animation-color-display-p
+                        (or (and target (mevedel-view--animation-target-frame target))
+                            (selected-frame))))
+                 (seconds (or mevedel-view--spinner-last-sample-seconds
+                              (mevedel-view--animation-seconds))))
+            (when rest
+              ;; Rest instead of holding a faded band for the whole pause, and
+              ;; repaint spans already drawn mid-sweep at the next rearm.
+              (setq mevedel-view--spinner-tool-samples
+                    (mapcar (lambda (sample)
+                              (cons (car sample)
+                                    (mevedel-view-animation-rest-seconds
+                                     mevedel-view-tool-spinner-style (cdr sample))))
+                            mevedel-view--spinner-tool-samples)
+                    mevedel-view--spinner-theme-stale-p t))
             (setq mevedel-view--spinner-frozen-seconds
-                  (mevedel-view-animation-rest-seconds
-                   mevedel-view-spinner-style
-                   (or mevedel-view--spinner-last-sample-seconds
-                       (mevedel-view--animation-seconds))))))
+                  (if rest
+                      (mevedel-view-animation-rest-seconds
+                       mevedel-view-spinner-style seconds)
+                    seconds))))
     (setq mevedel-view--spinner-frozen-seconds nil)
     (setq mevedel-view--spinner-last-sample-seconds
           (mevedel-view--animation-seconds))))

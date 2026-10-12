@@ -1501,7 +1501,8 @@ been designed to end at the normal foreground. Freezing now moves the label's
 and the tool rows' retained phases to the end of the sweep (shimmer) or the
 start of the cycle (breathe) and repaints spans already drawn mid-motion.
 Glyph styles and bounce keep their phase, which shows a glyph or a band by
-design. Resuming continues from the clock, as before.
+design, and so does a shimmer or breathe drawn by its glyph fallback: resting
+would move its glyph. Resuming continues from the clock, as before.
 
 ### October 2026: deliver siblings while a coalesced callback waits
 

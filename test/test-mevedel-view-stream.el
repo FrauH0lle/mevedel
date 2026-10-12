@@ -4663,11 +4663,15 @@
 ;; A freeze mid-sweep used to keep the faded band for the whole pause.
 (mevedel-deftest mevedel-view-animation-freeze-rests
   (:doc "Freezing a color label or tool row mid-motion repaints it at rest.")
-  (dolist (case '((shimmer) (breathe) (shimmer . native)))
+  (dolist (case '((shimmer) (breathe) (shimmer . native) (shimmer . glyph)))
     (let ((style (car case))
+          (glyph (eq (cdr case) 'glyph))
           (mevedel-view-animation--cache nil))
       (cl-letf (((symbol-function 'mevedel-view-animation--colors)
-                 (lambda (_face _frame) (cons "#ffffff" "#000000"))))
+                 (lambda (_face _frame) (cons "#ffffff" "#000000")))
+                ;; A low-color terminal draws glyphs, which keep their phase.
+                ((symbol-function 'mevedel-view-animation-color-display-p)
+                 (lambda (_frame) (not glyph))))
         (mevedel-view-stream-test--with-buffers
           (mevedel-view-stream-test--with-visible-view
             (let ((mevedel-view-spinner-style style)
@@ -4703,7 +4707,7 @@
                   (should-not (equal-including-properties moving-tool rest-tool))
                   ;; A natively presented row keeps sampling mid-sweep; the
                   ;; freeze must not take that sample over its rest.
-                  (when (cdr case)
+                  (when (eq (cdr case) 'native)
                     (setq mevedel-view--native-animation-targets
                           (list (car mevedel-view--spinner-tool-targets))))
                   (cl-letf (((symbol-function 'mevedel-view-native-sample)
@@ -4711,9 +4715,11 @@
                     (setq mevedel-view-spinner-power-policy 'save)
                     (mevedel-view--refresh-animation-options))
                   (should (equal-including-properties
-                           rest-label (get-text-property label 'display)))
+                           (if glyph moving-label rest-label)
+                           (get-text-property label 'display)))
                   (should (equal-including-properties
-                           rest-tool (get-text-property tool 'display)))
+                           (if glyph moving-tool rest-tool)
+                           (get-text-property tool 'display)))
                   ;; Resuming continues from the clock, not from rest.
                   (setq mevedel-view-spinner-power-policy 'full)
                   (mevedel-view--refresh-animation-options)
