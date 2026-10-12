@@ -5832,7 +5832,10 @@
             (mevedel-view-animation--dots-cache nil))
         (cl-letf (((symbol-function 'char-displayable-p)
                    (lambda (char &optional _frame)
-                     (or supported (not (memq char '(?⠋ ?● ?·)))))))
+                     (or supported (not (memq char '(?⠋ ?● ?·))))))
+                  ;; The first frame, however long a loaded runner stalls.
+                  ((symbol-function 'mevedel-view--animation-seconds)
+                   (lambda () 0.0)))
           (mevedel-view-stream-test--with-buffers
             (with-current-buffer data-buf
               (setq-local mevedel--current-request
