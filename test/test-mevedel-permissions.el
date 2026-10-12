@@ -148,7 +148,11 @@
                async)
           (apply #'mevedel-check-permission-async-with-metadata
                  tool-name (lambda (decision) (setq async decision)) args)
-          (should (equal sync async))))))
+          (should (equal sync async))
+          ;; A slot's denial keeps its reason.
+          (when (equal tool-name "Custom")
+            (should (equal '(deny . "custom reason")
+                           (mevedel-permission-decision-raw-outcome sync))))))))
 
   :doc "an absolute deny is resolved once and skips both tool slots"
   (let* ((deny-checks 0)

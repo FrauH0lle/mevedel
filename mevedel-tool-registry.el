@@ -31,6 +31,19 @@
 
 
 ;;
+;;; Error conditions
+;;
+;; Part of the tool contract: a permission slot may signal a denial with its
+;; reason, and the pipeline reports failed steps as these conditions.
+
+(define-error 'mevedel-pipeline-error "Pipeline error")
+(define-error 'mevedel-permission-denied "Permission denied"
+              'mevedel-pipeline-error)
+(define-error 'mevedel-validation-error "Validation error"
+              'mevedel-pipeline-error)
+
+
+;;
 ;;; Source directory
 ;;
 ;; Captured at load time so that `mevedel-define-tool' can resolve

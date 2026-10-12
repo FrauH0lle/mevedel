@@ -27,6 +27,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-hooks)
 (require 'mevedel-utilities)
+(require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair)
 
 ;; `gptel-request'
@@ -297,16 +298,6 @@ it was made, then applies FUNCTION to its arguments."
 (defun mevedel-pipeline-canonical-path (path)
   "Return PATH's pre-authorized canonical value for the active handler."
   (or (cdr (assoc path mevedel-pipeline--canonical-path-map)) path))
-
-
-;;
-;;; Error conditions
-
-(define-error 'mevedel-pipeline-error "Pipeline error")
-(define-error 'mevedel-permission-denied "Permission denied"
-              'mevedel-pipeline-error)
-(define-error 'mevedel-validation-error "Validation error"
-              'mevedel-pipeline-error)
 
 
 ;;
