@@ -161,6 +161,8 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-block-at
                   "mevedel-tool-render-data" (start &optional limit))
+(declare-function mevedel-tool-render-data-blocks
+                  "mevedel-tool-render-data" (string))
 (declare-function mevedel-tool-render-data-direct-call
                   "mevedel-tool-render-data" (name data))
 (declare-function mevedel-tool-render-data-extract
@@ -173,6 +175,7 @@
                   "mevedel-tool-render-data" (tool-use-id))
 (declare-function mevedel-tool-render-data-strip
                   "mevedel-tool-render-data" (string &optional expected-tool-use-id))
+(defvar mevedel-tool-render-data-open)
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tool-ui--render-agent "mevedel-tool-ui"
@@ -4689,14 +4692,21 @@ EXPANDED means insert the disclosure body expanded."
                     '(user hook-context prompt render-data ignored))
           (let ((text (buffer-substring (cadr seg) (caddr seg))))
             (unless info
-              (when-let* ((data
-                           (mevedel-view--inline-skill-render-data-from-text
-                            text)))
-                (setq info
-                      (plist-put
-                       data :source
-                       (mevedel-view-disclosure-source-range
-                        data-buf (cadr seg) (caddr seg))))))
+              (dolist (block (mevedel-tool-render-data-blocks text))
+                (when-let* (((not info))
+                            (open (string-search mevedel-tool-render-data-open
+                                                 text (car block)))
+                            (range (mevedel-tool-render-data-block-at
+                                    (+ (cadr seg) open)))
+                            (data (mevedel-view--inline-skill-render-data-from-text
+                                   (buffer-substring (car range) (cadr range)))))
+                  ;; Anchor the record, not its surrounding segment: gptel
+                  ;; may append separators to that segment during dispatch.
+                  (setq info
+                        (plist-put
+                         data :source
+                         (mevedel-view-disclosure-source-range
+                          data-buf (car range) (cadr range)))))))
             (setq hook-audits
                   (append hook-audits
                           (mevedel-view--hook-audit-records-from-text text))))))
@@ -5172,6 +5182,31 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
             (concat (substring preview 0 511) "…")
           preview)))))
 
+(defun mevedel-view--insert-skill-disclosures (info)
+  "Insert source-backed attachment and Prompt disclosures from skill INFO."
+  (let ((attachments (plist-get info :attachments))
+        (body (string-trim (or (plist-get info :prompt) "")))
+        (source (plist-get info :source)))
+    (when attachments
+      ;; Section bounds use source identity, not equality.  Keep the two
+      ;; rows separate even though they originate in the same source record.
+      (mevedel-view--insert-rendered-tool
+       (list :header (mevedel-view--attached-skills-summary
+                      (mapcar (lambda (attachment) (plist-get attachment :name))
+                              attachments)
+                      (length attachments))
+             :body (mapconcat (lambda (attachment) (plist-get attachment :body))
+                              attachments "\n\n")
+             :body-mode 'markdown-mode
+             :vtype 'system-reminder-summary
+             :initially-collapsed-p t)
+       (cons (car source) (cdr source))))
+    (unless (string-empty-p body)
+      (mevedel-view--insert-rendered-tool
+       (list :header "Prompt" :body body :body-mode 'markdown-mode
+             :vtype 'prompt-summary :initially-collapsed-p t)
+       source))))
+
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
@@ -5188,7 +5223,8 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
          (text (if prompt-drawers
                    (mevedel-view--fontify-directive-display-text
                     (mevedel-view--directive-turn-display-text raw-text))
-                 (or (plist-get inline-skill :display-text)
+                 (or (mevedel-view--user-turn-display-text segments data-buf)
+                     (plist-get inline-skill :display-text)
                      raw-text)))
          (attribution (unless directive
                         (mevedel-view--user-turn-attribution segments data-buf)))
@@ -5287,35 +5323,7 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
          (mevedel-view-disclosure-source-range
           data-buf (plist-get drawer :start) (plist-get drawer :end))))
       (when (and inline-skill inline-source-seg)
-        (let* ((attachments (plist-get inline-skill :attachments))
-               (body (string-trim (or (plist-get inline-skill :prompt) "")))
-               (source (plist-get inline-skill :source)))
-          (when attachments
-            ;; A fresh source cons per row: sections are delimited by
-            ;; `mevedel-view-source' identity, so two rows sharing one
-            ;; object would fold as a single section.
-            (mevedel-view--insert-rendered-tool
-             (list :header (mevedel-view--attached-skills-summary
-                            (mapcar (lambda (attachment)
-                                      (plist-get attachment :name))
-                                    attachments)
-                            (length attachments))
-                   :body (mapconcat (lambda (attachment)
-                                      (plist-get attachment :body))
-                                    attachments "\n\n")
-                   :body-mode 'markdown-mode
-                   :vtype 'system-reminder-summary
-                   :initially-collapsed-p t)
-             (mevedel-view-disclosure-source-range
-              data-buf (car source) (cdr source))))
-          (unless (string-empty-p body)
-            (mevedel-view--insert-rendered-tool
-             (list :header "Prompt"
-                   :body body
-                   :body-mode 'markdown-mode
-                   :vtype 'prompt-summary
-                   :initially-collapsed-p t)
-             source)))))))
+        (mevedel-view--insert-skill-disclosures inline-skill)))))
   (insert "\n"))
 
 (defun mevedel-view--directive-turn-display-text (text)
@@ -8471,7 +8479,8 @@ PROMPT-SUMMARY-BODY, when non-nil, is shown as a collapsed Prompt
 section backed by PROMPT-SUMMARY-SOURCE when available.  HOOK-AUDITS
 is a list of hook audit records to render under the user turn.
 ATTRIBUTION identifies the collaboration guest and any attached shared context.
-USER-SOURCE bounds the submitted prompt in the data buffer.
+USER-SOURCE bounds the submitted prompt in the data buffer, including
+trusted skill metadata used for immediate attachment disclosures.
 
 Sets `mevedel-view--user-pre-rendered' so the post-response render
 path knows to skip the user turn it would otherwise extract for this
@@ -8519,17 +8528,22 @@ marker at the end of the inserted block."
           (mevedel-view--insert-hook-audit-block
            audit
            (plist-get audit :source)))
-        (let ((prompt-body (and (stringp prompt-summary-body)
-                                (string-trim prompt-summary-body))))
-          (when (and prompt-body
-                     (not (string-empty-p prompt-body)))
-            (mevedel-view--insert-rendered-tool
-             (list :header "Prompt"
-                   :body prompt-body
-                   :body-mode 'markdown-mode
-                   :vtype 'prompt-summary
-                   :initially-collapsed-p t)
-             prompt-summary-source)))
+        (let ((inline-skill
+               (when (and user-source (buffer-live-p mevedel--data-buffer))
+                 (with-current-buffer mevedel--data-buffer
+                   (mevedel-view--inline-skill-info
+                    (mevedel-transcript-segments (car user-source) (cdr user-source))
+                    (current-buffer))))))
+          (if inline-skill
+              (mevedel-view--insert-skill-disclosures inline-skill)
+            (let ((prompt-body (and (stringp prompt-summary-body)
+                                    (string-trim prompt-summary-body))))
+              (when (and prompt-body (not (string-empty-p prompt-body)))
+                (mevedel-view--insert-rendered-tool
+                 (list :header "Prompt" :body prompt-body
+                       :body-mode 'markdown-mode :vtype 'prompt-summary
+                       :initially-collapsed-p t)
+                 prompt-summary-source)))))
         (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
         (add-text-properties start (point)
                              `(read-only t

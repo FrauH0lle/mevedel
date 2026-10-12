@@ -228,7 +228,7 @@
 (declare-function mevedel-view--begin-external-turn
 		  "mevedel-view-composer"
 		  (display-text data-turn-start &optional kind
-				hook-context no-spinner))
+				hook-context no-spinner user-source))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))

@@ -273,7 +273,7 @@
 (declare-function mevedel-view--begin-external-turn
 		  "mevedel-view-composer"
 		  (display-text data-turn-start &optional kind
-				hook-context no-spinner))
+				hook-context no-spinner user-source))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-post-tool "mevedel-view-stream"
@@ -1227,21 +1227,23 @@ DISPLAY-TEXT is mirrored to the view, defaulting to PROMPT.  KIND and
 HOOK-CONTEXT are forwarded to `mevedel-view--begin-external-turn',
 with NO-SPINNER forwarded when non-nil."
   (goto-char (point-max))
-  (mevedel--insert-user-turn prompt)
-  (when (and display-text (not (equal display-text prompt)))
-    (insert (mevedel-tool-render-data-format
-             (list :kind 'user-display :text display-text))))
-  (mevedel-collaboration--safe-accepted-prompt (current-buffer))
-  (let ((data-turn-start (copy-marker (point) nil)))
-    (when-let* ((view (and (boundp 'mevedel--view-buffer)
-                           mevedel--view-buffer))
-                ((buffer-live-p view))
-                ((fboundp 'mevedel-view--begin-external-turn)))
-      (with-current-buffer view
-        (mevedel-view--begin-external-turn
-         (or display-text prompt) data-turn-start kind hook-context
-         no-spinner)))
-    data-turn-start))
+  (let* ((body-start (mevedel--insert-user-turn prompt))
+         (user-source (cons (copy-marker body-start nil)
+                            (copy-marker (point) nil))))
+    (when (and display-text (not (equal display-text prompt)))
+      (insert (mevedel-tool-render-data-format
+               (list :kind 'user-display :text display-text))))
+    (mevedel-collaboration--safe-accepted-prompt (current-buffer))
+    (let ((data-turn-start (copy-marker (point) nil)))
+      (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                            mevedel--view-buffer))
+                  ((buffer-live-p view))
+                  ((fboundp 'mevedel-view--begin-external-turn)))
+        (with-current-buffer view
+          (mevedel-view--begin-external-turn
+           (or display-text prompt) data-turn-start kind hook-context
+           no-spinner user-source)))
+      data-turn-start)))
 
 (defun mevedel--submit-generated-turn
     (prompt &optional display-text prompt-submission prepared-outcome)

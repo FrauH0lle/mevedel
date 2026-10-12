@@ -1211,6 +1211,7 @@
 		       (view-buffer (generate-new-buffer " *mevedel-local-turn-view*"))
 		       (displayed nil)
 		       (kind nil)
+		       (source nil)
 		       (sent nil)
 		       (original-view-fn (and (fboundp 'mevedel-view--begin-external-turn)
 					      (symbol-function 'mevedel-view--begin-external-turn))))
@@ -1218,9 +1219,10 @@
 		       (progn
 			 (fset 'mevedel-view--begin-external-turn
 			       (lambda (display-text _marker &optional turn-kind
-                                                     _hook-context _no-spinner)
+                                                     _hook-context _no-spinner user-source)
 				 (setq displayed display-text
-				       kind turn-kind)))
+				       kind turn-kind
+				       source user-source)))
 			 (cl-letf (((symbol-function 'gptel-send)
 				    (lambda (&rest _) (setq sent t))))
 			   (with-current-buffer data-buffer
@@ -1246,6 +1248,9 @@
 					(point-min) (point-max)))))))))
 			 (should (equal "Show setup" displayed))
 			 (should (eq 'worktree kind))
+			 (with-current-buffer data-buffer
+			   (should (equal "Setup context\n"
+			                  (buffer-substring-no-properties (car source) (cdr source)))))
 			 (should-not sent))
 		     (if original-view-fn
 			 (fset 'mevedel-view--begin-external-turn original-view-fn)

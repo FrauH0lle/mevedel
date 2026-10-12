@@ -304,7 +304,12 @@ model/effort, agent, hooks, and request permission policy. Their current source
 is reloaded at dispatch and retry; an explicitly bound skill that is missing,
 disabled, malformed, or no longer user-invocable leaves the accepted handoff
 retryable and starts no request. The transcript stores the full generated
-prompt while the rendered view keeps the compact implementation label.
+prompt while the rendered view keeps the compact implementation label, both
+live and after reconstruction. Prepared skill bodies travel in that model
+prompt and appear immediately in a separate collapsed attached-skills
+disclosure. Its expansion is independent of the Prompt drawer, hook context,
+and ordinary system-reminder batches; attachments do not increase the reminder
+batch count.
 
 For Worktree execution, the target session owns the Goal, accepted artifact,
 selected permission mode, accepted model/effort snapshot, and selected Goal

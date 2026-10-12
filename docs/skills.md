@@ -647,7 +647,11 @@ render-data block connects that text to the prepared model prompt without
 exposing the control metadata to the model. It also records the names of the
 required attachments whose `<system-reminder>` blocks lead that prompt, so the
 view rows them as a collapsed attached-skills disclosure and keeps the prompt
-drawer to the prepared body. `$skill` preparation may block chat
+drawer to the prepared body. Both disclosures appear immediately on prepared
+composer submissions and generated implementation turns, before the provider
+starts, and use the same source-backed presentation after reconstruction.
+The attached-skills row expands independently of Prompt and ordinary reminder
+batches. `$skill` preparation may block chat
 input while asynchronous injections run, and an awaited fork keeps its owning
 workflow open until its child settles. Cancellation or buffer death invalidates
 the preparation token so late callbacks cannot dispatch.

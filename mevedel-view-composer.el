@@ -1360,17 +1360,18 @@ and other input properties remain untouched."
 
 
 (defun mevedel-view--begin-external-turn
-    (display-text data-turn-start &optional kind hook-context no-spinner)
+    (display-text data-turn-start &optional kind hook-context no-spinner user-source)
   "Begin a view turn initiated outside the editable input.
 
 DISPLAY-TEXT is shown as the user-side turn in the view.
 DATA-TURN-START is the data-buffer marker where the assistant
 response for this turn begins.  KIND may be `directive'.  HOOK-CONTEXT
 is model-visible hook context to summarize in the view.  When
-NO-SPINNER is non-nil, render only the local user turn."
+NO-SPINNER is non-nil, render only the local user turn.  USER-SOURCE bounds
+the stored prompt, including its trusted skill presentation metadata."
   (mevedel-view--ensure-interactive-chat-view)
   (let ((turn-start (mevedel-view--insert-user-message
-                     display-text kind hook-context)))
+                     display-text kind hook-context nil nil nil nil user-source)))
     (when (eq kind 'directive)
       (when-let* ((drawer (mevedel-view--external-prompt-drawer
                            data-turn-start)))
