@@ -618,21 +618,34 @@ admit only contained Markdown files before any content search."
       (let ((deadline (+ (float-time) mevedel-tool-fs-search-timeout))
             (owner (mevedel-current-origin))
             (teardown mevedel-tool-fs-search--teardown)
-            cancelled cancels)
+            cancelled settled cancels)
         (cl-labels
-            ((start (continuation name command)
+            ((finish (result)
+               (unless (or cancelled settled)
+                 ;; Downstream delivery owns its errors once settlement begins.
+                 (setq settled t)
+                 (funcall callback result)))
+             (start (continuation name command)
                (push
                 (mevedel-execution-start-helper
                  (mevedel-pipeline-handler-resumable
                   (lambda (result)
-                    (unless cancelled (funcall continuation result))))
+                    (unless (or cancelled settled)
+                      (condition-case err
+                          (funcall continuation result)
+                        (error
+                         (if settled
+                             (signal (car err) (cdr err))
+                           ;; Helper startup errors may name private scratch paths.
+                           (reject (format (concat "Package Grep could not continue search (%s); "
+                                                   "check helper availability and retry")
+                                           address))))))))
                  name command read-paths nil
                  :session session :owner owner :teardown-callback teardown
                  :timeout (max 0.001 (- deadline (float-time))))
                 cancels))
              (reject (reason)
-               (funcall callback
-                        (list :exit-code 2 :output (concat reason "\n")))))
+               (finish (list :exit-code 2 :output (concat reason "\n")))))
           (start
            (lambda (result)
              (let ((outcome (mevedel-tool-fs-search--rg-outcome result))
@@ -640,7 +653,7 @@ admit only contained Markdown files before any content search."
                (cond
                 ((memq outcome '(timeout output-limit))
                  ;; File-list output is not content and must not be paginated.
-                 (funcall callback (plist-put (copy-sequence result) :output "")))
+                 (finish (plist-put (copy-sequence result) :output "")))
                 ((not (memq outcome '(success no-match)))
                  (reject "Package Grep could not select files; check :glob and :type"))
                 ((> (string-bytes output) mevedel-tool-fs-search--grep-max-output-bytes)
@@ -660,11 +673,11 @@ admit only contained Markdown files before any content search."
                          (split-string output "\0" t))))
                    (cond
                     ((>= (float-time) deadline)
-                     (funcall callback '(:exit-code 1 :timed-out-p t :output "")))
+                     (finish '(:exit-code 1 :timed-out-p t :output "")))
                     ((null files)
-                     (funcall callback '(:exit-code 1 :output "")))
+                     (finish '(:exit-code 1 :output "")))
                     (t
-                     (start callback "mevedel-grep"
+                     (start #'finish "mevedel-grep"
                             (cons "rg" (append '("--with-filename") rg-args files))))))))))
            "mevedel-grep-files"
            (append (list "rg" "--files" "--null" "--hidden" "--no-require-git")
