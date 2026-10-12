@@ -81,16 +81,15 @@ jobs:
             echo "Source $hash is pinned."
             exit 0
           fi
-          if gh release view "$tag" >/dev/null 2>&1; then
-            # An earlier run published but lost its push: pin what it published.
-            rm -rf dist && mkdir dist
-            gh release download "$tag" --dir dist --pattern 'mevedel-native-*.so'
-            (cd dist && for file in mevedel-native-*.so; do sha256sum "$file" > "$file.sha256"; done)
-          else
-            gh release create "$tag" --title "Native module $hash" \
-              --notes "Prebuilt native modules for source $hash." \
-              dist/mevedel-native-*.so
-          fi
+          for arch in x86_64 aarch64; do
+            test -f "dist/mevedel-native-$arch.so" || { echo "No $arch module built" >&2; exit 1; }
+          done
+          # An unpinned release was never installable, so an earlier run's
+          # assets, complete or not, are replaced by this build's.
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" --title "Native module $hash" \
+                 --notes "Prebuilt native modules for source $hash."
+          gh release upload "$tag" dist/mevedel-native-*.so --clobber
           entry="(\"$hash\""
           for file in dist/mevedel-native-*.so.sha256; do
             arch=$(basename "$file" .so.sha256 | sed 's/^mevedel-native-//')
@@ -110,4 +109,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add native/prebuilt.eld
           git commit -m "chore(native): Pin prebuilt module checksums for $hash"
-          git push
+          for attempt in 1 2 3; do
+            git push && exit 0
+            git pull --rebase origin master
+            if [ "$(source_hash)" != "$hash" ]; then
+              echo "Sources changed since $hash; a later run pins them."
+              exit 0
+            fi
+          done
+          exit 1

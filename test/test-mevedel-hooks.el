@@ -2727,16 +2727,18 @@
                      'PreToolUse
                      '(:tool-name "Bash" :tool-input (:command "echo hi"))
                      cb session)))))
-            (should
-             (equal (mapconcat #'identity
-                               (list plugin-root
-                                     plugin-root
-                                     data-dir
-                                     data-dir
-                                     plugin-root
-                                     data-dir)
-                               "|")
-                    (plist-get decision :system-message)))
+            ;; A failed or unparsed run carries its reason in the decision.
+            (ert-info ((format "Decision: %S" decision))
+              (should
+               (equal (mapconcat #'identity
+                                 (list plugin-root
+                                       plugin-root
+                                       data-dir
+                                       data-dir
+                                       plugin-root
+                                       data-dir)
+                                 "|")
+                      (plist-get decision :system-message))))
             (should (file-directory-p data-dir)))
           (mevedel-plugins-disable "demo" workspace)
           (let* ((clean-command
