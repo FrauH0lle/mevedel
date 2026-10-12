@@ -905,6 +905,27 @@
         (when (re-search-forward ") \\(.\\)" nil t)
           (string-to-char (match-string 1)))))))
 
+(mevedel-deftest mevedel-transport-resume-paused
+  (:doc "continues only the processes due to continue within a window")
+  (mevedel-transport-test--with-guard
+    (skip-unless (and (executable-find "sleep")
+                      (not (memq system-type '(windows-nt ms-dos)))))
+    (let ((soon (make-process :name "mevedel-test-soon" :command '("sleep" "30")
+                              :connection-type 'pipe :noquery t))
+          (later (make-process :name "mevedel-test-later" :command '("sleep" "30")
+                               :connection-type 'pipe :noquery t)))
+      (unwind-protect
+          (progn
+            (should (mevedel-transport-pause-process soon 0.05))
+            (should (mevedel-transport-pause-process later 0.5))
+            (mevedel-transport-resume-paused 0.2)
+            (should-not (mevedel-transport-process-paused-p soon))
+            (should (mevedel-transport-process-paused-p later))
+            (mevedel-transport-resume-paused)
+            (should-not mevedel-transport--paused))
+        (delete-process soon)
+        (delete-process later)))))
+
 (mevedel-deftest mevedel-transport-pause-process ()
   ,test
   (test)

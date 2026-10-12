@@ -35,7 +35,7 @@
                   "mevedel-transport" (seconds function &rest args))
 (declare-function mevedel-transport-pause-process "mevedel-transport" (process seconds))
 (declare-function mevedel-transport-resume-process "mevedel-transport" (process))
-(declare-function mevedel-transport-resume-paused "mevedel-transport" ())
+(declare-function mevedel-transport-resume-paused "mevedel-transport" (&optional within))
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
 (autoload 'mevedel-transport-pause-process "mevedel-transport")
 (autoload 'mevedel-transport-resume-process "mevedel-transport")
@@ -218,18 +218,23 @@ zero-delay timer."
 (defun mevedel-gptel-stream-bridge--flush-batch-due (info)
   "Insert INFO's due batch, run its follow-up work and continue paced streams.
 One timer pass inserts, renders and continues the paced curl or Claude
-Code adapter processes: their own resume timers, due at other times, each
-cost one more redisplay per batch.  Continuing another stream early only
-means it is read once more before it pauses again."
+Code adapter process: its own resume timer, due at another time, would
+cost one more redisplay per batch.  The stream feeding this batch was
+paused for the batch delay when the batch began, so the flush continues
+processes due within half that delay.  Continuing every paused stream
+read each of N concurrent streams N times per delay; a stream continued
+early falls in step with this one, sharing its passes from then on."
   (let ((after (list nil)))
-    (let ((mevedel-gptel-stream-bridge--after-flush after))
-      (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info))
-    (dolist (function (nreverse (car after)))
-      (condition-case-unless-debug err
-          (funcall function)
-        (error (message "mevedel: stream batch follow-up failed: %s"
-                        (error-message-string err))))))
-  (mevedel-transport-resume-paused))
+    (unwind-protect
+        (let ((mevedel-gptel-stream-bridge--after-flush after))
+          (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info))
+      (dolist (function (nreverse (car after)))
+        (condition-case-unless-debug err
+            (funcall function)
+          (error (message "mevedel: stream batch follow-up failed: %s"
+                          (error-message-string err)))))
+      (mevedel-transport-resume-paused
+       (/ mevedel-gptel-stream-bridge-insert-batch-delay 2.0)))))
 
 (defun mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch (info)
   "Flush any pending batched string stream insert on INFO."

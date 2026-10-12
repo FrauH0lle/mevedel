@@ -91,7 +91,10 @@ acp.el's sentinel ignores stop and continue events."
              (< (string-bytes output) mevedel-acp--pace-backlog-bytes)
              (>= (process-get process 'mevedel-acp--text-reads)
                  mevedel-acp--pace-after-text-reads)
-             (boundp 'mevedel-gptel-stream-bridge-insert-batch-delay))
+             ;; Pacing follows text batches; without batching it only delays.
+             (numberp (bound-and-true-p
+                       mevedel-gptel-stream-bridge-insert-batch-delay))
+             (> mevedel-gptel-stream-bridge-insert-batch-delay 0))
     ;; acp.el inserts this text from a drain one timer pass after the read,
     ;; so the batch it starts falls due just after a pause of the same
     ;; length, and the two would each cost a redisplay.  The batch's flush

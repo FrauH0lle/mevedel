@@ -1692,9 +1692,9 @@ chunk in the data buffer.  Defers the incremental render by
 `mevedel-view-stream-render-delay' seconds so chunks in the same pending
 window share one refresh instead of rebuilding the view per token.  A
 batch flushed by `mevedel-gptel-stream-bridge' already coalesced its
-chunks: it renders from a zero-delay timer, which runs in the same wakeup
-as the flush instead of waking the editor again, and shows the text
-sooner."
+chunks: it renders through `mevedel-gptel-stream-bridge-after-flush',
+inside the batch's own timer, instead of waking the editor again, and
+shows the text sooner."
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))

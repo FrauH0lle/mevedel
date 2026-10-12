@@ -448,10 +448,15 @@ output is complete.  Return non-nil when PROCESS was stopped."
     ;; A stale ID could name an unrelated process by the time Emacs dies.
     (mevedel-transport--report-paused)))
 
-(defun mevedel-transport-resume-paused ()
-  "Continue every paced process."
-  (mapc #'mevedel-transport-resume-process
-        (copy-sequence mevedel-transport--paused)))
+(defun mevedel-transport-resume-paused (&optional within)
+  "Continue every paced process, or those due to continue WITHIN seconds."
+  (let ((until (and within (+ (float-time) within))))
+    (dolist (process (copy-sequence mevedel-transport--paused))
+      (when (or (null until)
+                (when-let* ((timer (process-get
+                                    process 'mevedel-transport--resume-timer)))
+                  (<= (float-time (timer--time timer)) until)))
+        (mevedel-transport-resume-process process)))))
 
 
 ;;

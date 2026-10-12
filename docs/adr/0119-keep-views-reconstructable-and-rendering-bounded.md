@@ -1612,9 +1612,14 @@ when the pass began, so the zero-delay timer that rendered a flushed batch ran
 in a second pass after a redisplay; the paced process's resume timer, due at
 its own time, added a third. The batch's timer now runs the render itself once
 the batch is inserted, through `mevedel-gptel-stream-bridge-after-flush`, and
-continues every paced process (curl and the Claude Code adapter alike); their
-resume timers remain the fallback when nothing is queued. Continuing another
-stream early only reads it once more before it pauses.
+continues the paced process feeding it (curl or the Claude Code adapter); its
+resume timer remains the fallback when nothing is queued. The read that paused
+that process started the batch, so the flush continues every process due to
+continue within half a batch delay. Continuing every paused process instead
+read each of N concurrent streams, such as parallel agents, N times per batch
+delay; a stream continued early now falls in step with the one flushing, and
+the two share their passes from then on. A flush that fails still renders and
+continues.
 
 In the headless nested KWin harness (Emacs 31.1 pgtk, a 1536x888 frame, native
 bounce label, a mock OpenAI-compatible stream through the real curl pacing),

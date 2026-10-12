@@ -81,6 +81,11 @@
                        0.26))
             (mevedel-acp--wake connection))
           (should-not mevedel-transport--paused)
+          ;; Without text batches there is nothing to pace for.
+          (dolist (delay '(nil 0))
+            (let ((mevedel-gptel-stream-bridge-insert-batch-delay delay))
+              (mevedel-acp--pace connection process text)
+              (should-not mevedel-transport--paused)))
           (setf (mevedel-acp-state connection) 'idle)
           (mevedel-acp--pace connection process text)
           (should-not mevedel-transport--paused))

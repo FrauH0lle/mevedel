@@ -384,6 +384,12 @@ gptel's sentinel through the cleanup advice."
           (should-not signals))
       (delete-process process))))
 
+(defun mevedel-gptel-stream-bridge-test--batch-falls-due (process)
+  "Make PROCESS's pause end now, when its batch falls due in real use.
+The read that paused PROCESS also started the batch, so both are due
+together; a test flushes at once instead of waiting for the pair."
+  (timer-set-time (process-get process 'mevedel-transport--resume-timer) nil))
+
 (mevedel-deftest mevedel-gptel-stream-bridge--flush-batch-due ()
   ,test
   (test)
@@ -412,6 +418,7 @@ gptel's sentinel through the cleanup advice."
           (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
           (should (eq 'stop (mevedel-gptel-stream-bridge-test--await-status
                              process 'stop)))
+          (mevedel-gptel-stream-bridge-test--batch-falls-due process)
           (let (messages)
             (mevedel-test--with-captured-diagnostics messages
               (mevedel-gptel-stream-bridge--flush-batch-due info))
@@ -422,7 +429,25 @@ gptel's sentinel through the cleanup advice."
           (should-not (process-get process 'mevedel-transport--resume-timer))
           (should (= timers (length timer-list)))
           (should (eq 'run (mevedel-gptel-stream-bridge-test--await-status
-                            process 'run))))))))
+                            process 'run)))))))
+
+  :doc "continues the stream and runs follow-ups when the insert fails"
+  (mevedel-gptel-stream-bridge-test--with-paced-stream
+    (let ((rendered nil))
+      (cl-labels ((orig (_response _info &optional _raw)
+                    (mevedel-gptel-stream-bridge-after-flush
+                     (lambda () (setq rendered t)))
+                    (error "Injected insert failure")))
+        (mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
+         #'orig "chunk" info)
+        (mevedel-gptel-stream-bridge--note-stream-start process)
+        (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
+        (should (eq 'stop (mevedel-gptel-stream-bridge-test--await-status
+                           process 'stop)))
+        (mevedel-gptel-stream-bridge-test--batch-falls-due process)
+        (should-error (mevedel-gptel-stream-bridge--flush-batch-due info))
+        (should rendered)
+        (should-not mevedel-transport--paused)))))
 
 (mevedel-deftest mevedel-gptel-stream-bridge-after-flush ()
   ,test
