@@ -1673,8 +1673,12 @@ frame's map event, so a Lisp thread showing a frame painted with the context
 still current on the main thread and segfaulted (exit 139). Every dispatch and
 iteration now releases the context, so GDK makes it current on whichever
 thread paints; at a 30 Hz change editor CPU was 6.0-6.2% with the release and
-6.1-6.2% without. Stock pgtk itself hangs when a thread shows a frame after another
-thread waited in `sleep-for`, so that case is checked by hand.
+6.1-6.2% without. Stock pgtk itself deadlocks when a thread shows a frame, now
+and then (1 in 19 runs; 3 in 3 after another thread waited in `sleep-for`): the
+thread waits in `gtk_main_iteration` for the GLib context while the main thread
+waits in `thread-join`. The module did not change that rate (2 in 28), so the
+test showing a frame from a thread runs in a daemon of its own and skips a
+timeout; a crash still fails it.
 
 An Emacs patch did all three and passed mevedel's suite, but changes to Emacs
 need a rebuild on every machine and distribution, and LLM-written

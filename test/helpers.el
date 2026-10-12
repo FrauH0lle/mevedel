@@ -1234,10 +1234,11 @@ The native module must also build here."
        (executable-find "cc") (executable-find "pkg-config")
        (zerop (call-process "pkg-config" nil nil nil "--exists" "gtk+-3.0" "wayland-client"))))
 
-(defun mevedel-test--run-wayland-fixture (fixture)
+(defun mevedel-test--run-wayland-fixture (fixture &optional timeout)
   "Run FIXTURE, a file under test/fixtures, in a PGTK daemon on a nested KWin.
 The daemon gets the display name in MEVEDEL_NATIVE_DISPLAY and writes its
 observations to the file named by MEVEDEL_NATIVE_RESULT before exiting.
+A daemon running longer than TIMEOUT seconds, 90 by default, fails the test.
 Return (OBSERVED EXIT-STATUS . TRACE), TRACE being the daemon's
 WAYLAND_DEBUG client log."
   (let* ((directory (make-temp-file "mevedel-wayland-" t))
@@ -1276,7 +1277,7 @@ WAYLAND_DEBUG client log."
                                    `(setq load-path (cons ,mevedel-test--root load-path)
                                           mevedel-user-dir ,(file-name-as-directory directory)))
                          "-l" (file-name-concat mevedel-test--root "test/fixtures" fixture)))))
-          (with-timeout (90 (ert-fail "Wayland scenario timed out"))
+          (with-timeout ((or timeout 90) (ert-fail "Wayland scenario timed out"))
             (while (process-live-p daemon) (accept-process-output nil 0.05)))
           (cl-list* (with-temp-buffer
                       (insert-file-contents result)

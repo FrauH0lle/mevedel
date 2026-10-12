@@ -67,6 +67,26 @@
       (dolist (phase phases)
         (should (= 0 (mevedel-present-wayland--count "wl_shm_pool#[0-9]+\\.create_buffer" (cdr phase))))))))
 
+(mevedel-deftest mevedel-present-wayland/thread
+  (:doc "Survives a Lisp thread showing a frame, which runs GTK's loop itself.")
+  (pcase-let* ((_ (skip-unless (mevedel-test--wayland-available-p)))
+               (`(,observed ,status . ,_)
+                (condition-case err
+                    (mevedel-test--run-wayland-fixture "present-wayland-thread.el" 20)
+                  (ert-test-failed
+                   ;; Stock pgtk itself deadlocks here now and then: the
+                   ;; thread waits in `gtk_main_iteration' for the GLib
+                   ;; context while the main thread waits in `thread-join'.
+                   ;; A crash or an error still fails.
+                   (if (equal (cadr err) "Wayland scenario timed out")
+                       (ert-skip "Stock pgtk deadlocked showing a frame from a thread")
+                     (signal (car err) (cdr err)))))))
+    (ert-info ((format "Observed: %S" observed))
+      (should-not (plist-get observed :error))
+      (should (= 0 status))
+      (should (eq 'enabled (plist-get observed :state)))
+      (should (eq t (plist-get observed :visible))))))
+
 (provide 'test-mevedel-present-wayland)
 
 ;;; test-mevedel-present-wayland.el ends here
