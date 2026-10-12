@@ -41,12 +41,15 @@ Target replacement strips filesystem entries from session profiles and invalidat
 frozen authority alongside session resource grants. It preserves command and
 network approvals and does not rewrite durable workspace/global configuration.
 
-Human queue admission defaults existing directory writes and reads beneath
-inaccessible masks to recursive scope for confined Bash and batch Eval. The
-card displays that scope for both execution and remembering, so ordinary
-approval accepts an enforceable grant without a separate scope-selection step.
-Only the requested directory is selected; access level is preserved. Hooks and
-automatic review still receive the original request. Files, missing paths,
+Before automatic review and human admission, the queue defaults existing directory
+writes and reads beneath inaccessible masks to recursive scope for confined Bash
+and batch Eval. The reviewer judges that prepared scope, sees the original
+resources beside it, and a fallback card displays the same selection for both
+execution and remembering. Ordinary approval therefore accepts an enforceable
+grant without a separate scope-selection step. Only the requested directory is
+selected; access level is preserved. The reviewer can approve the prepared tree
+once but never chooses a broader resource itself. Hooks still receive the
+original request. Files, missing paths,
 already-readable directory reads, native operations, live Eval and unconfined
 operations retain their original scope. The scope picker omits unrepresentable
 exact directory choices. Approval and launch validation still refuse unusable
@@ -206,3 +209,23 @@ authority is not rewritten.
 Regression coverage includes confined Git index updates preserving local files,
 invocation-only approval, session and workspace reuse, protected directory
 reads, exact file grants, and automatic-review fallback to the human card.
+
+### Prepare enforceable scope before automatic review
+
+Keeping the original exact scope for automatic review made that review unable
+to approve any confined exact-directory write. An October 2026 offline probe
+through the production path reproduced the failure: approval validation
+rejected the reviewer's `allow-once` for an exact `.git` directory with
+"Exact directory access cannot be confined", so every such request reached a
+human anyway. Telemetry from the same period recorded only `ask` outcomes for
+12 filesystem reviews.
+
+Scope preparation now runs inside review, after review owns cancellation and
+timeout, so a yielding directory check cannot settle a cancelled entry. It uses
+the same helper as human admission. The reviewer receives the selected tree,
+the original resources and a description of each prepared scope. Its trusted
+policy tells it to judge that complete tree and never to choose broader scope
+itself. Preparation is idempotent, so fallback shows the reviewed scope. Hooks
+keep the original request. A real confined Git fixture verifies one reviewed
+invocation staging through the prepared metadata tree, while a nested
+repository's metadata stays unwritable and no grant persists.

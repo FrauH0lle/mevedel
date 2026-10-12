@@ -840,7 +840,15 @@ additive child permissions are available only to batch Eval"
       '(:level use-default :additional-permissions nil :eval-mode live)
       (mevedel-tool-exec-permission-effective-sandbox-request
        '(:expression "(url-retrieve-synchronously url)" :mode "live")
-       "Eval" "(url-retrieve-synchronously url)" 'live context)))))
+       "Eval" "(url-retrieve-synchronously url)" 'live context))))
+  :doc "an optional live Eval justification creates no authority request"
+  (dolist (justification '("Inspect the buffer list" "  " nil))
+    (should
+     (equal
+      '(:level use-default :additional-permissions nil :eval-mode live)
+      (mevedel-tool-exec-permission-effective-sandbox-request
+       (list :expression "(buffer-list)" :mode "live" :justification justification)
+       "Eval" "(buffer-list)" 'live '(:buckets ((:session))))))))
 
 (mevedel-deftest mevedel-tool-exec-permission--additional-authority-state ()
   ,test

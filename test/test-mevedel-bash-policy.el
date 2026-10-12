@@ -328,6 +328,21 @@
   (should-not
    (mevedel-bash-policy-reusable-operation-p "printf '%s' '*.tmp'")))
 
+(mevedel-deftest mevedel-bash-policy-stable-prefix ()
+  ,test
+  (test)
+  :doc "single literal subcommands keep their literal executable"
+  (progn
+    (should (equal "git fetch" (mevedel-bash-policy-stable-prefix "git fetch origin")))
+    (should (equal "/usr/bin/git fetch"
+                   (mevedel-bash-policy-stable-prefix "/usr/bin/git fetch"))))
+  :doc "conservative syntax has no nearby prefix"
+  (let ((mevedel-bash-dangerous-commands '("rm")))
+    (dolist (command '("git -C repo fetch" "pwd && git fetch" "git fetch $REMOTE"
+                       "LANG=C git fetch" "FOO=bar git fetch" "doas git fetch" "env git fetch"
+                       "rm cache" "git fetch *" "git fetch &" ""))
+      (should-not (mevedel-bash-policy-stable-prefix command)))))
+
 (mevedel-deftest mevedel-bash-policy-effective-sandbox-mode ()
   ,test
   (test)

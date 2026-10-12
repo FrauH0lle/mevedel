@@ -124,8 +124,8 @@
                                (and key (list key (list selected))))
                        (car (plist-get entry :remember-authority-cell))))))))
 
-(mevedel-deftest mevedel-permission-queue--prepare-resources
-  (:doc "human defaults follow automatic review and create no authority")
+(mevedel-deftest mevedel-permission-queue-prepare-resources
+  (:doc "fallback admission prepares the same tree idempotently and creates no authority")
   (let* ((root (make-temp-file "mevedel-human-scope-" t))
          (session (mevedel-session--create
                    :permission-mode 'edits :sandbox-mode 'required))
@@ -141,10 +141,8 @@
         (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry) #'ignore)
                   ((symbol-function 'mevedel-permission-review-start)
                    (lambda (reviewed cont)
-                     (should (equal (list original)
-                                    (car (plist-get reviewed :resource-selection-cell))))
-                     (should-error (mevedel-permission-queue-validate-approval
-                                    reviewed 'allow-once) :type 'user-error)
+                     (mevedel-permission-queue-prepare-resources reviewed)
+                     (mevedel-permission-queue-validate-approval reviewed 'allow-once)
                      (setq fallback cont))))
           (mevedel-permission--enqueue entry session)
           (should-not (mevedel-session-permission-queue session))
@@ -162,6 +160,16 @@
             (should (equal selected (car (car (plist-get entry :resource-selection-cell)))))))
       (mevedel-permission-queue-abort-all session)
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-permission-queue-justification
+  (:doc "reads a trimmed reason from the entry or its arguments, never blank")
+  (progn
+    (should (equal "Inspect" (mevedel-permission-queue-justification
+                              '(:args (:justification "  Inspect ")))))
+    (should (equal "Entry" (mevedel-permission-queue-justification
+                            '(:justification "Entry" :args (:justification "Args")))))
+    (dolist (entry '((:args (:justification "  ")) (:justification 7) nil))
+      (should-not (mevedel-permission-queue-justification entry)))))
 
 (mevedel-deftest mevedel-permission-queue--admit
   (:doc "cancellation during directory inspection never leaves a pending card")
@@ -1218,7 +1226,7 @@
                       ('generic "Path: /tmp/input")
                       ('bash "Command: git status")
                       ('eval "Mode: batch")
-                      ('sandbox "Justification: Read input")))
+                      ('sandbox "Model's reason: Read input")))
                    (car card)))
           (with-temp-buffer
             (setq-local mevedel--session other-session)
@@ -1440,7 +1448,7 @@
                      :callback #'ignore)
                session)))
           (with-current-buffer parent-view
-            (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+            (should (string-match-p "Elisp Evaluation Request"
                                     (buffer-string)))
             (should (string-match-p "from /root/verifier"
                                     (buffer-string)))
@@ -1506,7 +1514,7 @@
                      (agent-pos (string-search
                                  "Blocked /root/verifier" text))
                      (prompt-pos (string-search
-                                  "The LLM is requesting permission to evaluate elisp"
+                                  "Elisp Evaluation Request"
                                   text)))
                 (should agent-pos)
                 (should prompt-pos)
@@ -1803,8 +1811,17 @@
                             (overlay-start ov) (overlay-end ov))))
                   (let ((body (buffer-substring-no-properties
                                (overlay-start ov) (overlay-end ov))))
+                    ;; The folded card keeps the actual scope; TAB reveals why.
+                    (should-not (string-match-p "admission: ask" body)))
+                  (goto-char (overlay-start ov))
+                  (call-interactively (lookup-key (overlay-get ov 'keymap) (kbd "TAB")))
+                  (setq ov (gethash id mevedel-view--interaction-overlays))
+                  (let ((body (buffer-substring-no-properties
+                               (overlay-start ov) (overlay-end ov))))
+                    (should (string-match-p (regexp-quote choice) body))
                     (should (string-match-p "admission: ask" body))
                     (should (string-match-p "outside the allowed roots" body)))
+                  (should (equal draft (mevedel-view--input-text)))
                   (goto-char (overlay-start ov))
                   (call-interactively
                    (lookup-key (overlay-get ov 'keymap) approval))

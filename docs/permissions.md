@@ -385,13 +385,15 @@ Identical entries in different scopes remain separate and independently
 revocable. Global entries are authored explicitly: prompt-based remembering
 continues to write only session or workspace authority.
 
-Human permission cards select an enforceable scope before displaying approval
-controls. For confined Bash and batch Eval, existing directory writes and
-reads beneath inaccessible masks default to the requested directory's recursive
-scope. Files, missing paths, already-readable directory reads, native operations,
-live Eval, and unconfined execution retain their original scope. Defaults never
-select an ancestor or change read access to write access. Hooks and automatic
-reviewers receive the unchanged original request before human admission.
+Permission entries select an enforceable scope before automatic review and
+before displaying approval controls. For confined Bash and batch Eval, existing
+directory writes and reads beneath inaccessible masks default to the requested
+directory's recursive scope. Files, missing paths, already-readable directory
+reads, native operations, live Eval, and unconfined execution retain their
+original scope. Defaults never select an ancestor or change read access to
+write access. Preparation is idempotent: a reviewer fallback card shows the same
+scope the reviewer judged. The reviewer also receives the original resources
+and which ones were prepared. Hooks still receive the unchanged original request.
 
 The card displays the selected authority consistently for the current invocation
 and remembering controls, with exact/recursive labels and target-native paths.
@@ -584,18 +586,27 @@ Rendering an Eval card does not load the execution-policy adapter. The queue
 retains ordering and outcome semantics; the shared interaction primitive retains
 overlay settlement and request cancellation.
 
-A Bash command longer than `mevedel-permission-command-display-limit` (400
-characters) and an Eval expression longer than
-`mevedel-eval-expression-display-limit` (20 lines) are elided in the prompt
-behind a `TAB` toggle, which names how much is hidden and re-renders the queue
-head in place. Only the command or expression body elides: agent attribution,
-the detected-command summary, the patterns a
-session/always allow would add, and every warning stay visible, because those
-are what the decision rests on. The `mevedel--remote` descriptor a browser
-collaborator reads always carries the whole command, elided or not -- a guest
-has no `TAB` to press and must not approve what it cannot see. Both surfaces
-show the captured admission mode, approval cause, and selected resource scope,
-including directory selections on one-shot cards without remembering controls.
+Cards start folded. The folded card shows the request kind, agent attribution,
+the model's optional reason, an operation preview, the detected-command summary,
+the complete `Scope:` an approval uses, the patterns a session/always allow
+would add, and every warning. Live Eval's unrestricted in-Emacs execution, full
+escalation's disabled confinement, protected paths, dangerous commands and
+unsupported shell syntax always stay visible. Once remembering choices differ
+from their defaults, the folded card also states what session or workspace
+approval would remember. `TAB` shows the details: the full command or
+expression, admission mode and approval cause, why automatic review deferred,
+the per-capability authority breakdown, remembering controls and the scope
+picker hint. Folding changes presentation only. Every key, including `g`, `c`,
+`n` and `p`, works in either state.
+
+The preview elides a Bash command longer than
+`mevedel-permission-command-display-limit` (400 characters) and an Eval
+expression longer than `mevedel-eval-expression-display-limit` (8 lines).
+The `mevedel--remote` descriptor a browser collaborator reads is built from the
+complete card, independent of local folding -- a guest has no `TAB` to press
+and must not approve what it cannot see. It includes the admission mode, approval
+cause, warnings and selected resource scope, including directory selections on
+one-shot cards without remembering controls.
 
 `mevedel-bash-policy.el` supplies Bash classification and reusable rule patterns. `mevedel-tool-exec-permission.el` combines that policy
 with the generic permission chain, persists approved authority, and adapts
@@ -782,8 +793,8 @@ Full Access bypasses ordinary resource asks. Invocation approval applies only
 to the current child. Reusable approval
 stores each selected path either in the matching operation profile or as an
 independent resource grant shared with native filesystem tools. It never
-creates both entries implicitly. Human directory defaults and the card's `g` selection can
-broaden a requested resource to a displayed directory tree. Both the current
+creates both entries implicitly. Prepared directory defaults and the card's `g`
+selection can broaden a requested resource to a displayed directory tree. Both the current
 child and a selected remembered profile receive that explicit extent. Narrowing
 the remembering toggles does not narrow the current invocation's approval.
 The default remembered selection includes every requested capability, including
@@ -906,9 +917,11 @@ snapshot.
 permission exceptions before displaying a card. The `guardian` workload may
 approve the complete invocation once, deny with a reason, or defer. It sees
 actual root user intent, exact arguments, requested capabilities, current target
-and confinement facts. It cannot persist grants or change mode. Failure,
-timeout and uncertainty fall back to the ordinary human card. Full Access
-bypasses review entirely.
+and confinement facts, the prepared scope, and direct saved rules related to the
+operation. Those saved-rule candidates are evidence, not grants. It cannot persist
+grants or change mode. Failure, timeout and uncertainty fall back to the ordinary
+human card, which explains why review deferred. Full Access bypasses review
+entirely.
 
 Review cancellation and evidence revalidation prevent late responses, mode
 changes, target replacement or revoked authority from reusing an obsolete
@@ -938,7 +951,9 @@ an `ask` fires `PermissionRequest` before queue admission without changing the
 specialized card. The expression shown in the prompt is subject to
 `mevedel-eval-expression-display-limit`.  The prompt also shows the
 requested execution mode and, for live Eval, whether UI preservation is
-enabled.
+enabled. An optional `justification` on any Eval call appears on the card and
+in reviewer evidence as the model's quoted reason. It never authorizes anything
+and remains mandatory only for non-default batch permission requests.
 
 The full-auto reminder explicitly states that live Eval runs inside Emacs
 without confinement, alongside the tool and permission-card disclosures.

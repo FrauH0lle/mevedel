@@ -13,6 +13,12 @@ data beneath an isolated trusted policy. Delegated tasks and tool content cannot
 substitute for user authorization. The harness revalidates deterministic hard
 restrictions, evidence and ownership before an approval. A model cannot persist
 permissions, select broader resources, change modes, or override Plan.
+The harness may prepare the same directory's tree when confinement cannot
+represent an exact directory ([ADR 0086](0086-reuse-approved-execution-permission-profiles.md));
+the reviewer judges that disclosed scope. Direct saved rules related to the
+operation arrive as candidates with their capability coverage. They inform the
+judgment of current intent but grant nothing and do not change deterministic
+matching.
 
 Errors, timeout, missing evidence and uncertainty display the ordinary card.
 Cancellation owns provider cleanup; late/duplicate responses cannot settle twice.

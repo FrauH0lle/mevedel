@@ -176,6 +176,9 @@ leaving restores the chat draft, and resume always starts in chat scope. Queued
 inputs retain the scope in which they were accepted. Status, agent, task, and
 interaction redraws preserve the active scoped draft and point exactly,
 including a multiline draft whose first editable character is `>`.
+Permission cards in the interaction zone start folded; `TAB` re-renders the
+queue head with its details, which also preserves the draft and point. The
+[permissions manual](permissions.md) owns what a folded card must show.
 
 Directive prompt construction remains independent of this visible chronology.
 A follow-up uses only durable discussion turns for the current authored request;

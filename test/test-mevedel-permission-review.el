@@ -113,7 +113,153 @@
     (should (equal (list :kind 'live-emacs :host (system-name))
                    (plist-get evidence :execution-target)))
     (should (equal (mevedel-execution-target-identity target)
-                   (plist-get evidence :session-target)))))
+                   (plist-get evidence :session-target))))
+  :doc "saved-rule candidates are evidence that changes no authority"
+  (let* ((rules (list (list "Bash" :pattern "git fetch:*" :action 'allow :network t)))
+         (session (mevedel-session--create
+                   :permission-mode 'edits :working-directory temporary-file-directory
+                   :permission-rules (copy-tree rules)))
+         (mevedel-permission-rules nil)
+         (entry (list :kind 'bash :session session :command "git fetch origin"
+                      :requested-additional-permissions '(:network t)
+                      :permission-via 'sandbox-network))
+         (before (mevedel-permission-queue--reevaluate entry))
+         (evidence (mevedel-permission-review--evidence entry))
+         (candidate (car (plist-get (plist-get evidence :saved-rule-candidates) :candidates))))
+    (should (eq :session (plist-get candidate :bucket)))
+    (should (eq t (plist-get (plist-get candidate :covers) :network)))
+    (should (equal rules (mevedel-session-permission-rules session)))
+    (should-not (mevedel-session-resource-grants session))
+    (should (equal before (mevedel-permission-queue--reevaluate entry)))))
+
+(mevedel-deftest mevedel-permission-review--rule-basis ()
+  ,test
+  (test)
+  :doc "prefix rules report their literal arguments before the wildcard"
+  (let ((facts (cons t "git fetch")))
+    (dolist (case '(("git fetch upstream:*" "upstream *")
+                    ("git fetch:*" nil)
+                    ("git fetch upstream" "upstream")))
+      (let ((basis (mevedel-permission-review--rule-basis
+                    "Bash" "git fetch origin" facts (list "Bash" :pattern (car case)))))
+        (if (cadr case)
+            (should (equal (list 'same-subcommand :operation-arguments "origin"
+                                 :rule-arguments (cadr case))
+                           basis))
+          (should (equal '(matches-operation) basis)))))))
+
+(mevedel-deftest mevedel-permission-review--rule-candidates ()
+  ,test
+  (test)
+  :doc "direct allow rules near the operation report capability coverage"
+  (let* ((root (make-temp-file "mevedel-candidates-" t))
+         (metadata (file-name-concat root ".git"))
+         (tree (list :path root :access 'write :recursive t))
+         (buckets
+          `((:invocation ("Bash" :pattern "git fetch:*" :action allow :network t))
+            (:request ("Bash" :pattern "git fetch:*" :action allow :network t))
+            (:session ("Bash" :pattern "git fetch:*" :action allow :network t)
+                      ("Bash" :pattern "git fetch:*" :action deny)
+                      ("Bash" :pattern "git fetch:*" :action allow
+                       :sandbox-permissions require-escalated)
+                      ("Bash" :pattern "git push:*" :action allow)
+                      ("*" :action allow))
+            (:persistent ("Bash" :pattern "git fetch upstream" :action allow
+                          :file-system (,tree)))
+            (:defcustom ("Bash" :pattern "/usr/bin/git fetch:*" :action allow))))
+         (profile (list :network t
+                        :file-system (list (list :path metadata :access 'write :recursive t)))))
+    (unwind-protect
+        (progn
+          (make-directory metadata)
+          (let* ((mevedel-protected-paths '(("**/.git/**" . read-only)))
+                 (result (mevedel-permission-review--rule-candidates
+                          "Bash" "git fetch origin" buckets profile nil))
+                 (candidates (plist-get result :candidates)))
+            (should (= 2 (length candidates)))
+            (should (equal '(:session :persistent)
+                           (mapcar (lambda (c) (plist-get c :bucket)) candidates)))
+            (should (equal '(matches-operation same-subcommand)
+                           (mapcar (lambda (c) (plist-get c :basis)) candidates)))
+            (let ((exact (car candidates)) (near (cadr candidates)))
+              (should (equal "git fetch:*" (plist-get (cdr (plist-get exact :rule)) :pattern)))
+              (should (eq t (plist-get (plist-get exact :covers) :network)))
+              (should (equal (plist-get profile :file-system)
+                             (plist-get (plist-get exact :missing) :file-system)))
+              (should (equal '(:operation-arguments "origin" :rule-arguments "upstream")
+                             (plist-get near :differences)))
+              (should (eq t (plist-get (plist-get near :missing) :network)))
+              ;; The protected `.git' child is not covered by its parent tree.
+              (should (equal (plist-get profile :file-system)
+                             (plist-get (plist-get near :missing) :file-system))))
+            (should (= 0 (plist-get result :omitted))))
+          (let* ((mevedel-protected-paths nil)
+                 (near (cadr (plist-get (mevedel-permission-review--rule-candidates
+                                         "Bash" "git fetch origin" buckets profile nil)
+                                        :candidates))))
+            (should (equal (plist-get profile :file-system)
+                           (plist-get (plist-get near :covers) :file-system))))
+          (let* ((mevedel-protected-paths nil)
+                 (read-only `((:session ("Bash" :pattern "git fetch:*" :action allow
+                                         :file-system ((:path ,root :access read :recursive t))))))
+                 (candidate (car (plist-get (mevedel-permission-review--rule-candidates
+                                             "Bash" "git fetch" read-only profile nil)
+                                            :candidates))))
+            (should (plist-get (plist-get candidate :missing) :file-system))
+            (should-not (plist-get (plist-get candidate :covers) :file-system))))
+      (delete-directory root t)))
+
+  :doc "compounds, dynamic syntax and Eval forms only report literal matches"
+  (let ((buckets '((:session ("Bash" :pattern "git fetch:*" :action allow)
+                             ("Bash" :pattern "pwd:*" :action allow)
+                             ("Bash" :pattern "pwd && git fetch origin" :action allow)
+                             ("Eval" :expression "(+ 1 2)" :action allow)
+                             ("Eval" :pattern "(+ 1 *)" :action allow)))))
+    (should (equal '("pwd && git fetch origin")
+                   (mapcar (lambda (c) (plist-get (cdr (plist-get c :rule)) :pattern))
+                           (plist-get (mevedel-permission-review--rule-candidates
+                                       "Bash" "pwd && git fetch origin" buckets nil nil)
+                                      :candidates))))
+    (should-not (plist-get (mevedel-permission-review--rule-candidates
+                            "Bash" "git fetch $REMOTE" buckets nil nil)
+                           :candidates))
+    (should (equal '(exact-expression)
+                   (mapcar (lambda (c) (plist-get c :basis))
+                           (plist-get (mevedel-permission-review--rule-candidates
+                                       "Eval" "(+ 1 2)" buckets nil nil)
+                                      :candidates))))
+    (should-not (plist-get (mevedel-permission-review--rule-candidates
+                            "Eval" "(+ 1  2)" buckets nil nil)
+                           :candidates)))
+
+  :doc "deterministic limits omit whole candidates and disclose the count"
+  (let* ((rules (cl-loop for index below 12
+                         collect (list "Bash" :pattern (format "git fetch remote%d" index)
+                                       :action 'allow)))
+         (huge (list "Bash" :pattern "git fetch:*" :action 'allow
+                     :file-system (cl-loop for index below 300
+                                           collect (list :path (format "/tmp/huge-%04d" index)
+                                                         :access 'read))))
+         (result (mevedel-permission-review--rule-candidates
+                  "Bash" "git fetch origin" `((:session ,huge ,@rules)) nil nil)))
+    (should (> (length (prin1-to-string huge)) 8192))
+    (should (= 8 (length (plist-get result :candidates))))
+    (should (= 5 (plist-get result :omitted)))
+    (should (equal "git fetch remote0"
+                   (plist-get (cdr (plist-get (car (plist-get result :candidates)) :rule))
+                              :pattern))))
+  :doc "non-ASCII candidates are budgeted in bytes"
+  (let* ((path (concat "/tmp/" (make-string 1100 ?ä)))
+         (rule (list "Bash" :pattern "git fetch:*" :action 'allow
+                     :file-system (list (list :path path :access 'read))))
+         (result (mevedel-permission-review--rule-candidates
+                  "Bash" "git fetch" (list (list :session rule rule)) nil nil)))
+    ;; Two candidates fit by characters but not by bytes.
+    (let ((candidate (prin1-to-string (car (plist-get result :candidates)))))
+      (should (< (* 2 (length candidate)) 8192))
+      (should (> (* 2 (string-bytes candidate)) 8192)))
+    (should (= 1 (length (plist-get result :candidates))))
+    (should (= 1 (plist-get result :omitted)))))
 
 (mevedel-deftest mevedel-permission-review--model ()
   ,test
@@ -159,7 +305,47 @@
                 (should (equal (mevedel-system-build-prompt 'permission-review)
                                (plist-get data :instructions)))
                 (should-not (plist-get data :tools))))
-          (when cancel (funcall cancel)))))))
+          (when cancel (funcall cancel))))))
+  :doc "streaming providers receive a streamed request and one complete reply"
+  (let (captured cancel replies)
+    (cl-letf (((symbol-function 'gptel-request)
+               (lambda (prompt &rest args) (setq captured (cons prompt args))))
+              ((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _) (list :model gptel-model :backend gptel-backend))))
+      (unwind-protect
+          (let ((info '(:stream t)))
+            (setq cancel (mevedel-permission-review--model
+                          '(:operation "probe") (lambda (reply) (push reply replies)) t))
+            (should (eq t (plist-get (cdr captured) :stream)))
+            (should (eq t (buffer-local-value
+                           'gptel-stream (plist-get (cdr captured) :buffer))))
+            (let ((callback (plist-get (cdr captured) :callback)))
+              (funcall callback "{\"decision\":\"allow-once\"," info)
+              (funcall callback "\"reason\":\"Requested\"}" info)
+              (should-not replies)
+              (funcall callback t info))
+            (should (equal '("{\"decision\":\"allow-once\",\"reason\":\"Requested\"}")
+                           replies))
+            (should (eq 'allow-once
+                        (plist-get (mevedel-permission-review--parse (car replies))
+                                   :decision))))
+        (when cancel (funcall cancel)))))
+  :doc "an over-long streamed reply settles before the stream ends"
+  (let (captured cancel replies)
+    (cl-letf (((symbol-function 'gptel-request)
+               (lambda (prompt &rest args) (setq captured (cons prompt args))))
+              ((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _) (list :model gptel-model :backend gptel-backend))))
+      (unwind-protect
+          (progn
+            (setq cancel (mevedel-permission-review--model
+                          '(:operation "probe") (lambda (reply) (push reply replies)) t))
+            (funcall (plist-get (cdr captured) :callback)
+                     (make-string (1+ mevedel-permission-review--reply-limit) ?x)
+                     '(:stream t))
+            (should (= 1 (length replies)))
+            (should-not (mevedel-permission-review--parse (car replies))))
+        (when cancel (funcall cancel))))))
 
 (mevedel-deftest mevedel-permission-review-start
   (:quiet t)
@@ -172,7 +358,7 @@
          (request (mevedel-request--create :id "review-request" :session session))
          (mevedel-permission-reviewer 'auto)
          (mevedel-permission-rules nil)
-         outcomes provider-callback evidence
+         outcomes provider-callback evidence provider-stream
          (cancelled 0)
          (entry (list :kind 'eval :tool-name "Eval" :session session
                       :origin "/root" :data-buffer buffer :request request
@@ -186,8 +372,9 @@
             (setq-local mevedel--session session)
             (insert "Evaluate (+ 1 2) in this Emacs session.\n"))
           (cl-letf (((symbol-function 'mevedel-permission-review--model)
-                     (lambda (facts callback)
-                       (setq evidence facts provider-callback callback)
+                     (lambda (facts callback &optional stream)
+                       (setq evidence facts provider-callback callback
+                             provider-stream stream)
                        (lambda () (cl-incf cancelled)))))
             ,test))
       (mevedel-permission-review-cancel session)
@@ -207,6 +394,17 @@
   (should-not (mevedel-session-permission-rules session))
   (should-not (mevedel-session-resource-grants session))
   (should-not mevedel-permission-review--pending))
+
+  :doc "review follows the requesting buffer's streaming choice"
+  (dolist (stream '(t nil))
+    (setq outcomes nil provider-stream 'unset)
+    (with-current-buffer buffer (setq-local gptel-stream stream))
+    (with-temp-buffer
+      (setq-local gptel-stream (not stream))
+      (mevedel-permission--enqueue entry session))
+    (should (eq stream provider-stream))
+    (funcall provider-callback "{\"decision\":\"deny\",\"reason\":\"Done\"}")
+    (should (equal '((deny . "Done")) outcomes)))
 
   :doc "reviewer refusal reports its reason without admitting a card"
   (progn
@@ -238,10 +436,11 @@
     (should-not outcomes))
 
   :doc "cancellation or timeout during preparation never starts a provider"
-  (dolist (stage '(evidence validation))
+  (dolist (stage '(scope evidence validation))
     (dolist (timeout-p '(nil t))
       (let ((mevedel-permission-review-timeout (if timeout-p 0.01 20))
             (validate (symbol-function 'mevedel-permission-queue-validate-approval))
+            (prepare (symbol-function 'mevedel-permission-queue-prepare-resources))
             (fallbacks 0)
             cancel-timer)
         (setq outcomes nil provider-callback nil evidence nil cancelled 0)
@@ -258,6 +457,10 @@
                          (lambda (&rest _)
                            (when (eq stage 'evidence) (yield-preparation))
                            '(:available t :mount-proc t)))
+                        ((symbol-function 'mevedel-permission-queue-prepare-resources)
+                         (lambda (&rest args)
+                           (when (eq stage 'scope) (yield-preparation))
+                           (apply prepare args)))
                         ((symbol-function 'mevedel-permission-queue-validate-approval)
                          (lambda (&rest args)
                            (when (eq stage 'validation) (yield-preparation))
@@ -404,12 +607,75 @@
     (should-not (plist-get (car (plist-get (plist-get entry :requested-additional-permissions)
                                          :file-system)) :recursive)))
 
+  :doc "review sees the prepared same-directory tree and approval persists nothing"
+  (let* ((original (list :path root :access 'write))
+         (file (file-name-concat root "file.txt"))
+         (file-grant (list :path file :access 'write))
+         (cell (list (list original file-grant))))
+    (with-temp-file file (insert "contents"))
+    (setq entry (plist-put entry :mode "batch"))
+    (setq entry (plist-put entry :requested-additional-permissions
+                           (list :file-system (list original file-grant))))
+    (setq entry (plist-put entry :resource-originals
+                           (list (copy-sequence original) (copy-sequence file-grant))))
+    (setq entry (plist-put entry :resource-selection-cell cell))
+    (mevedel-permission--enqueue entry session)
+    (should provider-callback)
+    (let ((selected (car (plist-get evidence :selected-resources))))
+      (should (equal root (plist-get selected :path)))
+      (should (eq 'write (plist-get selected :access)))
+      (should (plist-get selected :recursive)))
+    (should (equal file-grant (cadr (plist-get evidence :selected-resources))))
+    (should (equal (list original file-grant) (plist-get evidence :original-resources)))
+    (should (equal (list (list :path root :access 'write
+                               :reason 'exact-directory-unconfinable))
+                   (plist-get evidence :scope-preparation)))
+    (should (plist-get (car (plist-get (plist-get evidence :effective-additional-permissions)
+                                       :file-system))
+                       :recursive))
+    (funcall provider-callback "{\"decision\":\"allow-once\",\"reason\":\"Requested write\"}")
+    (should (equal '(allow-once) outcomes))
+    (should-not (plist-get original :recursive))
+    (should-not (mevedel-session-resource-grants session))
+    (should-not (mevedel-session-permission-rules session)))
+
+  :doc "human fallback keeps the scope the reviewer saw"
+  (let* ((original (list :path root :access 'write))
+         (cell (list (list original)))
+         (cards 0))
+    (setq entry (plist-put entry :mode "batch"))
+    (setq entry (plist-put entry :requested-additional-permissions
+                           (list :file-system (list original))))
+    (setq entry (plist-put entry :resource-originals (list (copy-sequence original))))
+    (setq entry (plist-put entry :resource-selection-cell cell))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               (lambda (_entry) (cl-incf cards))))
+      (mevedel-permission--enqueue entry session)
+      (let ((reviewed (car (plist-get evidence :selected-resources))))
+        (funcall provider-callback "{\"decision\":\"ask\",\"reason\":\"Unclear\"}")
+        (should (= 1 cards))
+        (should (eq reviewed (caar cell)))
+        (should (equal (list reviewed) (car cell)))
+        (should (equal '(reviewer "Unclear")
+                       (plist-get (car (mevedel-session-permission-queue session))
+                                  :review-fallback))))
+      (mevedel-permission-queue-abort-all session)))
+
+  :doc "live Eval justification reaches evidence as quoted operation data"
+  (progn
+    (setq entry (plist-put entry :args (list :expression "(+ 1 2)" :mode "live"
+                                             :justification "  Check arithmetic  ")))
+    (mevedel-permission--enqueue entry session)
+    (should (equal "Check arithmetic"
+                   (plist-get (plist-get evidence :operation) :justification)))
+    (funcall provider-callback "{\"decision\":\"deny\",\"reason\":\"Probe\"}"))
+
   :doc "provider cleanup errors cannot strand an approval or timeout fallback"
   (dolist (timeout-p '(nil t))
     (let ((fallbacks 0) timeout-callback)
       (setq outcomes nil)
       (cl-letf (((symbol-function 'mevedel-permission-review--model)
-                 (lambda (_facts callback)
+                 (lambda (_facts callback &optional _stream)
                    (setq provider-callback callback)
                    (lambda () (error "Broken provider cleanup"))))
                 ((symbol-function 'run-at-time)
@@ -472,7 +738,7 @@
                (reviews 0) (allowed 0) (denied 0) evidence provenance)
           (setq-local mevedel--session session)
           (cl-letf (((symbol-function 'mevedel-permission-review--model)
-                     (lambda (facts callback)
+                     (lambda (facts callback &optional _stream)
                        (cl-incf reviews)
                        (setq evidence facts)
                        (funcall callback (format "{\"decision\":\"%s\",\"reason\":\"Test decision\"}" response))
@@ -530,7 +796,7 @@
                              (funcall callback nil))))
                         ((symbol-function 'mevedel-permission-queue--render-entry) #'ignore)
                         ((symbol-function 'mevedel-permission-review--model)
-                         (lambda (_facts callback)
+                         (lambda (_facts callback &optional _stream)
                            (setq provider-callback callback)
                            #'ignore)))
                 (mevedel-tool-permission-step
@@ -588,7 +854,7 @@
                        (lambda (_event _payload callback &rest _) (funcall callback nil)))
                       ((symbol-function 'mevedel-permission-queue--render-entry) #'ignore)
                       ((symbol-function 'mevedel-permission-review--model)
-                       (lambda (_evidence callback)
+                       (lambda (_evidence callback &optional _stream)
                          (cl-incf providers)
                          (setq provider-callback callback)
                          #'ignore)))
@@ -639,7 +905,7 @@
                          (lambda (_event _payload callback &rest _) (funcall callback nil)))
                         ((symbol-function 'mevedel-permission-queue--render-entry) #'ignore)
                         ((symbol-function 'mevedel-permission-review--model)
-                         (lambda (facts callback)
+                         (lambda (facts callback &optional _stream)
                            (setq evidence facts)
                            (funcall callback
                                     (format "{\"decision\":\"%s\",\"reason\":\"Requested plan edit\"}" response))
@@ -677,7 +943,7 @@
              evidence denied)
         (setq-local mevedel--session session)
         (cl-letf (((symbol-function 'mevedel-permission-review--model)
-                   (lambda (facts callback)
+                   (lambda (facts callback &optional _stream)
                      (setq evidence facts)
                      (funcall callback "{\"decision\":\"deny\",\"reason\":\"Probe only\"}")
                      #'ignore))

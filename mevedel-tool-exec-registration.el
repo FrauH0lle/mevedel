@@ -144,7 +144,7 @@
                                                   :items (:type string)
                                                   :description "Absolute paths requiring write access.")))))
           (justification string :optional
-                         "Concise user-facing reason for a non-default batch permission request."))
+                         "Concise user-facing reason shown if approval is needed; required for non-default batch permission requests."))
    :async-p t
    :max-result-size 30000
    :groups (eval)

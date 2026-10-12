@@ -51,6 +51,8 @@
                   "mevedel-permission-queue" (event entry &optional session &rest props))
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
+(declare-function mevedel-permission-queue-justification
+                  "mevedel-permission-queue" (entry))
 (declare-function mevedel-permission-queue-resource-needs-tree-p
                   "mevedel-permission-queue" (entry grant))
 (declare-function mevedel-permission-queue-select-resource
@@ -59,6 +61,7 @@
                   "mevedel-permission-queue" (entry outcome))
 (autoload 'mevedel-permission-queue--log "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
+(autoload 'mevedel-permission-queue-justification "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue-resource-needs-tree-p "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue-select-resource "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue-validate-approval "mevedel-permission-queue")
@@ -321,7 +324,7 @@ a remote collaborator always receives the whole command."
   :type 'integer
   :group 'mevedel)
 
-(defcustom mevedel-eval-expression-display-limit 20
+(defcustom mevedel-eval-expression-display-limit 8
   "Maximum number of lines to show inline in the Eval permission prompt.
 Expressions longer than this are truncated with a toggle to expand."
   :type 'integer
@@ -371,10 +374,11 @@ prompt without one is returned whole."
       (mevedel-permission-queue--render-head session))))
 
 (defun mevedel-permission--prompt-body
-    (content include-always &optional suppress-allow-session once-only)
+    (content include-always &optional suppress-allow-session once-only toggle)
   "Return the permission prompt body for CONTENT.
 INCLUDE-ALWAYS enables persistent allow.  SUPPRESS-ALLOW-SESSION hides
-session allow.  ONCE-ONLY hides every session-scoped choice."
+session allow.  ONCE-ONLY hides every session-scoped choice.  TOGGLE is
+`collapsed' or `expanded' when TAB toggles the card's details."
   (mevedel--prompt-framed-body
    (concat
     content
@@ -382,24 +386,124 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     (mevedel--prompt-key "RET")
     " allow once  "
     (unless (or suppress-allow-session once-only)
-      (concat (mevedel--prompt-key "s")
-              " remember selected authority for session  "))
+      (concat (mevedel--prompt-key "s") " remember for session  "))
     (when (and include-always (not once-only))
-      (concat (mevedel--prompt-key "A")
-              " remember selected authority in workspace  "))
+      (concat (mevedel--prompt-key "A") " remember in workspace  "))
     (mevedel--prompt-key "d")
-    " deny-once  "
+    " deny  "
     (unless once-only
-      (concat (mevedel--prompt-key "D") " deny-session  "))
+      (concat (mevedel--prompt-key "D") " deny session  "))
     (mevedel--prompt-key "f")
-    " feedback\n")
+    " feedback"
+    (pcase toggle
+      ('collapsed (concat "  " (mevedel--prompt-key "TAB") " details"))
+      ('expanded (concat "  " (mevedel--prompt-key "TAB") " fewer details")))
+    "\n")
    'warning))
+
+(defun mevedel-permission--expanded-p (entry)
+  "Return non-nil when ENTRY's card shows its details locally.
+A prompt without an entry has no toggle state and shows everything."
+  (or (null entry) (mevedel-queue--entry-metadata-get entry :expanded)))
+
+(defun mevedel-permission--format-justification (entry &optional justification)
+  "Format ENTRY's model-supplied reason as quoted explanation, not authority.
+JUSTIFICATION, when non-blank, supplies the reason directly."
+  (when-let* ((text (if (and (stringp justification)
+                             (not (string-empty-p (string-trim justification))))
+                        (string-trim justification)
+                      (mevedel-permission-queue-justification entry))))
+    (concat (propertize "Model's reason: " 'font-lock-face 'font-lock-escape-face)
+            (propertize text 'font-lock-face 'italic)
+            "\n")))
+
+(defun mevedel-permission--warning (text)
+  "Return warning TEXT as an always-visible card line."
+  (concat (propertize "⚠ " 'font-lock-face 'error)
+          (propertize text 'font-lock-face 'warning)
+          "\n"))
+
+(defun mevedel-permission--execution-warnings (entry)
+  "Return confinement warnings that stay visible on ENTRY's folded card.
+Live Eval and full escalation have unrestricted effects whichever card
+kind requests them, including generic hook cards."
+  (let* ((kind (plist-get entry :kind))
+         (args (plist-get entry :args))
+         (live-p
+          (pcase kind
+            ('eval (equal (or (plist-get entry :mode) "live") "live"))
+            ('generic (and (equal (plist-get entry :tool-name) "Eval")
+                           (not (equal (plist-get args :mode) "batch"))))))
+         (escalated-p
+          (or (eq (plist-get entry :sandbox-permissions) 'require-escalated)
+              (equal (plist-get args :sandbox_permissions) "require_escalated"))))
+    (concat
+     (when live-p
+       (mevedel-permission--warning
+        "Live Eval runs inside this Emacs: filesystem, network and processes are unrestricted."))
+     (when escalated-p
+       (mevedel-permission--warning
+        (concat "This command runs directly as your user. Filesystem, network, "
+                "and process confinement are all disabled for this invocation.")))
+     (when (plist-get entry :protected-path)
+       (mevedel-permission--warning
+        "The requested path is protected by default.")))))
+
+(defun mevedel-permission--format-scope (entry)
+  "Format the complete additive authority an approval of ENTRY uses."
+  (let ((items
+         (append
+          (and (plist-get (plist-get entry :requested-additional-permissions) :network)
+               '("Network"))
+          (mapcar (lambda (grant) (mevedel-permission--resource-label entry grant))
+                  (mevedel-permission--prompt-resources entry)))))
+    (when items
+      (concat (propertize "Scope: " 'font-lock-face 'font-lock-escape-face)
+              (propertize (string-join items ", ") 'font-lock-face 'font-lock-constant-face)
+              "\n"))))
+
+(defun mevedel-permission--format-remember-summary (entry)
+  "Summarize changed remembering choices on ENTRY's folded card.
+Unchanged defaults stay in the details; a change shows what session or
+workspace approval would store."
+  (when-let* ((cell (plist-get entry :remember-authority-cell))
+              (default (mevedel-queue--entry-metadata-get entry :remember-default))
+              ((not (equal (car default) (car cell)))))
+    (let* ((selection (car cell))
+           (label (lambda (grant) (mevedel-permission--resource-label entry grant)))
+           (items
+            (append
+             (and (plist-get selection :operation) '("command"))
+             (and (plist-get selection :network) '("network with command"))
+             (mapcar (lambda (grant) (concat (funcall label grant) " with command"))
+                     (plist-get selection :file-system))
+             (mapcar (lambda (grant) (concat (funcall label grant) " independently"))
+                     (plist-get selection :resource-grants)))))
+      (concat (propertize "Session/workspace approval remembers: "
+                          'font-lock-face 'font-lock-escape-face)
+              (if items (string-join items ", ") "nothing")
+              "\n"))))
+
+(defun mevedel-permission--format-review-fallback (entry)
+  "Explain why automatic review left ENTRY to the user, or nil."
+  (when-let* ((fallback (plist-get entry :review-fallback)))
+    (format "Automatic review deferred: %s.\n"
+            (pcase fallback
+              (`(reviewer ,reason) (format "reviewer asked the user (%s)" reason))
+              ('timeout "review timed out")
+              ('changed "evidence changed during review")
+              ('missing-intent "no bounded user intent was available")
+              ('disabled "automatic review was disabled")
+              (_ "reviewer unavailable or its reply was invalid")))))
 
 (defun mevedel-permission--format-cause (entry)
   "Describe ENTRY's captured admission mode and permission cause."
-  (when-let* ((mode (plist-get entry :permission-mode-effective)))
-    (concat
-     (format "Permission mode at admission: %s\n" mode)
+  (let ((fallback (mevedel-permission--format-review-fallback entry)))
+    (when-let* ((mode (or (plist-get entry :permission-mode-effective)
+                          (and fallback 'unknown))))
+      (concat
+       (unless (eq mode 'unknown)
+         (format "Permission mode at admission: %s\n" mode))
      (when-let* ((cause
                   (pcase (plist-get entry :permission-via)
                     ('workspace-boundary "resource outside the allowed roots")
@@ -413,13 +517,15 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                     ('sandbox-filesystem "additional filesystem authority is missing")
                     ('sandbox-full-escalation "the operation requests execution without confinement"))))
        (format "Approval required: %s.\n" cause))
-     "\n")))
+       fallback
+       "\n"))))
 
 (defun mevedel-permission--prompt-async-with-content
     (content include-always cont
              &optional count entry suppress-allow-session once-only)
   "Display a permission prompt for CONTENT and call CONT with its outcome."
   (let* ((cause (mevedel-permission--format-cause entry))
+         (expanded-p (and entry (mevedel-queue--entry-metadata-get entry :expanded)))
          (authority
           (when-let* ((selected (car (plist-get entry :resource-selection-cell))))
             (concat "Selected authority:\n"
@@ -427,12 +533,21 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                      (lambda (grant) (mevedel-permission--resource-label entry grant))
                      selected "\n")
                     "\n(g selects exact resource or directory tree and access)\n\n")))
-         (remote-content
-          (concat cause
-                  (or (and entry (mevedel-queue--entry-metadata-get entry :remote-body))
-                      content)
-                  authority))
-         (content (concat cause content authority))
+         ;; Explanations and controls fold locally; the guest has no TAB, so
+         ;; its descriptor always receives the complete card.
+         (details (concat cause authority))
+         (remote-body (and entry (mevedel-queue--entry-metadata-get entry :remote-body)))
+         (remote-content (concat (or remote-body content) details))
+         ;; TAB is offered only when folding hides something.
+         (toggle (and entry
+                      (cond
+                       (expanded-p 'expanded)
+                       ((or (not (string-empty-p details))
+                            (and remote-body
+                                 (not (equal remote-body
+                                             (substring-no-properties content)))))
+                        'collapsed))))
+         (content (concat content (and (or (null entry) expanded-p) details)))
          ;; The entry's session decides where its card goes.  A prompt can be
          ;; admitted from an unrelated buffer, such as the permission
          ;; reviewer's request buffer when it leaves the decision to a human.
@@ -505,7 +620,8 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                                (propertize parent-active-warning
                                            'font-lock-face 'warning)))
                             include-always
-                            suppress-allow-session once-only)
+                            suppress-allow-session once-only
+                            toggle)
                      :priority 100
                      :keymap map
                      :help-echo (if once-only
@@ -629,40 +745,80 @@ CONT receives the user's outcome; the caller owns queue settlement."
       (plist-get entry :justification) origin cont count entry))
     (_ (error "Unknown permission card kind: %s" (plist-get entry :kind)))))
 
+(defun mevedel-permission--prompt-async-card
+    (build include-always cont count entry &optional suppress-allow-session once-only)
+  "Render the card BUILD describes and call CONT with its outcome.
+BUILD receives REMOTE-P and returns card text.  The local card folds its
+details until TAB expands them; the guest descriptor, which has no TAB,
+always receives the complete card.  INCLUDE-ALWAYS, COUNT, ENTRY,
+SUPPRESS-ALLOW-SESSION and ONCE-ONLY follow
+`mevedel-permission--prompt-async-with-content'."
+  (when entry
+    (when-let* ((cell (plist-get entry :remember-authority-cell))
+                ((not (mevedel-queue--entry-metadata-get entry :remember-default))))
+      ;; Wrapped so an empty default selection is still recorded.
+      (mevedel-queue--entry-metadata-put
+       entry :remember-default (list (copy-tree (car cell)))))
+    (mevedel-queue--entry-metadata-put
+     entry :remote-body (substring-no-properties (funcall build t))))
+  (mevedel-permission--prompt-async-with-content
+   (funcall build nil) include-always cont count entry
+   suppress-allow-session once-only))
+
+(defun mevedel-permission--card-title (text &optional face)
+  "Return card title TEXT with FACE, which defaults to `warning'."
+  (propertize (concat text "\n")
+              'font-lock-face (list :inherit 'bold :inherit (or face 'warning))))
+
+(defun mevedel-permission--card-field (label value &optional face)
+  "Return a card line for LABEL and VALUE, using FACE for VALUE."
+  (concat (propertize label 'font-lock-face 'font-lock-escape-face)
+          (propertize (format "%s" value)
+                      'font-lock-face (or face 'font-lock-constant-face))
+          "\n"))
+
+(defun mevedel-permission--card-details (entry remote-p)
+  "Return ENTRY's authority breakdown and remembering controls when shown.
+REMOTE-P requests them regardless of the local fold state."
+  (when (and entry (or remote-p (mevedel-permission--expanded-p entry)))
+    (let ((details (concat
+                    (mevedel-permission--format-authority-capabilities entry)
+                    (mevedel-permission--format-remember-authority entry))))
+      (unless (string-empty-p details) (concat "\n" details)))))
+
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
-  "Display an attributed permission prompt and call CONT with its outcome."
+  "Display an attributed permission prompt and call CONT with its outcome.
+TOOL-NAME requests PATH; INCLUDE-ALWAYS, ORIGIN, COUNT and ENTRY follow
+the shared permission prompt contract."
   (let* ((path (and path (mevedel-permission--display-path entry path)))
          (once-only (and entry (plist-get entry :once-only)))
-         (content
-         (concat
-          (propertize "Permission Request\n"
-                      'font-lock-face '(:inherit bold :inherit warning))
-          (mevedel--prompt-attribution-line origin)
-          "\n"
-          (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
-          (propertize (format "%s\n" tool-name)
-                      'font-lock-face 'font-lock-constant-face)
-          (when path
+         (build
+          (lambda (_remote-p)
             (concat
-             (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
-             (propertize (format "%s\n" path)
-                         'font-lock-face 'font-lock-string-face)
-             (when-let* ((access (and entry
-                                      (plist-get entry :resource-access))))
+             (mevedel-permission--card-title "Permission Request")
+             (mevedel--prompt-attribution-line origin)
+             "\n"
+             (mevedel-permission--card-field "Tool: " tool-name)
+             (when path
                (concat
-                (propertize "Access: "
-                            'font-lock-face 'font-lock-escape-face)
-                (propertize (format "%s\n" access)
-                            'font-lock-face 'font-lock-constant-face)))))
-          "\n")))
-    (mevedel-permission--prompt-async-with-content
-     content (and include-always (not once-only)) cont count entry
+                (mevedel-permission--card-field "Path: " path 'font-lock-string-face)
+                (when-let* ((access (and entry (plist-get entry :resource-access))))
+                  (mevedel-permission--card-field "Access: " access))))
+             (mevedel-permission--format-justification entry)
+             (mevedel-permission--format-scope entry)
+             (mevedel-permission--format-remember-summary entry)
+             (mevedel-permission--execution-warnings entry)
+             "\n"))))
+    (mevedel-permission--prompt-async-card
+     build (and include-always (not once-only)) cont count entry
      once-only once-only)))
 
 (defun mevedel-permission--prompt-async-bash
     (command command-class include-always origin cont &optional count entry)
-  "Display a Bash permission prompt and call CONT with its outcome."
+  "Display a Bash permission prompt and call CONT with its outcome.
+COMMAND has COMMAND-CLASS; INCLUDE-ALWAYS, ORIGIN, COUNT and ENTRY follow
+the shared permission prompt contract."
   (let* ((dangerous (eq command-class 'dangerous))
          (once-only (and entry (plist-get entry :once-only)))
          (rule-creating-disabled-p
@@ -675,75 +831,53 @@ CONT receives the user's outcome; the caller owns queue settlement."
                    (and commands (mapconcat #'identity commands ", ")))))
          (unparseable (and entry (plist-get entry :unparseable)))
          (allow-patterns (and entry (plist-get entry :allow-patterns)))
-         (faced-command (propertize command
-                                    'font-lock-face 'font-lock-string-face))
-         ;; Built twice: once elided for the prompt, once whole for the
-         ;; remote descriptor, whose reader has no TAB to expand with.
+         (faced-command (propertize command 'font-lock-face 'font-lock-string-face))
          (build
-          (lambda (shown-command)
+          (lambda (remote-p)
             (concat
-             (propertize
+             (mevedel-permission--card-title
               (if dangerous
-                  "Bash Command Execution Request — DANGEROUS\n"
-                "Bash Command Execution Request\n")
-              'font-lock-face
-              (if dangerous
-                  '(:inherit bold :inherit error)
-                '(:inherit bold :inherit warning)))
+                  "Bash Command Execution Request — DANGEROUS"
+                "Bash Command Execution Request")
+              (if dangerous 'error 'warning))
              (mevedel--prompt-attribution-line origin)
              "\n"
+             (mevedel-permission--format-justification entry)
              (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
-             shown-command
+             (if remote-p
+                 faced-command
+               (mevedel-permission--elide
+                faced-command entry nil mevedel-permission-command-display-limit))
              "\n"
-             (mevedel-permission--format-authority-capabilities entry)
-             (mevedel-permission--format-remember-authority entry)
              (when commands-summary
-               (concat
-                "\n"
-                (propertize "Detected commands: "
-                            'font-lock-face 'font-lock-escape-face)
-                (propertize commands-summary
-                            'font-lock-face 'font-lock-constant-face)
-                "\n"))
+               (mevedel-permission--card-field "Detected commands: " commands-summary))
+             (mevedel-permission--format-scope entry)
              (when (and allow-patterns (not rule-creating-disabled-p))
-               (concat
-                (propertize "Session/always allow will add: "
-                            'font-lock-face 'font-lock-escape-face)
-                (propertize
-                 (mapconcat (lambda (pattern) (format "`%s'" pattern))
-                            allow-patterns ", ")
-                 'font-lock-face 'font-lock-constant-face)
-                "\n"))
+               (mevedel-permission--card-field
+                "Session/always allow will add: "
+                (mapconcat (lambda (pattern) (format "`%s'" pattern))
+                           allow-patterns ", ")))
+             (mevedel-permission--format-remember-summary entry)
              (when dangerous
                (concat
-                (propertize "⚠ " 'font-lock-face 'error)
-                (propertize
-                 "Contains a binary on `mevedel-bash-dangerous-commands'.\n"
-                 'font-lock-face 'font-lock-comment-face)
+                (mevedel-permission--warning
+                 "Contains a binary on `mevedel-bash-dangerous-commands'.")
                 (when rule-creating-disabled-p
                   (propertize
                    "Session/permanent allow is disabled for dynamic dangerous commands.\n"
                    'font-lock-face 'font-lock-comment-face))))
              (when unparseable
                (concat
-                (propertize
-                 "Warning: Command contains unsupported or dynamic shell syntax.\n"
-                 'font-lock-face 'warning)
+                (mevedel-permission--warning
+                 "Command contains unsupported or dynamic shell syntax.")
                 (propertize
                  "Session/permanent allow is disabled for complex Bash commands.\n"
                  'font-lock-face 'font-lock-comment-face)))
-             "\n")))
-         (content
-          (funcall build
-                   (mevedel-permission--elide
-                    faced-command entry nil
-                    mevedel-permission-command-display-limit))))
-    (when entry
-      (mevedel-queue--entry-metadata-put
-       entry :remote-body
-       (substring-no-properties (funcall build faced-command))))
-    (mevedel-permission--prompt-async-with-content
-     content (and include-always (not rule-creating-disabled-p))
+             (mevedel-permission--execution-warnings entry)
+             (mevedel-permission--card-details entry remote-p)
+             "\n"))))
+    (mevedel-permission--prompt-async-card
+     build (and include-always (not rule-creating-disabled-p))
      cont count entry rule-creating-disabled-p once-only)))
 
 (defun mevedel-permission--prompt-async-eval
@@ -751,43 +885,35 @@ CONT receives the user's outcome; the caller owns queue settlement."
   "Display EXPRESSION from ENTRY with ORIGIN attribution and queue COUNT.
 Call CONT with the chosen outcome.  Local elision retains the full expression
 in the remote descriptor; ENTRY supplies execution mode and remembering scope."
-  (let* ((mode (plist-get entry :mode))
+  (let* ((mode (or (plist-get entry :mode) "live"))
          (preserve-ui (plist-get entry :preserve-ui))
-         (faced-expr (propertize expression
-                                'font-lock-face 'font-lock-string-face))
-         ;; Built twice: once elided for the prompt, once whole for the
-         ;; remote descriptor, whose reader has no TAB to expand with.
+         (faced-expr (propertize expression 'font-lock-face 'font-lock-string-face))
          (build
-          (lambda (display-expr)
+          (lambda (remote-p)
             (concat
-             "The LLM is requesting permission to evaluate elisp.\n\n"
+             (mevedel-permission--card-title "Elisp Evaluation Request")
              (mevedel--prompt-attribution-line origin)
+             "\n"
              (propertize "Mode: " 'font-lock-face 'font-lock-escape-face)
-             (format "%s" (or mode "live"))
-             (when (equal (or mode "live") "live")
+             mode
+             (when (equal mode "live")
                (format " (inherently unconfined; preserve_ui: %s)"
                        (if preserve-ui "true" "false")))
              "\n"
-             (when entry
-               (concat
-                (mevedel-permission--format-authority-capabilities entry)
-                (mevedel-permission--format-remember-authority entry)))
+             (mevedel-permission--format-justification entry)
+             (propertize "Expression:\n" 'font-lock-face 'font-lock-escape-face)
+             (if remote-p
+                 faced-expr
+               (mevedel-permission--elide
+                faced-expr entry mevedel-eval-expression-display-limit))
              "\n"
-             (propertize "Expression:\n"
-                         'font-lock-face 'font-lock-escape-face)
-             display-expr
-             "\n\n")))
-         (content
-          (funcall build
-                   (mevedel-permission--elide
-                    faced-expr entry
-                    mevedel-eval-expression-display-limit))))
-    (when entry
-      (mevedel-queue--entry-metadata-put
-       entry :remote-body
-       (substring-no-properties (funcall build faced-expr))))
-    (mevedel-permission--prompt-async-with-content
-     content (plist-get entry :include-always) cont count entry
+             (mevedel-permission--format-scope entry)
+             (mevedel-permission--format-remember-summary entry)
+             (mevedel-permission--execution-warnings entry)
+             (mevedel-permission--card-details entry remote-p)
+             "\n"))))
+    (mevedel-permission--prompt-async-card
+     build (plist-get entry :include-always) cont count entry
      (not (plist-get entry :remember-authority-cell))
      (not (plist-get entry :remember-authority-cell)))))
 
@@ -805,53 +931,46 @@ ENTRY follow the shared permission prompt contract."
           (and full-p
                (or once-only
                    (not (plist-get entry :include-always)))))
-         (content
-         (concat
-          (propertize
-           (cond
-            (full-p "Full Execution Escalation Request\n")
-            (t "Invocation Authority Request\n"))
-                      'font-lock-face '(:inherit bold :inherit warning))
-          (mevedel--prompt-attribution-line origin)
-          "\n"
-          (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
-          (format "%s\n" tool-name)
-          (when full-p
+         (faced-detail (propertize detail 'font-lock-face 'font-lock-string-face))
+         (build
+          (lambda (remote-p)
             (concat
-             (propertize "Confinement: "
-                         'font-lock-face 'font-lock-escape-face)
-             "disabled for this invocation\n"))
-          (unless full-p
-            (concat
-             (mevedel-permission--format-authority-capabilities entry)
-             (mevedel-permission--format-remember-authority entry)))
-          (propertize "Justification: "
-                      'font-lock-face 'font-lock-escape-face)
-          (format "%s\n\n" justification)
-          (propertize "Request:\n" 'font-lock-face 'font-lock-escape-face)
-          (propertize (format "%s\n\n" detail)
-                      'font-lock-face 'font-lock-string-face)
-          (propertize
-           (cond
-            (full-p
-             (concat
-              "Warning: this command runs directly as your user. Filesystem, "
-              "network, and process confinement are all disabled for this "
-              "invocation.\n"))
-            (t
-             (concat
-              "Approval grants every unchecked capability to this invocation. "
-              "Checked authority is already available; other resources and "
-              "the selected process confinement remain unchanged.\n")))
-           'font-lock-face 'font-lock-comment-face)
-          (when full-rule-disabled-p
-            (propertize
-             (concat
-              "Reusable allow is disabled for this request. Author a "
-              "qualified rule deliberately if recurring authority is needed.\n")
-             'font-lock-face 'font-lock-comment-face)))))
-    (mevedel-permission--prompt-async-with-content
-     content
+             (mevedel-permission--card-title
+              (if full-p
+                  "Full Execution Escalation Request"
+                "Invocation Authority Request"))
+             (mevedel--prompt-attribution-line origin)
+             "\n"
+             (mevedel-permission--card-field "Tool: " tool-name)
+             (mevedel-permission--format-justification entry justification)
+             (propertize "Request: " 'font-lock-face 'font-lock-escape-face)
+             (if remote-p
+                 faced-detail
+               (mevedel-permission--elide
+                faced-detail entry nil mevedel-permission-command-display-limit))
+             "\n"
+             (unless full-p (mevedel-permission--format-scope entry))
+             (mevedel-permission--format-remember-summary entry)
+             (mevedel-permission--execution-warnings entry)
+             (when (or remote-p (mevedel-permission--expanded-p entry))
+               (concat
+                (unless full-p (mevedel-permission--card-details entry t))
+                (unless full-p
+                  (propertize
+                   (concat
+                    "Approval grants every unchecked capability to this invocation. "
+                    "Checked authority is already available; other resources and "
+                    "the selected process confinement remain unchanged.\n")
+                   'font-lock-face 'font-lock-comment-face))
+                (when full-rule-disabled-p
+                  (propertize
+                   (concat
+                    "Reusable allow is disabled for this request. Author a "
+                    "qualified rule deliberately if recurring authority is needed.\n")
+                   'font-lock-face 'font-lock-comment-face))))
+             "\n"))))
+    (mevedel-permission--prompt-async-card
+     build
      (and (not once-only)
           (or missing-filesystem-p full-p)
           (or full-p (plist-get entry :remember-authority-cell))

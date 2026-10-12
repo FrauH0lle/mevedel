@@ -572,6 +572,20 @@ avoids saving a brittle whole-chain string such as
          (not (plist-get analysis :background-p))
          (not (string-match-p "\\(?:\\*\\|\\?\\|\\[\\)" command)))))
 
+(defun mevedel-bash-policy-single-reusable-segment-p (command)
+  "Return non-nil when COMMAND is one reusable segment.
+Compounds, dynamic syntax, background jobs and glob characters are not."
+  (and (mevedel-bash-policy-reusable-operation-p command)
+       (null (cdr (plist-get (mevedel-bash-analysis-analyze command) :segments)))))
+
+(defun mevedel-bash-policy-stable-prefix (command)
+  "Return COMMAND's literal `executable subcommand' prefix, or nil.
+Only one reusable segment has a prefix.  Compounds, dynamic syntax, unsafe
+environment assignments, wrappers, dangerous commands and a leading option
+have none.  The executable stays literal; paths are not reduced to names."
+  (when (mevedel-bash-policy-single-reusable-segment-p command)
+    (mevedel-bash-policy--bash-prefix-for-segment (string-trim command))))
+
 (defun mevedel-bash-policy-effective-permission-mode
     (&optional permission-context)
   "Return effective permission mode for PERMISSION-CONTEXT."

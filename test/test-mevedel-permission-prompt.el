@@ -372,16 +372,31 @@
   :doc "includes session allow by default"
   (cl-letf (((symbol-function 'mevedel--prompt-block-face)
              (lambda () 'ask)))
-    (should (string-match-p
-             "remember selected authority for session"
-             (mevedel-permission--prompt-body "Body\n" nil))))
+    (let ((body (mevedel-permission--prompt-body "Body\n" nil nil nil 'collapsed)))
+      (should (string-match-p "s remember for session" body))
+      (should (string-match-p "TAB details" body))))
 
   :doc "suppresses session allow without suppressing session deny"
   (cl-letf (((symbol-function 'mevedel--prompt-block-face)
              (lambda () 'ask)))
     (let ((body (mevedel-permission--prompt-body "Body\n" nil t)))
-      (should-not (string-match-p "remember selected authority for session" body))
-      (should (string-match-p "deny-session" body)))))
+      (should-not (string-match-p "remember for session" body))
+      (should-not (string-match-p "TAB" body))
+      (should (string-match-p "D deny session" body)))))
+
+(mevedel-deftest mevedel-permission--format-scope ()
+  ,test
+  (test)
+  :doc "names network and the selected resources an approval uses"
+  (progn
+    (should-not (mevedel-permission--format-scope '(:kind bash)))
+    (should (equal "Scope: Network, Write /srv/tree (recursive)\n"
+                   (substring-no-properties
+                    (mevedel-permission--format-scope
+                     '(:requested-additional-permissions
+                       (:network t :file-system ((:path "/srv/tree" :access write)))
+                       :resource-selection-cell
+                       (((:path "/srv/tree" :access write :recursive t))))))))))
 
 (mevedel-deftest mevedel-permission--format-cause
   ()
@@ -436,6 +451,28 @@
                   #'mevedel-permission--prompt-approve-once))
       (should-not (lookup-key captured-keymap "s"))
       (should (lookup-key captured-keymap "A"))))
+
+  :doc "offers TAB only when folding hides something"
+  (with-temp-buffer
+    (let ((target (current-buffer)) bodies)
+      (cl-letf (((symbol-function 'mevedel--prompt-block-face) (lambda () 'ask))
+                ((symbol-function 'mevedel--prompt--data-buffer)
+                 (lambda (&optional _buffer) target))
+                ((symbol-function 'mevedel-view--interaction-target-buffer)
+                 (lambda (_data-buffer) target))
+                ((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (plist)
+                   (push (substring-no-properties (plist-get plist :body)) bodies)
+                   (make-overlay (point-min) (point-min))))
+                ((symbol-function 'mevedel--prompt--register-canceller) #'ignore))
+        (mevedel-permission--prompt-async-attributed
+         "Read" "/srv/file" t "/root" #'ignore 1 (list :kind 'generic))
+        (mevedel-permission--prompt-async-attributed
+         "Read" "/srv/file" t "/root" #'ignore 1
+         (list :kind 'generic :permission-mode-effective 'ask
+               :permission-via 'workspace-boundary)))
+      (should (string-match-p "TAB details" (car bodies)))
+      (should-not (string-match-p "TAB" (cadr bodies)))))
 
   :doc "rememberable authority binds only the capabilities it presents"
   (with-temp-buffer
@@ -589,11 +626,31 @@
                                      "this mutation requires one-time approval"
                                      "Selected authority:"
                                      (mevedel-permission--resource-label queued scope)))
-                    (should (string-match-p (regexp-quote text) remote))
-                    (should (string-match-p (regexp-quote text) (buffer-string))))
+                    (should (string-match-p (regexp-quote text) remote)))
+                  ;; Locally the folded card keeps the actual scope only.
+                  (should (string-match-p
+                           (regexp-quote (mevedel-permission--resource-label queued scope))
+                           (buffer-string)))
+                  (should-not (string-match-p "Permission mode at admission" (buffer-string)))
                   (should (string-match-p (regexp-quote operation) remote))
                   (should-not (string-match-p (regexp-quote operation) (buffer-string)))
-                  (should (equal draft (mevedel-view--input-text)))))))
+                  (should (equal draft (mevedel-view--input-text)))))
+              ;; TAB reveals the cause locally without touching the draft.
+              (with-current-buffer view
+                (let* ((queued (car (mevedel-session-permission-queue session)))
+                       (ov (gethash (mevedel-queue--entry-metadata-get
+                                     queued :interaction-id)
+                                    mevedel-view--interaction-overlays))
+                       (point-before (- (point) (mevedel-view--input-start))))
+                  (save-excursion
+                    (goto-char (overlay-start ov))
+                    (call-interactively (lookup-key (overlay-get ov 'keymap) (kbd "TAB"))))
+                  (should (string-match-p "Permission mode at admission: full-auto"
+                                          (buffer-string)))
+                  (should (string-match-p (regexp-quote operation) (buffer-string)))
+                  (should (equal draft (mevedel-view--input-text)))
+                  (should (= point-before (- (point) (mevedel-view--input-start))))
+                  (mevedel-queue--entry-metadata-put queued :expanded nil)))))
         (mevedel-permission-queue-abort-all session)
         (when (buffer-live-p view) (kill-buffer view))
         (when (buffer-live-p data) (kill-buffer data)))))
@@ -602,6 +659,126 @@
   (dolist (key (list (kbd "RET") (kbd "TAB")
                      "a" "c" "n" "p" "s" "A" "d" "D" "f"))
     (should-not (lookup-key mevedel-view-mode-map key))))
+
+(mevedel-deftest mevedel-permission--execution-warnings ()
+  ,test
+  (test)
+  :doc "live Eval and full escalation warn whichever card kind requests them"
+  (dolist (entry '((:kind eval :mode "live")
+                   (:kind eval)
+                   (:kind generic :tool-name "Eval" :args (:expression "(+ 1 2)"))))
+    (should (string-match-p "Live Eval runs inside this Emacs"
+                            (mevedel-permission--execution-warnings entry))))
+  (dolist (entry '((:kind eval :mode "batch")
+                   (:kind generic :tool-name "Eval" :args (:mode "batch"))
+                   (:kind bash)))
+    (should (string-empty-p (mevedel-permission--execution-warnings entry))))
+  (dolist (entry '((:kind sandbox :sandbox-permissions require-escalated)
+                   (:kind generic :tool-name "Bash"
+                    :args (:sandbox_permissions "require_escalated"))))
+    (should (string-match-p "confinement are all disabled"
+                            (mevedel-permission--execution-warnings entry))))
+  (should (string-match-p "protected" (mevedel-permission--execution-warnings
+                                       '(:kind generic :protected-path t)))))
+
+(mevedel-deftest mevedel-permission--format-justification ()
+  ,test
+  (test)
+  :doc "quotes the model's reason from the entry or its arguments, never blank"
+  (progn
+    (should (string-match-p "Model's reason: Inspect state"
+                            (mevedel-permission--format-justification
+                             '(:args (:justification "  Inspect state  ")))))
+    (should-not (mevedel-permission--format-justification '(:args (:justification "  "))))
+    (should-not (mevedel-permission--format-justification '(:justification nil)))))
+
+(mevedel-deftest mevedel-permission--format-remember-summary ()
+  ,test
+  (test)
+  :doc "shows remembering only after it changes from the default"
+  (let* ((grant '(:path "/cache" :access write :recursive t))
+         (cell (list (list :operation t :file-system (list grant))))
+         (entry (list :remember-authority-cell cell)))
+    (mevedel-queue--entry-metadata-put entry :remember-default (list (copy-tree (car cell))))
+    (should-not (mevedel-permission--format-remember-summary entry))
+    (setcar cell (list :operation t :resource-grants (list grant)))
+    (should (equal "Session/workspace approval remembers: command, Write /cache (recursive) independently\n"
+                   (substring-no-properties
+                    (mevedel-permission--format-remember-summary entry))))
+    (setcar cell nil)
+    (should (string-match-p "remembers: nothing"
+                            (mevedel-permission--format-remember-summary entry)))))
+
+(mevedel-deftest mevedel-permission--format-review-fallback ()
+  ,test
+  (test)
+  :doc "explains why automatic review left the card to the user"
+  (progn
+    (should-not (mevedel-permission--format-review-fallback '(:kind bash)))
+    (should (string-match-p "reviewer asked the user (Unclear scope)"
+                            (mevedel-permission--format-cause
+                             '(:review-fallback (reviewer "Unclear scope")))))
+    (should (string-match-p "timed out" (mevedel-permission--format-cause
+                                         '(:permission-mode-effective edits
+                                           :review-fallback timeout))))))
+
+(mevedel-deftest mevedel-permission--prompt-async-card
+  (:doc "live Eval folds details but keeps reason, warning and guest disclosure")
+  (let* ((data (generate-new-buffer " *test-permission-card-source*"))
+         (view (generate-new-buffer " *test-permission-card-view*"))
+         (session (mevedel-session--create :name "card"))
+         (draft "> keep this draft\nsecond line")
+         (expression (mapconcat #'identity (make-list 30 "(message \"step\")") "\n"))
+         (entry (list :kind 'eval :origin "/root" :mode "live" :callback #'ignore
+                      :expression expression :permission-mode-effective 'edits
+                      :permission-via 'mode :reusable-operation-p t
+                      :remember-authority-cell (list '(:operation t))
+                      :args (list :expression expression
+                                  :justification "Inspect the live buffer list"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view data)
+          (with-current-buffer view
+            (goto-char (mevedel-view--input-start))
+            (insert draft))
+          (with-current-buffer data
+            (mevedel-permission--enqueue entry session))
+          (with-current-buffer view
+            (let* ((queued (car (mevedel-session-permission-queue session)))
+                   (ov (gethash (mevedel-queue--entry-metadata-get queued :interaction-id)
+                                mevedel-view--interaction-overlays))
+                   (remote (overlay-get ov 'mevedel--remote))
+                   (local (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))
+              (should (equal "Inspect the live buffer list" (plist-get queued :justification)))
+              (dolist (text '("Elisp Evaluation Request" "Model's reason: Inspect the live buffer list"
+                              "Live Eval runs inside this Emacs" "TAB details"))
+                (should (string-match-p (regexp-quote text) local)))
+              (dolist (text '("Permission mode at admission" "(c toggles)"))
+                (should-not (string-match-p (regexp-quote text) local)))
+              (should-not (string-match-p (regexp-quote expression) local))
+              ;; Guests receive every detail but only one-shot outcomes.
+              (dolist (text (list "Live Eval runs inside this Emacs" "Permission mode at admission"
+                                  "Model's reason: Inspect the live buffer list" expression))
+                (should (string-match-p (regexp-quote text) (plist-get remote :body))))
+              (should (equal '(allow-once deny-once) (mapcar #'car (plist-get remote :options))))
+              (should (equal draft (mevedel-view--input-text)))
+              ;; Changing remembering appears on the folded card.
+              (save-excursion
+                (goto-char (overlay-start ov))
+                (let ((last-command-event ?c))
+                  (call-interactively (lookup-key (overlay-get ov 'keymap) "c"))))
+              (setq ov (gethash (mevedel-queue--entry-metadata-get queued :interaction-id)
+                                mevedel-view--interaction-overlays))
+              (should (string-match-p "remembers: nothing"
+                                      (buffer-substring-no-properties
+                                       (overlay-start ov) (overlay-end ov))))
+              (should (equal draft (mevedel-view--input-text))))))
+      (mevedel-permission-queue-abort-all session)
+      (when (buffer-live-p view) (kill-buffer view))
+      (when (buffer-live-p data) (kill-buffer data)))))
 
 (mevedel-deftest mevedel-permission-prompt-render ()
   ,test
@@ -702,28 +879,43 @@
   (:doc "renders one combined invocation authority request")
   ,test
   (test)
-  (let (captured)
+  (let ((entry (copy-tree
+                '(:kind sandbox
+                  :reusable-operation-p t
+                  :remember-authority-cell ((:operation t))
+                  :show-operation-authority t
+                  :operation-pending-p nil
+                  :requested-additional-permissions
+                  (:network t
+                   :file-system
+                   ((:path "/external/input" :access read)
+                    (:path "/external/output" :access write)))
+                  :missing-additional-permissions
+                  (:file-system ((:path "/external/output" :access write)))
+                  :granted-additional-permissions
+                  (:network t
+                   :file-system ((:path "/external/input" :access read))))))
+        captured folded)
     (cl-letf (((symbol-function
                 'mevedel-permission--prompt-async-with-content)
                (lambda (&rest args) (setq captured args))))
       (mevedel-permission--prompt-async-sandbox
        "Bash" "curl https://example.test" "Download the page?"
-       "main" #'ignore 2
-       '(:kind sandbox
-         :reusable-operation-p t
-         :remember-authority-cell ((:operation t))
-         :show-operation-authority t
-         :operation-pending-p nil
-         :requested-additional-permissions
-         (:network t
-          :file-system
-          ((:path "/external/input" :access read)
-           (:path "/external/output" :access write)))
-         :missing-additional-permissions
-         (:file-system ((:path "/external/output" :access write)))
-         :granted-additional-permissions
-         (:network t
-          :file-system ((:path "/external/input" :access read))))))
+       "main" #'ignore 2 entry)
+      (setq folded (substring-no-properties (car captured)))
+      (mevedel-queue--entry-metadata-put entry :expanded t)
+      (mevedel-permission--prompt-async-sandbox
+       "Bash" "curl https://example.test" "Download the page?"
+       "main" #'ignore 2 entry))
+    ;; The folded card keeps the reason and complete scope, not the breakdown.
+    (should (string-match-p "Model's reason: Download the page?" folded))
+    (should (string-match-p
+             (regexp-quote "Scope: Network, Read /external/input (exact), Write /external/output (exact)")
+             folded))
+    (should-not (string-match-p "Authority for this execution" folded))
+    ;; The guest descriptor always receives the complete card.
+    (should (string-match-p "Authority for this execution"
+                            (mevedel-queue--entry-metadata-get entry :remote-body)))
     (let ((content (nth 0 captured)))
       (should (string-match-p "Invocation Authority Request" content))
       (should (string-match-p "Download the page?" content))
@@ -747,23 +939,25 @@
     (should-not (nth 6 captured)))
 
   :doc "renders exact filesystem access with rule-creating choices"
-  (let (captured)
+  (let ((entry (copy-tree
+                '(:kind sandbox
+                  :reusable-operation-p t
+                  :remember-authority-cell ((:operation t))
+                  :show-operation-authority t
+                  :operation-pending-p nil
+                  :requested-additional-permissions
+                  (:file-system ((:path "/tmp/secret" :access read)))
+                  :missing-additional-permissions
+                  (:file-system ((:path "/tmp/secret" :access read)))
+                  :include-always t)))
+        captured)
+    (mevedel-queue--entry-metadata-put entry :expanded t)
     (cl-letf (((symbol-function
                 'mevedel-permission--prompt-async-with-content)
                (lambda (&rest args) (setq captured args))))
       (mevedel-permission--prompt-async-sandbox
        "Bash" "cat /tmp/secret" "Read the requested file?"
-       "main" #'ignore 1
-       '(:kind sandbox
-         :reusable-operation-p t
-         :remember-authority-cell ((:operation t))
-         :show-operation-authority t
-         :operation-pending-p nil
-         :requested-additional-permissions
-         (:file-system ((:path "/tmp/secret" :access read)))
-         :missing-additional-permissions
-         (:file-system ((:path "/tmp/secret" :access read)))
-         :include-always t)))
+       "main" #'ignore 1 entry))
     (let ((content (nth 0 captured)))
       (should (string-match-p "Invocation Authority Request" content))
       (should (string-match-p "\\[ \\] Read /tmp/secret" content))
@@ -794,16 +988,17 @@
     (should-not (nth 6 captured)))
 
   :doc "suppresses reusable allow choices for unsafe full escalation"
-  (let (captured)
+  (let ((entry (copy-tree '(:kind sandbox
+                            :sandbox-permissions require-escalated
+                            :include-always nil)))
+        captured)
+    (mevedel-queue--entry-metadata-put entry :expanded t)
     (cl-letf (((symbol-function
                 'mevedel-permission--prompt-async-with-content)
                (lambda (&rest args) (setq captured args))))
       (mevedel-permission--prompt-async-sandbox
        "Bash" "rm -rf /" "Run outside confinement?"
-       "main" #'ignore 1
-       '(:kind sandbox
-         :sandbox-permissions require-escalated
-         :include-always nil)))
+       "main" #'ignore 1 entry))
     (should (string-match-p "Reusable allow is disabled" (nth 0 captured)))
     (should-not (nth 1 captured))
     (should (eq t (nth 5 captured)))

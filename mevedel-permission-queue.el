@@ -126,8 +126,8 @@ message from the entry -- never `notifications-notify' itself, whose
 keywords the entry does not carry.  Stable keys: `:kind' (`generic' /
 `eval' / `bash' / `sandbox'), `:tool-name', `:specifier-key',
 `:specifier-value' (display path, pattern, domain, or name),
-`:command' (bash), `:expression' (eval), `:detail' and
-`:justification' (sandbox), `:origin' (requesting agent path), and
+`:command' (bash), `:expression' (eval), `:detail' (sandbox),
+`:justification' (optional model reason), `:origin' (requesting agent path), and
 `:session'.
 
 The return value is ignored, nothing waits on it, and it cannot answer
@@ -283,6 +283,16 @@ Return non-nil when this call delivered or consumed the outcome."
               (setq safe (plist-put safe key (plist-get diagnostic key)))))
           (apply #'mevedel-telemetry-record-audit sess event safe))))))
 
+(defun mevedel-permission-queue-justification (entry)
+  "Return ENTRY's optional model-supplied reason, or nil when absent or blank.
+The reason may travel in the tool arguments for any card kind, including
+live Eval and hook cards.  It is quoted explanation, never authorization."
+  (let ((text (or (plist-get entry :justification)
+                  (plist-get (plist-get entry :args) :justification))))
+    (and (stringp text)
+         (not (string-empty-p (string-trim text)))
+         (string-trim text))))
+
 (defun mevedel-permission--enqueue (entry &optional session)
   "Resolve automatic review for ENTRY before human admission to SESSION."
   (let* ((session (or session (mevedel-queue--current-session)))
@@ -293,6 +303,9 @@ Return non-nil when this call delivered or consumed the outcome."
                      (or (plist-get entry :permission-id)
                          (format "%s-%s" (format-time-string "%s%N")
                                  (gensym "permission-")))))
+    ;; Normalize once for the reviewer and the card.
+    (setq entry (plist-put entry :justification
+                           (mevedel-permission-queue-justification entry)))
     (cond
      ((when-let* ((request (plist-get entry :request)))
         (mevedel-request-cancelled-p request))
@@ -341,7 +354,8 @@ ENTRY plist keys:
   :requested-additional-permissions -- complete additive profile
   :missing-additional-permissions -- unresolved additive profile
   :granted-additional-permissions -- previously granted additive profile
-  :justification         -- user-facing reason (`sandbox' only)
+  :justification         -- optional model-supplied reason, any kind
+  :review-fallback       -- why automatic review left the card to the user
   :callback              -- function: (lambda (outcome) ...)"
   (let ((origin (plist-get entry :origin)))
     (unless (mevedel-agent-path-p origin)
@@ -360,11 +374,11 @@ ENTRY plist keys:
                (plist-get (mevedel-session-control-transfer session) :state)
                (not (plist-get entry :request-id)))
       (mevedel-session-artifacts-assert-new-mutation-authority session))
-    ;; Only human admission selects a broader, enforceable default.  Hooks
-    ;; and automatic review have already seen the unchanged model request.
+    ;; Automatic review has already prepared the same scope; preparation is
+    ;; idempotent, so fallback keeps it.  Hooks saw the original request.
     (setq entry (plist-put entry :session session))
     (when session
-      (mevedel-permission-queue--prepare-resources entry))
+      (mevedel-permission-queue-prepare-resources entry))
     (mevedel-permission-queue--log 'permission-enqueued entry session)
     (let* ((release
             (and session
@@ -476,8 +490,10 @@ ENTRY plist keys:
                                          (if (equal grant previous) selected grant))
                                        (plist-get (car cell) key))))))))))
 
-(defun mevedel-permission-queue--prepare-resources (entry)
-  "Select enforceable defaults once when ENTRY enters the human queue."
+(defun mevedel-permission-queue-prepare-resources (entry)
+  "Select enforceable defaults for ENTRY before review or human admission.
+Only the same existing directory is widened to its tree, and only when its
+exact access cannot be confined.  Prepared selections are left unchanged."
   (dolist (grant (car (plist-get entry :resource-selection-cell)))
     (when (mevedel-permission-queue-resource-needs-tree-p entry grant)
       (mevedel-permission-queue-select-resource

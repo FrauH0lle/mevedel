@@ -34,8 +34,10 @@ Evaluate one Elisp form and return its value and printed output.
   Non-default permission requests apply only to batch:
   `with_additional_permissions` requests network and/or exact absolute read/write
   paths; `require_escalated` requests unrestricted child execution. Put the reason
-  in `justification` on the new tool call. Expression authorization is separate;
-  approval is not an automatic retry. Results disclose unavailable confinement.
+  in `justification` on the new tool call. A live evaluation that may need
+  approval can also carry a short `justification`; it is shown to the approver
+  and is optional there. Expression authorization is separate; approval is not
+  an automatic retry. Results disclose unavailable confinement.
 - For exact grant semantics, failure recovery, and batch evaluation details,
   read `mevedel://tools/execution.md` before using those features.
 

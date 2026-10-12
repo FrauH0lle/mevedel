@@ -565,8 +565,14 @@ Return the outcome and the logged entry."
           (lambda (text &rest _args)
             (setq content
                   (substring-no-properties text)))))
-      (mevedel-permission-queue--render-entry
-       (car (mevedel-session-permission-queue session))))
+      (let ((queued (car (mevedel-session-permission-queue session))))
+        (mevedel-permission-queue--render-entry queued)
+        ;; Folded: the reason and complete scope, not the breakdown.
+        (should (string-match-p "Model's reason: Reach the package registry?" content))
+        (should (string-match-p "Scope: Network" content))
+        (should-not (string-match-p "Authority" content))
+        (mevedel-queue--entry-metadata-put queued :expanded t)
+        (mevedel-permission-queue--render-entry queued)))
     (should (string-match-p "Authority" content))
     (should (string-match-p "\\[ \\] Command" content))
     (should (string-match-p "\\[ \\] Network" content)))

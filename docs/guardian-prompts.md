@@ -18,13 +18,39 @@ The isolated engine request has no tools, ambient conversation, skills, memory,
 or workspace instructions in its trusted system policy. Its sole system role is
 `prompts/permissions/approval-review-system.md`, assembled by the
 `permission-review` profile. Actual root user turns, the active Goal objective,
-exact tool arguments/operation, requested and selected resources, direct and
-delegated authority buckets, target identity/incarnation, working directory,
-and confinement facts arrive separately as quoted evidence. An agent's task or
-a tool result cannot impersonate user authorization.
+exact tool arguments/operation, the model's optional justification, original and
+selected resources with any prepared scope, direct and delegated authority
+buckets, saved-rule candidates, target identity/incarnation, working directory,
+and confinement facts arrive separately as quoted evidence. An agent's task, its
+justification or a tool result cannot impersonate user authorization.
+
+Before evidence is built, review prepares the same enforceable scope a human
+card would show: an exact directory that confinement cannot represent becomes
+that directory's tree, never an ancestor. `:scope-preparation` names each such
+change, and the effective capability bundle uses the selected scope.
+
+Saved-rule candidates come only from direct session, workspace and global allow
+rules; delegated invocation/request rules, approval history, and rules qualified
+by `:sandbox-permissions` (full escalation, which operation matching also
+ignores) are excluded.
+A candidate either matches the operation through the ordinary rule matcher or,
+for one reusable Bash segment, shares its literal `executable subcommand`
+prefix. Executable paths are not reduced to names. Dynamic or compound commands
+relate only to an identical rule, and Eval compares expressions literally. Each
+candidate records its bucket, rule, match basis, argument differences, profile
+and which selected network/filesystem requirements it covers or lacks. Coverage
+uses child-execution coverage, preserving access level, tree extent, canonical
+paths and protected descendants. At most eight candidates within 8 KiB of
+serialized evidence are sent,
+ordered by match basis and rule order; whole candidates beyond that are counted
+as omitted. Candidates are context, not grants, and freshness checks compare
+them like other evidence.
 
 The isolated request buffer itself holds the selected guardian backend/model,
-system policy and disabled tools/context before gptel snapshots it. Evidence
+system policy and disabled tools/context before gptel snapshots it. It follows
+the requesting buffer's `gptel-stream` choice, because some providers reject a
+request with streaming disabled; streamed chunks are accumulated into one reply
+before parsing. Evidence
 uses the actual tool's execution boundary, including when a hook requests a
 generic permission card. Child evidence includes resolved direct capability
 profiles; live Eval names the host Emacs separately from the session target and
@@ -54,7 +80,8 @@ into a recursive grant. Explicit hard denies, Plan and integrity checks remain
 outside model authority.
 
 `ask`, malformed responses, provider failures and the 20-second default timeout
-(`mevedel-permission-review-timeout`) display the ordinary human card. `deny`
+(`mevedel-permission-review-timeout`) display the ordinary human card, whose
+details state why review deferred, including the reviewer's reason. `deny`
 blocks the operation with its reason. A later deliberate user override is a new
 action, not a retry through another tool. Cancellation or timeout during evidence
 collection or approval validation prevents a provider request from starting.

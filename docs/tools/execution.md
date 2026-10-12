@@ -2,8 +2,9 @@
 
 The tool descriptions give ordinary Bash and Eval contracts. This manual
 covers exact grants, batch evaluation, and interactive command control; it
-grants no authority. The permission fields below apply to Bash and batch Eval,
-not live Eval.
+grants no authority. The `sandbox_permissions` and `additional_permissions`
+fields below apply to Bash and batch Eval, not live Eval. A live Eval may still
+carry an optional `justification`, shown to whoever approves it.
 
 ## Additive permission requests
 
