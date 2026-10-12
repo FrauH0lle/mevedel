@@ -9,7 +9,12 @@
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-engine-test-support"))
 (require 'mevedel-plan-handoff)
+(require 'mevedel-pipeline)
+(require 'mevedel-resource)
+(require 'mevedel-skills-invoke)
 (require 'mevedel-skills-plan)
+(require 'mevedel-tool-registry)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-disclosure)
@@ -304,6 +309,63 @@
               (should (string-search "EXACT PREPARED PROMPT" (buffer-string)))
               (should (equal "> keep\ndraft" (mevedel-view--input-text)))))
         (when (buffer-live-p view) (kill-buffer view))))))
+
+(mevedel-deftest mevedel-view--invoke-renderer/skill-source ()
+  ,test
+  (test)
+  :doc "ordinary Skill results deliver exact sources but render only raw body and line count"
+  (let* ((root (make-temp-file "skill-source-view-" t))
+         (source (file-name-concat root "SKILL.md"))
+         (body "FIRST PREPARED LINE\nSECOND PREPARED LINE")
+         (skill (mevedel-skill--create
+                 :name "plain" :body body :source-file source :source-dir root
+                 :context 'inline :model-invocable-p t :active-p t))
+         (workspace (mevedel-workspace--create :type 'test :root root :id root))
+         (session (mevedel-session--create :workspace workspace :skills (list skill)))
+         (tool (mevedel-tool-ensure "Skill"))
+         result)
+    (unwind-protect
+        (with-temp-buffer
+          (with-temp-file source
+            (insert "---\nname: plain\ndescription: Plain\n---\n" body))
+          (setq-local mevedel--session session
+                      mevedel--current-request
+                      (mevedel-request--create
+                       :session session :file-snapshots (make-hash-table :test #'equal)))
+          (mevedel-pipeline-run-tool
+           tool (lambda (value) (setq result value)) '(:name "plain"))
+          (let* ((parts (mevedel-tool-render-data-extract result session))
+                 (visible (car parts))
+                 (data (cdr parts))
+                 (rendering (mevedel-view--invoke-renderer
+                             tool data '(:name "plain") visible)))
+            (should (string-search (mevedel-resource--skill-address skill) visible))
+            (should (equal body (plist-get data :prompt)))
+            (should (equal "Skill: plain (2 lines)" (plist-get rendering :header)))
+            (should (equal body (plist-get rendering :body)))
+            (should (plist-get rendering :initially-collapsed-p))
+            (with-temp-file source (insert "Changed after delivery"))
+            (should (equal body (plist-get
+                                (mevedel-view--invoke-renderer
+                                 tool data '(:name "plain") visible)
+                                :body)))))
+      (delete-directory root t)))
+
+  :doc "source-less Skill delivery remains raw with no invented address or render header"
+  (let* ((body "Synthetic body\nSecond line")
+         (skill (mevedel-skill--create :name "synthetic" :body body :context 'inline))
+         (session (mevedel-session--create :skills (list skill)))
+         envelope)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (mevedel-skills--invoke-handler
+       (lambda (value) (setq envelope value)) '(:name "synthetic")))
+    (should (equal body (plist-get envelope :result)))
+    (should-not (plist-get envelope :render-data))
+    (let ((rendering (mevedel-skills--render-skill-tool
+                      "Skill" '(:name "synthetic") (plist-get envelope :result) nil)))
+      (should (equal body (plist-get rendering :body)))
+      (should (equal "Skill: synthetic (2 lines)" (plist-get rendering :header))))))
 
 (provide 'test-mevedel-view-render-skills)
 ;;; test-mevedel-view-render-skills.el ends here

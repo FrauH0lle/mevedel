@@ -40,6 +40,25 @@ source sibling of the loaded bytecode, or from the loaded library itself when
 no source sibling is available. Resource descendants retain their containment
 checks; package-manager symlinks identify the owner, not exceptions for content.
 
+Search exclusions follow the logical resource family even after descendant
+dispatch resolves a backing directory. Artifact discovery omits unpublished
+execution spools, and installed-document discovery remains Markdown-only.
+Bare `skill://` supports Read discovery only; searches require a selected
+package. Model-facing prepared skills disclose each contribution's exact source
+address without changing raw preparation, hook inputs, or collapsed render
+bodies. Source disclosure identifies content for inspection; it grants no
+authority to read or invoke the skill.
+
+Active retained-agent reads return a successful, explicit NOT READY status,
+separate from settled payloads. Valid pagination and JSON fragments cannot hide
+the status or expose a previous turn's result; text-only option validation still
+applies. Missing agents and inconsistent idle records remain errors. Nonempty
+text reads past EOF remain errors with observed line bounds and a concrete
+last-page retry in the visible address domain. Ordinary files count those bounds
+during the failed traversal, without a second scan; virtual text counts only on
+the error path. Neither recovery silently clamps offsets or changes settlement,
+publication, containment, permission, or mailbox semantics.
+
 ## Rationale and alternatives
 
 A closed dispatch keeps the trust boundary auditable and avoids a tool per
@@ -80,6 +99,18 @@ substitute for checking a settled operation's result.
 
 All revisions below refine ADR 0104's closed resolver decision.
 
+- **Local discovery and recovery.** Published session evidence showed descendant
+  artifact Glob advertising private execution-spool addresses that Read and
+  Grep correctly refused, outdated Grep guidance, bare-skill search retries,
+  active-agent reads treated as failures, and EOF guesses without line bounds.
+  Logical-family filtering and producer-side source/status/range disclosure
+  replace those blind retries. No new tail operation, catalog-wide skill search,
+  alias fallback, or permission grant is needed.
+- **Mandatory documentation filtering.** A positive caller glob and a positive
+  Markdown glob form a union in ripgrep, exposing non-Markdown content and counts
+  despite a safe file-list projection. Directory Grep now selects filenames using
+  caller filters, admits only contained Markdown files, and searches that set
+  within one cancellation and timeout budget. Ordinary-path search is unchanged.
 - **Compiled installation roots.** Straight's build tree contained regular
   `.elc` files but symlinked source and documentation. Deriving the documentation
   root from the bytecode made valid reads fail containment and discovery return

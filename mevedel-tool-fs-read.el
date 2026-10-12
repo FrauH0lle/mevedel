@@ -1024,6 +1024,18 @@ truncated with a [...] marker."
           (mevedel-tool-fs-read--visible-path path)
           next-line mevedel-tool-fs-read--default-limit))
 
+(defun mevedel-tool-fs-read--format-eof-error (path offset limit last-line)
+  "Return an EOF diagnostic for PATH, OFFSET, LIMIT and observed LAST-LINE.
+LAST-LINE is positive; empty reads keep their successful empty handling.
+The suggested last page is capped at the normal default line limit."
+  (let* ((visible (mevedel-tool-fs-read--visible-path path))
+         (width (min limit mevedel-tool-fs-read--default-limit))
+         (start (max 1 (1+ (- last-line width)))))
+    (format (concat "Read offset %d starts after the last line of %s. "
+                    "Available lines in this read: 1–%d. "
+                    "Read the last page with Read(file_path=%S, offset=%d, limit=%d).")
+            offset visible last-line visible start (1+ (- last-line start)))))
+
 (defun mevedel-tool-fs-read--finalize-read-buffer (path start-line line-truncated-next)
   "Line-number and bound current text Read buffer.
 PATH is used in continuation guidance.  START-LINE is the first line
@@ -1132,7 +1144,10 @@ wrap in `condition-case'."
   (if (zerop (file-attribute-size (file-attributes path)))
       ""
     (let ((start-line (max 1 (or offset 1)))
-          (num-lines (or limit mevedel-tool-fs-read--default-limit)))
+          (num-lines (or limit mevedel-tool-fs-read--default-limit))
+          ;; The caller's buffer-local session is absent in temporary buffers.
+          (visible-path (mevedel-tool-fs-read--visible-path
+                         (or display-path path))))
       (if (and (not offset) (not limit))
           (let ((file-size (file-attribute-size (file-attributes path))))
             (when (> file-size (* 512 1024))
@@ -1166,6 +1181,7 @@ wrap in `condition-case'."
                (byte-offset 0)
                (buffer-start-offset 0)
                (lines-to-skip (1- start-line))
+               (skipped-lines 0)
                (lines-to-read num-lines)
                line-truncated-next)
           (with-temp-buffer
@@ -1223,6 +1239,7 @@ wrap in `condition-case'."
                     (unless (next-newline)
                       (setq range-found nil)
                       (cl-return-from skip))
+                    (cl-incf skipped-lines)
                     (let ((deleted (- (point) (point-min))))
                       (delete-region (point-min) (point))
                       (cl-incf buffer-start-offset deleted))
@@ -1238,10 +1255,11 @@ wrap in `condition-case'."
                   ;; unread just means the next chunk has not arrived.
                   (setq range-found nil))
                 (if (not range-found)
-                    (error "Read offset %d starts after the last line of %s"
-                           start-line
-                           (mevedel-tool-fs-read--visible-path
-                            (or display-path path)))
+                    (error "%s"
+                           (mevedel-tool-fs-read--format-eof-error
+                            visible-path start-line num-lines
+                            (+ skipped-lines
+                               (if (> (point-max) (point-min)) 1 0))))
                   (let (selected-end)
                     (cl-block read
                       (while (> lines-to-read 0)
@@ -1507,8 +1525,10 @@ content, not a read failure.\n</system-reminder>"
           (when (> start-line 1)
             (when (or (not (zerop (forward-line (1- start-line))))
                       (eobp))
-              (error "Read offset %d starts after the last line of %s"
-                     start-line address))
+              (error "%s"
+                     (mevedel-tool-fs-read--format-eof-error
+                      address start-line num-lines
+                      (count-lines (point-min) (point-max)))))
             (delete-region (point-min) (point)))
           (let ((line-truncated-p
                  (mevedel-tool-fs-read--truncate-buffer-to-lines num-lines)))
@@ -1560,8 +1580,14 @@ from a private copy the Read releases."
    ((and (listp path) (plist-member path :shared-view))
     (mevedel-tool-fs-read--shared args path address k))
    ((and (listp path) (plist-get path :virtual))
-    (funcall k (mevedel-tool-fs-read--virtual-text
-                (plist-get path :result) args address)))
+    (let ((read-args (mevedel-tool-fs-read--normalize-read-args args)))
+      ;; Pending status is not the requested payload page.  Keep it visible
+      ;; even when the caller selected a later range of the eventual result.
+      (when (eq (plist-get path :resource-status) 'not-ready)
+        (plist-put read-args :offset 1)
+        (plist-put read-args :limit mevedel-tool-fs-read--default-limit))
+      (funcall k (mevedel-tool-fs-read--virtual-text
+                  (plist-get path :result) read-args address))))
    (t
     (unless (and (stringp path) (file-exists-p path))
       (error "File not found: %s" address))

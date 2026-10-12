@@ -90,16 +90,19 @@
       (nth 3 (assq 'path
                    (mevedel-tool-args (mevedel-tool-get "Grep")))))))
 
-  :doc "advertises saved-history searches while distinguishing live history"
+  :doc "distinguishes Glob discovery from Grep on concrete live history and shared text"
   (progn
     (mevedel-tool-fs--register)
     (dolist (name '("Glob" "Grep"))
       (let ((prompt (mevedel-tool-prompt (mevedel-tool-get name))))
         (should (string-search "`history://saved`" prompt))
-        (should (string-search
-                 (concat "Live history, agent, and MCP addresses do not support " name)
-                 prompt))
-        (should-not (string-search "Agent, history, and MCP addresses" prompt))))))
+        (should (string-search "selected `skill://` package" prompt))
+        (if (equal name "Glob")
+            (should (string-search "Live history, agent, and MCP addresses do not support Glob" prompt))
+          (should (string-search "`history://root`" prompt))
+          (should (string-search "`shared://`" prompt))
+          (should (string-search "Bare `history://`" prompt))
+          (should-not (string-search "Live history, agent, and MCP addresses do not support Grep" prompt)))))))
 
 (mevedel-deftest mevedel-tool-fs-strip-system-reminders ()
   ,test

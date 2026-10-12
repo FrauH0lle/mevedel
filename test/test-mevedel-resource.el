@@ -830,6 +830,72 @@
     (should (equal "now available"
                    (plist-get (mevedel-resource-execute attempt) :result)))))
 
+(mevedel-deftest mevedel-resource-agent-pending-read
+  (:doc "active agent Read returns status rather than stale payload or a pagination error")
+  (with-temp-buffer
+    (org-mode)
+    (let* ((record (mevedel-agent-record--create
+                    :path "/root/reviewer" :role "reviewer" :activity 'running
+                    :conversation-buffer (current-buffer)
+                    :settled-result "stale secret result" :settled-outcome 'completed))
+           (session (mevedel-session--create :permission-mode 'full-auto)))
+      (setq-local mevedel--session session)
+      (mevedel-session--set-agent-registry session (list (cons "/root/reviewer" record)))
+      (mevedel-tool-fs--register)
+      (dolist (activity '(starting running waiting permission-blocked interaction-blocked))
+        (setf (mevedel-agent-record-activity record) activity)
+        (dolist (address '("agent://root/reviewer" "agent://root/reviewer#/findings/0/path"))
+          (let (result)
+            (mevedel-pipeline-run-tool
+             (mevedel-tool-get "Read") (lambda (value) (setq result value))
+             (list :file_path address :offset 1000000 :limit 1))
+            (should (stringp result))
+            (should (string-search "NOT READY" result))
+            (should (string-search "history://root/reviewer" result))
+            (should-not (string-prefix-p "Error:" result))
+            (should-not (string-search "stale secret result" result))
+            (should-not (string-search "#/findings" result))))))))
+
+(mevedel-deftest mevedel-resource-agent-state-boundaries
+  (:doc "pending status preserves option validation and settled or unavailable state boundaries")
+  (with-temp-buffer
+    (org-mode)
+    (let* ((record (mevedel-agent-record--create :path "/root/reviewer" :activity 'starting))
+           (session (mevedel-session--create :permission-mode 'full-auto)))
+      (setq-local mevedel--session session)
+      (mevedel-session--set-agent-registry session (list (cons "/root/reviewer" record)))
+      (mevedel-tool-fs--register)
+      (cl-labels ((read-agent (options)
+                    (let (result)
+                      (mevedel-pipeline-run-tool
+                       (mevedel-tool-get "Read") (lambda (value) (setq result value))
+                       (append (list :file_path "agent://root/reviewer") options))
+                      result)))
+        (let ((status (read-agent nil)))
+          (should (string-search "NOT READY" status))
+          (should (string-search "history is not yet available" status))
+          (should-not (string-search "history://root/reviewer" status)))
+        (dolist (options '((:offset -1) (:limit -1) (:pages "1") (:max_width 10)))
+          (should (string-prefix-p "Error:" (read-agent options))))
+        (setf (mevedel-agent-record-activity record) 'idle)
+        (should (string-prefix-p "Error:" (read-agent nil)))
+        (setf (mevedel-agent-record-settled-result record) "invalid outcome payload"
+              (mevedel-agent-record-settled-outcome record) 'running)
+        (should (string-prefix-p "Error:" (read-agent nil)))
+        (setf (mevedel-agent-record-settled-result record) ""
+              (mevedel-agent-record-settled-outcome record) 'completed)
+        (should (equal "" (read-agent nil)))
+        ;; Execution must observe settlement after preparation, not return
+        ;; the status captured when the permission attempt was prepared.
+        (setf (mevedel-agent-record-activity record) 'running)
+        (let ((attempt (mevedel-resource-prepare
+                        'read "agent://root/reviewer#/answer" (list :session session))))
+          (setf (mevedel-agent-record-activity record) 'idle
+                (mevedel-agent-record-settled-result record) "{\"answer\":\"settled now\"}")
+          (should (equal "settled now" (plist-get (mevedel-resource-execute attempt) :result))))
+        (mevedel-session--set-agent-registry session nil)
+        (should (string-prefix-p "Error:" (read-agent nil)))))))
+
 (mevedel-deftest mevedel-resource-history-provider ()
   ,test
   (test)

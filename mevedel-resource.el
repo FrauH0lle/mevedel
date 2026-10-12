@@ -29,6 +29,8 @@
 (defvar mcp-server-connections)
 
 ;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-active-activity-p
+                  "mevedel-agent-control" (activity))
 (declare-function mevedel-agent-control-list-agents
                   "mevedel-agent-control" (session &optional path-prefix))
 (declare-function mevedel-agent-control-settled-result
@@ -41,6 +43,7 @@
                   "mevedel-agent-control" (record) t)
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (record) t)
+(autoload 'mevedel-agent-control-active-activity-p "mevedel-agent-control")
 (autoload 'mevedel-agent-control-list-agents "mevedel-agent-control")
 (autoload 'mevedel-agent-control-settled-result "mevedel-agent-control")
 (autoload 'mevedel-agent-record-activity "mevedel-agent-control")
@@ -1308,19 +1311,36 @@ When NESTED in an array or object, retain JSON string quoting."
    (t (json-serialize (format "%s" value)))))
 
 (defun mevedel-resource--agent-read (record parsed)
-  "Return settled RECORD payload selected by PARSED address."
+  "Return settled RECORD payload or active-turn status for PARSED address."
   (let ((settled (and record
                       (mevedel-agent-control-settled-result record))))
-    (unless settled
+    (cond
+     ((and record
+           (mevedel-agent-control-active-activity-p
+            (mevedel-agent-record-activity record)))
+      (let ((path (mevedel-resource--canonical-components
+                   (plist-get parsed :components)))
+            (history-p (or (buffer-live-p
+                            (mevedel-agent-record-conversation-buffer record))
+                           (mevedel-agent-record-conversation-location record))))
+        (list :resource-status 'not-ready
+              :result
+              (format "NOT READY: agent://%s has an active turn (%s); wait for completion.\n%s"
+                      path (mevedel-agent-record-activity record)
+                      (if history-p
+                          (format "Inspect progress with Read(file_path=\"history://%s\")." path)
+                        "Conversation history is not yet available.")))))
+     ((not settled)
       (signal 'mevedel-resource-unavailable
-              (list "Retained agent has no settled result yet; wait for completion or inspect its history:// conversation")))
-    (let ((payload (plist-get settled :payload)))
-      (if (not (plist-get parsed :fragment-p))
-          payload
-        (let* ((value (mevedel-resource--json-parse payload))
-               (selected (mevedel-resource--json-pointer-value
-                          value (plist-get parsed :pointer))))
-          (mevedel-resource--json-render selected))))))
+              '("Retained agent has no settled result; its idle record is unavailable")))
+     (t
+      (let ((payload (plist-get settled :payload)))
+        (if (not (plist-get parsed :fragment-p))
+            payload
+          (let* ((value (mevedel-resource--json-parse payload))
+                 (selected (mevedel-resource--json-pointer-value
+                            value (plist-get parsed :pointer))))
+            (mevedel-resource--json-render selected))))))))
 
 (defun mevedel-resource--history-hydrate (record session)
   "Load only RECORD's conversation from SESSION for history inspection.
@@ -1761,7 +1781,7 @@ errors before any content or handler is reached."
                  (plist-get parsed :dynamic-p)
                  (not (eq operation 'read)))
         (signal 'mevedel-resource-error
-                (list "Bare skill:// supports Read only")))
+                (list "Bare skill:// supports Read only; Read skill:// to discover resource addresses, or use ListSkills for model-invocable skills, then search a selected package")))
       ;; A bare directory address names a listing, never a patch endpoint.
       (when (and (null components)
                  (eq operation 'apply-patch))
@@ -2015,6 +2035,12 @@ executor."
                                            :address (plist-get data :address)
                                            :scheme (plist-get data :scheme)
                                            :operation (plist-get data :operation))))
+                    (when (and (listp result) (plist-member result :resource-status))
+                      (setq descriptor
+                            (plist-put descriptor :result (plist-get result :result)))
+                      (setq descriptor
+                            (plist-put descriptor :resource-status
+                                       (plist-get result :resource-status))))
                     (when (and (listp result)
                                (plist-member result :resource-search-roots))
                       (if (plist-get result :resource-search-roots)

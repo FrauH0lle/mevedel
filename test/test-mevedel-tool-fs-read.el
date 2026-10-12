@@ -56,6 +56,28 @@ An error result is signalled, as a Read that failed before waiting does."
   (test-mevedel-tool-fs-read--settle
    (lambda (k) (mevedel-tool-fs-read-list-directory path k max-entries))))
 
+(defun test-mevedel-tool-fs-read--eof-retry-args (text)
+  "Extract the last-page Read arguments from EOF diagnostic TEXT."
+  (should (string-match
+           "Read(file_path=\\(\".*\"\\), offset=\\([0-9]+\\), limit=\\([0-9]+\\))"
+           text))
+  (list :file_path (car (read-from-string (match-string 1 text)))
+        :offset (string-to-number (match-string 2 text))
+        :limit (string-to-number (match-string 3 text))))
+
+(defun test-mevedel-tool-fs-read--assert-eof (path last-line last-text)
+  "Assert PATH's observed LAST-LINE and follow its retry to LAST-TEXT."
+  (dolist (offset (list (1+ last-line) 999))
+    (let* ((failure (should-error
+                     (mevedel-test--read (list :file_path path :offset offset :limit 1))))
+           (text (error-message-string failure))
+           (retry (test-mevedel-tool-fs-read--eof-retry-args text)))
+      (should (string-search (format "Available lines in this read: 1–%d." last-line) text))
+      (should (equal retry (list :file_path path :offset last-line :limit 1)))
+      (should (string-search
+               (format "%d\t%s" last-line last-text)
+               (plist-get (mevedel-test--read retry) :result))))))
+
 (defmacro test-mevedel-tool-fs-read--with-file (suffix content &rest body)
   "Run BODY with tmp bound to a temporary file with SUFFIX and CONTENT."
   (declare (indent 2) (debug t))
@@ -815,6 +837,73 @@ An error result is signalled, as a Read that failed before waiting does."
               (should (= (point) (+ (mevedel-view--input-start) 4)))))
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-tool-fs-read--virtual-text ()
+  ,test
+  (test)
+  :doc "public file and virtual Read preserve line semantics and follow capped EOF retries"
+  (test-mevedel-tool-fs-read--with-file ".txt" nil
+    (let* ((record (mevedel-agent-record--create
+                    :path "/root/reader" :role "reader" :activity 'idle
+                    :settled-outcome 'completed))
+           (session (mevedel-session--create))
+           (mevedel-tool-fs-read--default-limit 2))
+      (mevedel-session--set-agent-registry session (list (cons "/root/reader" record)))
+      (cl-labels ((read-page (args)
+                   (let* ((address (plist-get args :file_path))
+                          (attempt (and (string-prefix-p "agent://" address)
+                                        (mevedel-resource-prepare
+                                         'read address (list :session session))))
+                          (mevedel-resource-current-attempts
+                           (and attempt (list (cons address attempt)))))
+                     (condition-case err
+                         (mevedel-test--read args)
+                       (error (list :status 'error :result (error-message-string err)))))))
+        (dolist (entry '(("a\nb\nc\n" 3) ("a\nb\nc" 3)
+                         ("\n\n" 2) ("a\n\nc" 3) ("a" 1)))
+          (with-temp-file tmp (insert (car entry)))
+          (setf (mevedel-agent-record-settled-result record) (car entry))
+          (dolist (address (list tmp "agent://root/reader"))
+            (dolist (offset (list (1+ (cadr entry)) 99))
+              (dolist (limit '(nil 1 20))
+                (let* ((result (read-page (list :file_path address :offset offset :limit limit)))
+                       (text (plist-get result :result))
+                       (retry (test-mevedel-tool-fs-read--eof-retry-args text))
+                       (last (cadr entry))
+                       (start (max 1 (1+ (- last (min (or limit 2) 2))))))
+                  (should (eq 'error (plist-get result :status)))
+                  (should (string-search (format "Available lines in this read: 1–%d." last) text))
+                  (should (equal retry (list :file_path address :offset start
+                                            :limit (1+ (- last start)))))
+                  (let ((page (read-page retry)))
+                    (should-not (eq 'error (plist-get page :status)))
+                    (should (string-match-p (format "%d\t" last) (plist-get page :result)))))))))
+        ;; A valid last-page retry still observes the normal character cap.
+        (let ((mevedel-tool-fs-read--default-limit 4)
+              (mevedel-tool-fs-read--max-output-chars 12)
+              (text "aaa\nbbb\nccc\nddd\neee\nfff\n"))
+          (with-temp-file tmp (insert text))
+          (setf (mevedel-agent-record-settled-result record) text)
+          (dolist (address (list tmp "agent://root/reader"))
+            (let* ((failure (read-page (list :file_path address :offset 99 :limit 20)))
+                   (retry (test-mevedel-tool-fs-read--eof-retry-args
+                           (plist-get failure :result)))
+                   (page (read-page retry))
+                   (next (test-mevedel-tool-fs-read--eof-retry-args
+                          (plist-get page :result))))
+              (should (equal retry (list :file_path address :offset 3 :limit 4)))
+              (should (string-search "Read output truncated" (plist-get page :result)))
+              (should (equal next (list :file_path address :offset 5 :limit 4)))
+              (should (string-search "6\tfff" (plist-get (read-page next) :result))))))
+        ;; Empty files and virtual payloads remain successful at any offset.
+        (with-temp-file tmp)
+        (setf (mevedel-agent-record-settled-result record) "")
+        (dolist (address (list tmp "agent://root/reader"))
+          (let ((result (read-page (list :file_path address :offset 99 :limit 1))))
+            (should-not (eq 'error (plist-get result :status)))
+            (if (equal address tmp)
+                (should (string-search "empty (0 bytes)" (plist-get result :result)))
+              (should (equal "" (plist-get result :result))))))))))
+
 (mevedel-deftest mevedel-tool-fs-read--file (:quiet t)
   ,test
   (test)
@@ -876,16 +965,20 @@ An error result is signalled, as a Read that failed before waiting does."
   ;; the model.
   (test-mevedel-tool-fs-read--with-file nil nil
     (with-temp-file tmp (insert "a\nb\nc\n"))
-    (should-error
-     (test-mevedel-tool-fs-read--settle
-      (lambda (k)
-        (mevedel-tool-fs-read--file (list :file_path tmp :offset 99) k)))
-      :type 'error)
-    (should-error
-     (test-mevedel-tool-fs-read--settle
-      (lambda (k)
-        (mevedel-tool-fs-read--file (list :file_path tmp :offset 4) k)))
-      :type 'error)
+    (dolist (offset '(4 99))
+      (let ((failure (should-error
+                      (test-mevedel-tool-fs-read--file
+                       (list :file_path tmp :offset offset))
+                      :type 'error)))
+        (should (equal
+                 (format (concat "Read offset %d starts after the last line of %s. "
+                                 "Available lines in this read: 1–3. "
+                                 "Read the last page with Read(file_path=%S, offset=1, limit=3).")
+                         offset tmp tmp)
+                 (cadr failure)))))
+    (should (equal "1\ta\n2\tb\n3\tc\n"
+                   (test-mevedel-tool-fs-read--file
+                    (list :file_path tmp :offset 1 :limit 3))))
     ;; The last real line still reads.
     (should (string-match-p
              "3\tc"
@@ -1313,7 +1406,22 @@ An error result is signalled, as a Read that failed before waiting does."
               (should (string-match-p
                        (regexp-quote (file-name-concat root "notes.txt"))
                        result))
-              (should-not (string-match-p "/mevedelmock:" result)))))
+              (should-not (string-match-p "/mevedelmock:" result))
+              (let* ((failure (should-error
+                               (mevedel-test--read
+                                (list :file_path remote-path :offset 99))))
+                     (text (error-message-string failure))
+                     (retry (test-mevedel-tool-fs-read--eof-retry-args text)))
+                (should-not (string-search "/mevedelmock:" text))
+                (should (string-search "Available lines in this read: 1–3." text))
+                (should (equal retry (list :file_path (file-name-concat root "notes.txt")
+                                          :offset 2 :limit 2)))
+                (plist-put retry :file_path
+                           (mevedel-execution-target-expand-path
+                            (mevedel-session-execution-target mevedel--session)
+                            (plist-get retry :file_path)))
+                (should (string-search "3\tthree"
+                                       (plist-get (mevedel-test--read retry) :result)))))))
       (delete-directory root t)))
   :doc "caps aggregate text read output with continuation guidance"
   (test-mevedel-tool-fs-read--with-file nil nil
@@ -1347,7 +1455,8 @@ An error result is signalled, as a Read that failed before waiting does."
                      (mevedel-tool-fs-read--file
                       (list :file_path tmp :offset 50 :limit 5) k)))))
       (should (string-match-p "50\tline 50" result))
-      (should (string-match-p "54\tline 54" result))))
+      (should (string-match-p "54\tline 54" result)))
+    (test-mevedel-tool-fs-read--assert-eof tmp 100 "line 100"))
   :doc "preserves a UTF-8 character split across input chunks"
   (test-mevedel-tool-fs-read--with-file nil nil
     (let ((coding-system-for-write 'utf-8-unix))
@@ -1359,7 +1468,8 @@ An error result is signalled, as a Read that failed before waiting does."
                      (mevedel-tool-fs-read--file
                       (list :file_path tmp :offset 2 :limit 1) k)))))
       (should (string-match-p
-               (regexp-quote "2\tab\u00e9") result))))
+               (regexp-quote "2\tab\u00e9") result)))
+    (test-mevedel-tool-fs-read--assert-eof tmp 2 "ab\u00e9"))
   :doc "preserves a UTF-16 surrogate pair split across input chunks"
   (test-mevedel-tool-fs-read--with-file nil nil
     (let ((coding-system-for-write 'utf-16le-with-signature))
@@ -1372,7 +1482,8 @@ An error result is signalled, as a Read that failed before waiting does."
                      (mevedel-tool-fs-read--file
                       (list :file_path tmp :offset 2 :limit 1) k)))))
       (should (string-match-p
-               (regexp-quote "2\ta\U0001f600") result))))
+               (regexp-quote "2\ta\U0001f600") result)))
+    (test-mevedel-tool-fs-read--assert-eof tmp 2 "a\U0001f600"))
   :doc "ignores newline bytes spanning UTF-16 code units"
   (test-mevedel-tool-fs-read--with-file nil nil
     (let ((coding-system-for-write 'utf-16le-with-signature))
@@ -1382,7 +1493,8 @@ An error result is signalled, as a Read that failed before waiting does."
                    (lambda (k)
                      (mevedel-tool-fs-read--file
                       (list :file_path tmp :offset 2 :limit 1) k)))))
-      (should (string-match-p "2\tsecond" result))))
+      (should (string-match-p "2\tsecond" result)))
+    (test-mevedel-tool-fs-read--assert-eof tmp 2 "second"))
   :doc "counts a bare LF after a DOS-coded input chunk"
   (test-mevedel-tool-fs-read--with-file nil nil
     (let ((coding-system-for-write 'no-conversion))
@@ -1394,7 +1506,59 @@ An error result is signalled, as a Read that failed before waiting does."
                    (lambda (k)
                      (mevedel-tool-fs-read--file
                       (list :file_path tmp :offset 3 :limit 1) k)))))
-      (should (string-match-p "3\tthree" result))))
+      (should (string-match-p "3\tthree" result)))
+    (test-mevedel-tool-fs-read--assert-eof tmp 3 "three"))
+  :doc "EOF counting preserves DOS, Mac, UTF-8 and signed UTF-16 line endings"
+  (test-mevedel-tool-fs-read--with-file ".txt" nil
+    (dolist (coding '(utf-8-unix utf-8-dos utf-8-mac
+                      utf-16le-with-signature utf-16be-with-signature))
+      (dolist (text '("one\n\nlast\n" "one\n\nlast"))
+        (let ((coding-system-for-write coding))
+          (write-region text nil tmp nil 'silent))
+        (test-mevedel-tool-fs-read--assert-eof tmp 3 "last"))))
+  :doc "EOF uses captured bytes despite append during traversal and does not rescan"
+  (test-mevedel-tool-fs-read--with-file ".txt" nil
+    (write-region (concat (make-string (1- (* 512 1024)) ?x)
+                          "\nsecond\nthird") nil tmp nil 'silent)
+    (let ((size (file-attribute-size (file-attributes tmp)))
+          (original-raw (symbol-function 'insert-file-contents-literally))
+          (original-decoded (symbol-function 'insert-file-contents))
+          ranges (probes 0) appended)
+      (let ((failure
+             (cl-letf (((symbol-function 'insert-file-contents)
+                        (lambda (&rest args)
+                          ;; Literal reads delegate here with no conversion.
+                          (unless (eq coding-system-for-read 'no-conversion)
+                            (cl-incf probes))
+                          (apply original-decoded args)))
+                       ((symbol-function 'insert-file-contents-literally)
+                        (lambda (&rest args)
+                          (push (list (nth 2 args) (nth 3 args)) ranges)
+                          (prog1 (apply original-raw args)
+                            (unless appended
+                              (setq appended t)
+                              (write-region "\nfour\nfive\n" nil tmp t 'silent))))))
+               (should-error
+                (mevedel-test--read (list :file_path tmp :offset 99 :limit 2))))))
+        (should (= probes 1))
+        (should (equal (nreverse ranges) (list (list 0 (* 512 1024))
+                                             (list (* 512 1024) size))))
+        (should (string-search "Available lines in this read: 1–3."
+                               (error-message-string failure)))
+        (let ((retry (test-mevedel-tool-fs-read--eof-retry-args
+                      (error-message-string failure))))
+          (should (equal retry (list :file_path tmp :offset 2 :limit 2)))
+          (should (string-search "3\tthird" (plist-get (mevedel-test--read retry) :result))))
+        ;; A later read observes growth; the failed read made no completion claim.
+        (test-mevedel-tool-fs-read--assert-eof tmp 5 "five"))))
+  :doc "EOF at an exact chunk boundary still recognizes a loaded next line"
+  (test-mevedel-tool-fs-read--with-file ".txt" nil
+    (write-region (concat (make-string (1- (* 512 1024)) ?x) "\nlast\n")
+                  nil tmp nil 'silent)
+    (should (string-search "2\tlast"
+                           (plist-get (mevedel-test--read
+                                       (list :file_path tmp :offset 2 :limit 1)) :result)))
+    (test-mevedel-tool-fs-read--assert-eof tmp 2 "last"))
   :doc "follows symlinks"
   (let ((tmp (make-temp-file "mevedel-test-"))
         (link (make-temp-file "mevedel-link-")))
@@ -1675,6 +1839,24 @@ An error result is signalled, as a Read that failed before waiting does."
                          (list :file_path fixed :offset 2 :limit 1) k)))))
                 (should (string-match-p "2\tsecond line" result))
                 (should-not (string-match-p "poisoned" result))
+                (should-not dedup-called))
+              (let* ((failure (should-error
+                               (mevedel-test--read
+                                (list :file_path fixed :offset 99 :limit 1))))
+                     (text (error-message-string failure))
+                     (retry (test-mevedel-tool-fs-read--eof-retry-args text)))
+                (should (string-search "Available lines in this read: 1–2." text))
+                (dolist (private '("mevedel-session-artifact-" "/mevedelmock:" ".publications"))
+                  (should-not (string-search private text)))
+                (should (equal (plist-get retry :file_path)
+                               (file-name-concat local-root ".mevedel" "sessions"
+                                                 "session" logical)))
+                (plist-put retry :file_path
+                           (mevedel-execution-target-expand-path
+                            (mevedel-session-execution-target session)
+                            (plist-get retry :file_path)))
+                (should (string-search "2\tsecond line"
+                                       (plist-get (mevedel-test--read retry) :result)))
                 (should-not dedup-called)))
             (delete-file fixed)
             (should (string-match-p

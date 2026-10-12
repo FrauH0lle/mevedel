@@ -13,18 +13,20 @@ than inventing identities. Plain relative filesystem paths start at the session
 working directory; addresses have their own roots. Markdown links and web URLs
 are not filesystem paths.
 
-| Family | Read | Glob / Grep | Target |
-|---|---|---|---|
-| `work://` | Yes | Yes | Session working files and workspace shared files |
-| `artifact://` | Yes | Yes | Persisted tool/execution output |
-| `skill://` | Yes | Yes | Discovered skill packages |
-| `agent://` | Yes | No | Latest settled retained-agent results |
-| `history://` | Yes | No | Root and retained-agent conversations |
-| `history://saved[/SESSION[/SEGMENT]]` | Yes | Yes | Filtered saved workspace conversations, including archives |
-| `memory://root` | Yes | Yes | Configured memory index/roots |
-| `memory://journal/` | Yes | Yes | Validated published workspace journal records |
-| `mevedel://` | Yes | Yes | Installed Markdown documentation |
-| `mcp://` | Yes | No | Connected servers' advertised resources |
+| Family | Read | Glob | Grep | Target |
+|---|---|---|---|---|
+| `work://` | Yes | Yes | Yes | Session working files and workspace shared files |
+| `artifact://` | Yes | Yes | Yes | Persisted tool/execution output |
+| Selected `skill://` package | Yes | Yes | Yes | Discovered skill package |
+| `agent://` | Yes | No | No | Latest settled retained-agent results or active-turn status |
+| Bare `history://` | Yes | No | No | Conversation discovery |
+| `history://root[/PATH]` | Yes | No | Yes | Root and retained-agent conversations, including unsaved content |
+| `history://saved[/SESSION[/SEGMENT]]` | Yes | Yes | Yes | Filtered saved workspace conversations, including archives |
+| `memory://root` | Yes | Yes | Yes | Configured memory index/roots |
+| `memory://journal/` | Yes | Yes | Yes | Validated published workspace journal records |
+| `shared://` | Yes | No | Text views | Shared whiteboards and documents |
+| `mevedel://` | Yes | Yes | Yes | Installed Markdown documentation |
+| `mcp://` | Yes | No | No | Connected servers' advertised resources |
 
 Bare `skill://` supports Read only; Glob and Grep require a selected package.
 Read a bare family address to list current entries, except memory uses
@@ -77,6 +79,13 @@ For lifecycle, containment, and full address semantics, consult
 
 ## Selecting JSON from an agent result
 
+An active retained agent returns an explicit NOT READY status, not a completed
+payload or an older turn's result. The status includes its history address when
+available, otherwise states that history is not yet available. Payload offsets,
+limits, and JSON fragments do not hide this status; text-only option validation
+still applies. Wait for completion before treating the agent's work as settled.
+Missing agents and idle records without a valid settled result remain errors.
+
 If the complete settled payload is JSON, append a URI-fragment JSON Pointer:
 `agent://root/reviewer#/findings/0/path`. The fragment is URI-decoded once,
 then uses RFC 6901 escapes (`~1` for slash, `~0` for tilde). No fragment returns
@@ -126,6 +135,13 @@ at 2000 characters and final text output at 50 Ki characters. Use a returned
 continuation offset when available; the end of a bounded result need not be
 the end of the file. Unchanged duplicate reads may be suppressed in a session;
 ToolCall nested reads still return the content needed by the script.
+
+An offset past the end of nonempty text remains an error. Its diagnostic gives
+the observed line bounds and a concrete last-page `Read` call using the visible
+path or resource address. The suggested page is no wider than the requested
+limit or the 2000-line default. Use that returned range rather than guessing a
+tail offset; bounds describe this read, not a promise about a growing file.
+Empty content still returns successfully as empty text.
 
 Glob returns up to 100 entries by default with a 30 KiB hard output cap.
 Grep bounds output at 200 KiB. Content mode previews overlong lines with

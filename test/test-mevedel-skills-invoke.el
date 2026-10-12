@@ -1114,6 +1114,13 @@ hooks:
                :origin 'user)))
           (dolist (text (list model-result fork-prompt))
             (should (string-match-p "Child contract" text))
+            (let* ((child (mevedel-session-get-skill session "child"))
+                   (skill (mevedel-session-get-skill
+                           session (if (eq text model-result) "inline" "fork")))
+                   (child-address (mevedel-resource--skill-address child))
+                   (root-address (mevedel-resource--skill-address skill)))
+              (should (< (string-search child-address text)
+                         (string-search root-address text))))
             (should (string-match-p
                      (if (eq text model-result) "Inline root" "Fork root")
                      text)))
@@ -1631,6 +1638,7 @@ hooks:
          :description "target hint"
          :on-invocation progress-callback)))
     (should (string-match-p "the task" (car captured)))
+    (should-not (string-search "skill://" (car captured)))
     (should (string-match-p "<hook-context>ctx</hook-context>" (car captured)))
     (should (equal "target hint" (plist-get (cdr captured) :description)))
     (should (eq progress-callback
@@ -1767,7 +1775,10 @@ description: Yell
              (lambda (r)
                (setq received (test-mevedel-skills--handler-result r)))
              (list :name "shout" :arguments "loudly")))
-          (should (equal "YELL loudly" received)))
+          (let* ((skill (mevedel-session-get-skill session "shout"))
+                 (address (mevedel-resource--skill-address skill)))
+            (should (string-search address received))
+            (should (string-suffix-p "YELL loudly" received))))
       (delete-directory dir t)))
 
   :doc "user-attached skill is an idempotent model-side success"
@@ -1860,7 +1871,7 @@ description: Yell
        '(:name "costly")))
     (should (equal "Prepared body" (plist-get envelope :result)))
     (should (equal '(:kind skill-invocation
-                           :prompt nil :attachments nil
+                           :prompt "Prepared body" :attachments nil
                            :ignored-policy-fields (model effort))
                    (plist-get envelope :render-data))))
 
@@ -1890,7 +1901,7 @@ description: Yell
              tool render-data '(:name "costly") visible)))
       (should (equal "Prepared body" visible))
       (should (equal '(:kind skill-invocation
-                             :prompt nil :attachments nil
+                             :prompt "Prepared body" :attachments nil
                              :ignored-policy-fields (model effort))
                      render-data))
       (should (eq 'warning (plist-get rendering :status)))
@@ -2186,14 +2197,62 @@ description: Yell
   (let ((text (mevedel-skills-format-attachment
                '(:name "review" :body "Check it"))))
     (should (string-match-p "`\\$review`" text))
+    (should-not (string-search "skill://" text))
     (should (string-suffix-p "Check it" text))))
 
-(mevedel-deftest mevedel-skills-format-model-input
-  (:doc "puts formatted dependency attachments before the root body")
+(mevedel-deftest mevedel-skills-format-body ()
+  ,test
+  (test)
+  :doc "discloses the exact source without altering the prepared body"
+  (let ((root (make-temp-file "skill-source-body-" t)))
+    (unwind-protect
+        (let* ((source (mevedel-skills-test--write-skill
+                        root "review" "name: review\ndescription: Review\n"
+                        "Authored body"))
+               (skill (mevedel-skill--create
+                       :name "review" :source-file source))
+               (body "Prepared $ARGUMENTS\n\n!$inert\n")
+               (text (mevedel-skills-format-body skill body)))
+          (should (string-search (mevedel-resource--skill-address skill) text))
+          (should (string-suffix-p body text))
+          (should (equal "Prepared $ARGUMENTS\n\n!$inert\n" body)))
+      (delete-directory root t)))
+
+  :doc "source-less skills retain the exact body and acquire no fake locator"
+  (let* ((skill (mevedel-skill--create :name "synthetic"))
+         (body "Synthetic body\n"))
+    (should (equal body (mevedel-skills-format-body skill body)))
+    (should (equal body (mevedel-skills-format-body nil body)))))
+
+(mevedel-deftest mevedel-skills-format-model-input ()
+  ,test
+  (test)
+  :doc "puts formatted dependency attachments before the root body"
   (let ((text (mevedel-skills-format-model-input
                '(:required-attachments ((:name "child" :body "Child"))
                  :body "Root"))))
-    (should (< (string-search "Child" text) (string-search "Root" text)))))
+    (should-not (string-search "skill://" text))
+    (should (< (string-search "Child" text) (string-search "Root" text))))
+
+  :doc "root and dependency disclose their own sources dependency first"
+  (let ((dir (make-temp-file "skill-source-input-" t)))
+    (unwind-protect
+        (let* ((root-source (mevedel-skills-test--write-skill
+                             dir "root" "name: root\ndescription: Root\n" "Root"))
+               (child-source (mevedel-skills-test--write-skill
+                              dir "child" "name: child\ndescription: Child\n" "Child"))
+               (skill (mevedel-skill--create :name "root" :source-file root-source))
+               (child (mevedel-skill--create :name "child" :source-file child-source))
+               (prepared (list :skill skill :body "Root prepared"
+                               :required-attachments
+                               (list (list :name "child" :source-file child-source
+                                           :body "Child prepared"))))
+               (text (mevedel-skills-format-model-input prepared)))
+          (should (< (string-search (mevedel-resource--skill-address child) text)
+                     (string-search (mevedel-resource--skill-address skill) text)))
+          (should (string-suffix-p "Root prepared" text))
+          (should (equal "Root prepared" (plist-get prepared :body))))
+      (delete-directory dir t))))
 
 (mevedel-deftest mevedel-skills--dependency-skill
   (:doc "finds a session skill by canonical source key")

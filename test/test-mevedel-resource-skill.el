@@ -96,9 +96,12 @@
           (make-directory (file-name-concat skill-dir "templates") t)
           (with-temp-file (file-name-concat skill-dir "templates" "prompt.tmpl")
             (insert "template needle\n"))
-          (should-error
-           (mevedel-resource-prepare 'glob "skill://"
-                                     (list :session session)))
+          (dolist (operation '(glob grep))
+            (let ((failure (should-error
+                            (mevedel-resource-prepare operation "skill://"
+                                                      (list :session session)))))
+              (should (string-search "Read skill://" (error-message-string failure)))
+              (should (string-search "ListSkills" (error-message-string failure)))))
           (let* ((listing
                   (mevedel-resource-execute
                    (mevedel-resource-prepare

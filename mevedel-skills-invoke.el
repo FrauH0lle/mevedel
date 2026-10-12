@@ -346,11 +346,25 @@ DISPLAY-CALLBACK receives the lifecycle event when non-nil."
      `(:event done :skill ,skill-name))
     (funcall callback outcome)))
 
+(defun mevedel-skills-format-body (skill body)
+  "Return prepared BODY with SKILL's exact source address when available.
+Keep BODY unchanged for a source-less SKILL.  This delivery wrapper does not
+modify prepared bodies or invocation records."
+  (if (and skill (mevedel-skill-source-file skill))
+      (format "Skill source: `%s`\n\n%s"
+              (mevedel-resource--skill-address skill) body)
+    body))
+
 (defun mevedel-skills-format-attachment (attachment)
   "Return the model instruction body for prepared skill ATTACHMENT."
   (format "The host already attached the skill `$%s` for this request. You must follow it without calling `Skill`.\n\n%s"
           (plist-get attachment :name)
-          (or (plist-get attachment :body) "")))
+          (mevedel-skills-format-body
+           (or (plist-get attachment :skill)
+               (when-let* ((source (plist-get attachment :source-file)))
+                 (mevedel-skill--create
+                  :name (plist-get attachment :name) :source-file source)))
+           (or (plist-get attachment :body) ""))))
 
 (defun mevedel-skills-format-model-input (prepared)
   "Return PREPARED's complete dependency attachments and root body."
@@ -361,7 +375,8 @@ DISPLAY-CALLBACK receives the lifecycle event when non-nil."
               (mevedel-reminders-format-block
                (mevedel-skills-format-attachment attachment)))
             (plist-get prepared :required-attachments))
-    (list (or (plist-get prepared :body) "")))
+    (list (mevedel-skills-format-body
+           (plist-get prepared :skill) (or (plist-get prepared :body) ""))))
    "\n\n"))
 
 (defun mevedel-skills--prompt-rewrite-audit-record (original decision)
@@ -1504,10 +1519,9 @@ returns the body; error returns a `Error: ' prefixed message."
          (skill (and session (mevedel-session-get-skill session name)))
          (return
           (lambda (result &optional outcome)
-            ;; OUTCOME is present only for a successful invocation.  An
-            ;; inline body whose required attachments lead RESULT travels
-            ;; beside it as `:prompt', so the row shows the skill alone
-            ;; and no reminder markup reaches the reader as prose.
+            ;; OUTCOME is present only for a successful invocation.
+            ;; Raw bodies travel beside delivery wrappers as `:prompt', so
+            ;; source headers and dependency reminders stay out of the row.
             (let* ((attachments
                     (and (plist-get outcome :body)
                          (mapcar (lambda (attachment)
@@ -1515,10 +1529,13 @@ returns the body; error returns a `Error: ' prefixed message."
                                  (plist-get outcome :required-attachments))))
                    (ignored (plist-get outcome :ignored-policy-fields))
                    (render-data
-                    (when (or attachments ignored)
+                    (when (or attachments ignored
+                              (and (plist-get outcome :body)
+                                   (plist-get outcome :skill)
+                                   (mevedel-skill-source-file
+                                    (plist-get outcome :skill))))
                       (list :kind 'skill-invocation
-                            :prompt (and attachments
-                                         (plist-get outcome :body))
+                            :prompt (plist-get outcome :body)
                             :attachments attachments
                             :ignored-policy-fields ignored))))
               (when attachments

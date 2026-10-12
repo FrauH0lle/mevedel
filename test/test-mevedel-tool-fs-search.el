@@ -1197,6 +1197,40 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
               (should-not (string-search root result)))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-tool-fs-search/artifact-descendant-discovery
+  (:doc "descendant discovery never returns private execution spool addresses")
+  (let* ((root (make-temp-file "mevedel-artifact-descendants-" t))
+         (session (mevedel-session--create :save-path root))
+         (directory (file-name-concat root "tool-results" "executions")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat directory ".mevedel-pending-executions") t)
+          (with-temp-file (file-name-concat directory "public.log")
+            (insert "needle public\n"))
+          (with-temp-file (file-name-concat directory ".mevedel-pending-executions" "secret.log")
+            (insert "needle private\n"))
+          (dolist (address '("artifact://executions" "artifact://executions/"))
+            (dolist (operation '(glob grep))
+              (let* ((attempt (mevedel-resource-prepare operation address (list :session session)))
+                     (mevedel-resource-current-attempts (list (cons address attempt)))
+                     (result
+                      (test-mevedel-tool-fs-search--await-callback
+                       (if (eq operation 'glob) #'mevedel-tool-fs-search-glob #'mevedel-tool-fs-search-grep)
+                       (list :path address :pattern (if (eq operation 'glob) "**/*" "needle")))))
+                (should (string-search "artifact://executions/public.log" result))
+                (should-not (string-search "secret" result))
+                (should-not (string-search root result)))))
+          (dolist (pattern '("**/secret.log" "**/.mevedel-pending-executions/**"))
+            (let* ((address "artifact://executions")
+                   (attempt (mevedel-resource-prepare 'glob address (list :session session)))
+                   (mevedel-resource-current-attempts (list (cons address attempt)))
+                   (result (test-mevedel-tool-fs-search--await-callback
+                            #'mevedel-tool-fs-search-glob
+                            (list :path address :pattern pattern))))
+              (should (string-search "No files found" result))
+              (should-not (string-search "secret" result)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-tool-fs-search/live-history ()
   ,test
   (test)

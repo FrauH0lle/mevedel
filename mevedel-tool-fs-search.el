@@ -23,6 +23,7 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-handler-resumable "mevedel-pipeline" (function))
+(autoload 'mevedel-pipeline-handler-resumable "mevedel-pipeline")
 
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-ids "mevedel-shared-editing" (workspace))
@@ -600,6 +601,83 @@ and FAILURE-GUIDANCE tells the caller how to narrow a failed invocation."
                        failure-guidance))))
     (list :partial-warning partial-warning :pageable-p pageable-p)))
 
+(defun mevedel-tool-fs-search--start-grep
+    (callback rg-args paths read-paths file-glob file-type session)
+  "Start Grep with RG-ARGS over PATHS and call CALLBACK with child results.
+READ-PATHS and SESSION retain the native helper's execution scope.
+Package directories first select files using FILE-GLOB and FILE-TYPE, then
+admit only contained Markdown files before any content search."
+  (let ((address mevedel-tool-fs-search--resource-address))
+    (if (not (and address (string-prefix-p "mevedel://" address)
+                  (cl-every #'file-directory-p paths)))
+        (mevedel-execution-start-helper
+         callback "mevedel-grep" (cons "rg" (append rg-args paths)) read-paths nil
+         :session session :owner (mevedel-current-origin)
+         :teardown-callback mevedel-tool-fs-search--teardown
+         :timeout mevedel-tool-fs-search-timeout)
+      (let ((deadline (+ (float-time) mevedel-tool-fs-search-timeout))
+            (owner (mevedel-current-origin))
+            (teardown mevedel-tool-fs-search--teardown)
+            cancelled cancels)
+        (cl-labels
+            ((start (continuation name command)
+               (push
+                (mevedel-execution-start-helper
+                 (mevedel-pipeline-handler-resumable
+                  (lambda (result)
+                    (unless cancelled (funcall continuation result))))
+                 name command read-paths nil
+                 :session session :owner owner :teardown-callback teardown
+                 :timeout (max 0.001 (- deadline (float-time))))
+                cancels))
+             (reject (reason)
+               (funcall callback
+                        (list :exit-code 2 :output (concat reason "\n")))))
+          (start
+           (lambda (result)
+             (let ((outcome (mevedel-tool-fs-search--rg-outcome result))
+                   (output (or (plist-get result :output) "")))
+               (cond
+                ((memq outcome '(timeout output-limit))
+                 ;; File-list output is not content and must not be paginated.
+                 (funcall callback (plist-put (copy-sequence result) :output "")))
+                ((not (memq outcome '(success no-match)))
+                 (reject "Package Grep could not select files; check :glob and :type"))
+                ((> (string-bytes output) mevedel-tool-fs-search--grep-max-output-bytes)
+                 (reject "Package Grep file list is too large; narrow :path, :glob, or :type"))
+                ((and (eq outcome 'success)
+                      (not (string-suffix-p "\0" output)))
+                 (reject "Package Grep returned an incomplete file list; narrow the search"))
+                (t
+                 (let ((files
+                        (cl-remove-if-not
+                         (lambda (file)
+                           (and (string-suffix-p ".md" file)
+                                (cl-some (lambda (root)
+                                           (mevedel-resource-within-root-p file root))
+                                         paths)
+                                (file-regular-p file)))
+                         (split-string output "\0" t))))
+                   (cond
+                    ((>= (float-time) deadline)
+                     (funcall callback '(:exit-code 1 :timed-out-p t :output "")))
+                    ((null files)
+                     (funcall callback '(:exit-code 1 :output "")))
+                    (t
+                     (start callback "mevedel-grep"
+                            (cons "rg" (append '("--with-filename") rg-args files))))))))))
+           "mevedel-grep-files"
+           (append (list "rg" "--files" "--null" "--hidden" "--no-require-git")
+                   ;; Do not add a second positive glob: rg combines them by
+                   ;; union, and explicit file arguments bypass these filters.
+                   (when file-glob (list (format "--glob=%s" file-glob)))
+                   (when file-type (list (format "--type=%s" file-type)))
+                   mevedel-tool-fs-search--rg-vcs-exclusions paths)))
+        (lambda ()
+          (unless cancelled
+            (setq cancelled t)
+            (dolist (cancel cancels) (when (functionp cancel) (funcall cancel)))))))))
+
 (defun mevedel-tool-fs-search--dispatch-resource (callback args attempt operation)
   "Dispatch prepared ATTEMPT to the Glob or Grep handler OPERATION.
 Preserve ARGS and return the handler's cancellation value.  CALLBACK receives
@@ -700,8 +778,8 @@ and optional :path."
                                       mevedel-tool-fs-search--resource-address)
                               (list "--null"))
                             (mevedel-tool-fs-resource-rg-exclusions
-                             (or (if resource-roots (plist-get args :path) address)
-                                 mevedel-tool-fs-search--resource-address))
+                             (or mevedel-tool-fs-search--resource-address
+                                 address))
                             mevedel-tool-fs-search--rg-vcs-exclusions
                             paths)))
               (mevedel-execution-start-helper
@@ -849,9 +927,8 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                        (mevedel-tool-fs-resource-rg-exclusions
                         (or resource-address mevedel-tool-fs-search--resource-address))
                        mevedel-tool-fs-search--rg-vcs-exclusions
-                       (list "-e" pattern)
-                       (or resource-paths (list path))))
-                (mevedel-execution-start-helper
+                       (list "-e" pattern)))
+                (mevedel-tool-fs-search--start-grep
                  (lambda (child-result)
                    (with-temp-buffer
                      (let* ((settlement
@@ -922,10 +999,8 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                            (setq result (plist-put result :status 'error))
                            (setq result (plist-put result :render-data '(:count 0))))
                          (funcall callback result)))))
-                 "mevedel-grep" (cons "rg" rg-args) search-roots nil
-                 :session session :owner (mevedel-current-origin)
-                 :teardown-callback mevedel-tool-fs-search--teardown
-                 :timeout mevedel-tool-fs-search-timeout)))))))))
+                 rg-args (or resource-paths (list path)) search-roots
+                 file-glob file-type session)))))))))
 
 (provide 'mevedel-tool-fs-search)
 

@@ -216,6 +216,74 @@
             (should-not (string-search "Resource unavailable:" result))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-tool-fs-read/eof-diagnostics ()
+  ,test
+  (test)
+  :doc "file-backed and virtual history EOF give private, followable pipeline diagnostics"
+  (let* ((root (make-temp-file "mevedel-resource-eof-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create :workspace workspace :permission-mode 'full-auto))
+         (file (file-name-concat root ".mevedel" "shared" "notes.md"))
+         (mevedel-tool-fs-read--default-limit 2))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local mevedel--session session mevedel--workspace workspace
+                      default-directory (file-name-as-directory root))
+          (mevedel-session-set-root-buffer session (current-buffer))
+          (insert "History user request\n")
+          (let ((start (point)))
+            (insert "History assistant answer\nlast answer line\n")
+            (put-text-property start (point) 'gptel 'response))
+          (make-directory (file-name-directory file) t)
+          (write-region "one\ntwo\nthree\n" nil file nil 'silent)
+          (cl-labels
+              ((pipeline-read (args)
+                 (let* ((address (plist-get args :file_path))
+                        (attempt (mevedel-resource-prepare 'read address (list :session session)))
+                        result)
+                   (mevedel-pipeline--step-handler
+                    (list :tool (mevedel-tool--create
+                                 :name "Read" :handler #'mevedel-tool-fs-read :async-p t)
+                          :args args :resource-attempts (list (cons address attempt)))
+                    (lambda (context) (setq result context))
+                    (lambda (&rest failure) (ert-fail failure)))
+                   result)))
+            (dolist (address '("work://shared/notes.md" "history://root"))
+              (let* ((last (if (string-prefix-p "work://" address)
+                               3
+                             (with-temp-buffer
+                               (insert (plist-get
+                                        (mevedel-resource-execute
+                                         (mevedel-resource-prepare 'read address (list :session session)))
+                                        :result))
+                               (count-lines (point-min) (point-max)))))
+                     (start (max 1 (1- last)))
+                     (failure (pipeline-read (list :file_path address :offset 999 :limit 20)))
+                     (text (plist-get failure :result)))
+                (should (eq 'error (plist-get failure :handler-status)))
+                (should (equal text
+                               (format (concat "Error: Read offset 999 starts after the last line of %s. "
+                                               "Available lines in this read: 1–%d. "
+                                               "Read the last page with Read(file_path=%S, offset=%d, limit=2).")
+                                       address last address start)))
+                (should-not (string-search root text))
+                (should-not (string-search "Resource unavailable:" text))
+                (should-not (string-search "Error: Error:" text))
+                ;; Parse and execute the authored call, not a reconstructed path.
+                (should (string-match
+                         "Read(file_path=\\(\".*\"\\), offset=\\([0-9]+\\), limit=\\([0-9]+\\))" text))
+                (let* ((retry (list :file_path (car (read-from-string (match-string 1 text)))
+                                    :offset (string-to-number (match-string 2 text))
+                                    :limit (string-to-number (match-string 3 text))))
+                       (page (pipeline-read retry)))
+                  (should (eq 'success (plist-get page :handler-status)))
+                  (should (string-match-p (format "%d\t" last) (plist-get page :result)))
+                  (should (string-search (if (string-prefix-p "work://" address)
+                                            "three" "last answer line")
+                                         (plist-get page :result))))))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-tool-patch-handler/diagnostics ()
   ,test
   (test)

@@ -229,7 +229,25 @@ persisted enablement when supplied."
     (should (equal "expansion context" (plist-get outcome :hook-context)))
     (should (equal '(record)
                    (plist-get (plist-get outcome :request-context)
-                              :invoked-skills)))))
+                              :invoked-skills))))
+
+  :doc "synthetic stacked contributions and their dependencies gain no fabricated address"
+  (let* ((first (mevedel-skill--create :name "first"))
+         (second (mevedel-skill--create :name "second"))
+         (plan (mevedel-skill-invocation-plan--create :text "$first $second"))
+         (pairs
+          (list (list :entry (mevedel-skill-plan-entry--create
+                              :name "first" :skill first :role 'command)
+                      :outcome '(:body "First body"
+                                 :required-attachments ((:name "base" :body "Base body"))))
+                (list :entry (mevedel-skill-plan-entry--create
+                              :name "second" :skill second :role 'command)
+                      :outcome '(:body "Second body"))))
+         (outcome (mevedel-skills-plan--prepared-outcome plan pairs nil)))
+    (should-not (string-search "skill://" (plist-get outcome :model-input)))
+    (should (string-suffix-p "First body\n\nSecond body"
+                             (plist-get outcome :model-input)))
+    (should (equal "First body\n\nSecond body" (plist-get outcome :render-prompt)))))
 
 
 ;;
@@ -882,6 +900,58 @@ persisted enablement when supplied."
             (should (equal '("child" "parent")
                            (mapcar #'mevedel-skill-invocation-record-name
                                    records)))))
+      (delete-directory root t)))
+
+  :doc "stacked source-backed commands disclose sources once while render bodies stay raw"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "skill-source-stack-" t))
+         (local (file-name-concat root ".mevedel" "skills"))
+         (other (file-name-concat root ".agents" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "source-stack" workspace root))
+         result)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           local "base" "name: base\ndescription: Base\n" "BASE RAW")
+          (mevedel-skills-test--write-skill
+           local "one" "name: one\ndescription: One\n"
+           "ONE RAW\n!$base")
+          (mevedel-skills-test--write-skill
+           other "two" "name: two\ndescription: Two\n"
+           "TWO RAW\n!$base")
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan
+                 root '(".mevedel/skills" ".agents/skills") workspace))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (mevedel-skills-plan-prepare
+             (mevedel-skills-plan-user-input "$one $two $one inspect" session)
+             (lambda (value) (setq result value))))
+          (should (eq 'ok (plist-get result :status)))
+          (let ((input (plist-get result :model-input))
+                (render (plist-get result :render-prompt))
+                (previous -1))
+            (dolist (name '("base" "one" "two"))
+              (let* ((skill (mevedel-session-get-skill session name))
+                     (address (mevedel-resource--skill-address skill))
+                     (position (string-search address input)))
+                (should position)
+                (should (< previous position))
+                (should-not (string-search address input (1+ position)))
+                (setq previous position)))
+            (should (equal "ONE RAW\n[skill:base -- attached]\n\nARGUMENTS: inspect\n\nTWO RAW\n[skill:base -- attached]\n\nARGUMENTS: inspect"
+                           render))
+            (should-not (string-search "Skill source:" render))
+            (should (equal '("base" "one" "two")
+                           (mapcar #'mevedel-skill-invocation-record-name
+                                   (plist-get (plist-get result :request-context)
+                                              :invoked-skills))))
+            (dolist (record (plist-get (plist-get result :request-context)
+                                      :invoked-skills))
+              (should-not (string-search
+                           "Skill source:"
+                           (mevedel-skill-invocation-record-prepared-body record))))))
       (delete-directory root t))))
 
 (provide 'test-mevedel-skills-plan)

@@ -13,6 +13,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-tool-fs-search)
 
 (mevedel-deftest mevedel-resource-installed-package
   ()
@@ -41,7 +42,7 @@
           (dolist (dir '("prompts" "agents"))
             (copy-directory (file-name-concat repo dir)
                             (file-name-concat source dir) nil t t))
-          (dolist (relative '("docs/memory.md" "docs/tools/execution.md"))
+          (dolist (relative '("docs/memory.md" "docs/tools/execution.md" "docs/tools/ignored.txt"))
             (let ((file (file-name-concat source relative))
                   (link (file-name-concat build relative)))
               (make-directory (file-name-directory file) t)
@@ -83,8 +84,9 @@
                                   (file-name-concat ,build (concat owner ".elc")))))
                         (cl-labels
                             ((invoke (operation address &rest options)
-                               (let* ((attempt (mevedel-resource-prepare
-                                                operation address nil))
+                               (let* ((attempt (and (mevedel-resource-address-like-p address)
+                                                    (mevedel-resource-prepare
+                                                     operation address nil)))
                                       (mevedel-resource-current-attempts
                                        (list (cons address attempt)))
                                       (args (append
@@ -106,8 +108,9 @@
                                  (should done)
                                  (let ((text (plist-get result :result)))
                                    (should (stringp text))
-                                   (should-not (string-match-p
-                                                (regexp-quote ,root) text))
+                                   (when attempt
+                                     (should-not (string-match-p
+                                                  (regexp-quote ,root) text)))
                                    text))))
                           (dolist (address '("mevedel://memory.md"
                                              "mevedel://tools/execution.md"))
@@ -121,12 +124,68 @@
                           (should (string-match-p
                                    "mevedel://tools/execution.md"
                                    (invoke 'glob "mevedel://tools" :pattern "*.md")))
+                          (let ((listing (invoke 'glob "mevedel://tools" :pattern "*")))
+                            (should (string-match-p "mevedel://tools/execution.md" listing))
+                            (should-not (string-match-p "ignored" listing)))
+                          (should-not (string-match-p
+                                       "ignored"
+                                       (invoke 'glob "mevedel://tools" :pattern "*.txt")))
                           (let ((matches (invoke 'grep "mevedel://"
                                                  :pattern "needle"
                                                  :output_mode "content")))
                             (should (string-match-p "public needle" matches))
                             (should (string-match-p "mevedel://" matches))
                             (should-not (string-match-p "private needle" matches)))
+                          (dolist (address '("mevedel://" "mevedel://tools"))
+                            (dolist (mode '("content" "count" "files_with_matches"))
+                              (should (equal "No matches found"
+                                             (invoke 'grep address :pattern "needle"
+                                                     :glob "**/*.txt" :output_mode mode)))
+                              (let ((matches (invoke 'grep address :pattern "needle"
+                                                     :glob "**/execution.md" :type "md"
+                                                     :output_mode mode)))
+                                (should (string-search "mevedel://tools/execution.md" matches))
+                                (should-not (string-search "memory.md" matches))
+                                (should-not (string-search "ignored.txt" matches)))
+                              (should (equal "No matches found"
+                                             (invoke 'grep address :pattern "needle"
+                                                     :type "rust" :output_mode mode)))
+                              ;; Native positive globs override type filters.
+                              (should (string-search
+                                       "mevedel://tools/execution.md"
+                                       (invoke 'grep address :pattern "needle"
+                                               :glob "**/*.md" :type "rust"
+                                               :output_mode mode)))))
+                          ;; Ordinary-path positive globs still select text files.
+                          (dolist (mode '("content" "count" "files_with_matches"))
+                            (should (string-search
+                                     "ignored.txt"
+                                     (invoke 'grep ,(file-name-concat source "docs")
+                                             :pattern "needle" :glob "**/*.txt"
+                                             :output_mode mode))))
+                          ;; Explicit files retain native selection semantics,
+                          ;; including positive globs bypassing type selection.
+                          (dolist (mode '("content" "count" "files_with_matches"))
+                            (dolist (options '(nil (:glob "**/*.txt" :type "rust")))
+                              (let ((matches (apply #'invoke 'grep "mevedel://memory.md"
+                                                    :pattern "needle" :output_mode mode
+                                                    options)))
+                                (should-not (string-prefix-p "Error:" matches))
+                                (should-not (equal "No matches found" matches))
+                                (should (string-search
+                                         (pcase mode
+                                           ("content" "public needle")
+                                           ("count" "1")
+                                           (_ "mevedel://memory.md"))
+                                         matches)))))
+                          ;; Unknown types fail in both native and package searches.
+                          (dolist (address (list "mevedel://" "mevedel://tools"
+                                                 "mevedel://memory.md"
+                                                 ,(file-name-concat source "docs")))
+                            (let ((failure (invoke 'grep address :pattern "needle"
+                                                   :type "mevedel-unknown-type")))
+                              (should (string-prefix-p "Error:" failure))
+                              (should-not (string-search "public needle" failure))))
                           (dolist (address '("mevedel://escape.md"
                                              "mevedel://../private.md"))
                             (should-error (invoke 'read address)
@@ -167,6 +226,99 @@
   nil
   :doc "source-less compiled owners use assets alongside the loaded library"
   t)
+
+(mevedel-deftest mevedel-tool-fs-search--start-grep ()
+  ,test
+  (test)
+  :doc "public package Grep whitelists before content and retains deadline and cancellation"
+  (let* ((root (make-temp-file "mevedel-package-grep-lifecycle-" t))
+         (docs (file-name-concat root "docs"))
+         (guide (file-name-concat docs "guide.md"))
+         (ignored (file-name-concat docs "ignored.txt"))
+         (escape (file-name-concat docs "escape.md"))
+         (mevedel-resource--source-dir root)
+         (mevedel-tool-fs-search-timeout 20)
+         (now 100.0)
+         calls results)
+    (unwind-protect
+        (progn
+          (make-directory docs t)
+          (write-region "public needle\n" nil guide nil 'silent)
+          (write-region "private needle\n" nil ignored nil 'silent)
+          (write-region "private needle\n" nil (file-name-concat root "private.md") nil 'silent)
+          (make-symbolic-link (file-name-concat root "private.md") escape)
+          (cl-letf (((symbol-function 'float-time) (lambda (&optional _time) now))
+                    ((symbol-function 'mevedel-execution-start-helper)
+                     (lambda (callback name command _read-paths _writable-roots &rest options)
+                       (let ((call (list :callback callback :name name :command command
+                                         :options options :cancel-count 0)))
+                         (setq calls (append calls (list call)))
+                         (lambda () (cl-incf (plist-get call :cancel-count)))))))
+            (cl-labels
+                ((invoke (&rest options)
+                   (setq calls nil results nil now 100.0)
+                   (let* ((address "mevedel://")
+                          (attempt (mevedel-resource-prepare 'grep address nil))
+                          (mevedel-resource-current-attempts (list (cons address attempt))))
+                     (mevedel-tool-fs-search-grep
+                      (lambda (result) (push result results))
+                      (append options
+                              (list :path address :pattern "needle" :glob "**/*" :type "md"
+                                    :output_mode "content")))))
+                 (deliver (index result)
+                   (funcall (plist-get (nth index calls) :callback) result)))
+              (let ((cancel (invoke)))
+                (should (equal "mevedel-grep-files" (plist-get (car calls) :name)))
+                (should (member "--glob=**/*" (plist-get (car calls) :command)))
+                (should (member "--type=md" (plist-get (car calls) :command)))
+                (setq now 105.0)
+                ;; Even an unexpected discovery candidate cannot reach content.
+                (deliver 0 (list :exit-code 0 :output (concat ignored "\0" escape "\0" guide "\0")))
+                (should (= 2 (length calls)))
+                (should (member guide (plist-get (cadr calls) :command)))
+                (should-not (member ignored (plist-get (cadr calls) :command)))
+                (should-not (member escape (plist-get (cadr calls) :command)))
+                (should (= 15.0 (plist-get (plist-get (cadr calls) :options) :timeout)))
+                (funcall cancel)
+                (funcall cancel)
+                (dolist (call calls) (should (= 1 (plist-get call :cancel-count))))
+                (deliver 1 '(:exit-code 0 :output "late result"))
+                (should-not results))
+              (let ((cancel (invoke)))
+                (funcall cancel)
+                (deliver 0 (list :exit-code 0 :output (concat guide "\0")))
+                (should (= 1 (length calls)))
+                (should-not results))
+              (let ((cancel (invoke :-i t :multiline t :-A 2 :-B 1 :context 3
+                                    :-n :json-false :head_limit 4 :offset 2)))
+                (deliver 0 (list :exit-code 0 :output (concat guide "\0")))
+                (let ((command (plist-get (cadr calls) :command)))
+                  (dolist (selector '("-i" "-U" "--multiline-dotall" "-A2" "-B1"
+                                      "-C3" "--max-count=7" "--with-filename"
+                                      "--glob=**/*" "--type=md" "-e" "needle"))
+                    (should (member selector command)))
+                  (should-not (member "--line-number" command)))
+                (funcall cancel))
+              (dolist (failure (list
+                               (list :exit-code 1 :timed-out-p t :output (concat guide "\0"))
+                               (list :exit-code 1 :output-limit-p t :output (concat guide "\0"))
+                               (list :exit-code 0 :output guide)
+                               (list :exit-code 0 :output (make-string
+                                                          (1+ mevedel-tool-fs-search--grep-max-output-bytes) ?x))
+                               '(:exit-code 2 :output "private discovery failure")))
+                (invoke)
+                (deliver 0 failure)
+                (should (= 1 (length calls)))
+                (should (= 1 (length results)))
+                (should (string-prefix-p "Error:" (plist-get (car results) :result)))
+                (should-not (string-search root (plist-get (car results) :result)))
+                (should-not (string-search "private" (plist-get (car results) :result))))
+              (invoke)
+              (setq now 121.0)
+              (deliver 0 (list :exit-code 0 :output (concat guide "\0")))
+              (should (= 1 (length calls)))
+              (should (string-search "timed out" (plist-get (car results) :result))))))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-resource-installation)
 ;;; test-mevedel-resource-installation.el ends here

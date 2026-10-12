@@ -565,18 +565,28 @@ spanning lines")))
             (should (string-match-p "must follow it without calling `Skill`"
                                     (car bodies)))
             (should (string-match-p "Alpha body" (car bodies)))
-            (should (string-match-p "Beta body" (cadr bodies))))
+            (should (string-match-p "Beta body" (cadr bodies)))
+            (should-not (string-search "skill://" (mapconcat #'identity bodies "\n"))))
           (with-current-buffer chat
             (should-not mevedel-skills-input--pending-inline-attachments)))
       (kill-buffer chat)))
 
   :doc "same-named bound skills retain distinct canonical sources"
-  (let* ((session (mevedel-skills-test--make-session))
+  (let* ((root (make-temp-file "skill-inline-sources-" t))
+         (session (mevedel-skills-test--make-session nil root))
          (chat (generate-new-buffer " *mevedel-inline-skill-source-chat*"))
          (fsm (gptel-make-fsm :info (list :buffer chat)))
-         (source-a "/tmp/source-a/SKILL.md")
-         (source-b "/tmp/source-b/SKILL.md")
+         (source-a (mevedel-skills-test--write-skill
+                    (file-name-concat root "local") "alpha"
+                    "name: alpha\ndescription: Local\n" "Body A"))
+         (source-b (mevedel-skills-test--write-skill
+                    (file-name-concat root "global") "alpha"
+                    "name: alpha\ndescription: Global\n" "Body B"))
+         (skills (mapcar (lambda (source)
+                           (mevedel-skill--create :name "alpha" :source-file source))
+                         (list source-a source-b)))
          (input (propertize "Use $alpha then $alpha." 'gptel 'prompt)))
+    (setf (mevedel-session-skills session) skills)
     (mevedel-mention-bindings-set
      4 10 (list :kind 'skill :token "$alpha" :source-file source-a) input)
     (mevedel-mention-bindings-set
@@ -597,8 +607,23 @@ spanning lines")))
           (let ((bodies (test-mevedel-skills-input--staged-bodies fsm)))
             (should (= 2 (length bodies)))
             (should (string-match-p "Body A" (car bodies)))
-            (should (string-match-p "Body B" (cadr bodies)))))
-      (kill-buffer chat)))
+            (should (string-match-p "Body B" (cadr bodies)))
+            (cl-mapc
+             (lambda (skill body expected)
+               (let* ((address (mevedel-resource--skill-address skill))
+                      (attempt (mevedel-resource-prepare
+                                'read address (list :session session))))
+                 (should (string-search address body))
+                 (should (string-search
+                          expected
+                          (mevedel-resource-execute
+                           attempt (lambda (path _address)
+                                     (with-temp-buffer
+                                       (insert-file-contents path)
+                                       (buffer-string))))))))
+             skills bodies '("Body A" "Body B"))))
+      (kill-buffer chat)
+      (delete-directory root t)))
 
   :doc "coexists with earlier mention expansion reminders"
   (let* ((root (make-temp-file "mevedel-inline-skill-mentions-" t))
@@ -736,7 +761,35 @@ spanning lines")))
          (equal
           (list (list :name "artifact-design"
                       :body (mevedel-skills-format-attachment attachment)))
-          (plist-get data :attachments)))))))
+          (plist-get data :attachments))))))
+
+  :doc "raw user command projection delivers root and dependency sources without wrapping render prompt"
+  (let ((root (make-temp-file "skill-user-source-" t)))
+    (unwind-protect
+        (let* ((source (mevedel-skills-test--write-skill
+                        root "doc" "name: doc\ndescription: Doc\n" "Root"))
+               (child-source (mevedel-skills-test--write-skill
+                              root "base" "name: base\ndescription: Base\n" "Base"))
+               (skill (mevedel-skill--create :name "doc" :source-file source))
+               (child (mevedel-skill--create :name "base" :source-file child-source))
+               (outcome (list :status 'ok :kind 'inline :skill skill
+                              :body "Root prepared" :arguments "write"
+                              :required-attachments
+                              (list (list :name "base" :skill child
+                                          :source-file child-source :body "Base prepared")))))
+          (with-temp-buffer
+            (insert "$doc write")
+            (mevedel-skills-input--handle-user-skill-outcome
+             skill outcome (point-min) (point-max) nil)
+            (let* ((parts (mevedel-tool-render-data-extract (buffer-string)))
+                   (provider (car parts))
+                   (data (cdr parts)))
+              (should (< (string-search (mevedel-resource--skill-address child) provider)
+                         (string-search (mevedel-resource--skill-address skill) provider)))
+              (should (equal "Root prepared" (plist-get data :prompt)))
+              (should (equal "$doc write" (plist-get data :display-text)))
+              (should (string-suffix-p "Root prepared" provider)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills-input-dispatch-command (:quiet t)
   ,test

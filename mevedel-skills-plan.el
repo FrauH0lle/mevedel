@@ -48,9 +48,12 @@
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-format-attachment
                   "mevedel-skills-invoke" (attachment))
+(declare-function mevedel-skills-format-body
+                  "mevedel-skills-invoke" (skill body))
 (declare-function mevedel-skills-prepare-many
                   "mevedel-skills-invoke" (roots callback &rest keys))
 (autoload 'mevedel-skills-format-attachment "mevedel-skills-invoke")
+(autoload 'mevedel-skills-format-body "mevedel-skills-invoke")
 (autoload 'mevedel-skills-prepare-many "mevedel-skills-invoke")
 
 ;; `mevedel-tool-render-data'
@@ -354,6 +357,7 @@ function uses recorded extents and never scans TEXT."
                 'command))
           pairs))
         command-bodies
+        command-inputs
         instruction-attachments
         permission-rules
         (ptc-primitives :unrestricted)
@@ -377,6 +381,10 @@ function uses recorded extents and never scans TEXT."
         (if (eq (mevedel-skill-plan-entry-role entry) 'command)
             (progn
               (push (or (plist-get outcome :body) "") command-bodies)
+              (push (mevedel-skills-format-body
+                     (mevedel-skill-plan-entry-skill entry)
+                     (or (plist-get outcome :body) ""))
+                    command-inputs)
               (setq permission-rules
                     (append permission-rules
                             (plist-get context :permission-rules))
@@ -408,6 +416,7 @@ function uses recorded extents and never scans TEXT."
               (push attachment instruction-attachments))))))
     (list :command-count command-count
           :command-bodies (nreverse command-bodies)
+          :command-inputs (nreverse command-inputs)
           :instruction-attachments (nreverse instruction-attachments)
           :permission-rules permission-rules
           :ptc-primitives ptc-primitives
@@ -435,10 +444,14 @@ function uses recorded extents and never scans TEXT."
             (mevedel-skills-plan-replace-instructions
              (mevedel-skill-invocation-plan-text plan)
              (mevedel-skill-invocation-plan-occurrences plan))))
+         (command-inputs (plist-get aggregate :command-inputs))
          (model-input
           (mapconcat
            #'identity
-           (append reminder-blocks (list main-input))
+           (append reminder-blocks
+                   (list (if command-inputs
+                             (mapconcat #'identity command-inputs "\n\n")
+                           main-input)))
            "\n\n"))
          (request-context
           (list :permission-rules (plist-get aggregate :permission-rules)

@@ -80,6 +80,13 @@ distinct messages. Discovery guidance names the appropriate resource listing.
 Private storage paths stay out of model-visible errors, including helper
 failures. Internal execution-contract failures are identified as internal errors.
 
+For nonempty text, a Read offset beyond the last available line remains an
+error, with the observed line bounds and an executable last-page retry using
+the visible address. Ordinary files and virtual text share this diagnostic;
+the suggestion is capped at the requested/default page width and does not
+expose backing paths. Bounds describe that read, not future file contents.
+Empty text remains a successful empty result.
+
 Canonical serialization uses UTF-8 RFC 3986 percent encoding: leave only
 unreserved bytes literal and use uppercase hexadecimal escapes. For
 path-oriented families, split on literal `/` before decoding each component
@@ -268,7 +275,13 @@ When a workspace is available, bare history also links to `history://saved`.
 An agent address returns the complete payload and terminal outcome of its
 latest settled turn. Completed, errored, and interrupted turns expose the same
 visible final or partial payload used by the agent result contract. Active
-agents expose no streaming text and are reported as not ready. JSON selection
+agents expose no streaming text or previous result and return a successful,
+explicit NOT READY status. It names their concrete history address when
+conversation metadata is available, otherwise states that history is not yet
+available. The status is separate from payload pagination: a valid offset,
+limit, or JSON fragment cannot hide it or select stale content. Text-only Read
+validation still applies. Missing agents and idle records without a valid
+settled result remain unavailable errors. JSON selection
 is read-only and cannot alter the conversation, settled result, or `RESULT`
 mailbox.
 
@@ -431,6 +444,11 @@ It is available without a session. Bare Read returns a sorted recursive listing
 of canonical documentation addresses; descendant Read, Glob, and Grep stay
 contained under the packaged documentation root and report logical addresses.
 Each operation observes the installed files at execution time.
+
+Grep on a documentation directory first selects filenames with the caller's
+glob and type filters, then searches only contained Markdown files. A positive
+caller glob cannot expand this family to non-Markdown content or counts. Both
+selection and content search share the native cancellation and timeout budget.
 
 The documentation owner uses the same source-aware package directory as system
 and tool prompts. When loading bytecode, an existing sibling `.el` file identifies

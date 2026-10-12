@@ -233,6 +233,17 @@ Disabled or stale resources retain the provider's normal validation, and raw
 skill development uses ordinary
 filesystem grants.
 
+Prepared deliveries also disclose that exact address as `Skill source:` before
+each file-backed skill body. This covers model-side inline `Skill` results,
+required and user-inline attachments, every stacked user command, and fork
+prompts. Dependencies still precede their parent, and each contribution names
+its own source rather than borrowing the root's origin. The address identifies
+source for inspection with `Read`; it does not identify a prepared-body snapshot
+or grant invocation authority. Synthetic skills without a source file receive
+no invented address. Preparation, expansion hooks, and invocation records keep
+the raw prepared body; the collapsed Skill row and user command Prompt drawer
+also use that raw body, so delivery headers do not inflate their line counts.
+
 Bare `skill://` listings also expose readable origin aliases alongside exact
 addresses: `skill://local-mevedel/SKILL`, `skill://local-agents/SKILL`,
 `skill://global-mevedel/SKILL`, `skill://global-agents/SKILL`,
