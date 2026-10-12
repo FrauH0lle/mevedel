@@ -157,10 +157,12 @@ native timed condition wait where supported, so a worker releases the
 interpreter lock without dispatching process sentinels or redisplay. Emacs
 owns mutex restoration, stack rooting and cancellation. The native boundary
 prevents advice, GC and debugger callbacks from consuming its one-shot timeout.
-Unavailable native waits or worker creation fall back to the shared main-thread
-timer with the same cadence. Ordinary worker sleeps remain unsafe because they
-dispatch process sentinels. Native PGTK presentation reduces the fallback's
-redraw cost. Metadata-only
+Only PGTK Emacs loads the module for this: elsewhere a timer wakeup that
+changes nothing does not redraw. Unavailable native waits or worker creation
+fall back to the shared main-thread timer, every 100 ms, or once a second while
+a PGTK frame exists; timer callbacks count their own run time as lag. Ordinary
+worker sleeps remain unsafe because they dispatch process sentinels.
+Metadata-only
 views join the whole-second clock. Decorative Lisp animation and output-driven
 progress retain their natural deadlines. Missing execution rows trigger recovery
 only when their source, or a compound ancestor's source, is in the transcript;
@@ -1792,7 +1794,7 @@ selects `pthread_cond_timedwait`, and every ordinary wait delegates unchanged.
 Emacs still owns interpreter-lock release, stack rooting, mutex restoration and
 thread signals. The 100 ms cadence, callback attribution and post-request tails
 remain. Unsupported imports, unavailable modules and failed thread creation
-retain the safe coalesced-timer fallback.
+retain the safe coalesced-timer fallback, described below.
 
 An adversarial test changed the initial implementation: `funcall` may collect
 before entering the condition-wait primitive, and a GC hook waiting on another
@@ -1841,3 +1843,23 @@ native drawing, display closure/reconnection and threaded presentation.
 QEMU's device translation forced software EGL, so this validates ARM
 instructions and lifecycle behavior, not accelerated dmabuf presentation or
 physical-device performance.
+
+### October 2026: the PGTK fallback samples once a second
+
+Two reviews replaced the unsafe worker independently. The other proposed a
+whole-second heartbeat on the shared clock everywhere, with timer callbacks
+timing their own run time: 0.00-0.07% idle editor CPU with native
+presentation and 0.27-0.33% without, close to the native wait's 0.10% and
+0.18-0.46%. It was not adopted as the only sampler because it sees a
+sub-second stall outside timer callbacks only when the stall happens to delay
+a timer. Of the 37 recorded sub-second `event-loop-lag` events in local
+sessions, 25 were not explained by a callback's own run time.
+
+The native wait therefore stays the sampler, and that design serves only the
+fallback. Without the module on PGTK, a 100 ms timer cost 2.8% idle at scale
+1 and 12.4% on HiDPI, as presentation itself is stock there. While a PGTK
+frame exists the fallback timer runs once a second and callbacks count their
+run time since the previous heartbeat. Other displays and frameless Emacs
+keep 100 ms, where a wakeup that changes nothing does not redraw. Telemetry
+loads the native module only on PGTK, so an X11, terminal or headless Emacs
+never compiles it for sampling or reports it missing.

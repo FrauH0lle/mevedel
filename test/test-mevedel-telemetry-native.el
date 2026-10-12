@@ -23,7 +23,7 @@
         process)
     (unwind-protect
         (progn
-          (skip-unless (and (eq system-type 'gnu/linux) (fboundp 'module-load)
+          (skip-unless (and (eq system-type 'gnu/linux) (featurep 'pgtk) (fboundp 'module-load)
                             module-file-suffix (executable-find "cc")
                             (executable-find "pkg-config")
                             (zerop (call-process "pkg-config" nil nil nil

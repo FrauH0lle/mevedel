@@ -237,6 +237,10 @@
                           (plist-get (read (current-buffer)) :stage))))))
       (delete-directory root t))))
 
+;; Tests rebind `features' to choose a display build; Emacs does not
+;; declare it special.
+(defvar features)
+
 (defun test-mevedel-telemetry--events (session event)
   "Return SESSION's pending telemetry entries for EVENT, oldest first."
   (seq-filter (lambda (entry) (eq event (plist-get entry :event)))
@@ -249,7 +253,7 @@
   :doc "falls back when native loading, timed waits, or threads are unavailable"
   (dolist (failure '(module wait thread))
     (let ((system-type 'gnu/linux)
-          (module-file-suffix ".so"))
+          (features (cons 'pgtk features)))
       (cl-letf (((symbol-function 'mevedel-native-load)
                  (lambda () (not (eq failure 'module))))
                 ((symbol-function 'mevedel-native--timed-wait-available-p)
@@ -263,9 +267,23 @@
           (mevedel-telemetry--lag-start)
           (should (eq timer mevedel-telemetry--lag-timer)))
         (mevedel-telemetry--lag-stop))))
+  :doc "samples a fallback timer once a second while a PGTK frame exists"
+  (cl-letf (((symbol-function 'mevedel-native-load) #'ignore))
+    (dolist (case '((nil . 0.1) (pgtk . 1)))
+      (cl-letf (((symbol-function 'frame-list) (lambda () '(frame)))
+                ((symbol-function 'framep) (lambda (_) (car case))))
+        (mevedel-telemetry--lag-start))
+      (should (= (cdr case) (timer--repeat-delay mevedel-telemetry--lag-timer)))
+      (mevedel-telemetry--lag-stop)))
+  :doc "never loads the native module outside PGTK"
+  (let ((features (remq 'pgtk features)))
+    (cl-letf (((symbol-function 'mevedel-native-load)
+               (lambda () (ert-fail "Loaded the native module"))))
+      (mevedel-telemetry--lag-start)
+      (should mevedel-telemetry--lag-timer)))
   :doc "retains the sampler started by a request during module loading"
   (let ((system-type 'gnu/linux)
-        (module-file-suffix ".so")
+        (features (cons 'pgtk features))
         loading first)
     (cl-letf (((symbol-function 'mevedel-native-load)
                (lambda ()
@@ -389,7 +407,8 @@
           (timer-activate-when-idle timer t)
           (cancel-timer timer)
           (mevedel-telemetry--lag-time-callback #'ignore timer)
-          (should (= 0 mevedel-telemetry--lag-late))
+          ;; Only its brief run time counts.
+          (should (< mevedel-telemetry--lag-late 0.05))
           (mevedel-telemetry-record session 'request-settled :request-id "request-4")
           (let ((lags (test-mevedel-telemetry--events session 'event-loop-lag))
                 (summary (car (test-mevedel-telemetry--events
@@ -400,7 +419,7 @@
             (should (= 1 (plist-get summary :over-200-ms)))))
       (delete-directory root t)))
 
-:doc "notices a busy main thread, naming input that waited"
+  :doc "notices a busy main thread, naming input that waited"
   (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
          (session (test-mevedel-telemetry--session root))
          (noninteractive nil)
@@ -509,6 +528,27 @@
     (timer-set-function timer (lambda ()))
     (mevedel-telemetry--lag-time-callback (lambda (_) (sleep-for 0.05)) timer)
     (should (equal "anonymous" (plist-get mevedel-telemetry--lag-slowest :name))))
+
+  :doc "counts a callback's run time since the previous heartbeat as lag"
+  (let ((mevedel-telemetry--lag-late 0)
+        (mevedel-telemetry--lag-since (float-time))
+        (timer (timer-create)))
+    (timer-set-function timer #'ignore)
+    (mevedel-telemetry--lag-time-callback (lambda (_) (sleep-for 0.05)) timer)
+    (should (<= 0.05 mevedel-telemetry--lag-late 0.5))
+    ;; A heartbeat during the callback already saw the time before it.
+    (setq mevedel-telemetry--lag-late 0)
+    (mevedel-telemetry--lag-time-callback
+     (lambda (_)
+       (sleep-for 0.05)
+       (setq mevedel-telemetry--lag-since (float-time)))
+     timer)
+    (should (< mevedel-telemetry--lag-late 0.04))
+    ;; The heartbeat's own tick is not a stall.
+    (setq mevedel-telemetry--lag-late 0)
+    (timer-set-function timer #'mevedel-telemetry--lag-tick)
+    (mevedel-telemetry--lag-time-callback (lambda (_) (sleep-for 0.05)) timer)
+    (should (= 0 mevedel-telemetry--lag-late)))
 
   :doc "separates collection inside the slowest callback"
   (let ((mevedel-telemetry--lag-slowest nil)

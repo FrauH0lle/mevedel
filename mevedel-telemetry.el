@@ -605,6 +605,12 @@ A native timed condition wait lets a worker sample without dispatching
 callbacks or redisplaying.  Without it, the shared main-thread timer
 preserves sampling and process ownership at the cost of redisplay.")
 
+(defconst mevedel-telemetry--lag-pgtk-interval 1
+  "Seconds between fallback timer samples while a PGTK frame exists.
+Stock PGTK presents a whole frame on every timer wakeup: a 100 ms timer
+cost 2.8% editor CPU idle at scale 1 and 12.4% on HiDPI, against 0.3% for
+a whole-second one.  Timer callbacks still time their own run time.")
+
 (defconst mevedel-telemetry--lag-count-threshold 0.2
   "Event-loop delay, in seconds, counted in a request's lag summary.")
 
@@ -626,8 +632,10 @@ the editor as much as the request did.")
   "Float time the previous heartbeat ran, or watching started.")
 
 (defvar mevedel-telemetry--lag-late 0
-  "Seconds the latest timer ran late since the previous heartbeat.
-Lateness the previous heartbeat already saw is not counted again.")
+  "Longest stall seen since the previous heartbeat, in seconds.
+A timer's lateness, or the run time of a timer callback or a blocking
+remote operation.  Time the previous heartbeat already saw is not counted
+again.")
 
 (defvar mevedel-telemetry--lag-slowest nil
   "The slowest timer callback since the last heartbeat, or nil.
@@ -700,15 +708,18 @@ what it does rather than where it was created."
      (t "anonymous"))))
 
 (defun mevedel-telemetry--lag-time-callback (original timer)
-  "Run ORIGINAL on TIMER, remembering the slowest callback since a heartbeat.
-The heartbeat can only tell that the loop was late; this names what held
-it for most stalls, since timers run most of mevedel's deferred work.
-Collection inside the callback is kept apart from its own work.
+  "Run ORIGINAL on TIMER, counting its lateness and run time as lag.
+A callback blocks input while it runs, and timers run most of mevedel's
+deferred work, so this times most stalls even between whole-second
+fallback heartbeats, and names the slowest.  Collection inside the
+callback is kept apart from its own work.  The heartbeat's own tick is
+not timed.
 
 A stall delays every timer due during it, so TIMER's lateness measures the
 loop as well as a heartbeat would.  Idle timers are due relative to input,
 not the clock, and are not counted."
-  (if (eq (timer--function timer) #'mevedel--coalesced-timer-tick)
+  (if (memq (timer--function timer)
+            '(mevedel--coalesced-timer-tick mevedel-telemetry--lag-tick))
       (funcall original timer)
     (let ((start (float-time))
           (gc-count gcs-done)
@@ -722,6 +733,9 @@ not the clock, and are not counted."
                                  (or mevedel-telemetry--lag-since start))))))
       (unwind-protect (funcall original timer)
         (let ((elapsed (- (float-time) start)))
+          (setq mevedel-telemetry--lag-late
+                (max mevedel-telemetry--lag-late
+                     (- (float-time) (max start (or mevedel-telemetry--lag-since start)))))
           (when (> elapsed (or (plist-get mevedel-telemetry--lag-slowest :seconds) 0))
             (setq mevedel-telemetry--lag-slowest
                   (list :name (mevedel-telemetry--lag-callback-name timer)
@@ -767,8 +781,8 @@ sentinels or timers.  Ordinary `sleep-for' is unsafe in this worker."
   "Start callback timing and the lowest-overhead safe heartbeat available."
   (unless (or mevedel-telemetry--lag-thread mevedel-telemetry--lag-timer)
     ;; Resolve the optional module before starting the sampling clock.
-    (let ((native (and (eq system-type 'gnu/linux)
-                       (fboundp 'module-load) module-file-suffix
+    ;; Elsewhere a timer wakeup that changes nothing does not redraw.
+    (let ((native (and (eq system-type 'gnu/linux) (featurep 'pgtk)
                        (mevedel-native-load)
                        (mevedel-native--timed-wait-available-p))))
       ;; Loading can wait for a compiler while another request starts.
@@ -788,8 +802,12 @@ sentinels or timers.  Ordinary `sleep-for' is unsafe in this worker."
                   (error nil))))
         (unless mevedel-telemetry--lag-thread
           (setq mevedel-telemetry--lag-timer
-                (mevedel--run-periodic-timer mevedel-telemetry--lag-interval
-                                            #'mevedel-telemetry--lag-tick)
+                (mevedel--run-periodic-timer
+                 (if (seq-some (lambda (frame) (eq (framep frame) 'pgtk))
+                               (frame-list))
+                     mevedel-telemetry--lag-pgtk-interval
+                   mevedel-telemetry--lag-interval)
+                 #'mevedel-telemetry--lag-tick)
                 mevedel-telemetry--lag-due
                 (float-time (timer--time mevedel-telemetry--lag-timer))))))
     (advice-add 'timer-event-handler :around

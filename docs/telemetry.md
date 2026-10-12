@@ -147,16 +147,22 @@ cancellation releases the fence and leaves the machine retryable.
   stack roots and thread cancellation. The module guards against GC hooks,
   advice and debugger callbacks consuming the timeout before the intended
   wait. Stopping sampling signals and joins the worker. If the module, timed
-  wait or worker creation is unavailable, the existing shared main-thread
-  timer preserves the same sampling interval and process ownership, with a
-  higher redisplay cost. Native presentation and native sampling are separate
-  capabilities; sampling does not require a graphical frame. A blocking remote operation can deliver
+  wait or worker creation is unavailable, the shared main-thread timer
+  samples instead, preserving process ownership: every 100 ms, or once a
+  second while a PGTK frame exists, since stock PGTK redraws the whole frame
+  on each wakeup. A timer callback also counts its own run time since the
+  previous heartbeat, since it blocks input while it runs; a sub-second stall
+  elsewhere reaches the whole-second heartbeat only by delaying a timer. Only
+  PGTK Emacs loads the module for sampling; elsewhere a wakeup that changes
+  nothing does not redraw. Native presentation and native sampling are
+  separate capabilities; sampling does not require a graphical frame. A
+  blocking remote operation can deliver
   timers while it waits, so the outermost one on the main thread counts as
   late as it took. Each callback
   retains its own timing attribution; the shared timer dispatcher does not
   replace callback names. Disabling telemetry stops the heartbeat at its next
   sample, since requests no longer report settling to close their windows.
-  Lateness the previous heartbeat already saw is not counted again, and idle
+  Time the previous heartbeat already saw is not counted again, and idle
   timers do not count. The event carries the delay, whether input arrived
   since the previous heartbeat, whether the request
   had settled, the running command's name, and the name and duration of
