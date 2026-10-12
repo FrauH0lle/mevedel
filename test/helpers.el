@@ -1217,5 +1217,77 @@ to leave the request unanswered.  All server processes are cleaned up."
       (dolist (process (cons server clients))
         (when (process-live-p process) (delete-process process))))))
 
+;;
+;;; Headless Wayland
+
+(defconst mevedel-test--root
+  (expand-file-name ".." (file-name-directory
+                          (or load-file-name buffer-file-name byte-compile-current-file)))
+  "Repository root.")
+
+(defun mevedel-test--wayland-available-p ()
+  "Return non-nil when this machine can run a PGTK daemon on a nested KWin.
+The native module must also build here."
+  (and (eq system-type 'gnu/linux)
+       (string-match-p "PGTK" system-configuration-features)
+       (executable-find "kwin_wayland")
+       (executable-find "cc") (executable-find "pkg-config")
+       (zerop (call-process "pkg-config" nil nil nil "--exists" "gtk+-3.0" "wayland-client"))))
+
+(defun mevedel-test--run-wayland-fixture (fixture)
+  "Run FIXTURE, a file under test/fixtures, in a PGTK daemon on a nested KWin.
+The daemon gets the display name in MEVEDEL_NATIVE_DISPLAY and writes its
+observations to the file named by MEVEDEL_NATIVE_RESULT before exiting.
+Return (OBSERVED EXIT-STATUS . TRACE), TRACE being the daemon's
+WAYLAND_DEBUG client log."
+  (let* ((directory (make-temp-file "mevedel-wayland-" t))
+         (socket (format "mevedel-test-%d" (emacs-pid)))
+         (result (file-name-concat directory "result.eld"))
+         (trace (generate-new-buffer " *mevedel-test-wayland-trace*"))
+         (kwin-log (generate-new-buffer " *mevedel-test-kwin*"))
+         (process-environment (cl-remove-if (lambda (entry)
+                                              (string-match-p "\\`\\(WAYLAND_DISPLAY\\|DISPLAY\\)=" entry))
+                                            process-environment))
+         (kwin (make-process
+                :name "mevedel-test-kwin" :noquery t :connection-type 'pipe
+                :buffer nil :stderr kwin-log
+                :command (list "kwin_wayland" "--virtual" "--no-lockscreen"
+                               "--width" "1600" "--height" "1000" "--socket" socket)))
+         daemon)
+    (unwind-protect
+        (progn
+          (with-timeout (10 (ert-fail "Nested compositor did not start"))
+            (while (not (file-exists-p
+                         (file-name-concat (or (getenv "XDG_RUNTIME_DIR") "/tmp") socket)))
+              (accept-process-output nil 0.05)))
+          (setq daemon
+                (let ((process-environment
+                       (append (list "WAYLAND_DEBUG=client"
+                                     (concat "MEVEDEL_NATIVE_DISPLAY=" socket)
+                                     (concat "MEVEDEL_NATIVE_RESULT=" result))
+                               process-environment)))
+                  (make-process
+                   :name "mevedel-test-wayland-daemon" :noquery t :connection-type 'pipe
+                   :buffer nil :stderr trace
+                   :command
+                   (list (expand-file-name invocation-name invocation-directory)
+                         (format "--fg-daemon=mevedel-wayland-test-%d" (emacs-pid)) "-Q"
+                         "--eval" (prin1-to-string
+                                   `(setq load-path (cons ,mevedel-test--root load-path)
+                                          mevedel-user-dir ,(file-name-as-directory directory)))
+                         "-l" (file-name-concat mevedel-test--root "test/fixtures" fixture)))))
+          (with-timeout (90 (ert-fail "Wayland scenario timed out"))
+            (while (process-live-p daemon) (accept-process-output nil 0.05)))
+          (cl-list* (with-temp-buffer
+                      (insert-file-contents result)
+                      (read (current-buffer)))
+                    (process-exit-status daemon)
+                    (with-current-buffer trace (buffer-string))))
+      (when (and daemon (process-live-p daemon)) (delete-process daemon))
+      (when (process-live-p kwin) (delete-process kwin))
+      (kill-buffer trace)
+      (kill-buffer kwin-log)
+      (delete-directory directory t))))
+
 (provide 'helpers)
 ;;; helpers.el ends here

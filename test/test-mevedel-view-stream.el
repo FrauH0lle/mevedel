@@ -6179,6 +6179,23 @@
   (should (= 0.04 (mevedel-view--spinner-next-delay
                    '((shimmer . 0.04) (glyph . 0.24)) 1.0))))
 
+(mevedel-deftest mevedel-view--spinner-visual-period
+  (:doc "Text breathe and bounce leave 8 fps once PGTK presents only changes.")
+  (let ((mevedel-view-spinner-framerate 30)
+        (mevedel-view-spinner-power-policy 'full)
+        (mevedel-view-spinner-animate t)
+        (mevedel-present--state nil))
+    (should (= 0.125 (mevedel-view--spinner-visual-period 'bounce)))
+    (setq mevedel-present--state 'enabled)
+    (should (= (/ 1.0 30) (mevedel-view--spinner-visual-period 'bounce)))
+    (should (= (/ 1.0 30) (mevedel-view--spinner-visual-period 'breathe)))
+    ;; Glyphs keep their own cadence, and so does a glyph fallback.
+    (should (= 0.24 (mevedel-view--spinner-visual-period 'braille)))
+    (should (= 0.24 (mevedel-view--spinner-visual-period 'bounce t)))
+    (let ((mevedel-view-spinner-power-policy 'save)
+          (mevedel-view-spinner-battery-framerate 15))
+      (should (= (/ 1.0 15) (mevedel-view--spinner-visual-period 'bounce))))))
+
 (mevedel-deftest mevedel-view-animation-shimmer-mixed-displays
   (:doc "A portable tool glyph continues during another tool's color rest.")
   (let ((mevedel-view-animation--cache nil))

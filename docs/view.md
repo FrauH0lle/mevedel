@@ -29,6 +29,8 @@ ephemeral projection state.
 `mevedel-view-animation.el` prepares bounded time-based status frames;
 `mevedel-view-native.el` optionally presents those samples through independent
 Wayland surfaces, owning setup, placement, fallback and teardown;
+`mevedel-present.el` makes PGTK frames present only what changed;
+`mevedel-native.el` builds and loads the native module both use;
 `mevedel-view-power.el` shares local battery observations and computes the
 effective animation ceiling. The stream owner decides when visible frames
 and semantic progress metadata need updating; these modules do not own the
@@ -467,24 +469,52 @@ immediately, rather than waiting for elapsed-metadata maintenance. Explicit
 frame rates reduce
 scheduled animation work, not necessarily battery drain proportionally.
 
-The optional native presenter requires Linux PGTK/Wayland, Emacs module support,
-`cc`, `pkg-config`, and Emacs/GTK 3/Wayland development headers. It compiles once
-on first eligible animation and caches the module by source/build identity under
+The view enables cheaper PGTK presentation when its mode starts on a PGTK
+frame (`mevedel-present-ensure`), once per session and for all frames. Stock
+PGTK queues a whole-widget redraw for every frame at the end of each redisplay,
+and GTK 3's shared-memory path then allocates and backfills a whole-window
+buffer per frame while the compositor holds the last one. The native module
+(`native/mevedel-present.c`) creates a GL paint context for each frame's
+toplevel, so GDK presents through EGL, and redirects the Emacs executable's GOT
+entries for its drawing calls (`cairo_fill`, `cairo_fill_preserve`,
+`cairo_stroke`, `cairo_paint`, `cairo_mask`, `cairo_show_glyphs`) to record
+their clipped extents on each frame surface. Emacs's `gtk_widget_queue_draw`
+becomes a redraw of that region, or nothing. A frame counts as shown only once
+its draw handler painted its newest surface; before that (a resize before the
+flip, the visible bell) redraws stay whole. GL contexts are current on the main
+thread only, so Emacs's calls to `g_main_context_query`, `_pending` and
+`_dispatch` do nothing on other threads: a Lisp thread waiting in `sleep-for`
+used to dispatch GTK painting and crash in GDK. The module refuses, with a
+reason kept in `mevedel-present--state`, on displays other than Wayland,
+architectures other than x86_64 and aarch64, and executables that do not
+import every redirected call or that import a drawing call it does not track
+(`cairo_show_text`, `cairo_paint_with_alpha` and the like). While it is active,
+text breathe/bounce use the power-aware ceiling instead of 8 fps.
+`test/test-mevedel-present-wayland.el` checks the protocol on a headless nested
+KWin: GL buffers instead of shared memory, no commits for redisplays that drew
+nothing, and painting while a Lisp thread waits.
+
+The native module (`mevedel-native.el`) requires Linux PGTK/Wayland, Emacs
+module support, `cc`, `pkg-config`, and Emacs/GTK 3/Wayland development
+headers. It compiles every `native/*.c` into one library once, at the first
+view or eligible animation, and caches it by source/build identity under
 `mevedel-user-dir/native/`. The build looks for `emacs-module.h` beside the
 running Emacs (its prefix's `include` directory or its build tree) before the
 compiler's default path, and does not treat warnings as errors, so newer headers
-cannot disable the path. `mevedel-view-native-enabled` disables this path;
-unsupported displays or build/placement failures retain ordinary text animation.
-A cached local build is loaded first, then a downloaded prebuilt module, then a
-new local build. `mevedel-view-native-install` downloads the prebuilt module for
-the current source revision and architecture from the project's GitHub release
-`native-HASH` (HASH is the first 16 hex digits of the C source's SHA-256) and
-loads it only when its SHA-256 matches `native/prebuilt.eld`. CI
+cannot disable the module. `mevedel-view-native-enabled` disables the
+presenter; unsupported displays or build/placement failures retain ordinary
+text animation. A cached local build is loaded first, then a downloaded
+prebuilt module, then a new local build. `mevedel-native-install` downloads the
+prebuilt module for the current source revision and architecture from the
+project's GitHub release `native-HASH` (HASH is the first 16 hex digits of the
+SHA-256 of `native/*.c` concatenated in byte order) and loads it only when
+its SHA-256 matches `native/prebuilt.eld`. The sources share no header, so
+package recipes that list `native/*.c` build it. CI
 (`.github/workflows/native.yml`) builds the x86_64 and aarch64 modules on
 Ubuntu 22.04 against its older `emacs-module.h`, so they load into any newer
 Emacs and glibc 2.27 or later, and records their checksums there. A failure is
 reported once per session in the echo area, naming the next step; the internal
-`mevedel-view-native--load-state` retains its reason, and setting it to nil
+`mevedel-native--load-state` retains its reason, and setting it to nil
 retries. Labels that contain characters XML
 cannot carry, such as control characters from tool arguments, change width once
 escaped, so they keep the ordinary renderer. An error or a refused surface

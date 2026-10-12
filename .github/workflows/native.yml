@@ -1,16 +1,17 @@
 name: Native module
 
-# Build the native animation module for users without a C compiler or the
-# GTK 3/Wayland development files.  Each source revision gets a release
-# `native-HASH` (HASH: first 16 hex digits of the C source's SHA-256) and its
-# module checksums are pinned in native/prebuilt.eld, which
-# `mevedel-view-native-install' verifies before loading a download.
+# Build the native module for users without a C compiler or the GTK
+# 3/Wayland development files.  Each source revision gets a release
+# `native-HASH` (HASH: first 16 hex digits of the SHA-256 of native/*.c,
+# concatenated in byte order) and its module checksums are pinned in
+# native/prebuilt.eld, which `mevedel-native-install' verifies before loading
+# a download.
 
 on:
   push:
     branches: [master]
     paths:
-      - native/mevedel-view-native.c
+      - native/*.c
       - native/build-prebuilt.sh
       - .github/workflows/native.yml
   workflow_dispatch:
@@ -60,18 +61,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          hash=$(sha256sum native/mevedel-view-native.c | cut -c1-16)
+          hash=$(LC_ALL=C ls native/*.c | LC_ALL=C sort | xargs cat | sha256sum | cut -c1-16)
           tag="native-$hash"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag exists; its pinned modules stand."
             exit 0
           fi
-          gh release create "$tag" --title "Native animation module $hash" \
-            --notes "Prebuilt native animation modules for source $hash." \
-            dist/mevedel-view-native-*.so
+          gh release create "$tag" --title "Native module $hash" \
+            --notes "Prebuilt native modules for source $hash." \
+            dist/mevedel-native-*.so
           entry="(\"$hash\""
-          for file in dist/mevedel-view-native-*.so.sha256; do
-            arch=$(basename "$file" .so.sha256 | sed 's/^mevedel-view-native-//')
+          for file in dist/mevedel-native-*.so.sha256; do
+            arch=$(basename "$file" .so.sha256 | sed 's/^mevedel-native-//')
             entry="$entry (\"$arch\" . \"$(cut -c1-64 "$file")\")"
           done
           entry="$entry)"

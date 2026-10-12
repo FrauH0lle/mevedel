@@ -429,6 +429,7 @@ the next send.
 | `mevedel-view-rerender-debounce`               | Debounce delay for explicit full view rerenders.                   |
 | `mevedel-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |
 | `mevedel-view-spinner-animate`                 | Global reduced-motion switch for request and pending-tool indicators. |
+| `mevedel-present-enabled`                      | Make PGTK/Wayland frames present only what changed, through GL (default t; affects all of Emacs). |
 | `mevedel-view-native-enabled`                  | Use low-CPU native animation on PGTK/Wayland when available (default t). |
 | `mevedel-view-spinner-style`                   | Request label: `shimmer` (default), `breathe`, `bounce`, `dots`, `ellipsis`, `braille`, `ascii`, or `static`. |
 | `mevedel-view-tool-spinner-style`              | Pending-tool indicator: `shimmer` (default; sweeps "Calling TOOL" with the label), `braille`, `ascii`, `dots`, or `static`. |
@@ -452,21 +453,35 @@ settings can be changed through Customize during an active request. Elapsed
 time and status updates continue even with `static`, a zero saving ceiling,
 or `mevedel-view-spinner-animate` set to nil.
 
-On Linux with PGTK/Wayland, mevedel can present the same animation samples on
-small independent surfaces, avoiding a full editor repaint per frame. This
-optional renderer builds automatically at first use; it requires Emacs module
+On Linux with PGTK/Wayland, stock Emacs repaints and presents the whole frame
+after every redisplay, and GTK 3 copies the whole window into a new buffer
+each time: on a large HiDPI frame that is about 11 ms of CPU per frame,
+whatever changed. mevedel's optional native module fixes this for all of
+Emacs, not only mevedel's buffers: frames present through GL, only what Emacs
+drew is repainted, and redisplays that drew nothing present nothing. Typing,
+streaming and animation then cost a fraction of the CPU (a 10 Hz timer: 15%
+to 0.3% of a core). It is enabled at the first mevedel view on such a frame
+and lasts until Emacs exits; set `mevedel-present-enabled` to nil to keep
+Emacs's own presentation. It works by redirecting the Emacs executable's own
+calls into GTK, Cairo and GLib, and refuses to act on an executable whose
+drawing calls it does not recognize.
+
+The same module can present animation samples on small independent surfaces,
+avoiding a repaint per frame even without the presentation fix. Set
+`mevedel-view-native-enabled` to nil to disable it.
+
+The module builds automatically at first use; it requires Emacs module
 support, a C compiler (`cc`), `pkg-config`, and the Emacs, GTK 3 and Wayland
 client development headers. The compiled module is cached under
 `mevedel-user-dir/native/`. Without those build tools, `M-x
-mevedel-view-native-install` downloads a prebuilt module for x86_64 or aarch64
+mevedel-native-install` downloads a prebuilt module for x86_64 or aarch64
 Linux from the project's GitHub releases; it is loaded only when its SHA-256
 matches the checksum pinned in `native/prebuilt.eld`. When neither is available,
 mevedel says so once per session. Other displays, unavailable modules and
 unsuitable label geometry use ordinary text animation, at several times the
-CPU. Set
-`mevedel-view-native-enabled` to nil to disable it. Native breathe/bounce use
-the configured frame-rate ceiling; their ordinary renderer retains the accepted
-8-fps compromise. No Emacs patch or rebuild is required.
+CPU. Native breathe/bounce use the configured frame-rate ceiling, and so does
+ordinary text animation while frames present only what changed; otherwise it
+retains the accepted 8-fps compromise. No Emacs patch or rebuild is required.
 
 ```emacs-lisp
 ;; Automatic 30 fps on external power, 15 fps on battery or unknown power.

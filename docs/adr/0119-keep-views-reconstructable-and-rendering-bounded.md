@@ -114,7 +114,8 @@ spinner, its inherited faces, or the default face invalidate both; observing
 resolved-color dependencies matters when a paused, zero-fps view has no timer
 to discover updated Customize colors.
 Breathe and bounce retain their 3.6-second cycle. Ordinary text uses the accepted
-8-fps ceiling; eligible native surfaces use the configured rendering ceiling.
+8-fps ceiling; eligible native surfaces, and ordinary text while PGTK frames
+present only what changed, use the configured rendering ceiling.
 Glyphs advance every 240 ms (braille/ascii), 480 ms (dots) or 960 ms
 (ellipsis); colorless and low-color terminals use the glyph
 fallback cadence rather than waking at the color rate. Even resolvable face
@@ -170,6 +171,13 @@ neither discards rearms nor hides a queued timer from cancellation. Window
 replacement and deletion release power subscriptions, including frozen
 tool-only progress with no timer to discover that its window disappeared.
 Package install/uninstall owns the global focus and face-change observers.
+
+On Linux PGTK/Wayland the first view makes all of Emacs's frames present only
+what changed: the native module has GDK paint each toplevel through GL,
+redirects the Emacs executable's own drawing calls to record their damage, cuts
+Emacs's whole-frame redraws to it, and keeps GLib dispatch on the main thread,
+where the GL context is current. It refuses executables whose imports it cannot
+account for. The October 2026 entry below records why it lives in mevedel.
 
 Eligible Linux PGTK/Wayland views optionally use independent native surfaces.
 The animation module supplies timed, styled samples; a small C module owns
@@ -1627,3 +1635,59 @@ passes fell from 13 per 32 batches to 3 per 46). Such a turn cost 16.5-16.8%
 editor CPU with native animation; it had run on text animation at
 19.6-22.6% while the native failure memory still keyed on the bare label.
 
+### October 2026: PGTK presents only what changed
+
+Every per-wakeup measurement above traced back to one cost: on PGTK each
+redisplay presented the whole frame. A perf profile of a no-op 10-Hz timer
+in a 1568x884 frame at scale 2 found two causes. `unblock_buffer_flips` calls
+the terminal's `buffer_flipping_unblocked_hook` for every frame at the end of
+every redisplay, and PGTK's flips and queues a whole-widget draw there,
+whether or not anything was drawn (`frame_up_to_date` does the same; X builds
+flip only a frame that needs it). And on shared-memory buffers GTK 3 may not
+reuse a buffer the compositor still holds; KWin holds the committed one until
+the next commit, so every presentation allocated a new whole-window buffer and
+backfilled it (`pixman_blt` and page faults), about 11 ms per frame. Damage
+tracking alone therefore helped little: an Emacs built with it still used
+11.7% for the timer (from 15.1%). GDK's GL presentation (EGL, dmabuf) with
+damage-limited redraws took it to 0.4-0.6%.
+
+GL then crashed Emacs: Emacs's `xg_select` and `pgtk_read_socket` dispatch
+GLib on whichever thread waits, so a Lisp thread in `sleep-for` (the telemetry
+heartbeat) ran GTK's paint, `eglMakeCurrent` failed off the thread holding
+the context, and GDK segfaulted. Stock Emacs with `GDK_GL=always` crashes
+the same way. Dispatch must stay on the main thread.
+
+An Emacs patch did all three and passed mevedel's suite, but changes to Emacs
+need a rebuild on every machine and distribution, and LLM-written
+contributions are not accepted upstream. The native module reaches the same
+result in a stock Emacs: `gdk_window_create_gl_context` on each toplevel, and
+the executable's GOT entries (all `GLOB_DAT` on Arch's LTO, `-fno-plt`, full
+RELRO build) for its drawing calls, `gtk_widget_queue_draw`,
+`gdk_window_create_similar_surface`, `cairo_get_target` and GLib dispatch.
+Only Emacs's own calls change. Its damage is each drawing call's extents within
+the clip; a frame counts as shown once its draw handler painted the newest
+surface, so a resize before the flip and the visible bell redraw whole.
+Executables importing a drawing call it does not track are refused rather than
+left with stale pixels.
+
+Editor CPU in the nested KWin harness, stock Emacs 31.1 without and with the
+module: idle 1.1% and 0.0%; a no-op 10-Hz timer 14.1% and 0.3%; a word
+inserted 8 times a second 12.6% and 2.1%, 32 times 41.1% and 7.0%; a 30-fps
+color label 36.6% and 3.1%; a Lisp thread waking every 100 ms beside 8
+insertions a second 2.5% and 0.3%, without a crash. On the desktop session:
+the timer 15.3% and 0.4%, insertions 13.0% and 1.9%; KWin's own share fell
+from about 6-7% to 1.4%. mevedel streams at 8 and 32 chunks a second cost
+9.6% and 11.8% stock with native animation, 2.7% and 4.0% with the module,
+and 2.7% and 3.2% with the module and text animation. Waiting with the
+default shimmer cost 3.4% stock native, 10.0% stock text, 0.7% module native
+and 1.2% module text; with bounce, 4.6% stock native (30 fps), 14.9% stock
+text (8 fps), 0.9% module native and 4.5% module text (30 fps). Screenshots after insertions, scrolling, region and mode-line
+changes, a translucent frame, a moving child frame, a resize and the visible
+bell matched both a full `redraw-frame` and stock Emacs pixel for pixel.
+
+With the module the native presenter saves half a point for the cadenced
+shimmer and three and a half for continuous bounce at 30 fps. It stays, and
+is to be measured on the other machines. Text breathe/bounce now use the
+power-aware ceiling while the module is active, since their 8 fps existed to
+bound stock PGTK's per-frame cost: 30-fps text bounce costs what the stock
+presenter did.

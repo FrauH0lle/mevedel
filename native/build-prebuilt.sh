@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the prebuilt native animation module for ARCH into OUT-DIR.
+# Build the prebuilt native module for ARCH into OUT-DIR.
 #
 # Runs on an older distribution (CI uses Ubuntu 22.04) so the module links
 # against widely available GTK 3, Wayland and glibc versions, and against its
@@ -8,7 +8,7 @@
 # an older header's module loads into Emacs 31 and later; the module uses only
 # functions Emacs 25 already had.  A newer header's would be refused by older
 # Emacsen.
-# Writes mevedel-view-native-ARCH.so and its .sha256 file.
+# Writes mevedel-native-ARCH.so and its .sha256 file.
 set -euo pipefail
 arch=$1
 out=$2
@@ -21,9 +21,10 @@ fi
 mkdir -p "$out"
 cc -shared -fPIC -O2 -Wall -Wextra -Werror \
    -I"$(dirname "$header")" \
-   "$here/mevedel-view-native.c" -o "$out/mevedel-view-native-$arch.so" \
+   "$here"/*.c -o "$out/mevedel-native-$arch.so" \
    $(pkg-config --cflags --libs gtk+-3.0 wayland-client) -lm
-strip --strip-unneeded "$out/mevedel-view-native-$arch.so"
-(cd "$out" && sha256sum "mevedel-view-native-$arch.so" > "mevedel-view-native-$arch.so.sha256")
-echo "source $(sha256sum "$here/mevedel-view-native.c" | cut -c1-16)"
-cat "$out/mevedel-view-native-$arch.so.sha256"
+strip --strip-unneeded "$out/mevedel-native-$arch.so"
+(cd "$out" && sha256sum "mevedel-native-$arch.so" > "mevedel-native-$arch.so.sha256")
+# The hash `mevedel-native--source-hash' computes: all sources in byte order.
+echo "source $(cd "$here" && LC_ALL=C ls ./*.c | LC_ALL=C sort | xargs cat | sha256sum | cut -c1-16)"
+cat "$out/mevedel-native-$arch.so.sha256"

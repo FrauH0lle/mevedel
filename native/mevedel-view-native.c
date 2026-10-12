@@ -12,8 +12,6 @@
 #include <math.h>
 #include <errno.h>
 
-int plugin_is_GPL_compatible;
-
 struct pixels {
   struct wl_buffer *buffer;
   void *data;
@@ -393,15 +391,21 @@ static emacs_value statistics(emacs_env *env, ptrdiff_t nargs, emacs_value *args
                         env->make_integer(env,released),env->make_integer(env,dropped)};
   return env->funcall(env,env->intern(env,"vector"),4,values);
 }
-int emacs_module_init(struct emacs_runtime *runtime) {
-  if (runtime->size<(ptrdiff_t)sizeof(*runtime)) return 1;
-  emacs_env *env=runtime->get_environment(runtime);
-  if (env->size<(ptrdiff_t)sizeof(*env)) return 2;
-  /* Spelled out: emacs_function only exists in Emacs 28 and later headers,
-     and prebuilt modules use an older header to load into every Emacs. */
-  struct binding {const char *name;ptrdiff_t arity;
-                  emacs_value (*fn)(emacs_env *,ptrdiff_t,emacs_value *,void *);
-                  const char *doc;} bindings[]={
+struct binding {const char *name;ptrdiff_t arity;
+                emacs_value (*fn)(emacs_env *,ptrdiff_t,emacs_value *,void *);
+                const char *doc;};
+/* Spelled out: emacs_function only exists in Emacs 28 and later headers,
+   and prebuilt modules use an older header to load into every Emacs. */
+static void bind(emacs_env *env, const struct binding *bindings, size_t count) {
+  for (size_t i=0;i<count;i++) {
+    emacs_value args[]={env->intern(env,bindings[i].name),
+                        env->make_function(env,bindings[i].arity,bindings[i].arity,
+                                           bindings[i].fn,bindings[i].doc,NULL)};
+    env->funcall(env,env->intern(env,"fset"),2,args);
+  }
+}
+void mevedel_view_native_init(emacs_env *env) {
+  static const struct binding bindings[]={
     {"mevedel-view-native--supported-p",1,supported,"Whether frame ID has a Wayland parent."},
     {"mevedel-view-native--open",6,open_animation,"Present a timed styled-text sequence."},
     {"mevedel-view-native--move",3,move_animation,"Move a live surface; nil means it was closed."},
@@ -410,10 +414,5 @@ int emacs_module_init(struct emacs_runtime *runtime) {
     {"mevedel-view-native--sample",1,sample_seconds,"Return the elapsed time of the last submitted sample."},
     {"mevedel-view-native--stats",0,statistics,"Return active, submitted, released and dropped counts."}
   };
-  for (size_t i=0;i<sizeof(bindings)/sizeof(*bindings);i++) {
-    struct binding *b=&bindings[i];
-    emacs_value args[]={env->intern(env,b->name),env->make_function(env,b->arity,b->arity,b->fn,b->doc,NULL)};
-    env->funcall(env,env->intern(env,"fset"),2,args);
-  }
-  return exited(env)?3:0;
+  bind(env,bindings,sizeof(bindings)/sizeof(*bindings));
 }

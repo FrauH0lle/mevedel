@@ -25,6 +25,7 @@
 (require 'button)
 (require 'cl-lib)
 (require 'mevedel-execution)
+(require 'mevedel-present)
 (require 'mevedel-theme-faces)
 (require 'mevedel-tool-task)
 (require 'mevedel-transcript)
@@ -649,7 +650,8 @@ the arguments stay still.  The glyph styles draw a compact prefix."
   "Maximum graphical progress frames per second on external power.
 Ordinary text frames require editor redisplay; supported native surfaces
 present independently.  Shimmer draws during its one-second sweep every
-four seconds.  Ordinary breathe/bounce keep their lower natural cadence."
+four seconds.  Text breathe/bounce keep 8 fps unless PGTK presents only
+what changed (`mevedel-present-enabled')."
   :type '(integer 1 60)
   :set #'mevedel-view--set-spinner-option
   :group 'mevedel)
@@ -749,6 +751,8 @@ request progress row, and input zone.  The input zone starts at
 the editable composer body.
 
 \\{mevedel-view-mode-map}"
+  ;; Stock PGTK presents the whole frame for each redisplay.
+  (mevedel-present-ensure (selected-frame))
   ;; View projection uses several independent symbolic invisibility categories.
   ;; Keep the wildcard form so adding or removing one category cannot expose
   ;; unrelated collapsed content.

@@ -116,6 +116,10 @@ Chat / view
   mevedel-view-animation.el   prepared status frames, styles, and bounded color cache
   mevedel-view-native.el      optional native presentation, placement, fallback and teardown
   native/mevedel-view-native.c timed Wayland surfaces without Lisp frame callbacks
+  mevedel-present.el          once-per-session switch to cheaper PGTK presentation
+  native/mevedel-present.c    GL presentation, damage-only redraws, main-thread GLib dispatch
+  mevedel-native.el           native module build, prebuilt download and loading
+  native/mevedel-native.c     module entry registering each source's functions
   mevedel-view-power.el       shared battery observations and effective FPS policy
   mevedel-pending-inputs.el   pending queue, steering, delivery, and cockpit
   mevedel-patch-review.el     staged ApplyPatch review UI

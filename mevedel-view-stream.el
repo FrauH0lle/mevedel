@@ -12,6 +12,7 @@
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-execution-transcript)
 (require 'mevedel-view-animation)
+(require 'mevedel-present)
 (require 'mevedel-view-power)
 (require 'mevedel-ptc-interpreter)
 (require 'mevedel-view-zone)
@@ -820,9 +821,11 @@ GLYPH-FALLBACK means a color STYLE is drawn by its glyph fallback."
                mevedel-view-spinner-animate)))
     (when (and (> rate 0) (not (eq style 'static)))
       (max (/ 1.0 rate)
-           (if (and glyph-fallback (memq style '(shimmer breathe bounce)))
-               (mevedel-view-animation-period 'braille)
-             (mevedel-view-animation-period style))))))
+           (cond ((and glyph-fallback (memq style '(shimmer breathe bounce)))
+                  (mevedel-view-animation-period 'braille))
+                 ;; Their 8 fps bounded what each stock PGTK frame cost.
+                 ((and (memq style '(breathe bounce)) (mevedel-present-active-p)) 0)
+                 (t (mevedel-view-animation-period style)))))))
 
 (defun mevedel-view--spinner-next-delay (plan seconds)
   "Return seconds until PLAN's next visible change at animation SECONDS.

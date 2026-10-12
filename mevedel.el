@@ -127,7 +127,7 @@
 (autoload 'mevedel-view-close-agent-transcript "mevedel-view-agent" nil t)
 (autoload 'mevedel-view-cycle-permission-mode "mevedel-view-composer" nil t)
 (autoload 'mevedel-view-go-to-segment "mevedel-view-segments" nil t)
-(autoload 'mevedel-view-native-install "mevedel-view-native" nil t)
+(autoload 'mevedel-native-install "mevedel-native" nil t)
 (autoload 'mevedel-view-next-display "mevedel-view-render" nil t)
 (autoload 'mevedel-view-next-user-query "mevedel-view-render" nil t)
 (autoload 'mevedel-view-open-agent-transcript-at-point "mevedel-view-agent" nil t)
