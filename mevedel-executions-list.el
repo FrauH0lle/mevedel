@@ -18,11 +18,13 @@
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-number-cell "mevedel-cockpit" (text number))
 (declare-function mevedel-cockpit-format-header
                   "mevedel-cockpit" (name scope state))
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
+(declare-function mevedel-cockpit-sort-by-number "mevedel-cockpit" (column))
 (declare-function mevedel-cockpit-setup-tabulated-surface
                   "mevedel-cockpit" (surface))
 (declare-function mevedel-cockpit-surface-context
@@ -34,9 +36,11 @@
 (autoload 'mevedel-cockpit-context-session "mevedel-cockpit")
 (autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-format-header "mevedel-cockpit")
+(autoload 'mevedel-cockpit-number-cell "mevedel-cockpit")
 (autoload 'mevedel-cockpit-open-surface "mevedel-cockpit")
 (autoload 'mevedel-cockpit-quit "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-setup-tabulated-surface "mevedel-cockpit")
+(autoload 'mevedel-cockpit-sort-by-number "mevedel-cockpit")
 (autoload 'mevedel-cockpit-surface-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
@@ -97,8 +101,7 @@
    (mevedel-executions-list--session context)))
 
 (defun mevedel-executions-list--entry (item _context)
-  "Return tabulated row for execution ITEM.
-Numeric cells carry their number for `mevedel-executions-list--by-number'."
+  "Return tabulated row for execution ITEM."
   (let ((id (plist-get item :execution-id))
         (seconds (or (plist-get item :wall-time-seconds) 0))
         (bytes (or (plist-get item :output-bytes) 0)))
@@ -108,20 +111,10 @@ Numeric cells carry their number for `mevedel-executions-list--by-number'."
       id
       (or (plist-get item :owner) "")
       (if (plist-get item :tty) "PTY" "pipe")
-      (propertize (mevedel--duration-label seconds)
-                  'mevedel-executions-list-number seconds)
-      (propertize (number-to-string bytes)
-                  'mevedel-executions-list-number bytes)
+      (mevedel-cockpit-number-cell (mevedel--duration-label seconds) seconds)
+      (mevedel-cockpit-number-cell (number-to-string bytes) bytes)
       (format "%s" (or (plist-get item :sandbox-state) 'pending))
       (mevedel--truncate-display (or (plist-get item :command) "") 60 "…")))))
-
-(defun mevedel-executions-list--by-number (column)
-  "Return a predicate ordering rows by the number behind COLUMN's cells.
-The default predicate compares the displayed text, so 1m 05s sorted
-before 9s."
-  (lambda (a b)
-    (< (get-text-property 0 'mevedel-executions-list-number (aref (cadr a) column))
-       (get-text-property 0 'mevedel-executions-list-number (aref (cadr b) column)))))
 
 (defun mevedel-executions-list--header (items context)
   "Return cockpit header for execution ITEMS and CONTEXT."
@@ -212,8 +205,8 @@ before 9s."
     :format [("Execution" 15 t)
              ("Owner" 20 t)
              ("Mode" 6 t)
-             ("Elapsed" 9 ,(mevedel-executions-list--by-number 3))
-             ("Bytes" 10 ,(mevedel-executions-list--by-number 4))
+             ("Elapsed" 9 ,(mevedel-cockpit-sort-by-number 3))
+             ("Bytes" 10 ,(mevedel-cockpit-sort-by-number 4))
              ("Sandbox" 12 t)
              ("Command" 0 t)]
     :sort-key ("Execution" . nil)

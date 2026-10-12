@@ -84,7 +84,7 @@
       (when (buffer-live-p data) (kill-buffer data))
       (when (file-exists-p artifact) (delete-file artifact))))))
 
-(mevedel-deftest mevedel-executions-list--by-number
+(mevedel-deftest mevedel-executions-list--entry
   (:doc "sorts Elapsed and Bytes by their numbers, not their text")
   (let* ((session (mevedel-session--create :name "main"))
          (view (generate-new-buffer " *execution-list-view*"))

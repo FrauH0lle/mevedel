@@ -401,6 +401,18 @@ item is selected."
                                (mevedel-cockpit--detail-report surface context
                                                                (tabulated-list-get-id) item))))
 
+(defun mevedel-cockpit-number-cell (text number)
+  "Return cell TEXT that `mevedel-cockpit-sort-by-number' orders by NUMBER."
+  (propertize text 'mevedel-cockpit-number number))
+
+(defun mevedel-cockpit-sort-by-number (column)
+  "Return a predicate ordering rows by the numbers behind COLUMN's cells.
+Tabulated lists compare displayed text, which sorts 1m 05s before 9s,
+10 before 9 and 1.5M before 200k."
+  (lambda (a b)
+    (< (get-text-property 0 'mevedel-cockpit-number (aref (cadr a) column))
+       (get-text-property 0 'mevedel-cockpit-number (aref (cadr b) column)))))
+
 (defun mevedel-cockpit-format-header (name scope state)
   "Return the shared cockpit header line for NAME, SCOPE, and STATE.
 NAME identifies the surface, SCOPE the session or root it belongs to, and

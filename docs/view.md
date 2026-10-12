@@ -1299,8 +1299,9 @@ project's choice; mevedel adds no ignore rule for it.
 
 In Emacs, the artifacts cockpit (cockpit `A`, or `M-x mevedel-artifacts` from
 any project buffer) lists the store with each artifact's kind, attachment to
-the current session, version count, modification time and size; `t` toggles
-between all and attached artifacts. It opens an artifact locally (`o`, `e`),
+the current session, version count, modification time and size, sorting
+versions and sizes by their numbers; `t` toggles between all and attached
+artifacts. It opens an artifact locally (`o`, `e`),
 attaches it to the current session (`a`), views or restores a version (`v`),
 duplicates it into an independent artifact (`D`), opens its dedicated session
 (`c`), and deletes it with its versions, comments and dedicated session (`d`).

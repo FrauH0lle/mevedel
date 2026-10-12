@@ -62,6 +62,7 @@
 (declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-format-header
                   "mevedel-cockpit" (name scope state))
+(declare-function mevedel-cockpit-number-cell "mevedel-cockpit" (text number))
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
@@ -69,6 +70,7 @@
                   "mevedel-cockpit" (&optional label context))
 (declare-function mevedel-cockpit-setup-tabulated-surface
                   "mevedel-cockpit" (surface))
+(declare-function mevedel-cockpit-sort-by-number "mevedel-cockpit" (column))
 (declare-function mevedel-cockpit-surface-context
                   "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-refresh
@@ -82,10 +84,12 @@
 (autoload 'mevedel-cockpit-context-workspace "mevedel-cockpit")
 (autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-format-header "mevedel-cockpit")
+(autoload 'mevedel-cockpit-number-cell "mevedel-cockpit")
 (autoload 'mevedel-cockpit-open-surface "mevedel-cockpit")
 (autoload 'mevedel-cockpit-quit "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-require-owner "mevedel-cockpit")
 (autoload 'mevedel-cockpit-setup-tabulated-surface "mevedel-cockpit")
+(autoload 'mevedel-cockpit-sort-by-number "mevedel-cockpit")
 (autoload 'mevedel-cockpit-surface-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit" nil t)
 (autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
@@ -179,10 +183,12 @@
     (plist-get item :name)
     (format "%s" (or (plist-get item :kind) ""))
     (if (plist-get item :attached) "✓" "")
-    (number-to-string (plist-get item :versions))
+    (mevedel-cockpit-number-cell (number-to-string (plist-get item :versions))
+                                 (plist-get item :versions))
     (if (plist-get item :missing) "missing"
       (format-time-string "%Y-%m-%d %H:%M" (plist-get item :modified)))
-    (file-size-human-readable (or (plist-get item :size) 0)))))
+    (let ((size (or (plist-get item :size) 0)))
+      (mevedel-cockpit-number-cell (file-size-human-readable size) size)))))
 
 (defun mevedel-artifacts-list--header (items context)
   "Return cockpit header for artifact ITEMS and CONTEXT."
@@ -460,9 +466,9 @@ share it.  Nothing is created when that is declined."
     :format [("Artifact" 32 t)
              ("Kind" 10 t)
              ("Att" 4 t)
-             ("Ver" 4 t)
+             ("Ver" 4 ,(mevedel-cockpit-sort-by-number 3))
              ("Modified" 17 t)
-             ("Size" 0 t)]
+             ("Size" 0 ,(mevedel-cockpit-sort-by-number 5))]
     :sort-key ("Modified" . t)
     :collect mevedel-artifacts-list--collect
     :entry mevedel-artifacts-list--entry

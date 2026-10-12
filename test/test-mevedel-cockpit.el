@@ -515,6 +515,16 @@
               (should (string-match-p "y    Run described test key" text)))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
+(mevedel-deftest mevedel-cockpit-sort-by-number
+  (:doc "orders rows by the numbers behind their cells, not their text")
+  (let ((rows (mapcar (lambda (size)
+                        (list size (vector (mevedel-cockpit-number-cell
+                                            (file-size-human-readable size)
+                                            size))))
+                      '(204800 980 1572864))))
+    (should (equal '(980 204800 1572864)
+                   (mapcar #'car (sort rows (mevedel-cockpit-sort-by-number 0)))))))
+
 (mevedel-deftest mevedel-cockpit-format-header ()
   ,test
   (test)

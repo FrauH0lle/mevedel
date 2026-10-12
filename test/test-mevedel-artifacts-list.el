@@ -108,6 +108,18 @@
             (should (buffer-live-p origin))
             (should-not (get-buffer mevedel-artifacts-list-buffer-name))))))))
 
+(mevedel-deftest mevedel-artifacts-list--entry
+  (:doc "sorts Ver and Size by their numbers, not their text")
+  (let ((rows (mapcar (lambda (item) (mevedel-artifacts-list--entry item nil))
+                      (list (list :row "small" :name "small" :versions 10
+                                  :size 980 :modified 0)
+                            (list :row "large" :name "large" :versions 9
+                                  :size 1572864 :modified 0)))))
+    (pcase-dolist (`(,column . ,first) '((3 . "large") (5 . "small")))
+      (should (equal first (car (car (sort (copy-sequence rows)
+                                           (mevedel-cockpit-sort-by-number
+                                            column)))))))))
+
 (mevedel-deftest mevedel-artifacts-list-count ()
   ,test
   (test)
