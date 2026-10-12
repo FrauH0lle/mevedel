@@ -468,7 +468,10 @@ drawing calls it does not recognize.
 
 The same module can present animation samples on small independent surfaces,
 avoiding a repaint per frame even without the presentation fix. Set
-`mevedel-view-native-enabled` to nil to disable it.
+`mevedel-view-native-enabled` to nil to disable it. It also lets the telemetry
+heartbeat wait without waking the editor's display loop, preserving 100 ms
+stall sampling with less CPU use. This works independently of native
+presentation; without the module, sampling uses a main-thread timer.
 
 The module builds automatically at first use; it requires Emacs module
 support, a C compiler (`cc`), `pkg-config`, and the Emacs, GTK 3 and Wayland

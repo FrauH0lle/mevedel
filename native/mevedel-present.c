@@ -15,84 +15,15 @@
 #include <emacs-module.h>
 #include <gtk/gtk.h>
 #include <gdk/gdkwayland.h>
-#include <link.h>
-#include <elf.h>
 #include <dlfcn.h>
-#include <sys/mman.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
 
-/* The executable's dynamic symbols and relocations. */
-static struct {
-  uintptr_t base, relro_start, relro_end;
-  const ElfW(Sym) *symtab;
-  const char *strtab;
-  const ElfW(Rela) *rela[2];
-  size_t relasz[2];
-} exe;
-static int find_executable(struct dl_phdr_info *info, size_t size, void *data) {
-  (void)size;(void)data;
-  /* The executable comes first. */
-  exe.base=info->dlpi_addr;
-  const ElfW(Dyn) *dyn=NULL;
-  for (int i=0;i<info->dlpi_phnum;i++) {
-    const ElfW(Phdr) *ph=&info->dlpi_phdr[i];
-    if (ph->p_type==PT_DYNAMIC) dyn=(const void *)(exe.base+ph->p_vaddr);
-    else if (ph->p_type==PT_GNU_RELRO) {
-      exe.relro_start=exe.base+ph->p_vaddr;exe.relro_end=exe.relro_start+ph->p_memsz;
-    }
-  }
-  /* ld.so normally relocates these addresses in place. */
-#define ADDRESS(v) ((uintptr_t)(v)<exe.base?exe.base+(uintptr_t)(v):(uintptr_t)(v))
-  for (;dyn && dyn->d_tag!=DT_NULL;dyn++)
-    switch (dyn->d_tag) {
-    case DT_SYMTAB: exe.symtab=(const void *)ADDRESS(dyn->d_un.d_ptr);break;
-    case DT_STRTAB: exe.strtab=(const void *)ADDRESS(dyn->d_un.d_ptr);break;
-    case DT_RELA: exe.rela[0]=(const void *)ADDRESS(dyn->d_un.d_ptr);break;
-    case DT_RELASZ: exe.relasz[0]=dyn->d_un.d_val;break;
-    case DT_JMPREL: exe.rela[1]=(const void *)ADDRESS(dyn->d_un.d_ptr);break;
-    case DT_PLTRELSZ: exe.relasz[1]=dyn->d_un.d_val;break;
-    }
-#undef ADDRESS
-  return 1;
-}
-#if defined __x86_64__
-#define SLOT_RELOCATION(type) ((type)==R_X86_64_GLOB_DAT || (type)==R_X86_64_JUMP_SLOT)
-#elif defined __aarch64__
-#define SLOT_RELOCATION(type) ((type)==R_AARCH64_GLOB_DAT || (type)==R_AARCH64_JUMP_SLOT)
-#endif
-/* Point the executable's GOT slots for NAME at REPLACEMENT, or only count
-   them when REPLACEMENT is NULL. */
-static int redirect(const char *name, void *replacement) {
-  int count=0;
-#ifndef SLOT_RELOCATION
-  (void)name;(void)replacement;return 0;
-#endif
-  long page=sysconf(_SC_PAGESIZE);
-#ifdef SLOT_RELOCATION
-  for (int t=0;t<2;t++)
-    for (size_t i=0;exe.rela[t] && i<exe.relasz[t]/sizeof(ElfW(Rela));i++) {
-      const ElfW(Rela) *r=&exe.rela[t][i];
-      if (!SLOT_RELOCATION(ELF64_R_TYPE(r->r_info))
-          || strcmp(exe.strtab+exe.symtab[ELF64_R_SYM(r->r_info)].st_name,name)) continue;
-      count++;
-      if (!replacement) continue;
-      void **slot=(void **)(exe.base+r->r_offset);
-      uintptr_t mask=~(uintptr_t)(page-1);
-      void *start=(void *)((uintptr_t)slot&mask);
-      /* ld.so protects whole pages only: the page RELRO ends in stays
-         writable, and may hold data Emacs writes. */
-      int relro=(uintptr_t)slot>=(exe.relro_start&mask) && (uintptr_t)slot<(exe.relro_end&mask);
-      if (relro && mprotect(start,(size_t)page,PROT_READ|PROT_WRITE)) return -1;
-      *slot=replacement;
-      if (relro) mprotect(start,(size_t)page,PROT_READ);
-    }
-#endif
-  return count;
-}
+/* Redirect only imports of the executable, never those of this module. */
+int mevedel_native_redirect(const char *name, void *replacement);
 
 /* GLib dispatch may paint through GL.  Emacs's own dispatch runs on the
    main thread only; other Lisp threads wait for their own descriptors.  A
@@ -321,19 +252,15 @@ static emacs_value enable(emacs_env *env, ptrdiff_t nargs, emacs_value *args, vo
   if (enabled) return env->intern(env,"t");
   GdkDisplay *display=gdk_display_get_default();
   if (!display || !GDK_IS_WAYLAND_DISPLAY(display)) reason="not a Wayland display";
-#ifndef SLOT_RELOCATION
+#if !defined __x86_64__ && !defined __aarch64__
   reason="unsupported architecture";
 #endif
-  if (!reason) {
-    dl_iterate_phdr(find_executable,NULL);
-    if (!exe.symtab || !exe.strtab) reason="Emacs has no dynamic symbols";
-  }
   for (size_t i=0;!reason && i<sizeof(hooks)/sizeof(*hooks);i++)
-    if (hooks[i].required && redirect(hooks[i].symbol,NULL)<1) {
+    if (hooks[i].required && mevedel_native_redirect(hooks[i].symbol,NULL)<1) {
       snprintf(buffer,sizeof buffer,"Emacs does not import %s",hooks[i].symbol);reason=buffer;
     }
   for (size_t i=0;!reason && i<sizeof(untracked)/sizeof(*untracked);i++)
-    if (redirect(untracked[i],NULL)>0) {
+    if (mevedel_native_redirect(untracked[i],NULL)>0) {
       snprintf(buffer,sizeof buffer,"Emacs draws with %s",untracked[i]);reason=buffer;
     }
   for (size_t i=0;!reason && i<sizeof(hooks)/sizeof(*hooks);i++)
@@ -345,7 +272,7 @@ static emacs_value enable(emacs_env *env, ptrdiff_t nargs, emacs_value *args, vo
      dispatch stays on the main thread and releases its context.  A failure
      on the way leaves only hooks that change nothing. */
   for (size_t i=sizeof(hooks)/sizeof(*hooks);!reason && i-->0;)
-    if (redirect(hooks[i].symbol,hooks[i].hook)<0) reason="Emacs's GOT is not writable";
+    if (mevedel_native_redirect(hooks[i].symbol,hooks[i].hook)<0) reason="Emacs's GOT is not writable";
   if (reason) return env->make_string(env,reason,(ptrdiff_t)strlen(reason));
   g_signal_add_emission_hook(g_signal_lookup("draw",GTK_TYPE_WIDGET),0,draw_started,NULL,NULL);
   enabled=1;

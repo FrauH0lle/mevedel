@@ -2,9 +2,8 @@
 
 ;;; Commentary:
 ;; Runs the native module in a pgtk daemon against a headless nested KWin,
-;; so module construction, placement, coordinate translation and protocol order
-;; are exercised for real.  Display closing is excluded because deleting a
-;; displayed terminal aborts the tested PGTK daemon even without the module.
+;; so module construction, placement, coordinate translation, protocol order
+;; and display teardown/reconnection are exercised for real.
 ;; Skipped without `kwin_wayland', a pgtk Emacs or the module's build tools
 ;; (`mevedel-test--wayland-available-p').
 
@@ -122,6 +121,26 @@ result is (POSITIONS . VIOLATIONS), POSITIONS being (X . Y) in order."
                            (+ (aref (car placement) 1) (nth 1 offset)))
                      (car (car checked))))
       (should-not (cdr checked)))))
+
+(mevedel-deftest mevedel-view-native-wayland/display-close
+  (:doc "Closes real displays and binds fresh globals when the daemon reconnects.")
+  (pcase-let* ((_ (skip-unless (mevedel-test--wayland-available-p)))
+               (`(,observed ,status . ,trace)
+                (mevedel-test--run-wayland-fixture "native-wayland-close.el")))
+    (ert-info ((format "Observed: %S" observed))
+      (should (= status 0))
+      (should (= (length observed) 3))
+      (dolist (cycle observed)
+        (should (plist-get cycle :terminal-closed))
+        (should (= (plist-get cycle :active) 0))
+        (should (> (plist-get cycle :submitted) 1))
+        (should (plist-get cycle :handles-closed))))
+    ;; The module's GTK closed handler releases its registry bindings, not
+    ;; just the surface closed earlier by the parent-destroy handler.
+    (let ((start 0) (closed 0))
+      (while (string-match "-> wl_subcompositor#[0-9]+\\.destroy()" trace start)
+        (setq start (match-end 0) closed (1+ closed)))
+      (should (>= closed 3)))))
 
 (provide 'test-mevedel-view-native-wayland)
 

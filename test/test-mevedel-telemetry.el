@@ -8,6 +8,7 @@
 
 (require 'gptel)
 (require 'mevedel-agents)
+(require 'mevedel-native)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
@@ -241,8 +242,44 @@
   (seq-filter (lambda (entry) (eq event (plist-get entry :event)))
               (reverse (mevedel-session-telemetry-pending session))))
 
-(mevedel-deftest mevedel-telemetry--lag-tick
+(mevedel-deftest mevedel-telemetry--lag-start
   (:after-each (mevedel-telemetry--lag-stop))
+  ,test
+  (test)
+  :doc "falls back when native loading, timed waits, or threads are unavailable"
+  (dolist (failure '(module wait thread))
+    (let ((system-type 'gnu/linux)
+          (module-file-suffix ".so"))
+      (cl-letf (((symbol-function 'mevedel-native-load)
+                 (lambda () (not (eq failure 'module))))
+                ((symbol-function 'mevedel-native--timed-wait-available-p)
+                 (lambda () (not (eq failure 'wait))))
+                ((symbol-function 'make-thread)
+                 (lambda (&rest _) (error "Threads unavailable"))))
+        (mevedel-telemetry--lag-start)
+        (should-not mevedel-telemetry--lag-thread)
+        (should (mevedel--ui-timer-pending-p mevedel-telemetry--lag-timer))
+        (let ((timer mevedel-telemetry--lag-timer))
+          (mevedel-telemetry--lag-start)
+          (should (eq timer mevedel-telemetry--lag-timer)))
+        (mevedel-telemetry--lag-stop))))
+  :doc "retains the sampler started by a request during module loading"
+  (let ((system-type 'gnu/linux)
+        (module-file-suffix ".so")
+        loading first)
+    (cl-letf (((symbol-function 'mevedel-native-load)
+               (lambda ()
+                 (unless loading
+                   (setq loading t)
+                   (mevedel-telemetry--lag-start)
+                   (setq first mevedel-telemetry--lag-timer))
+                 nil)))
+      (mevedel-telemetry--lag-start)
+      (should (eq first mevedel-telemetry--lag-timer)))))
+
+(mevedel-deftest mevedel-telemetry--lag-tick
+  (:vars ((mevedel-native--load-state "unavailable in fallback tests"))
+   :after-each (mevedel-telemetry--lag-stop))
   ,test
   (test)
   :doc "watches only while a request runs, then for its tail"

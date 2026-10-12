@@ -12,6 +12,17 @@
 (require 'mevedel-view-native)
 (require 'mevedel-view)
 
+(defmacro mevedel-view-native-test--deftest (object options &rest body)
+  "Define a test of OBJECT with OPTIONS and fake surface handles in BODY."
+  (declare (indent 2))
+  ;; Other cases may already have loaded the real module.  Keep every
+  ;; operation on these handles mocked, including unwind cleanup.
+  `(mevedel-deftest ,object ,options
+     (cl-letf (((symbol-function 'mevedel-view-native--sample) (lambda (_) 0.0))
+               ((symbol-function 'mevedel-view-native--live-p) (lambda (_) t))
+               ((symbol-function 'mevedel-view-native--close) #'ignore))
+       ,@body)))
+
 (mevedel-deftest mevedel-view-native--markup
   (:doc "Preserves text and foreground runs without interpreting label markup.")
   (let* ((sample (concat "A<&" (propertize "B>" 'face '(:foreground "#123456"))))
@@ -85,7 +96,7 @@
                 ((symbol-function 'use-region-p) (lambda () t)))
         (should-not (mevedel-view-native--placement target (selected-window)))))))
 
-(mevedel-deftest mevedel-view-native-sync
+(mevedel-view-native-test--deftest mevedel-view-native-sync
   (:doc "Reuses a stable surface, replaces changed text and closes on stop.")
   (with-temp-buffer
     (insert "Working...\n")
@@ -140,7 +151,7 @@
               (should (= 0 (hash-table-count mevedel-view-native--views)))))
         (mevedel-view-native-stop)))))
 
-(mevedel-deftest mevedel-view-native-sync/moved
+(mevedel-view-native-test--deftest mevedel-view-native-sync/moved
   (:doc "Moves the surface of a replaced target that text above displaced.")
   (with-temp-buffer
     (insert "Working...\n")
@@ -194,7 +205,7 @@
                  (lambda (&rest _) (ert-fail "Placed again"))))
         (should (equal (mevedel-view-native-sync specs 0 #'ignore) (list target)))))))
 
-(mevedel-deftest mevedel-view-native-sync/teardown
+(mevedel-view-native-test--deftest mevedel-view-native-sync/teardown
   (:doc "Queued teardown marks the view's windows for redisplay.")
   (with-temp-buffer
     (let ((noninteractive nil)
@@ -213,7 +224,7 @@
         (cl-letf (((symbol-function 'mevedel-view-native--close) #'ignore))
           (mevedel-view-native-stop))))))
 
-(mevedel-deftest mevedel-view-native-sync/failure
+(mevedel-view-native-test--deftest mevedel-view-native-sync/failure
   (:doc "A failing label falls back alone and is not retried until it changes.")
   (with-temp-buffer
     (insert "Working...\nTesting...\n")
@@ -282,10 +293,10 @@
         (cl-letf (((symbol-function 'mevedel-view-native--close) #'ignore))
           (mevedel-view-native-stop))))))
 
-(mevedel-deftest mevedel-view-native--clear
+(mevedel-view-native-test--deftest mevedel-view-native--clear
   (:doc "Closes each live handle once and leaves no retained surface.")
   (with-temp-buffer
-    (setq mevedel-view-native--entries '((a config first) (b config second)))
+    (setq mevedel-view-native--entries '(((a window) config first) ((b window) config second)))
     (let (closed)
       (cl-letf (((symbol-function 'mevedel-view-native--close) (lambda (h) (push h closed))))
         (mevedel-view-native--clear)
@@ -337,7 +348,7 @@
         (should-not mevedel-view-native--rearm-timer)
         (should (= 0 (hash-table-count mevedel-view-native--views)))))))
 
-(mevedel-deftest mevedel-view-native-sample
+(mevedel-view-native-test--deftest mevedel-view-native-sample
   (:doc "Retains the last submitted phase when geometry invalidation hides pixels.")
   (with-temp-buffer
     (let ((target (cons (copy-marker 1) (copy-marker 1))))
@@ -350,7 +361,7 @@
         (mevedel-view-native-stop)
         (should-not (mevedel-view-native-sample target))))))
 
-(mevedel-deftest mevedel-view-native--before-redisplay/cached
+(mevedel-view-native-test--deftest mevedel-view-native--before-redisplay/cached
   (:doc "Verifies placement again only after a layout input changes.")
   (let ((buffer (generate-new-buffer " *mevedel-native-cache*"))
         (window (selected-window))
@@ -393,7 +404,7 @@
       (set-window-buffer window previous)
       (kill-buffer buffer))))
 
-(mevedel-deftest mevedel-view-native--before-redisplay
+(mevedel-view-native-test--deftest mevedel-view-native--before-redisplay
   (:doc "Detects inhibited edits and changed geometry without reacting to decoration.")
   (progn
     (with-temp-buffer
@@ -436,7 +447,7 @@
                 (should mevedel-view-native--settling))
             (mevedel-view-native-stop)))))))
 
-(mevedel-deftest mevedel-view-native--before-redisplay/inputs
+(mevedel-view-native-test--deftest mevedel-view-native--before-redisplay/inputs
   (:doc "Rechecks placement after overlay, invisibility, property and closure changes.")
   (let ((buffer (generate-new-buffer " *mevedel-native-inputs*"))
         (window (selected-window))
@@ -499,7 +510,7 @@
       (set-window-buffer window previous)
       (kill-buffer buffer))))
 
-(mevedel-deftest mevedel-view-native--before-redisplay/paint-inputs
+(mevedel-view-native-test--deftest mevedel-view-native--before-redisplay/paint-inputs
   (:doc "Rechecks live surfaces when overlay paint, pixel scroll or opacity changes.")
   (mevedel-view-test--with-buffers
     (save-window-excursion

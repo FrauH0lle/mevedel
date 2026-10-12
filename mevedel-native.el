@@ -4,7 +4,8 @@
 
 ;; mevedel's optional native module serves PGTK frames on Wayland: cheaper
 ;; presentation (`mevedel-present') and independent animation surfaces
-;; (`mevedel-view-native').  Every C source under native/ builds into one
+;; (`mevedel-view-native').  It also gives telemetry timed condition waits
+;; that dispatch no events (`mevedel-telemetry').  Every C source under native/ builds into one
 ;; library, without shared headers: package recipes list native/*.c.
 ;; Loading prefers a downloaded prebuilt module that matches the checksum
 ;; pinned in native/prebuilt.eld, then a cached local build, then a new

@@ -504,10 +504,20 @@ text breathe/bounce use the power-aware ceiling instead of 8 fps.
 KWin: GL buffers instead of shared memory, no commits for redisplays that drew
 nothing, and painting while a Lisp thread waits.
 
-The native module (`mevedel-native.el`) requires Linux PGTK/Wayland, Emacs
-module support, `cc`, `pkg-config`, and Emacs/GTK 3/Wayland development
-headers. It compiles every `native/*.c` into one library once, at the first
-view or eligible animation, and caches it by source/build identity under
+The native surface tests also close real GTK displays and reconnect with fresh
+Wayland bindings. Stock Emacs 31 PGTK leaves a closed display's descriptor in
+its input wait set and can leave a frame scale timer behind when deleting a
+terminal with live frames. The regression therefore deletes frames first and
+reconnects immediately; direct close followed by an event-loop wait requires
+fixing those Emacs teardown bugs. Native display teardown itself releases its
+surfaces and registry bindings.
+
+The native module (`mevedel-native.el`) requires Linux, Emacs module support,
+`cc`, `pkg-config`, and Emacs/GTK 3/Wayland development headers. Its rendering
+features require PGTK/Wayland; its timed condition wait for
+[telemetry sampling](telemetry.md) also works without a graphical frame.
+It compiles every `native/*.c` into one library once, at the first view,
+eligible animation or telemetry sampling window, and caches it by source/build identity under
 `mevedel-user-dir/native/`. The build looks for `emacs-module.h` beside the
 running Emacs (its prefix's `include` directory or its build tree) before the
 compiler's default path, and does not treat warnings as errors, so newer headers

@@ -162,10 +162,8 @@
     frame))
 
 (defun mevedel-native-wayland--run ()
-  "Run the scenario, record what it observed and exit.
-The display is not closed: a pgtk daemon aborts when the terminal of a
-frame that has been displayed is deleted, module or not, and deleting a
-display's last frame keeps its terminal."
+  "Run the placement scenario, record what it observed and exit.
+Display teardown and reconnection run in native-wayland-close.el."
   (let ((status 0))
     (condition-case err
         (mevedel-native-wayland--scenario (getenv "MEVEDEL_NATIVE_DISPLAY"))

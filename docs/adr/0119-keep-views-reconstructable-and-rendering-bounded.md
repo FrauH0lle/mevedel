@@ -152,10 +152,15 @@ Periodic housekeeping and metadata share host wakeups. Aligning separate timer
 deadlines alone still allowed redisplay between their callbacks on PGTK, so one
 UI-host timer now dispatches due callbacks together. GC maintenance, process-exit
 recovery and quiet progress retain whole-second updates; telemetry attributes
-each callback separately. Its lag heartbeat samples every 100 ms on this
-same main-thread timer: worker sleeps could dispatch process sentinels on
-the wrong thread. Native PGTK presentation suppresses repainting when that
-wakeup changes nothing. Metadata-only
+each callback separately. Its lag heartbeat samples every 100 ms using a
+native timed condition wait where supported, so a worker releases the
+interpreter lock without dispatching process sentinels or redisplay. Emacs
+owns mutex restoration, stack rooting and cancellation. The native boundary
+prevents advice, GC and debugger callbacks from consuming its one-shot timeout.
+Unavailable native waits or worker creation fall back to the shared main-thread
+timer with the same cadence. Ordinary worker sleeps remain unsafe because they
+dispatch process sentinels. Native PGTK presentation reduces the fallback's
+redraw cost. Metadata-only
 views join the whole-second clock. Decorative Lisp animation and output-driven
 progress retain their natural deadlines. Missing execution rows trigger recovery
 only when their source, or a compound ancestor's source, is in the transcript;
@@ -1732,9 +1737,10 @@ A real subprocess regression disproved the safety of the worker heartbeat.
 only excluded the latter. A sentinel draining its main-thread-owned process
 from the heartbeat raised "Attempt to accept output ... locked to thread".
 Emacs provides no timed condition-variable wait for this worker. The heartbeat
-therefore returns to the existing coalesced main-thread timer, preserving
+therefore returned to the existing coalesced main-thread timer, preserving
 100 ms sampling, remote-operation attribution and post-request tails, while
-removing its worker lifecycle. The earlier thread measurements remain history,
+removing its worker lifecycle. The native-wait follow-up below supersedes
+this fallback-only decision. The earlier thread measurements remain history,
 not evidence that the unsafe mechanism should stay.
 
 The safety change has a measured cost. Twelve isolated daemon runs on a
@@ -1742,7 +1748,7 @@ headless KWin used compiled code, a 1510x840 frame at scale 1, three interleaved
 rounds, and 15-second idle measurement windows after warm-up. Each window
 recorded 149 or 150 samples. Median editor CPU with stock PGTK rose from
 0.107% for the thread to 3.407% for the timer; with native presentation it
-rose from 0.070% to 0.607% (timer range 0.543-0.665%). The shared timer is
+rose from 0.070% to 0.607% (timer range 0.543-0.665%). The shared timer was
 chosen for correct process ownership, not as a performance improvement.
 These idle measurements do not establish streaming or HiDPI costs; the
 non-native fallback retains a material wakeup cost.
@@ -1772,3 +1778,66 @@ callback checks that its job is still current: transport can restore a timer
 cancelled while suspended, and that callback previously rearmed orphan work.
 An additional real host-timer test confirms coalesced callbacks still deliver
 their siblings during a wait without re-entering themselves.
+
+
+### October 2026: timed native sampling and teardown verification
+
+The fallback-only heartbeat decision above preserved correctness but imposed a
+material, measured CPU cost even while nothing changed. Increasing the sampling
+interval or watching only command boundaries would reduce sensitivity to stalls
+in process output, redisplay and other C work. Instead, the native module now
+adds a timeout to Emacs's existing condition wait. Only the executable's
+`pthread_cond_wait` import is redirected; a one-shot thread-local deadline
+selects `pthread_cond_timedwait`, and every ordinary wait delegates unchanged.
+Emacs still owns interpreter-lock release, stack rooting, mutex restoration and
+thread signals. The 100 ms cadence, callback attribution and post-request tails
+remain. Unsupported imports, unavailable modules and failed thread creation
+retain the safe coalesced-timer fallback.
+
+An adversarial test changed the initial implementation: `funcall` may collect
+before entering the condition-wait primitive, and a GC hook waiting on another
+condition consumed its deadline, leaving the intended wait blocked indefinitely.
+The native boundary now captures the unadvised primitive and guards GC,
+debugger entry and quit during the short call setup. Dynamic bindings belong to
+the waiting thread; the main thread retains its normal GC settings while it
+waits. Tests exercise the actual module in isolated Emacs processes, including
+this failure, advice, independent deadlines, notification, recursive mutexes,
+ordinary waits, thread cancellation and main-thread process-sentinel ownership.
+No caller must arrange these guards or know the redirection mechanism.
+
+Display-close validation also separated module behavior from two Emacs PGTK
+bugs. Closing a terminal leaves its Wayland descriptor in the input wait set;
+the next event-loop wait aborts even without the module. Directly closing a
+terminal with live frames additionally leaves a scale timer referring to freed
+display state. The stock regression deletes frames first and reconnects before
+waiting, exercising real GTK display closure and fresh Wayland bindings without
+those host defects. Removing the module's closed-signal subscription makes the
+regression crash. A disposable Emacs build with the descriptor and scale-timer
+fixes passed 20 direct live-terminal closures with a 100 ms event-loop wait
+after each. No installed editor was modified and no presenter change was needed.
+
+Two interleaved 15-second observations per configuration used frozen bytecode,
+real local HTTP/SSE through gptel's curl transport and mevedel's stream bridge,
+a 1510x840 logical frame and verified display scales 1 and 2. CPU is a percentage
+of one editor core, excluding the compositor, server and startup. At scale 2,
+the timer/native-wait medians without native presentation were 12.40/0.46% idle,
+24.36/12.96% at 8 chunks per second and 27.64/17.51% at 32. With native
+presentation they were 0.92/0.10%, 4.33/3.53% and 9.61/8.43%. The old unsafe
+worker's scale-2, non-native 32-chunk median was 17.00%, so these measurements
+show the timer regression largely removed, not perfect equivalence to the old
+worker. Idle native counters also exposed roughly 150 extra intercepted paint
+entries per timer observation, absent with native waiting.
+
+Streaming checks required every numbered chunk to reach both authoritative data
+and the projected view in order. Send-to-view-projection latency includes curl
+pausing and insertion batching: a token emitted while curl is paused can wait
+one 0.4-second interval before being read and another in the next batch. P95
+remained around 0.8 seconds across samplers. This is buffer-projection timing,
+not compositor scanout, and does not establish physical ARM or battery costs.
+
+The same candidate also compiled without warnings and executed in aarch64
+Emacs 31.1 under QEMU, including the guarded-wait and telemetry fixtures,
+native drawing, display closure/reconnection and threaded presentation.
+QEMU's device translation forced software EGL, so this validates ARM
+instructions and lifecycle behavior, not accelerated dmabuf presentation or
+physical-device performance.

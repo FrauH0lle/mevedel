@@ -32,6 +32,10 @@
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
+;; `mevedel-native'
+(declare-function mevedel-native-load "mevedel-native" ())
+(autoload 'mevedel-native-load "mevedel-native")
+
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-mode-effective
                   "mevedel-sandbox" (&optional session permission-mode))
@@ -104,6 +108,11 @@
 ;; `mevedel-view-render'
 (defvar mevedel-view-render-debug)
 (defvar mevedel-view-render-debug-buffer-name)
+
+;; `native/mevedel-wait.c'
+(declare-function mevedel-native--condition-wait "ext:mevedel-wait"
+                  (condition seconds))
+(declare-function mevedel-native--timed-wait-available-p "ext:mevedel-wait" ())
 
 ;; `profiler'
 (declare-function profiler-cpu-profile "profiler" ())
@@ -591,9 +600,10 @@ the `event-loop-lag-summary' each settled request records."
   :group 'mevedel)
 
 (defconst mevedel-telemetry--lag-interval 0.1
-  "Seconds between heartbeats on the shared main-thread timer.
-Worker-thread sleeps dispatch process sentinels, which can violate the
-process owner's thread affinity even with private timer lists.")
+  "Seconds between event-loop samples.
+A native timed condition wait lets a worker sample without dispatching
+callbacks or redisplaying.  Without it, the shared main-thread timer
+preserves sampling and process ownership at the cost of redisplay.")
 
 (defconst mevedel-telemetry--lag-count-threshold 0.2
   "Event-loop delay, in seconds, counted in a request's lag summary.")
@@ -603,8 +613,11 @@ process owner's thread affinity even with private timer lists.")
 Journal, collection and publication work follows settlement and can stall
 the editor as much as the request did.")
 
+(defvar mevedel-telemetry--lag-thread nil
+  "Heartbeat worker using native timed waits, or nil.")
+
 (defvar mevedel-telemetry--lag-timer nil
-  "Coalesced heartbeat timer, or nil while no session is watched.")
+  "Coalesced fallback heartbeat timer, or nil.")
 
 (defvar mevedel-telemetry--lag-due nil
   "Float time the next heartbeat is due.")
@@ -730,20 +743,55 @@ therefore counted as late as it took, once it returns."
         (setq mevedel-telemetry--lag-late
               (max mevedel-telemetry--lag-late (- (float-time) start)))))))
 
+(defun mevedel-telemetry--lag-watch ()
+  "Sample until this thread is replaced or stopped.
+Native condition waits release the interpreter without dispatching process
+sentinels or timers.  Ordinary `sleep-for' is unsafe in this worker."
+  (let* ((thread (current-thread))
+         (mutex (make-mutex "mevedel-lag"))
+         (gate (make-condition-variable mutex "mevedel-lag")))
+    (condition-case err
+        (with-mutex mutex
+          (while (eq thread mevedel-telemetry--lag-thread)
+            (let ((remaining (- mevedel-telemetry--lag-due (float-time))))
+              (if (> remaining 0)
+                  (mevedel-native--condition-wait gate remaining)
+                (mevedel-telemetry--lag-tick)))))
+      ((error quit)
+       (when (eq thread mevedel-telemetry--lag-thread)
+         (mevedel-telemetry--lag-stop)
+         (message "mevedel: event-loop lag watching stopped: %s"
+                  (error-message-string err)))))))
+
 (defun mevedel-telemetry--lag-start ()
-  "Start the heartbeat and callback timing unless they already run."
-  (unless mevedel-telemetry--lag-timer
-    (setq mevedel-telemetry--lag-since (float-time)
-          mevedel-telemetry--lag-late 0
-          mevedel-telemetry--lag-slowest nil
-          mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
-          mevedel-telemetry--lag-cpu (mevedel-telemetry--cpu-seconds)
-          mevedel-telemetry--lag-input num-nonmacro-input-events
-          mevedel-telemetry--lag-timer
-          (mevedel--run-periodic-timer mevedel-telemetry--lag-interval
-                                      #'mevedel-telemetry--lag-tick)
-          mevedel-telemetry--lag-due
-          (float-time (timer--time mevedel-telemetry--lag-timer)))
+  "Start callback timing and the lowest-overhead safe heartbeat available."
+  (unless (or mevedel-telemetry--lag-thread mevedel-telemetry--lag-timer)
+    ;; Resolve the optional module before starting the sampling clock.
+    (let ((native (and (eq system-type 'gnu/linux)
+                       (fboundp 'module-load) module-file-suffix
+                       (mevedel-native-load)
+                       (mevedel-native--timed-wait-available-p))))
+      ;; Loading can wait for a compiler while another request starts.
+      (unless (or mevedel-telemetry--lag-thread mevedel-telemetry--lag-timer)
+        (setq mevedel-telemetry--lag-since (float-time)
+              mevedel-telemetry--lag-late 0
+              mevedel-telemetry--lag-slowest nil
+              mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)
+              mevedel-telemetry--lag-cpu (mevedel-telemetry--cpu-seconds)
+              mevedel-telemetry--lag-input num-nonmacro-input-events
+              mevedel-telemetry--lag-due (+ (float-time) mevedel-telemetry--lag-interval))
+        (when native
+          (setq mevedel-telemetry--lag-thread
+                (condition-case nil
+                    (make-thread #'mevedel-telemetry--lag-watch
+                                 "mevedel-lag-heartbeat" 'silently)
+                  (error nil))))
+        (unless mevedel-telemetry--lag-thread
+          (setq mevedel-telemetry--lag-timer
+                (mevedel--run-periodic-timer mevedel-telemetry--lag-interval
+                                            #'mevedel-telemetry--lag-tick)
+                mevedel-telemetry--lag-due
+                (float-time (timer--time mevedel-telemetry--lag-timer))))))
     (advice-add 'timer-event-handler :around
                 #'mevedel-telemetry--lag-time-callback)
     (advice-add 'mevedel--coalesced-timer-call :around
@@ -752,7 +800,13 @@ therefore counted as late as it took, once it returns."
                 #'mevedel-telemetry--lag-time-remote)))
 
 (defun mevedel-telemetry--lag-stop ()
-  "Stop the heartbeat and callback timing."
+  "Stop the heartbeat and callback timing, joining any sleeping worker."
+  (let ((thread mevedel-telemetry--lag-thread))
+    (setq mevedel-telemetry--lag-thread nil)
+    (when (and (threadp thread) (thread-live-p thread)
+               (not (eq thread (current-thread))))
+      (thread-signal thread 'error '("Heartbeat stopped"))
+      (ignore-errors (thread-join thread))))
   (when (timerp mevedel-telemetry--lag-timer)
     (mevedel--ui-timer-cancel mevedel-telemetry--lag-timer))
   (setq mevedel-telemetry--lag-timer nil
@@ -821,7 +875,9 @@ never reports settling."
            (cpu-before (or mevedel-telemetry--lag-cpu cpu))
            (input-before (or mevedel-telemetry--lag-input num-nonmacro-input-events)))
       (setq mevedel-telemetry--lag-due
-            (float-time (timer--time mevedel-telemetry--lag-timer))
+            (if mevedel-telemetry--lag-timer
+                (float-time (timer--time mevedel-telemetry--lag-timer))
+              (+ now mevedel-telemetry--lag-interval))
             mevedel-telemetry--lag-input num-nonmacro-input-events
             mevedel-telemetry--lag-since now
             mevedel-telemetry--lag-late 0

@@ -139,13 +139,18 @@ cancellation releases the fence and leaves the machine retryable.
   request runs and for two minutes after it settles, since journal,
   collection and publication work follows settlement. Every timer delivered
   meanwhile reports how late it ran, since a stall delays every timer due
-  during it. A 100 ms heartbeat on the shared main-thread timer samples the
-  rest and reports the worst delay since the previous heartbeat, once.
-  Busy Lisp, redisplay or collection makes it late. A worker-thread heartbeat
-  avoided redisplay, but its sleeps also dispatched process sentinels on the
-  wrong thread, even with private timer lists. The shared timer preserves
-  process ownership; native PGTK presentation avoids whole-frame repainting
-  for its unchanged redisplays. A blocking remote operation can deliver
+  during it. A 100 ms heartbeat samples the rest and reports the worst delay
+  since the previous heartbeat, once. Busy Lisp, redisplay or collection makes
+  it late. On supported Linux builds, the optional native module supplies a
+  timed condition wait: a worker releases the interpreter lock without
+  dispatching process sentinels, timers or redisplay. Emacs owns the mutex,
+  stack roots and thread cancellation. The module guards against GC hooks,
+  advice and debugger callbacks consuming the timeout before the intended
+  wait. Stopping sampling signals and joins the worker. If the module, timed
+  wait or worker creation is unavailable, the existing shared main-thread
+  timer preserves the same sampling interval and process ownership, with a
+  higher redisplay cost. Native presentation and native sampling are separate
+  capabilities; sampling does not require a graphical frame. A blocking remote operation can deliver
   timers while it waits, so the outermost one on the main thread counts as
   late as it took. Each callback
   retains its own timing attribution; the shared timer dispatcher does not
