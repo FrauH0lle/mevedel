@@ -152,8 +152,10 @@ Periodic housekeeping and metadata share host wakeups. Aligning separate timer
 deadlines alone still allowed redisplay between their callbacks on PGTK, so one
 UI-host timer now dispatches due callbacks together. GC maintenance, process-exit
 recovery and quiet progress retain whole-second updates; telemetry attributes
-each callback separately. Its lag heartbeat is not a timer: a Lisp thread
-samples every 100 ms without redisplaying. Metadata-only
+each callback separately. Its lag heartbeat samples every 100 ms on this
+same main-thread timer: worker sleeps could dispatch process sentinels on
+the wrong thread. Native PGTK presentation suppresses repainting when that
+wakeup changes nothing. Metadata-only
 views join the whole-second clock. Decorative Lisp animation and output-driven
 progress retain their natural deadlines. Missing execution rows trigger recovery
 only when their source, or a compound ancestor's source, is in the transcript;
@@ -1468,7 +1470,11 @@ the build is first attempted inside animation scheduling, where prompting is
 unsafe. A local end-to-end check with compilation disabled installed the
 container-built module from a local server and animated a request natively.
 
-### October 2026: a lag heartbeat that does not redisplay
+### October 2026: a lag heartbeat that does not redisplay (replaced)
+
+This thread-based choice was replaced after the review below reproduced
+process-sentinel dispatch on the wrong thread. The measurements here record
+why it was originally chosen.
 
 The half-second telemetry heartbeat was the last request-long timer that
 existed only to observe. Emacs redisplays after every timer it runs
@@ -1718,3 +1724,51 @@ is to be measured on the other machines. Text breathe/bounce now use the
 power-aware ceiling while the module is active, since their 8 fps existed to
 bound stock PGTK's per-frame cost: 30-fps text bounce costs what the stock
 presenter did.
+
+### October 2026: review of the rendering and wakeup series
+
+A real subprocess regression disproved the safety of the worker heartbeat.
+`sleep-for` dispatches process sentinels as well as timers; private timer lists
+only excluded the latter. A sentinel draining its main-thread-owned process
+from the heartbeat raised "Attempt to accept output ... locked to thread".
+Emacs provides no timed condition-variable wait for this worker. The heartbeat
+therefore returns to the existing coalesced main-thread timer, preserving
+100 ms sampling, remote-operation attribution and post-request tails, while
+removing its worker lifecycle. The earlier thread measurements remain history,
+not evidence that the unsafe mechanism should stay.
+
+The safety change has a measured cost. Twelve isolated daemon runs on a
+headless KWin used compiled code, a 1510x840 frame at scale 1, three interleaved
+rounds, and 15-second idle measurement windows after warm-up. Each window
+recorded 149 or 150 samples. Median editor CPU with stock PGTK rose from
+0.107% for the thread to 3.407% for the timer; with native presentation it
+rose from 0.070% to 0.607% (timer range 0.543-0.665%). The shared timer is
+chosen for correct process ownership, not as a performance improvement.
+These idle measurements do not establish streaming or HiDPI costs; the
+non-native fallback retains a material wakeup cost.
+
+Review also found two incomplete geometry assumptions. The pinned-prompt memo
+invalidated after text scaling, but its canonical-row walk could still place an
+offscreen prompt inside a graphical viewport; graphical displays now use
+Emacs's pixel visibility query, with horizontal and pixel scroll in the key.
+Native labels now include overlay faces, priorities, window restrictions,
+pixel scroll and frame opacity in their cheap layout snapshot. An existing
+surface falls back to text when the frame becomes translucent. The nested KWin
+fixture verifies changed backgrounds, pixel movement and transparency fallback;
+its position oracle now requires the moved child's own parent callback.
+
+Freezing now distinguishes actual color samples from their portable glyph
+fallbacks. Only color samples move to the resting phase; the last displayed
+glyph remains unchanged even after its window disappears. Native loading
+failures remain owned by the loader, so installing after a failed build lets
+presentation retry at the next view. Installing with a module already active
+does not replace its bindings or process-lifetime hooks. The published binaries
+were verified against both checksum pins and require glibc 2.34; the earlier
+2.27 claim was contradicted by their imported symbol versions.
+
+The same-pass stream path remains. Its ACP margin now applies only to positive
+numeric batching delays, preserving disabled batching. The collection wait
+callback checks that its job is still current: transport can restore a timer
+cancelled while suspended, and that callback previously rearmed orphan work.
+An additional real host-timer test confirms coalesced callbacks still deliver
+their siblings during a wait without re-entering themselves.

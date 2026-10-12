@@ -179,6 +179,40 @@
       (mevedel--ui-timer-cancel sibling))
     (should-not mevedel--coalesced-timer)))
 
+(mevedel-deftest mevedel--coalesced-timer-tick/host-delivery
+  (:doc "real host delivery permits siblings while a callback waits")
+  (let ((mevedel--coalesced-timers nil)
+        (mevedel--coalesced-timer nil)
+        (waiter-calls 0) sibling-ran waiter sibling finished)
+    (unwind-protect
+        (progn
+          (setq sibling (mevedel--run-periodic-timer
+                         1 (lambda ()
+                             (setq sibling-ran t)
+                             (mevedel--ui-timer-cancel sibling)))
+                waiter (mevedel--run-periodic-timer
+                        1 (lambda ()
+                            (cl-incf waiter-calls)
+                            (timer-set-time waiter (time-subtract nil 1) 1)
+                            (let ((deadline (time-add nil 1)))
+                              (while (and (not sibling-ran)
+                                          (time-less-p nil deadline))
+                                (sleep-for 0.01)))
+                            (mevedel--ui-timer-cancel waiter)
+                            (setq finished t))))
+          (timer-set-time waiter (time-subtract nil 2) 1)
+          (timer-set-time sibling (time-subtract nil 1) 1)
+          (mevedel--coalesced-timer-arm)
+          (let ((deadline (time-add nil 2)))
+            (while (and (not finished) (time-less-p nil deadline))
+              (sleep-for 0.01)))
+          (should finished)
+          (should sibling-ran)
+          (should (= waiter-calls 1)))
+      (mevedel--ui-timer-cancel waiter)
+      (mevedel--ui-timer-cancel sibling))
+    (should-not mevedel--coalesced-timer)))
+
 (mevedel-deftest mevedel--coalesced-timer-arm
   (:doc "owns one persistent host timer across temporary transport bindings")
   (let ((mevedel--coalesced-timers nil)

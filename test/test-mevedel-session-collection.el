@@ -117,7 +117,30 @@
           (should (> (float-time (timer--time timer)) 8.0))
           (cancel-timer timer)
           (apply (timer--function timer) (timer--args timer)))
-        (should (equal (list (list session job)) steps))))))
+        (should (equal (list (list session job)) steps)))))
+
+  :doc "a wait restored after cancellation cannot rearm the cancelled job"
+  (test-mevedel-collection--with-session
+    (mevedel-session-collection-schedule session)
+    (let ((job (gethash session mevedel-session-collection--jobs))
+          (idle 3600.0))
+      (cl-letf (((symbol-function 'current-idle-time)
+                 (lambda () (and idle (seconds-to-time idle)))))
+        (mevedel-session-collection--arm session job 8.0)
+        (let ((timer (plist-get job :timer)))
+          (unwind-protect
+              (progn
+                ;; Target I/O suspends timers; cancellation cannot reach one
+                ;; on the temporarily hidden list.
+                (mevedel-transport-with-exclusive-connection
+                  (mevedel-session-collection-cancel session))
+                (should (memq timer timer-list))
+                (setq idle nil)
+                (timer-event-handler timer)
+                (should-not (gethash session mevedel-session-collection--jobs))
+                (should-not (memq (plist-get job :timer) timer-idle-list)))
+            (cancel-timer timer)
+            (cancel-timer (plist-get job :timer))))))))
 
 (mevedel-deftest mevedel-session-collection--retry (:quiet t)
   ,test

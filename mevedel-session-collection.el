@@ -91,11 +91,13 @@ timer, and the slice falls back to an idle timer if input interrupted it."
 (defun mevedel-session-collection--waited (session job wait)
   "Step SESSION's JOB if the editor stayed idle for WAIT seconds.
 Otherwise wait for WAIT seconds of the current or next idle period."
-  (if (>= (if-let* ((idle (current-idle-time))) (float-time idle) 0) wait)
-      (mevedel-session-collection--step session job)
-    (setf (plist-get job :timer)
-          (run-with-idle-timer wait nil #'mevedel-session-collection--step
-                               session job))))
+  ;; A transport section can restore a timer cancelled while suspended.
+  (when (eq job (gethash session mevedel-session-collection--jobs))
+    (if (>= (if-let* ((idle (current-idle-time))) (float-time idle) 0) wait)
+        (mevedel-session-collection--step session job)
+      (setf (plist-get job :timer)
+            (run-with-idle-timer wait nil #'mevedel-session-collection--step
+                                 session job)))))
 
 (defun mevedel-session-collection--retry (session job)
   "Retry JOB for SESSION later, waiting twice as long as last time.

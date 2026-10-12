@@ -4663,15 +4663,11 @@
 ;; A freeze mid-sweep used to keep the faded band for the whole pause.
 (mevedel-deftest mevedel-view-animation-freeze-rests
   (:doc "Freezing a color label or tool row mid-motion repaints it at rest.")
-  (dolist (case '((shimmer) (breathe) (shimmer . native) (shimmer . glyph)))
+  (dolist (case '((shimmer) (breathe) (shimmer . native)))
     (let ((style (car case))
-          (glyph (eq (cdr case) 'glyph))
           (mevedel-view-animation--cache nil))
       (cl-letf (((symbol-function 'mevedel-view-animation--colors)
-                 (lambda (_face _frame) (cons "#ffffff" "#000000")))
-                ;; A low-color terminal draws glyphs, which keep their phase.
-                ((symbol-function 'mevedel-view-animation-color-display-p)
-                 (lambda (_frame) (not glyph))))
+                 (lambda (_face _frame) (cons "#ffffff" "#000000"))))
         (mevedel-view-stream-test--with-buffers
           (mevedel-view-stream-test--with-visible-view
             (let ((mevedel-view-spinner-style style)
@@ -4715,11 +4711,9 @@
                     (setq mevedel-view-spinner-power-policy 'save)
                     (mevedel-view--refresh-animation-options))
                   (should (equal-including-properties
-                           (if glyph moving-label rest-label)
-                           (get-text-property label 'display)))
+                           rest-label (get-text-property label 'display)))
                   (should (equal-including-properties
-                           (if glyph moving-tool rest-tool)
-                           (get-text-property tool 'display)))
+                           rest-tool (get-text-property tool 'display)))
                   ;; Resuming continues from the clock, not from rest.
                   (setq mevedel-view-spinner-power-policy 'full)
                   (mevedel-view--refresh-animation-options)
@@ -4728,6 +4722,71 @@
                            moving-label (get-text-property label 'display)))
                   (should (equal-including-properties
                            moving-tool (get-text-property tool 'display))))))))))))
+
+(mevedel-deftest mevedel-view--animation-rest-seconds
+  (:doc "Rests color samples only, including before insertion and after release.")
+  (with-temp-buffer
+    (insert "Working...")
+    (let ((target (cons (copy-marker (point-min)) (copy-marker (point-max))))
+          (dead (cons (make-marker) (make-marker))))
+      (dolist (color '(nil t))
+        (put-text-property (point-min) (point-max) 'display
+                           (if color (propertize "Working..." 'face '(:foreground "white"))
+                             "- Working..."))
+        (cl-letf (((symbol-function 'mevedel-view-animation-color-available-p)
+                   (lambda (_style _label _face _frame) color)))
+          (dolist (span (list target nil dead))
+            (dolist (style '(shimmer breathe ascii))
+              (should (= (mevedel-view--animation-rest-seconds
+                          style 1.0 span 'mevedel-view-spinner)
+                         (if color (mevedel-view-animation-rest-seconds style 1.0)
+                           1.0)))))))
+      ;; Moving or hiding the window does not change what was last drawn.
+      (put-text-property (point-min) (point-max) 'display "- Working...")
+      (cl-letf (((symbol-function 'mevedel-view-animation-color-available-p)
+                 (lambda (&rest _) (ert-fail "Probed an unrelated frame"))))
+        (should (= 1.0 (mevedel-view--animation-rest-seconds
+                        'shimmer 1.0 target 'mevedel-view-spinner))))
+      (let ((mevedel-view--native-animation-targets (list target)))
+        (should (= (mevedel-view-animation-rest-seconds 'shimmer 1.0)
+                   (mevedel-view--animation-rest-seconds
+                    'shimmer 1.0 target 'mevedel-view-spinner)))))))
+
+(mevedel-deftest mevedel-view-animation-freeze-color-fallback
+  (:doc "Freezing a color style keeps its displayed fallback glyph and draft.")
+  (dolist (style '(shimmer breathe))
+    (let ((mevedel-view-animation--cache nil))
+      (cl-letf (((symbol-function 'mevedel-view-animation--colors)
+                 (lambda (_face _frame) nil)))
+        (mevedel-view-stream-test--with-buffers
+          (mevedel-view-stream-test--with-visible-view
+            (let ((mevedel-view-spinner-style style)
+                  (mevedel-view-tool-spinner-style 'shimmer)
+                  (mevedel-view-native-enabled nil)
+                  (mevedel-view-spinner-power-policy 'full)
+                  (mevedel-view-spinner-battery-framerate 0)
+                  (mevedel-view--pending-tool-calls
+                   '(("call-1" . "Calling Read..."))))
+              (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
+                         (lambda () 1.0)))
+                (mevedel-view-stream-test--insert-composer-draft
+                 "> first line\nsecond line" 4)
+                (mevedel-view--start-spinner "Working...")
+                (mevedel-view--refresh-pending-tool-lines)
+                (mevedel-view--spinner-tick)
+                (let* ((label (marker-position
+                               (car mevedel-view--spinner-label-target)))
+                       (tool (marker-position
+                              (caar mevedel-view--spinner-tool-targets)))
+                       (label-glyph (get-text-property label 'display))
+                       (tool-glyph (get-text-property tool 'display)))
+                  (setq mevedel-view-spinner-power-policy 'save)
+                  (mevedel-view--refresh-animation-options)
+                  (should (equal label-glyph (get-text-property label 'display)))
+                  (should (equal tool-glyph (get-text-property tool 'display)))
+                  (should (equal "> first line\nsecond line"
+                                 (mevedel-view--input-text)))
+                  (should (= 4 (- (point) (mevedel-view--input-start)))))))))))))
 
 (mevedel-deftest mevedel-view-animation-freeze-tool-row
   (:doc "Power changes keep the last displayed tool glyph, not its initial frame.")

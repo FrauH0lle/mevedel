@@ -193,13 +193,6 @@ its sweep; see `mevedel-view-animation-next-delay'."
     ('ellipsis 0.96)
     (_ nil)))
 
-(defun mevedel-view-animation-color-display-p (frame)
-  "Return non-nil when FRAME can show color animation instead of glyphs.
-Small terminal palettes cannot resolve the 64 shades of a color bank."
-  (and (framep frame) (display-color-p frame)
-       (or (display-graphic-p frame)
-           (>= (or (display-color-cells frame) 0) 256))))
-
 (defun mevedel-view-animation--colors (face frame)
   "Return (FOREGROUND . BACKGROUND) for FACE on FRAME, or nil.
 Resolve buffer-local face remapping just as redisplay does, including the
@@ -208,7 +201,9 @@ Only called when preparing a color bank, never to sample a cached bank.
 Small terminal palettes cannot resolve the 64 shades into a useful color
 animation; use the glyph fallback instead of scheduling invisible frames."
   (condition-case nil
-      (when (mevedel-view-animation-color-display-p (or frame (selected-frame)))
+      (when (and (display-color-p frame)
+                 (or (display-graphic-p frame)
+                     (>= (or (display-color-cells frame) 0) 256)))
         (let ((buffer (current-buffer)))
           (with-selected-frame (or frame (selected-frame))
             ;; Selecting a frame makes its selected window's buffer current;

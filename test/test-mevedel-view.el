@@ -1879,6 +1879,35 @@
             (mevedel-view--prompt-on-screen-p window)
             (should (= 3 calls)))))))
 
+  :doc "graphical visibility follows pixel layout, not canonical row counts"
+  (save-window-excursion
+    (with-temp-buffer
+      (insert "Answer\n"
+              (propertize "Prompt\n" 'mevedel-view-prompt-preview "Prompt"))
+      (set-window-buffer (selected-window) (current-buffer))
+      (set-window-start nil (point-min) t)
+      (let ((visible '(0 20)) (calls 0))
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                  ((symbol-function 'pos-visible-in-window-p)
+                   (lambda (_position _window partially)
+                     (should partially)
+                     (cl-incf calls)
+                     visible))
+                  ((symbol-function 'vertical-motion)
+                   (lambda (&rest _) (ert-fail "Counted canonical rows"))))
+          (should (mevedel-view--prompt-on-screen-p (selected-window)))
+          (should (mevedel-view--prompt-on-screen-p (selected-window)))
+          (should (= calls 1))
+          ;; A larger font puts the prompt below the bottom of the window.
+          (setq visible nil)
+          (text-scale-set 5)
+          (should-not (mevedel-view--prompt-on-screen-p (selected-window)))
+          (should (= calls 2))
+          (setq visible '(0 20))
+          (text-scale-set 0)
+          (should (mevedel-view--prompt-on-screen-p (selected-window)))
+          (should (= calls 3))))))
+
   :doc "skips the on-screen walk without a compacted continuation prompt"
   (save-window-excursion
     (with-temp-buffer

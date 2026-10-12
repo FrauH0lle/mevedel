@@ -32,7 +32,7 @@ text animation runs at the power-aware frame rate instead of 8 fps."
   :group 'mevedel)
 
 (defvar mevedel-present--state nil
-  "nil until tried, then `enabled' or why frames present as before.")
+  "nil until the module tries presentation, then `enabled' or its refusal.")
 
 (defun mevedel-present-active-p ()
   "Return non-nil when PGTK frames present only what changed."
@@ -42,16 +42,16 @@ text animation runs at the power-aware frame rate instead of 8 fps."
   "Enable cheaper presentation once, when FRAME is a PGTK frame.
 Return non-nil when it is active."
   (when (and mevedel-present-enabled (not mevedel-present--state)
-             (not noninteractive) (eq (framep frame) 'pgtk))
+             (not noninteractive) (eq (framep frame) 'pgtk)
+             ;; A failure leaves this unset, so an installed module enables
+             ;; presentation at the next view.
+             (mevedel-native-load))
     (setq mevedel-present--state
-          (if (mevedel-native-load)
-              (let ((result (mevedel-present--enable)))
-                (if (eq result t)
-                    'enabled
-                  (message "mevedel: PGTK presentation unchanged: %s" result)
-                  result))
-            ;; `mevedel-native-load' reported why.
-            mevedel-native--load-state)))
+          (let ((result (mevedel-present--enable)))
+            (if (eq result t)
+                'enabled
+              (message "mevedel: PGTK presentation unchanged: %s" result)
+              result))))
   (mevedel-present-active-p))
 
 (provide 'mevedel-present)

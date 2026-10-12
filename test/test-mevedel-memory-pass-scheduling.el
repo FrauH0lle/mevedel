@@ -31,7 +31,8 @@
                           (now 1800000000)
                           (calls 0) callback selected state result
                           (none "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- No supported changes."))
-                         :after-each ((mevedel-memory-pass-stop-all)
+                         :after-each ((mevedel-test--with-captured-messages nil
+                                        (mevedel-memory-pass-stop-all))
                                       (mevedel-memory-decision-stop-recovery)
                                       (delete-directory root t)))
                  (cl-letf (((symbol-value 'mevedel-journal-worker--child-p) t)

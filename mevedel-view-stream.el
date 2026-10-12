@@ -333,6 +333,22 @@ Once a freeze has latched its resting phases, native samples are stale."
               mevedel-view-spinner-power-policy
               mevedel-view-spinner-animate))))
 
+(defun mevedel-view--animation-rest-seconds (style seconds target face)
+  "Rest color STYLE at SECONDS for TARGET and FACE, preserving glyph fallbacks."
+  (let ((target (and target (marker-position (car target)) target)))
+    (if (and (memq style '(shimmer breathe))
+             (if target
+                 ;; Use the displayed sample even after its window disappears.
+                 ;; Prepared color samples carry faces; fallback glyphs do not.
+                 (let ((display (get-text-property (car target) 'display)))
+                   (or (memq target mevedel-view--native-animation-targets)
+                       (and (stringp display) (> (length display) 0)
+                            (get-text-property 0 'face display))))
+               (mevedel-view-animation-color-available-p
+                style "" face (mevedel-view--animation-buffer-frame))))
+        (mevedel-view-animation-rest-seconds style seconds)
+      seconds)))
+
 (defun mevedel-view--animation-display-seconds ()
   "Return the phase for a newly rendered progress label.
 Semantic redraws must not advance the glyph when motion is disabled.
@@ -341,28 +357,24 @@ The underlying phase continues to advance and resumes without restarting."
     (mevedel-view--capture-native-animation))
   (if (mevedel-view--animation-frozen-p)
       (or mevedel-view--spinner-frozen-seconds
-          (let* ((target mevedel-view--spinner-label-target)
-                 ;; Glyph fallbacks keep their phase: resting would move them.
-                 (rest (mevedel-view-animation-color-display-p
-                        (or (and target (mevedel-view--animation-target-frame target))
-                            (selected-frame))))
-                 (seconds (or mevedel-view--spinner-last-sample-seconds
-                              (mevedel-view--animation-seconds))))
-            (when rest
-              ;; Rest instead of holding a faded band for the whole pause, and
-              ;; repaint spans already drawn mid-sweep at the next rearm.
-              (setq mevedel-view--spinner-tool-samples
-                    (mapcar (lambda (sample)
-                              (cons (car sample)
-                                    (mevedel-view-animation-rest-seconds
-                                     mevedel-view-tool-spinner-style (cdr sample))))
-                            mevedel-view--spinner-tool-samples)
-                    mevedel-view--spinner-theme-stale-p t))
+          (progn
+            ;; Rest instead of holding a faded band for the whole pause, and
+            ;; repaint spans already drawn mid-sweep at the next rearm.
+            (dolist (target mevedel-view--spinner-tool-targets)
+              (when-let* ((start (marker-position (car target)))
+                          (sample (assoc (get-text-property start 'mevedel-view-zone-id)
+                                         mevedel-view--spinner-tool-samples)))
+                (setcdr sample
+                        (mevedel-view--animation-rest-seconds
+                         mevedel-view-tool-spinner-style (cdr sample)
+                         target 'mevedel-view-ephemeral))))
+            (setq mevedel-view--spinner-theme-stale-p t)
             (setq mevedel-view--spinner-frozen-seconds
-                  (if rest
-                      (mevedel-view-animation-rest-seconds
-                       mevedel-view-spinner-style seconds)
-                    seconds))))
+                  (mevedel-view--animation-rest-seconds
+                   mevedel-view-spinner-style
+                   (or mevedel-view--spinner-last-sample-seconds
+                       (mevedel-view--animation-seconds))
+                   mevedel-view--spinner-label-target 'mevedel-view-spinner))))
     (setq mevedel-view--spinner-frozen-seconds nil)
     (setq mevedel-view--spinner-last-sample-seconds
           (mevedel-view--animation-seconds))))

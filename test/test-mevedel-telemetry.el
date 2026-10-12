@@ -251,20 +251,20 @@
          (noninteractive nil))
     (unwind-protect
         (progn
-          (should-not mevedel-telemetry--lag-thread)
+          (should-not mevedel-telemetry--lag-timer)
           (mevedel-telemetry-record session 'request-start :request-id "request-1")
-          (should (thread-live-p mevedel-telemetry--lag-thread))
+          (should (mevedel--ui-timer-pending-p mevedel-telemetry--lag-timer))
           (should (advice-member-p #'mevedel-telemetry--lag-time-callback
                                    'timer-event-handler))
           (mevedel-telemetry-record session 'request-settled :request-id "request-1")
-          (should (thread-live-p mevedel-telemetry--lag-thread))
+          (should (mevedel--ui-timer-pending-p mevedel-telemetry--lag-timer))
           ;; Past the tail, nothing is watched and the heartbeat stops.
           (setf (plist-get (alist-get session mevedel-telemetry--lag-windows) :until)
                 (- (float-time) 1))
-          (let ((thread mevedel-telemetry--lag-thread))
+          (let ((timer mevedel-telemetry--lag-timer))
             (mevedel-telemetry--lag-tick)
-            (should-not mevedel-telemetry--lag-thread)
-            (should-not (thread-live-p thread)))
+            (should-not mevedel-telemetry--lag-timer)
+            (should-not (mevedel--ui-timer-pending-p timer)))
           (should-not (advice-member-p #'mevedel-telemetry--lag-time-callback
                                        'timer-event-handler))
           (should-not (advice-member-p #'mevedel-telemetry--lag-time-callback
@@ -278,12 +278,12 @@
     (unwind-protect
         (progn
           (mevedel-telemetry-record session 'request-start :request-id "request-1")
-          (should (thread-live-p mevedel-telemetry--lag-thread))
+          (should (mevedel--ui-timer-pending-p mevedel-telemetry--lag-timer))
           (let ((mevedel-telemetry-enabled nil))
             ;; Settling is no longer recorded, so its window never closes.
             (mevedel-telemetry-record session 'request-settled :request-id "request-1")
             (mevedel-telemetry--lag-tick))
-          (should-not mevedel-telemetry--lag-thread)
+          (should-not mevedel-telemetry--lag-timer)
           (should-not mevedel-telemetry--lag-windows)
           (should-not (advice-member-p #'mevedel-telemetry--lag-time-callback
                                        'timer-event-handler)))
@@ -363,7 +363,7 @@
             (should (= 1 (plist-get summary :over-200-ms)))))
       (delete-directory root t)))
 
-:doc "notices a busy main thread without a timer, naming input that waited"
+:doc "notices a busy main thread, naming input that waited"
   (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
          (session (test-mevedel-telemetry--session root))
          (noninteractive nil)
@@ -371,7 +371,7 @@
     (unwind-protect
         (progn
           (mevedel-telemetry-record session 'request-start :request-id "request-5")
-          ;; Let the heartbeat take its first sample, then hold the lock.
+          ;; Let the heartbeat take its first sample, then block the event loop.
           (sleep-for 0.15)
           (let ((end (+ (float-time) 0.7)))
             (while (< (float-time) end)))
@@ -385,7 +385,7 @@
       (setq num-nonmacro-input-events events)
       (delete-directory root t)))
 
-  :doc "counts a blocking remote operation, during which the heartbeat runs on time"
+  :doc "counts a blocking remote operation, during which nested timer delivery runs on time"
   (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
          (session (test-mevedel-telemetry--session root))
          (noninteractive nil))
@@ -405,7 +405,7 @@
             (should-not (plist-get (car lags) :input-pending))))
       (delete-directory root t)))
 
-  :doc "never runs the editor's timers in the heartbeat thread"
+  :doc "keeps timer callbacks on the main thread"
   (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
          (session (test-mevedel-telemetry--session root))
          (noninteractive nil)
@@ -420,6 +420,37 @@
           (should (cl-every (lambda (thread) (eq thread main-thread)) threads)))
       (delete-directory root t)))
 
+  :doc "keeps process sentinels on the main thread during heartbeat sampling"
+  (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
+         (session (test-mevedel-telemetry--session root))
+         (noninteractive nil)
+         process calls errors)
+    (unwind-protect
+        (progn
+          (mevedel-telemetry-record session 'request-start :request-id "sentinel")
+          (setq process
+                (make-process
+                 :name "mevedel-lag-sentinel" :noquery t
+                 :command '("sh" "-c" "sleep 0.01")
+                 :connection-type 'pipe
+                 :sentinel
+                 (lambda (child _event)
+                   (push (current-thread) calls)
+                   (condition-case err
+                       (while (accept-process-output child 0.001 nil 1))
+                     (error (push err errors))))))
+          ;; Yield the lock across child exit without dispatching its sentinel.
+          (let ((deadline (+ (float-time) 0.2)))
+            (while (< (float-time) deadline) (thread-yield)))
+          (accept-process-output process 0.01)
+          (should calls)
+          (should-not errors)
+          (should (cl-every (lambda (thread) (eq thread main-thread)) calls)))
+      (when process
+        (set-process-sentinel process #'ignore)
+        (delete-process process))
+      (delete-directory root t)))
+
   :doc "does not watch a batch Emacs"
   (let* ((root (make-temp-file "mevedel-telemetry-lag-" t))
          (session (test-mevedel-telemetry--session root))
@@ -427,7 +458,7 @@
     (unwind-protect
         (progn
           (mevedel-telemetry-record session 'request-start :request-id "request-3")
-          (should-not mevedel-telemetry--lag-thread)
+          (should-not mevedel-telemetry--lag-timer)
           (mevedel-telemetry-record session 'request-settled :request-id "request-3")
           (should-not (test-mevedel-telemetry--events session 'event-loop-lag-summary)))
       (delete-directory root t)))

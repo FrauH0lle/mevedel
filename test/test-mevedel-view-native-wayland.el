@@ -2,8 +2,9 @@
 
 ;;; Commentary:
 ;; Runs the native module in a pgtk daemon against a headless nested KWin,
-;; so module construction, placement, coordinate translation, protocol order
-;; and display teardown are exercised for real rather than through mocks.
+;; so module construction, placement, coordinate translation and protocol order
+;; are exercised for real.  Display closing is excluded because deleting a
+;; displayed terminal aborts the tested PGTK daemon even without the module.
 ;; Skipped without `kwin_wayland', a pgtk Emacs or the module's build tools
 ;; (`mevedel-test--wayland-available-p').
 
@@ -42,7 +43,9 @@ result is (POSITIONS . VIOLATIONS), POSITIONS being (X . Y) in order."
         (remhash (match-string 2 line) callbacks)
         (when (gethash (match-string 1 line) parents)
           (maphash (lambda (subsurface state)
-                     (when (eq state 'moved)
+                     (when (and (eq state 'moved)
+                                (equal (gethash subsurface subsurfaces)
+                                       (match-string 1 line)))
                        (puthash subsurface (match-string 2 line) pending)))
                    pending)))
        ((string-match "wl_callback#\\([0-9]+\\)\\.done" line)
@@ -76,7 +79,14 @@ result is (POSITIONS . VIOLATIONS), POSITIONS being (X . Y) in order."
                   (concat "wl_callback#12.done(0)\n" header
                           "-> wl_subsurface#9.set_position(10, 30)\n"
                           "-> wl_surface#3.frame(new id wl_callback#12)\n"
-                          "-> wl_subsurface#9.set_desync()\n"))))))
+                          "-> wl_subsurface#9.set_desync()\n"))))
+    ;; A callback on another frame cannot commit this surface's position.
+    (should (cdr (mevedel-view-native-wayland--trace-check
+                  (concat header
+                          "-> wl_subcompositor#5.get_subsurface(new id wl_subsurface#19, wl_surface#18, wl_surface#13)\n"
+                          "-> wl_subsurface#9.set_position(10, 30)\n"
+                          "-> wl_surface#13.frame(new id wl_callback#12)\n"
+                          "wl_callback#12.done(2)\n-> wl_subsurface#9.set_desync()\n"))))))
 
 (mevedel-deftest mevedel-view-native-wayland
   (:doc "Presents, moves and replaces a closed surface on a real compositor.")
@@ -101,7 +111,10 @@ result is (POSITIONS . VIOLATIONS), POSITIONS being (X . Y) in order."
       (let ((overlay (plist-get first :overlay-placement)))
         (should (equal (nth 0 overlay) (nth 1 overlay))))
       (should (plist-get first :restored))
-      (should (plist-get first :reopened)))
+      (should (plist-get first :reopened))
+      (should (plist-get first :repainted))
+      (should (plist-get first :pixel-scrolled))
+      (should (plist-get first :translucent)))
     (ert-info ((format "Positions: %S" (car checked)))
       ;; The first surface's position is the placement translated
       ;; from the text area into the toplevel.

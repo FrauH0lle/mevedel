@@ -139,24 +139,21 @@ cancellation releases the fence and leaves the machine retryable.
   request runs and for two minutes after it settles, since journal,
   collection and publication work follows settlement. Every timer delivered
   meanwhile reports how late it ran, since a stall delays every timer due
-  during it. A 100 ms heartbeat in its own Lisp thread samples the rest and
-  reports the worst delay since the previous heartbeat, once. The thread
-  needs the global lock, which the main thread releases only while it waits,
-  so busy Lisp, redisplay or collection makes it late. Its wakeups do not
-  redisplay: a timer heartbeat redisplayed the whole frame on every wakeup,
-  which pgtk presents in full (a 100 ms timer cost 23% editor CPU on a
-  2x-scaled frame, and the later 500 ms timer still cost a wakeup a
-  half-second). It runs with the timer lists unbound, since `sleep-for` would
-  otherwise run the editor's timers in it, and records its events itself. A
-  blocking remote operation releases the lock while it waits, so the
-  outermost one on the main thread counts as late as it took. Each callback
+  during it. A 100 ms heartbeat on the shared main-thread timer samples the
+  rest and reports the worst delay since the previous heartbeat, once.
+  Busy Lisp, redisplay or collection makes it late. A worker-thread heartbeat
+  avoided redisplay, but its sleeps also dispatched process sentinels on the
+  wrong thread, even with private timer lists. The shared timer preserves
+  process ownership; native PGTK presentation avoids whole-frame repainting
+  for its unchanged redisplays. A blocking remote operation can deliver
+  timers while it waits, so the outermost one on the main thread counts as
+  late as it took. Each callback
   retains its own timing attribution; the shared timer dispatcher does not
   replace callback names. Disabling telemetry stops the heartbeat at its next
   sample, since requests no longer report settling to close their windows.
   Lateness the previous heartbeat already saw is not counted again, and idle
   timers do not count. The event carries the delay, whether input arrived
-  since the previous heartbeat (the main thread has handled it by the time
-  the heartbeat runs), whether the request
+  since the previous heartbeat, whether the request
   had settled, the running command's name, and the name and duration of
   the slowest timer callback since the previous heartbeat. `:gc-count` and
   `:gc-ms` report garbage collection anywhere since the previous heartbeat;

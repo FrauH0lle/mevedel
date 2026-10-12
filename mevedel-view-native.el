@@ -81,9 +81,9 @@ animation stops.  Either way the surfaces before it are not reopened on
 each semantic update.")
 
 (defun mevedel-view-native--overlays (window)
-  "Return the overlays that can move this view's surfaces in WINDOW.
+  "Return the overlays that can move or repaint this view's surfaces in WINDOW.
 Overlay edits leave the text ticks alone; only those between the window
-start and the last surface can move one, through their extent and the
+start and the last surface can affect one, through their faces, extent and
 properties that hide or insert text."
   (when-let* ((end (cl-loop for entry in mevedel-view-native--entries
                             maximize (or (marker-position (cdr (caar entry))) 0))))
@@ -91,7 +91,10 @@ properties that hide or insert text."
               (list overlay (overlay-start overlay) (overlay-end overlay)
                     (overlay-get overlay 'invisible) (overlay-get overlay 'display)
                     (overlay-get overlay 'before-string)
-                    (overlay-get overlay 'after-string)))
+                    (overlay-get overlay 'after-string)
+                    (copy-tree (overlay-get overlay 'face))
+                    (copy-tree (overlay-get overlay 'priority))
+                    (overlay-get overlay 'window)))
             (overlays-in (window-start window) (1+ end)))))
 
 (defun mevedel-view-native--layout-key (window)
@@ -111,7 +114,9 @@ and their targets."
         (and (use-region-p) (cons (region-beginning) (region-end)))
         (mevedel--window-text-layout window)
         (window-start window) (window-point window) (window-hscroll window)
+        (window-vscroll window t)
         (window-inside-pixel-edges window)
+        (mevedel-view-native--opaque-p (window-frame window))
         (frame-focus-state (window-frame window))
         (cl-count-if (lambda (frame)
                        (and (eq (frame-parent frame) (window-frame window))
@@ -217,6 +222,7 @@ The placement is (FRAME GEOMETRY FONT BACKGROUND)."
          (point (window-point window)))
     (when (and start end (< start end)
                (eq (frame-visible-p frame) t) (frame-focus-state frame)
+               (mevedel-view-native--opaque-p frame)
                (not (use-region-p))
                (not (and (<= start point) (< point end)))
                (not (cl-some (lambda (other)

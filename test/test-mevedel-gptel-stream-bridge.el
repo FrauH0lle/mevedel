@@ -459,7 +459,41 @@ together; a test flushes at once instead of waiting for the pair."
       (should (memq process mevedel-transport--paused))
       (let ((mevedel-gptel-stream-bridge-insert-batch-delay nil))
         (mevedel-gptel-stream-bridge--flush-batch-due info))
-      (should-not mevedel-transport--paused))))
+      (should-not mevedel-transport--paused)))
+
+  :doc "real gptel insertion locks its marker before same-pass observers run"
+  (mevedel-gptel-stream-bridge-test--with-data-buffer
+    (let ((info (list :buffer data-buf))
+          (mevedel-gptel-stream-bridge-insert-batch-delay 30)
+          (timers (length timer-list))
+          observed)
+      (with-current-buffer data-buf
+        (setq-local
+         gptel-post-stream-hook
+         (list (lambda ()
+                 (should (marker-insertion-type
+                          (plist-get info :tracking-marker)))
+                 (mevedel-gptel-stream-bridge-after-flush
+                  (lambda ()
+                    (should-not (marker-insertion-type
+                                 (plist-get info :tracking-marker)))
+                    (setq observed
+                          (with-current-buffer data-buf
+                            (buffer-substring-no-properties
+                             (plist-get info :position)
+                             (plist-get info :tracking-marker))))))))))
+      (unwind-protect
+          (progn
+            (mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
+             #'gptel-curl--stream-insert-response "first " info)
+            (mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
+             #'gptel-curl--stream-insert-response "second" info)
+            (should-not observed)
+            (mevedel-gptel-stream-bridge--flush-batch-due info)
+            (should (equal observed "first second"))
+            (should (= timers (length timer-list))))
+        (when-let* ((timer (plist-get info :mevedel-stream-insert-timer)))
+          (cancel-timer timer))))))
 
 (mevedel-deftest mevedel-gptel-stream-bridge-after-flush ()
   ,test

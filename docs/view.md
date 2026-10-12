@@ -340,8 +340,9 @@ also validates pixel placement at semantic boundaries: it covers only a fully
 visible, single-line span with matching font geometry. If any window showing
 part of the label cannot host it, ordinary animation continues for that target.
 A local pre-redisplay guard hides stale native pixels after text, text
-property (decorative frames aside), overlay, invisibility, wrapping, geometry
-or cursor/selection changes, and replaces a surface the module closed itself
+property (decorative frames aside), overlay geometry or paint, invisibility,
+wrapping, geometry, pixel scrolling, opacity or cursor/selection changes,
+and replaces a surface the module closed itself
 (its frame unmapped or changed scale, or drawing failed). There is no
 per-frame Lisp callback and no horizontal/pixel-scroll primitive observer.
 
@@ -373,10 +374,10 @@ queuing overdue repeats
 after a stall. Static or frozen indicators require no decorative timer,
 although a visible active request can still update elapsed text once a second
 without advancing a frozen indicator. Freezing keeps the last displayed
-sample, except that a shimmer frozen mid-sweep moves to the end of its sweep
-and a breathe frozen mid-fade to its normal foreground, so a pause never holds
-a faded band; drawn by its glyph fallback, on a terminal of fewer than 256
-colors or a span shown on several frames, it keeps its phase. The kept sample includes an existing tool row's glyph across option changes and
+sample, except that a color shimmer frozen mid-sweep moves to the end of its
+sweep and a color breathe frozen mid-fade to its normal foreground, so a pause
+never holds a faded band. Their glyph fallbacks retain the displayed phase,
+including after the window disappears. The kept sample includes an existing tool row's glyph across option changes and
 pending-tool row rebuilds, incremental projection, and full rerenders of the
 same transcript; a scheduling-only rearm does not sample the next
 clock phase. A subsequent resume clears the old freeze latch without
@@ -521,10 +522,13 @@ its SHA-256 matches `native/prebuilt.eld`. The sources share no header, so
 package recipes that list `native/*.c` build it. CI
 (`.github/workflows/native.yml`) builds the x86_64 and aarch64 modules on
 Ubuntu 22.04 against its older `emacs-module.h`, so they load into any newer
-Emacs and glibc 2.34 or later, and records their checksums there. A failure is
+Emacs with glibc 2.34 or later, and records their checksums there. A failure is
 reported once per session in the echo area, naming the next step; the internal
 `mevedel-native--load-state` retains its reason, and setting it to nil
-retries. Labels that contain characters XML
+retries. Installing after a failed build allows presentation to retry on the
+next view. Installing while a module is already loaded leaves that module
+active until Emacs exits, preserving its surfaces and presentation hooks.
+Labels that contain characters XML
 cannot carry, such as control characters from tool arguments, change width once
 escaped, so they keep the ordinary renderer. An error or a refused surface
 hands only that label back to text animation, closing its own surfaces;
@@ -997,9 +1001,10 @@ When compaction copies multiple prompts into the live tail, content before
 their first header uses the preceding archived prompt, not the last copied
 prompt. A local header anywhere in the visible window suppresses the archived
 preview; once it scrolls above the window, its own local preview takes over.
-Finding whether a local header is on screen walks the window body, so it runs
+Finding whether a local header is on screen checks graphical pixel visibility
+(or fixed-height rows on a terminal), so it runs
 only when an archived prompt exists, and its answer is kept per window until
-the window's start or size, the buffer, its invisibility spec, or the text's
+the window's start, scrolling or size, the buffer, its invisibility spec, or the text's
 layout changes: wrapping, text scale, line spacing, line numbers, tab width,
 or the frame font.
 Header lines are evaluated on every redisplay, including the many caused by

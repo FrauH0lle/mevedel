@@ -53,14 +53,17 @@
         (should (= enables 2))))))
 
 (mevedel-deftest mevedel-present-ensure/unloadable
-  (:doc "Keeps the module's load failure as the reason, without enabling.")
+  (:doc "Leaves load failure memory to the loader so installation can recover.")
   (cl-letf (((symbol-function 'mevedel-native-load) (lambda () nil))
             ((symbol-function 'mevedel-present--enable)
              (lambda () (ert-fail "Enabled without a module"))))
     (mevedel-present-test--with-frame 'pgtk
       (let ((mevedel-native--load-state "Native module compilation failed: x"))
         (should-not (mevedel-present-ensure (selected-frame)))
-        (should (equal mevedel-present--state mevedel-native--load-state))))))
+        (should-not mevedel-present--state)
+        (cl-letf (((symbol-function 'mevedel-native-load) (lambda () t))
+                  ((symbol-function 'mevedel-present--enable) (lambda () t)))
+          (should (mevedel-present-ensure (selected-frame))))))))
 
 (provide 'test-mevedel-present)
 

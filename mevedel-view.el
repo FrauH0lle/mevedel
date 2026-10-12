@@ -1280,15 +1280,15 @@ When ARCHIVE is non-nil, POSITION is a source position in that segment."
 
 (defun mevedel-view--prompt-on-screen-p (window)
   "Return non-nil when a prompt header below WINDOW's start is on screen.
-Header lines are evaluated on every redisplay, and finding the window's
-last visible position walks its whole body, so the answer is kept per
-window until its start, the buffer, its invisibility or its text layout
-changes: size, wrapping, text scale, line spacing or font."
+Header lines are evaluated on every redisplay, so the answer is kept per
+window until its start or scrolling, the buffer, its invisibility or its
+text layout changes: size, wrapping, text scale, line spacing or font."
   (let ((key (list (current-buffer)
                    ;; Animation frames rewrite display properties but move
                    ;; nothing a header depends on.
                    (mevedel-view--content-tick)
                    buffer-invisibility-spec (window-start window)
+                   (window-hscroll window) (window-vscroll window t)
                    (mevedel--window-text-layout window)
                    (mevedel-view--input-marker-position)))
         (cached (window-parameter window 'mevedel-view--prompt-on-screen)))
@@ -1300,12 +1300,16 @@ changes: size, wrapping, text scale, line spacing or font."
                     (mevedel-view--input-marker-position)))
              (visible (and next
                            (get-text-property next 'mevedel-view-prompt-preview)
-                           (< next
-                              (save-excursion
-                                (goto-char (window-start window))
-                                (vertical-motion
-                                 (window-body-height window) window)
-                                (point)))
+                           (if (display-graphic-p (window-frame window))
+                               ;; Pixel-height rows need not match the frame's
+                               ;; canonical character height after text scaling.
+                               (pos-visible-in-window-p next window t)
+                             (< next
+                                (save-excursion
+                                  (goto-char (window-start window))
+                                  (vertical-motion
+                                   (window-body-height window) window)
+                                  (point))))
                            (not (invisible-p next))
                            t)))
         (set-window-parameter window 'mevedel-view--prompt-on-screen

@@ -90,6 +90,36 @@
           (let ((moved (nth 2 (car mevedel-view-native--entries))))
             (mevedel-native-wayland--note :moved-same (eq moved handle))
             (mevedel-native-wayland--note :moved-placement (cdr (nth 3 (car mevedel-view-native--entries)))))
+          ;; Painting an existing overlay changes neither text nor its extent.
+          (let ((overlay (make-overlay (car target) (cdr target))))
+            (redisplay t)
+            (let ((before (nth 2 (car mevedel-view-native--entries))))
+              (overlay-put overlay 'face '(:background "#203040"))
+              (mevedel-native-wayland--wait
+               3 (lambda ()
+                   (redisplay t)
+                   (equal (nth 3 (nth 3 (car mevedel-view-native--entries))) "#203040")))
+              (mevedel-native-wayland--note
+               :repainted (let ((entry (car mevedel-view-native--entries)))
+                            (and entry (not (eq before (nth 2 entry)))
+                                 (equal (nth 3 (nth 3 entry)) "#203040")
+                                 (mevedel-view-native--live-p (nth 2 entry)) t))))
+            (delete-overlay overlay)
+            (redisplay t)
+            (mevedel-native-wayland--wait 0.5))
+          ;; Pixel scrolling changes no buffer position or window edges.
+          (let ((before (aref (cadr (mevedel-view-native--placement target window)) 1)))
+            (set-window-vscroll window 3 t)
+            (redisplay t)
+            (mevedel-native-wayland--wait 0.5)
+            (mevedel-native-wayland--note
+             :pixel-scrolled
+             (let ((placement (nth 3 (car mevedel-view-native--entries))))
+               (and placement (= (aref (cadr placement) 1) (- before 3))
+                    (equal placement (mevedel-view-native--placement target window)))))
+            (set-window-vscroll window 0 t)
+            (redisplay t)
+            (mevedel-native-wayland--wait 0.5))
           ;; An overlay hiding the first line moves it without a text edit.
           (let ((overlay (make-overlay 1 10)))
             (overlay-put overlay 'invisible t)
@@ -121,6 +151,13 @@
                          (and entry (not (eq (nth 2 entry) before))
                               (mevedel-view-native--live-p (nth 2 entry)) t))))
           (mevedel-native-wayland--note :stats-end (mevedel-view-native--stats))
+          ;; A live surface must disappear when its parent becomes translucent.
+          (set-frame-parameter frame 'alpha-background 80)
+          (redisplay t)
+          (mevedel-native-wayland--wait 0.5)
+          (mevedel-native-wayland--note
+           :translucent (and (not mevedel-view-native--entries)
+                             (not (mevedel-view-native--placement target window))))
           (mevedel-view-native-stop))))
     frame))
 

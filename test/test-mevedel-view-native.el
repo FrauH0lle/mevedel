@@ -10,6 +10,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view-native)
+(require 'mevedel-view)
 
 (mevedel-deftest mevedel-view-native--markup
   (:doc "Preserves text and foreground runs without interpreting label markup.")
@@ -497,6 +498,61 @@
               (mevedel-view-native-stop))))
       (set-window-buffer window previous)
       (kill-buffer buffer))))
+
+(mevedel-deftest mevedel-view-native--before-redisplay/paint-inputs
+  (:doc "Rechecks live surfaces when overlay paint, pixel scroll or opacity changes.")
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char (point-min))
+          (insert "Working...\n"))
+        (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 3)
+        (set-window-buffer (selected-window) (current-buffer))
+        (let* ((window (selected-window))
+               (target (cons (copy-marker 1) (copy-marker 11)))
+               (overlay (make-overlay 1 11))
+               (placement '(frame [8 42 80 21 16] "Mono 16px" "#000000"))
+               (scroll 0) (alpha 100) (checks 0))
+          (setq mevedel-view-native--entries
+                (list (list (list target window) nil 'handle placement "Working...")))
+          (unwind-protect
+              (cl-letf (((symbol-function 'mevedel-view-native--placement)
+                         (lambda (&rest _) (cl-incf checks) placement))
+                        ((symbol-function 'mevedel-view-native--close) #'ignore)
+                        ((symbol-function 'window-vscroll) (lambda (&rest _) scroll))
+                        ((symbol-function 'frame-parameter)
+                         (let ((original (symbol-function 'frame-parameter)))
+                           (lambda (frame parameter)
+                             (if (eq parameter 'alpha-background) alpha
+                               (funcall original frame parameter))))))
+                (mevedel-view-native--before-redisplay window)
+                (should (= checks 1))
+                (overlay-put overlay 'face (list :background "#102030"))
+                (mevedel-view-native--before-redisplay window)
+                (should (= checks 2))
+                ;; Face plists can be edited in place without changing the overlay.
+                (setf (plist-get (overlay-get overlay 'face) :background) "#203040")
+                (mevedel-view-native--before-redisplay window)
+                (should (= checks 3))
+                (overlay-put overlay 'priority 10)
+                (mevedel-view-native--before-redisplay window)
+                (should (= checks 4))
+                (overlay-put overlay 'window 'another-window)
+                (mevedel-view-native--before-redisplay window)
+                (should (= checks 5))
+                (setq scroll 5)
+                (mevedel-view-native--before-redisplay window)
+                (should (= checks 6))
+                (setq alpha 80)
+                (mevedel-view-native--before-redisplay window)
+                (should (= checks 7))
+                (mevedel-view-native--before-redisplay window)
+                (should (= checks 7))
+                (should (equal (mevedel-view--input-text) "> quoted\nsecond line"))
+                (should (= (point) (+ (mevedel-view--input-start) 3))))
+            (cl-letf (((symbol-function 'mevedel-view-native--close) #'ignore))
+              (mevedel-view-native-stop))))))))
 
 (mevedel-deftest mevedel-view-native--background
   (:doc "Paints the background redisplay draws there, not the frame default.")

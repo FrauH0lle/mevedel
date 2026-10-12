@@ -81,11 +81,13 @@
                        0.26))
             (mevedel-acp--wake connection))
           (should-not mevedel-transport--paused)
-          ;; Without text batches there is nothing to pace for.
-          (dolist (delay '(nil 0))
+          ;; Disabling text batching disables pacing, including its margin.
+          (dolist (delay '(nil 0 -0.01))
             (let ((mevedel-gptel-stream-bridge-insert-batch-delay delay))
               (mevedel-acp--pace connection process text)
-              (should-not mevedel-transport--paused)))
+              (should-not mevedel-transport--paused)
+              (should-not
+               (process-get process 'mevedel-transport--resume-timer))))
           (setf (mevedel-acp-state connection) 'idle)
           (mevedel-acp--pace connection process text)
           (should-not mevedel-transport--paused))
