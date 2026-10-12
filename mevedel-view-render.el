@@ -159,6 +159,8 @@
 (defvar mevedel-tool-render-summary-only)
 
 ;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-block-at
+                  "mevedel-tool-render-data" (start &optional limit))
 (declare-function mevedel-tool-render-data-direct-call
                   "mevedel-tool-render-data" (name data))
 (declare-function mevedel-tool-render-data-extract
@@ -3425,24 +3427,16 @@ Cached globally; see `mevedel-view--scaffolding-only-cache'."
         (goto-char (or start (point-min)))
         (unwind-protect
             (while (search-forward "<!-- mevedel-render-data -->" limit t)
-              (let ((block-start (match-beginning 0)))
-                (when-let* ((close (search-forward
-                                    "<!-- /mevedel-render-data -->"
-                                    limit t)))
-                  (when (mevedel-view--request-summary-render-data-from-text
-                         (buffer-substring block-start close))
-                    (let ((delete-start
-                           (if (and (> block-start (point-min))
-                                    (eq (char-before block-start) ?\n))
-                               (1- block-start)
-                             block-start))
-                          (delete-end
-                           (if (and (< close (point-max))
-                                    (eq (char-after close) ?\n))
-                               (1+ close)
-                             close)))
-                      (delete-region delete-start delete-end)
-                      (goto-char delete-start))))))
+              (when-let* ((open (match-beginning 0))
+                          (block (mevedel-tool-render-data-block-at
+                                  open (marker-position limit))))
+                (goto-char (cadr block))
+                (when (and (eq (plist-get (caddr block) :kind) 'request-summary)
+                           (not (plist-member (caddr block) :mevedel-tool-use-id))
+                           (mevedel-tool-render-data-trusted-range-p
+                            open (cadr block)))
+                  (delete-region (car block) (cadr block))
+                  (goto-char (car block)))))
           (set-marker limit nil))))))
 
 (defun mevedel-view--request-summary-elapsed-seconds (data-buf)

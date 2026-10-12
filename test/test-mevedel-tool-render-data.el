@@ -89,6 +89,21 @@
          (extract (mevedel-tool-render-data-extract result)))
     (should (equal "visible body" (car extract)))
     (should (equal data (cdr extract))))
+  :doc "round-trip: quoted delimiters, nested blocks and tool headers remain payload data"
+  (let* ((output (concat "quote \" and backslash \\ end\n"
+                         mevedel-tool-render-data-close "\n"
+                         "#+begin_tool Bash\n(:command \"printed\")\n"
+                         (mevedel-tool-render-data-format
+                          '(:kind literal :text "nested") "printed-owner")
+                         "#+end_tool\n" mevedel-tool-render-data-open))
+         (data (list :kind 'bash :state 'completed :execution-output output))
+         (raw (concat "visible output"
+                      (mevedel-tool-render-data-format data "actual-owner")))
+         (extracted (mevedel-tool-render-data-extract raw nil "actual-owner")))
+    (should (equal "visible output" (car extracted)))
+    (should (equal data (cdr extracted)))
+    (should (equal raw (car (mevedel-tool-render-data-extract
+                            raw nil "printed-owner")))))
   :doc "format strips nested text properties and replaces ownership without mutating input"
   (let* ((patch (propertize "some patch" 'fontified nil))
          (data (list :kind 'diff :patch patch :nested (vector (list patch))
@@ -189,23 +204,43 @@
     (should (null (car extract)))
     (should (null (cdr extract)))))
 
-(mevedel-deftest mevedel-tool-render-data--read-payload
+(mevedel-deftest mevedel-tool-render-data-block-at/bounded-payload
   (:doc "bounded reads reject incomplete or trailing forms without reading outside the block")
   (progn
-    (should (equal '(:kind read)
-                   (mevedel-tool-render-data--read-payload
-                    "prefix \n (:kind read) \t\nsuffix" 6 24)))
+    (with-temp-buffer
+      (insert "prefix\n" (mevedel-tool-render-data-format '(:kind read)) "suffix")
+      (should (equal '(:kind read)
+                     (caddr (mevedel-tool-render-data-block-at 9 (- (point-max) 6))))))
     (dolist (payload '("(:kind read" "(:kind \"unfinished" "(:kind read) nil"
                        "(:kind read) ; trailing comment" "(:kind)"
                        "(kind read)" "(:kind read . tail)"))
-      (let ((source (concat "prefix" payload ")\"\n(:kind read)")))
-        (should (eq :mevedel-parse-failed
-                    (mevedel-tool-render-data--read-payload
-                     source 6 (+ 6 (length payload)))))))))
+      (with-temp-buffer
+        (insert "prefix\n" mevedel-tool-render-data-open "\n" payload "\n"
+                mevedel-tool-render-data-close)
+        (let ((limit (point)))
+          (insert ")\"\n(:kind read)" mevedel-tool-render-data-close)
+          (should-not (mevedel-tool-render-data-block-at 8 limit)))))))
 
 (mevedel-deftest mevedel-tool-render-data-blocks ()
   ,test
   (test)
+  :doc "one complete payload hides all marker-shaped nested blocks"
+  (let* ((nested (mevedel-tool-render-data-format '(:kind nested) "fake"))
+         (data (list :kind 'bash :text (concat mevedel-tool-render-data-close nested)))
+         (raw (mevedel-tool-render-data-format data))
+         (blocks (mevedel-tool-render-data-blocks raw)))
+    (should (equal (list (list 0 (length raw) data)) blocks)))
+  :doc "trailing forms and comments preserve literals while later valid blocks survive"
+  (dolist (payload '("(:kind read) nil" "(:kind read) ; comment\n"
+                     "(:kind)" "(kind read)" "(:kind read . tail)"))
+    (let* ((literal (concat mevedel-tool-render-data-open "\n" payload "\n"
+                            mevedel-tool-render-data-close))
+           (data '(:kind later))
+           (valid (mevedel-tool-render-data-format data))
+           (raw (concat literal valid))
+           (blocks (mevedel-tool-render-data-blocks raw)))
+      (should (equal (list (list (length literal) (length raw) data)) blocks))
+      (should (equal literal (mevedel-tool-render-data-strip raw)))))
   :doc "returns valid blocks while skipping earlier malformed literals"
   (let* ((literal
           (concat "158 " mevedel-tool-render-data-open
@@ -239,6 +274,47 @@
          (blocks (mevedel-tool-render-data-blocks raw)))
     (should (= 1 (length blocks)))
     (should (equal data (caddr (car blocks))))))
+
+(mevedel-deftest mevedel-tool-render-data-block-at ()
+  ,test
+  (test)
+  :doc "buffer reader preserves point and narrowing and skips quoted closing delimiters"
+  (let* ((data (list :kind 'bash :execution-output
+                     (concat mevedel-tool-render-data-close "\n"
+                             mevedel-tool-render-data-open)))
+         (raw (mevedel-tool-render-data-format data)))
+    (with-temp-buffer
+      (insert "prefix" raw "suffix")
+      (narrow-to-region 7 (+ 7 (length raw)))
+      (goto-char (point-max))
+      (let ((before (point)))
+        (should (equal (list 7 (point-max) data)
+                       (mevedel-tool-render-data-block-at 8)))
+        (should (= before (point)))
+        (should (= 7 (point-min)))
+        (should-not (mevedel-tool-render-data-block-at 7))
+        (should-not (mevedel-tool-render-data-block-at 8 (- (point-max) 3))))))
+  :doc "large buffer payloads are read without any substring copies"
+  (with-temp-buffer
+    (let* ((data (list :kind 'read :text (make-string 100000 ?x)))
+           (raw (mevedel-tool-render-data-format data)))
+      (insert raw)
+      (cl-letf (((symbol-function 'buffer-substring)
+                 (lambda (&rest _) (ert-fail "Buffer payload copied")))
+                ((symbol-function 'buffer-substring-no-properties)
+                 (lambda (&rest _) (ert-fail "Buffer payload copied"))))
+        (should (equal (list 1 (point-max) data)
+                       (mevedel-tool-render-data-block-at 2))))))
+  :doc "buffer reader rejects malformed, trailing and evaluated payloads"
+  (dolist (payload '("(:kind" "(:kind read) nil" "(:kind read) ; comment\n"
+                     "(:kind)" "(kind read)" "(:kind read . tail)"
+                     "#.(setq test-mevedel-tool-render-data--read-eval-ran t)"))
+    (with-temp-buffer
+      (let ((test-mevedel-tool-render-data--read-eval-ran nil))
+        (insert mevedel-tool-render-data-open "\n" payload "\n"
+                mevedel-tool-render-data-close)
+        (should-not (mevedel-tool-render-data-block-at 1))
+        (should-not test-mevedel-tool-render-data--read-eval-ran)))))
 
 (mevedel-deftest mevedel-tool-render-data-strip ()
   ,test
@@ -355,6 +431,19 @@
      'dummy-backend (list tc))
     (should (equal (concat "visible" forged "middle") seen))
     (should (equal raw (plist-get tc :result))))
+
+  :doc "scrubs the complete owned payload with quoted delimiters and restores stored result"
+  (let* ((literal (substring-no-properties
+                   (mevedel-tool-render-data-format '(:kind literal) "printed-owner")))
+         (output (concat "actual output\n" literal))
+         (data (list :kind 'bash :execution-output output))
+         (raw (concat output (mevedel-tool-render-data-format data "actual-owner")))
+         (tc (list :id "actual-owner" :name "Bash" :result raw)))
+    (mevedel-tool-render-data--provider-advice
+     (lambda (_backend calls)
+       (should (equal output (plist-get (car calls) :result))))
+     'dummy-backend (list tc))
+    (should (eq raw (plist-get tc :result))))
 
   :doc "pass-through when no tool-call carries a block"
   (let* ((tc1 (list :name "Read" :args nil :result "clean 1"))
@@ -903,6 +992,20 @@
   ,test
   (test)
 
+  :doc "finds the outer agent block after malformed text and ignores quoted nested metadata"
+  (with-temp-buffer
+    (insert mevedel-tool-render-data-open "\n(:kind \"unfinished\n")
+    (let* ((nested (mevedel-tool-render-data-format
+                    '(:kind collaboration-event :event started :agent-id "fake") "agent"))
+           (data (list :kind 'collaboration-event :event 'started :agent-id "actual"
+                       :text (concat mevedel-tool-render-data-close nested)))
+           (begin (point)))
+      (insert (propertize (mevedel-tool-render-data-format data "agent")
+                          'gptel '(tool . "agent")))
+      (should-not (mevedel-tool-render-data-find-agent-block "fake"))
+      (should (equal (cons begin (point-max))
+                     (mevedel-tool-render-data-find-agent-block "actual")))))
+
   :doc "finds a matching block in a large multiline payload"
   (with-temp-buffer
     (insert "leading text\n")
@@ -1030,6 +1133,24 @@
 (mevedel-deftest mevedel-tool-render-data-update ()
   ,test
   (test)
+  :doc "replaces metadata once while preserving quoted output, owner and adjacent tools"
+  (with-temp-buffer
+    (let* ((output (concat mevedel-tool-render-data-close "\n"
+                           (mevedel-tool-render-data-format '(:kind literal) "fake")))
+           (data (list :state 'running :execution-output output :keep 'value))
+           (next (propertize "next tool" 'gptel '(tool . "next"))))
+      (insert (propertize (concat "visible" (mevedel-tool-render-data-format data "actual"))
+                          'gptel '(tool . "actual")) next)
+      (should (mevedel-tool-render-data-update
+               (current-buffer) "actual" '(:state completed)))
+      (let ((updated (mevedel-tool-render-data-for-tool (current-buffer) "actual")))
+        (should (equal output (plist-get updated :execution-output)))
+        (should (eq 'completed (plist-get updated :state)))
+        (should (eq 'value (plist-get updated :keep))))
+      (should (equal-including-properties next
+                                         (buffer-substring (- (point-max) (length next))
+                                                           (point-max))))
+      (should (= 1 (length (mevedel-tool-render-data-blocks (buffer-string)))))))
   :doc "merges durable execution facts into the matching tool segment"
   (with-temp-buffer
     (let* ((tool-id "tool-live")
@@ -1121,6 +1242,21 @@
 (mevedel-deftest mevedel-tool-render-data-reconcile-lost-executions ()
   ,test
   (test)
+  :doc "repairs the complete outer payload after malformed text without touching nested output"
+  (with-temp-buffer
+    (insert mevedel-tool-render-data-open "\n(:kind \"unfinished\n")
+    (let* ((nested (mevedel-tool-render-data-format
+                    '(:state running :execution-id "fake" :live-execution-p t) "actual"))
+           (output (concat mevedel-tool-render-data-close "\n" nested))
+           (data (list :state 'running :execution-id "real" :live-execution-p t
+                       :execution-output output)))
+      (insert (propertize (mevedel-tool-render-data-format data "actual")
+                          'gptel '(tool . "actual")))
+      (should (= 1 (mevedel-tool-render-data-reconcile-lost-executions (current-buffer))))
+      (let ((repaired (mevedel-tool-render-data-for-tool (current-buffer) "actual")))
+        (should (eq 'lost (plist-get repaired :state)))
+        (should (equal output (plist-get repaired :execution-output)))
+        (should (equal "real" (plist-get repaired :execution-id))))))
   :doc "repairs only stale running Bash render records"
   (with-temp-buffer
     (insert "before")

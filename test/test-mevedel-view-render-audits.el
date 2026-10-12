@@ -25,6 +25,25 @@
 (require 'mevedel-tool-ptc)
 (require 'mevedel-execution-transcript)
 
+(mevedel-deftest mevedel-view-audit--history-render-data-owner ()
+  ,test
+  (test)
+  :doc "history lookup finds the outer owner beyond quoted nested closing delimiters"
+  (with-temp-buffer
+    (insert "prefix\n")
+    (insert (mevedel-tool-render-data-format
+             (list :kind 'bash :execution-output
+                   (concat mevedel-tool-render-data-close "\n"
+                           (mevedel-tool-render-data-format '(:kind nested) "fake")
+                           "find-execution-here")) "actual"))
+    (insert "suffix")
+    (goto-char (point-min))
+    (search-forward "find-execution-here")
+    (let ((pos (point)))
+      (should (equal "actual" (mevedel-view-audit--history-render-data-owner pos)))
+      (should (= pos (point))))
+    (should-not (mevedel-view-audit--history-render-data-owner (point-max)))))
+
 (mevedel-deftest mevedel-view-audit--breadcrumb-label ()
   ,test
   (test)

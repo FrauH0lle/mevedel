@@ -226,6 +226,15 @@ stays data and never splits the enclosing span. Tool ranges and render-data /
 hook-audit ranges are exempt because they
 carry their own proof -- validation against the raw tool property runs or a
 trust hash -- and backends really do nest a tool call inside a reasoning block.
+This exemption never applies to markers inside an authorized serialized
+render-data payload. The codec's complete Lisp boundaries make that payload
+opaque during control-line indexing, tool-boundary recovery and prompt-depth
+scanning, including when metadata shares a tool-property run. A prematurely
+split saved metadata run is recovered only with a matching surrounding tool
+owner; marker-shaped prose alone does not gain authority. Full, live and batched
+projections therefore disclose the original output as one call without leaking
+its outer metadata. A structural scan reuses each decoded block across its
+phases rather than copying or repeatedly parsing large payloads.
 Independently, no generated control block ever lands inside gptel's streamed
 `response` run, so markup found there is prose the model quoted and renders as
 prose. What remains unguarded is markup that opens a run: a response or user

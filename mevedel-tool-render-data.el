@@ -132,23 +132,68 @@ display."
      'gptel 'mevedel-render-data
      'mevedel-render-data t)))
 
-(defun mevedel-tool-render-data--read-payload (payload &optional start end)
-  "Read one render-data plist from PAYLOAD or return a failure sentinel.
-Optional START and END bound the payload without copying its contents."
-  (condition-case nil
-      (let* ((read-eval nil)
-             (parsed (read-from-string payload start end))
-             (data (car parsed))
-             (rest (substring payload (cdr parsed) end)))
-        (if (and (consp data)
-                 (string-blank-p rest)
-                 (proper-list-p data)
-                 (zerop (% (length data) 2))
-                 (cl-loop for tail on data by #'cddr
-                          always (keywordp (car tail))))
-            data
-          :mevedel-parse-failed))
-    (error :mevedel-parse-failed)))
+(defun mevedel-tool-render-data--delimiter-at-p (delimiter source position limit)
+  "Return non-nil when DELIMITER occurs in SOURCE at POSITION before LIMIT.
+Nil SOURCE denotes the current buffer.  Do not copy surrounding payloads."
+  (let ((end (+ position (length delimiter))))
+    (and (<= end limit)
+         (if source
+             (eq t (compare-strings delimiter nil nil source position end))
+           (save-excursion
+             (goto-char position)
+             (looking-at-p (regexp-quote delimiter)))))))
+
+(defun mevedel-tool-render-data--read-block (source start limit)
+  "Decode a complete render-data block in SOURCE at START before LIMIT.
+Nil SOURCE denotes the current buffer.  Return (BEGIN END DATA), including
+optional framing newlines, or nil.  Delimiters inside the Lisp object are
+data, not boundaries.  This function validates syntax, not provenance."
+  (when (mevedel-tool-render-data--delimiter-at-p
+         mevedel-tool-render-data-open source start limit)
+    (condition-case nil
+        (let* ((read-eval nil)
+               (payload-start (+ start (length mevedel-tool-render-data-open)))
+               (parsed (if source
+                           (read-from-string source payload-start limit)
+                         (goto-char payload-start)
+                         (let ((data (read (current-buffer))))
+                           (cons data (point)))))
+               (data (car parsed))
+               (cursor (cdr parsed)))
+          (when (and (consp data)
+                     (proper-list-p data)
+                     (zerop (% (length data) 2))
+                     (cl-loop for tail on data by #'cddr
+                              always (keywordp (car tail))))
+            (while (and (< cursor limit)
+                        (memq (if source (aref source cursor) (char-after cursor))
+                              '(?\s ?\t ?\r ?\n)))
+              (cl-incf cursor))
+            (when (mevedel-tool-render-data--delimiter-at-p
+                   mevedel-tool-render-data-close source cursor limit)
+              (let ((end (+ cursor (length mevedel-tool-render-data-close)))
+                    (minimum (if source 0 (point-min))))
+                (list (if (and (> start minimum)
+                               (eq (if source (aref source (1- start))
+                                     (char-before start)) ?\n))
+                          (1- start) start)
+                      (if (and (< end limit)
+                               (eq (if source (aref source end)
+                                     (char-after end)) ?\n))
+                          (1+ end) end)
+                      data)))))
+      (error nil))))
+
+(defun mevedel-tool-render-data-block-at (start &optional limit)
+  "Return the complete render-data block opening at START before LIMIT.
+The result is (BEGIN END DATA), in current-buffer coordinates, or nil.
+Preserve point, match data and narrowing; read directly without copying the
+buffer.  Callers must independently establish ownership or provenance."
+  (save-match-data
+    (save-excursion
+      (save-restriction
+        (narrow-to-region (point-min) (min (or limit (point-max)) (point-max)))
+        (mevedel-tool-render-data--read-block nil start (point-max))))))
 
 (defun mevedel-tool-render-data-blocks (string)
   "Return valid render-data blocks found in STRING, oldest first.
@@ -160,39 +205,12 @@ BEGIN and END include the formatter's optional surrounding newlines."
       (while (setq open
                    (string-search mevedel-tool-render-data-open
                                   string search-start))
-        (let* ((payload-start
-                (+ open (length mevedel-tool-render-data-open)))
-               (close
-                (string-search mevedel-tool-render-data-close
-                               string payload-start)))
-          (if (not close)
-              (setq search-start payload-start)
-            (let* ((data
-                    (mevedel-tool-render-data--read-payload
-                     string payload-start close))
-                   (next-open
-                    (string-search mevedel-tool-render-data-open
-                                   string payload-start))
-                   (close-end
-                    (+ close (length mevedel-tool-render-data-close))))
-              (cond
-               ((not (eq data :mevedel-parse-failed))
-                (let ((begin
-                       (if (and (> open 0)
-                                (eq (aref string (1- open)) ?\n))
-                           (1- open)
-                         open))
-                      (end
-                       (if (and (< close-end (length string))
-                                (eq (aref string close-end) ?\n))
-                           (1+ close-end)
-                         close-end)))
-                  (push (list begin end data) blocks))
-                (setq search-start close-end))
-               ((and next-open (< next-open close))
-                (setq search-start next-open))
-               (t
-                (setq search-start close-end)))))))
+        (let ((block (mevedel-tool-render-data--read-block string open (length string))))
+          (if block
+              (progn
+                (push block blocks)
+                (setq search-start (cadr block)))
+            (setq search-start (+ open (length mevedel-tool-render-data-open))))))
       (nreverse blocks))))
 
 (defun mevedel-tool-render-data-trusted-range-p
@@ -286,31 +304,18 @@ plist should be updated when a sub-agent's status changes."
       (let (found)
         (while (and (not found)
                     (search-forward mevedel-tool-render-data-open nil t))
-          (let* ((open-beg (match-beginning 0))
-                 (block-beg (if (and (> open-beg (point-min))
-                                     (eq (char-before open-beg) ?\n))
-                                (1- open-beg)
-                              open-beg)))
-            (if (not (search-forward mevedel-tool-render-data-close nil t))
-                (goto-char (point-max))
-              (let* ((close-end (match-end 0))
-                     (block-end (if (and (< close-end (point-max))
-                                         (eq (char-after close-end) ?\n))
-                                    (1+ close-end)
-                                  close-end))
-                     (raw (buffer-substring-no-properties block-beg block-end))
-                     (block (car (mevedel-tool-render-data-blocks raw)))
-                     (plist (and block (caddr block))))
-                (when (and (eq (plist-get plist :kind)
-                               'collaboration-event)
-                           (eq (plist-get plist :event) 'started)
-                           (if (plist-member plist :mevedel-tool-use-id)
-                               (mevedel-tool-render-data-call-range-p
-                                plist block-beg block-end)
-                             (mevedel-tool-render-data-trusted-range-p
-                              block-beg block-end))
-                           (equal (plist-get plist :agent-id) agent-id))
-                  (setq found (cons block-beg block-end)))))))
+          (when-let* ((block (mevedel-tool-render-data-block-at (match-beginning 0))))
+            (pcase-let ((`(,block-beg ,block-end ,plist) block))
+              (goto-char block-end)
+              (when (and (eq (plist-get plist :kind) 'collaboration-event)
+                         (eq (plist-get plist :event) 'started)
+                         (if (plist-member plist :mevedel-tool-use-id)
+                             (mevedel-tool-render-data-call-range-p
+                              plist block-beg block-end)
+                           (mevedel-tool-render-data-trusted-range-p
+                            block-beg block-end))
+                         (equal (plist-get plist :agent-id) agent-id))
+                (setq found (cons block-beg block-end))))))
         found))))
 
 (defun mevedel-tool-render-data-patch-block (beg end new-plist)
@@ -330,15 +335,18 @@ result."
     (save-restriction
       (widen)
       (let ((surrounding-gptel
-             (or (and (> beg (point-min))
+             (or (and (consp (get-text-property beg 'gptel))
+                      (eq (car (get-text-property beg 'gptel)) 'tool)
+                      (get-text-property beg 'gptel))
+                 (and (> beg (point-min))
                       (get-text-property (1- beg) 'gptel))
                  (and (< end (point-max))
                       (get-text-property end 'gptel))))
             (tool-use-id
-             (when-let* ((block
-                          (car
-                           (mevedel-tool-render-data-blocks
-                            (buffer-substring-no-properties beg end)))))
+             (when-let* ((block (save-excursion
+                                 (goto-char beg)
+                                 (skip-chars-forward "\n" end)
+                                 (mevedel-tool-render-data-block-at (point) end))))
                (plist-get (caddr block) :mevedel-tool-use-id))))
         (goto-char beg)
         (delete-region beg end)
@@ -422,18 +430,20 @@ model's call order, independently of asynchronous completion order."
                             (max beg next) end)))))))
       authorized)))
 
-(defun mevedel-tool-render-data--block-bounds
+(defun mevedel-tool-render-data--find-block
     (beg end &optional expected-tool-use-id)
-  "Return matching render-data bounds inside BEG..END, or nil.
+  "Return a matching (BEGIN END DATA) block inside BEG..END, or nil.
 The block must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data."
-  (when-let* ((block
-               (cl-find-if
-                (lambda (candidate)
-                  (mevedel-tool-render-data--owner-p
-                   (caddr candidate) expected-tool-use-id))
-                (mevedel-tool-render-data-blocks
-                 (buffer-substring-no-properties beg end)))))
-    (cons (+ beg (car block)) (+ beg (cadr block)))))
+  (save-excursion
+    (goto-char beg)
+    (let (found)
+      (while (and (not found)
+                  (search-forward mevedel-tool-render-data-open end t))
+        (when-let* ((block (mevedel-tool-render-data-block-at (match-beginning 0) end)))
+          (goto-char (cadr block))
+          (when (mevedel-tool-render-data--owner-p (caddr block) expected-tool-use-id)
+            (setq found block))))
+      found)))
 
 (defun mevedel-tool-render-data--next-segment-start (position tool-use-id)
   "Return the first different tool segment after POSITION.
@@ -482,22 +492,18 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
                        end tool-use-id)
                       (point-max)))
                  (block
-                  (mevedel-tool-render-data--block-bounds
+                  (mevedel-tool-render-data--find-block
                    beg search-end tool-use-id))
                  (existing
                   (and block
-                       (cdr
-                        (mevedel-tool-render-data-extract
-                         (buffer-substring-no-properties
-                          (car block) (cdr block))
-                         nil tool-use-id))))
+                       (mevedel-tool-render-data-without-owner (caddr block))))
                  (render-data
                   (mevedel-tool-render-data--plist-merge existing updates))
                  (inhibit-modification-hooks t)
                  (inhibit-read-only t))
             (if block
                 (mevedel-tool-render-data-patch-block
-                 (car block) (cdr block) render-data)
+                 (car block) (cadr block) render-data)
               (goto-char end)
               (insert
                (propertize
@@ -519,12 +525,9 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
                           (cdr segment) tool-use-id)
                          (point-max)))
                     (block
-                     (mevedel-tool-render-data--block-bounds
+                     (mevedel-tool-render-data--find-block
                       (car segment) search-end tool-use-id)))
-          (cdr
-           (mevedel-tool-render-data-extract
-            (buffer-substring-no-properties (car block) (cdr block))
-            nil tool-use-id)))))))
+          (mevedel-tool-render-data-without-owner (caddr block)))))))
 
 (defun mevedel-tool-render-data--reconcile-running
     (data successor-execution-ids)
@@ -584,34 +587,19 @@ terminal truth.  Return the number of repaired executions."
           (save-excursion
             (goto-char (point-min))
             (while (search-forward mevedel-tool-render-data-open nil t)
-              (let* ((open-begin (match-beginning 0))
-                     (begin
-                      (if (and (> open-begin (point-min))
-                               (eq (char-before open-begin) ?\n))
-                          (1- open-begin)
-                        open-begin)))
-                (when (search-forward mevedel-tool-render-data-close nil t)
-                  (let* ((close-end (match-end 0))
-                         (end
-                          (if (and (< close-end (point-max))
-                                   (eq (char-after close-end) ?\n))
-                              (1+ close-end)
-                            close-end))
-                         (block
-                          (car
-                           (mevedel-tool-render-data-blocks
-                            (buffer-substring-no-properties begin end))))
-                         (stored (and block (caddr block)))
-                         (data
-                          (and (mevedel-tool-render-data-call-range-p
-                                stored begin end)
-                               (mevedel-tool-render-data-without-owner
-                                stored)))
-                         (repair (and data
-                                      (mevedel-tool-render-data--reconcile-running
-                                       data successor-execution-ids))))
-                    (when (and repair (> (cdr repair) 0))
-                      (push (list begin end repair) records)))))))
+              (when-let* ((block (mevedel-tool-render-data-block-at (match-beginning 0))))
+                (pcase-let* ((`(,begin ,end ,stored) block)
+                            (data
+                             (and (mevedel-tool-render-data-call-range-p
+                                   stored begin end)
+                                  (mevedel-tool-render-data-without-owner stored)))
+                            (repair
+                             (and data
+                                  (mevedel-tool-render-data--reconcile-running
+                                   data successor-execution-ids))))
+                  (goto-char end)
+                  (when (and repair (> (cdr repair) 0))
+                    (push (list begin end repair) records))))))
           (dolist (record records)
             (pcase-let ((`(,begin ,end ,repair) record))
               (mevedel-tool-render-data-patch-block

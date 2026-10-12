@@ -1068,13 +1068,21 @@ terminal facts and retained bounded payload without a second output card."
 (defun mevedel-view-audit--history-render-data-owner (pos)
   "Return the tool owning the render-data block around POS, or nil."
   (save-excursion
-    (goto-char pos)
-    (when-let* ((open (search-backward mevedel-tool-render-data-open nil t))
-                (close (search-forward mevedel-tool-render-data-close nil t))
-                ((> close pos))
-                (block (car (mevedel-tool-render-data-blocks
-                             (buffer-substring-no-properties open close)))))
-      (plist-get (caddr block) :mevedel-tool-use-id))))
+    (goto-char (or (previous-single-property-change
+                   (min (1+ pos) (point-max)) 'gptel nil (point-min))
+                  (point-min)))
+    (let (owner)
+      (while (and (not owner)
+                  (search-forward mevedel-tool-render-data-open pos t))
+        (when-let* ((block (mevedel-tool-render-data-block-at (match-beginning 0))))
+          (when (and (> (cadr block) pos)
+                     (or (mevedel-tool-render-data-call-range-p
+                          (caddr block) (car block) (cadr block))
+                         (mevedel-tool-render-data-trusted-range-p
+                          (car block) (cadr block))))
+            (setq owner (plist-get (caddr block) :mevedel-tool-use-id)))
+          (goto-char (min pos (cadr block)))))
+      owner)))
 
 (defun mevedel-view-audit--history-delivery (pos execution-id)
   "Return EXECUTION-ID's mailbox delivery around POS and its end, or nil."

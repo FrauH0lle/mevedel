@@ -848,7 +848,12 @@ dedicated non-tool paths when the complete source span carries live producer
 provenance or the persisted `gptel=mevedel-render-data` property;
 delimiter-shaped user, assistant, and reasoning text remains ordinary
 transcript content.
-The payload is exactly one proper keyword plist.  Marker-looking text with a
+The codec reads one complete Lisp object before checking whitespace and the
+closing delimiter. Delimiter-shaped strings and quoted transcript/tool marker
+lines inside that object remain payload data, even when they contain a complete
+nested marker-shaped block. Buffer consumers share this decoder and advance
+over the full block without copying the transcript. Reader evaluation is disabled.
+The payload is exactly one proper keyword plist. Marker-looking text with a
 non-plist payload, trailing Lisp data, or unreadable data is ordinary visible
 tool output and is preserved verbatim. Handler envelopes are validated at the
 pipeline boundary as well: a non-nil `:render-data` value must already be a
@@ -882,8 +887,9 @@ Settled `WaitAgent` calls render `WaitAgent: agents (OUTCOME)`; consecutive
 waits coalesce into the final row with a count. `FollowupAgent: PATH` and
 `SendMessage: PATH` start collapsed and expand to their exact follow-up or
 mail text.
-Render-data lookup/patching scans literal open/close delimiters rather
-than matching the whole hidden block with one regexp; live agent metadata
+Render-data lookup/patching searches opening delimiters and decodes the complete
+payload rather than stopping at the first closing marker or matching the whole
+hidden block with one regexp; live agent metadata
 and multiline payloads can be large enough to overflow Emacs regexp
 limits. ApplyPatch uses `:kind patch` render-data for one persisted aggregate
 whose body contains structured per-file diff blocks.

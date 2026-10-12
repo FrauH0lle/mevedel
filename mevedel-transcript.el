@@ -192,11 +192,17 @@ support accepts."
     (save-restriction
       (widen)
       (let ((depth (or depth 0))
-            (regexp (format "^[ \t]*#\\+\\(begin\\|end\\)_\\(%s\\)\\b"
-                            block-re)))
+            (regexp (concat
+                     (format "^[ \t]*#\\+\\(begin\\|end\\)_\\(%s\\)\\b"
+                             block-re)
+                     "\\|^<!-- mevedel-render-data -->")))
         (goto-char (or start (point-min)))
         (while (re-search-forward regexp pos t)
           (cond
+           ((not (match-beginning 1))
+            (when-let* ((block (mevedel-transcript--render-data-block-at
+                               (match-beginning 0))))
+              (goto-char (min pos (cadr block)))))
            ((equal (match-string 1) "end")
             (setq depth (max 0 (1- depth))))
            ((or (not (equal (match-string 2) "tool"))
@@ -323,7 +329,10 @@ beginning of the buffer."
                 (with-syntax-table emacs-lisp-mode-syntax-table
                   (forward-sexp 1))
                 (let ((sexp-end (point)))
-                  (when (re-search-forward "^#\\+end_tool[^\n]*\n?" end t)
+                  ;; END is the canonical block boundary.  A quoted close in
+                  ;; serialized metadata is part of the result, not scaffold.
+                  (goto-char end)
+                  (when (re-search-backward "^#\\+end_tool[^\n]*\n?" sexp-end t)
                     (let ((tool-end (match-beginning 0))
                           (suffix-end (match-end 0)))
                       (when (<= sexp-end tool-end)
@@ -337,6 +346,46 @@ beginning of the buffer."
 
 (defvar mevedel-transcript--control-lines nil
   "Candidate control-line positions shared within one structural scan.")
+
+(defvar mevedel-transcript--render-data-blocks nil
+  "Complete decoded metadata blocks shared within one structural scan.")
+
+(defun mevedel-transcript--render-data-block-at (position &optional limit literal)
+  "Return the authorized render-data block at POSITION before LIMIT.
+Use the codec's complete payload boundaries.  A tool-owned block must match
+its surrounding call, including a saved metadata run that ends partway
+through the payload; an unbound block still needs producer provenance.
+With LITERAL, return a valid block without checking its authority."
+  (when-let* ((block
+              (or (and mevedel-transcript--render-data-blocks
+                       (gethash position mevedel-transcript--render-data-blocks))
+                  (save-excursion
+                    (goto-char position)
+                    (when (looking-at-p "<!-- mevedel-render-data -->")
+                      (mevedel-tool-render-data-block-at position limit))))))
+    (when mevedel-transcript--render-data-blocks
+      (puthash position block mevedel-transcript--render-data-blocks))
+    (pcase-let ((`(,begin ,end ,data) block))
+      (cond
+       (literal block)
+       ((plist-member data :mevedel-tool-use-id)
+          (let* ((owner (plist-get data :mevedel-tool-use-id))
+                 (target (cons 'tool owner))
+                 (context begin))
+            (when (eq (get-text-property context 'gptel) 'mevedel-render-data)
+              (setq context
+                    (max (point-min)
+                         (1- (or (previous-single-property-change
+                                  (1+ context) 'gptel nil (point-min))
+                                 (point-min))))))
+            (when (and (stringp owner)
+                       (or (mevedel-tool-render-data-call-range-p data begin end)
+                           (equal target (get-text-property context 'gptel))
+                           (and (> context (point-min))
+                                (equal target (get-text-property (1- context) 'gptel)))))
+              block)))
+       ((mevedel-tool-render-data-trusted-range-p position end)
+        block)))))
 
 (defconst mevedel-transcript--control-line-regexp
   (concat "^\\(?:#\\+\\(?:begin_\\|end_\\)"
@@ -353,7 +402,10 @@ Index prefixes only; the existing parsers still validate each complete marker."
       (goto-char (point-min))
       (let (positions)
         (while (re-search-forward mevedel-transcript--control-line-regexp nil t)
-          (push (match-beginning 0) positions))
+          (let ((start (match-beginning 0)))
+            (push start positions)
+            (when-let* ((block (mevedel-transcript--render-data-block-at start)))
+              (goto-char (cadr block)))))
         (vconcat (nreverse positions))))))
 
 (defconst mevedel-transcript--control-kinds
@@ -659,6 +711,21 @@ source, not a work-slice boundary."
                  (cons (plist-get block :close-end)
                        (list 'mailbox start (plist-get block :close-end)))
                (cons (1+ start) nil))))))
+      ('render-data
+       (when (mevedel-transcript--search-control-line (cadr spec) end)
+         (let* ((start (match-beginning 0))
+                (block (mevedel-transcript--render-data-block-at start end t)))
+           (if block
+               (progn
+                 (goto-char (cadr block))
+                 ;; Blank separator lines belong to metadata rather than the
+                 ;; enclosing tool's readable body, as with other controls.
+                 (while (and (< (point) end)
+                             (looking-at "[ \t\r]*\n")
+                             (<= (match-end 0) end))
+                   (goto-char (match-end 0)))
+                 (cons (point) (list 'render-data start (point))))
+             (cons (1+ start) nil)))))
       (_
        (when (mevedel-transcript--search-control-line (cadr spec) end)
          (let ((start (match-beginning 0))
@@ -686,7 +753,10 @@ BASE-SEGMENTS are raw `gptel' property runs used to validate persisted
 tool blocks.  Each result is `(TYPE START END VALUE...)'.
 PREPARED-RANGES, when non-nil, is a cons whose cdr holds candidates
 collected by a resumable scan of this same source."
-  (let* ((mevedel-transcript--control-lines
+  (let* ((mevedel-transcript--render-data-blocks
+          (or mevedel-transcript--render-data-blocks
+              (make-hash-table :test #'eql)))
+         (mevedel-transcript--control-lines
           (or mevedel-transcript--control-lines
               (mevedel-transcript--control-line-positions)))
          (ranges (if prepared-ranges (cdr prepared-ranges)
@@ -745,7 +815,7 @@ collected by a resumable scan of this same source."
                              (mevedel-transcript-audit-trusted-range-p
                               (cadr range) (point)))))
                     (and render-p
-                         (mevedel-tool-render-data-trusted-range-p
+                         (mevedel-transcript--render-data-block-at
                           (cadr range) (caddr range)))
                   (and (eq (car range) 'mailbox)
                        (mevedel-transcript--mailbox-control-context-p
@@ -872,7 +942,7 @@ a tool remains part of that tool.  Do not modify either input list."
                (:constructor mevedel-transcript--make-scan))
   "One full-source canonical segmentation pass."
   buffer tick low high start end phase pos type properties controls
-  control-lines raw-index raw-pos raw-ranges result)
+  control-lines render-data-blocks raw-index raw-pos raw-ranges result)
 
 (defun mevedel-transcript-scan-start (start end)
   "Start a resumable canonical scan between START and END in this buffer.
@@ -891,7 +961,8 @@ after any source text or property change."
      :low low :high high :start start :end end
      :phase 'properties :pos from :type (mevedel-transcript--classify-gptel-prop
                                         (get-text-property from 'gptel))
-     :properties nil :controls nil)))
+     :properties nil :controls nil
+     :render-data-blocks (make-hash-table :test #'eql))))
 
 (defun mevedel-transcript-scan-cancel (job)
   "Release retained intermediate data in transcript scan JOB."
@@ -900,6 +971,7 @@ after any source text or property change."
         (mevedel-transcript--scan-properties job) nil
         (mevedel-transcript--scan-controls job) nil
         (mevedel-transcript--scan-control-lines job) nil
+        (mevedel-transcript--scan-render-data-blocks job) nil
         (mevedel-transcript--scan-raw-ranges job) nil
         (mevedel-transcript--scan-result job) nil)
   nil)
@@ -948,9 +1020,13 @@ after any source text or property change."
            (limit (min (point-max) (+ (point) 16384)))
            (finished nil))
       (while (and (< count 128)
+                  (< (point) limit)
                   (re-search-forward mevedel-transcript--control-line-regexp
                                      limit t))
-        (push (match-beginning 0) (mevedel-transcript--scan-controls job))
+        (let ((start (match-beginning 0)))
+          (push start (mevedel-transcript--scan-controls job))
+          (when-let* ((block (mevedel-transcript--render-data-block-at start)))
+            (goto-char (cadr block))))
         (cl-incf count))
       ;; Search limits may cut across the fixed candidate prefix.  Revisit
       ;; the final 64 characters on the next step, without repeating matches
@@ -1016,7 +1092,9 @@ the caller's timer budget."
              (narrow-to-region (mevedel-transcript--scan-low job)
                                (mevedel-transcript--scan-high job))
              (let ((mevedel-transcript--control-lines
-                    (mevedel-transcript--scan-control-lines job)))
+                    (mevedel-transcript--scan-control-lines job))
+                   (mevedel-transcript--render-data-blocks
+                    (mevedel-transcript--scan-render-data-blocks job)))
                (pcase (mevedel-transcript--scan-phase job)
                  ('properties (mevedel-transcript--scan-properties-step job))
                  ('controls (mevedel-transcript--scan-controls-step job))
@@ -1037,6 +1115,7 @@ the caller's timer budget."
                           (mevedel-transcript--scan-properties job) nil
                           (mevedel-transcript--scan-controls job) nil
                           (mevedel-transcript--scan-raw-ranges job) nil
+                          (mevedel-transcript--scan-render-data-blocks job) nil
                           (mevedel-transcript--scan-control-lines job) nil))))))))
        (eq (mevedel-transcript--scan-phase job) 'done)))))
 

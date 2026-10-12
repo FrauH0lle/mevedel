@@ -266,7 +266,14 @@ missing hooks, and unobserved character changes retire affected identities.
 This allows hits to skip payload copying, hashing, structural parsing, and
 repeated request-failure decoding. Partial spans depending on surrounding source
 are not cached under their own range alone. A structural scan shares candidate control-line
-positions among its existing parsers. Activity classification and insertion
+positions and complete decoded metadata blocks among its existing parsers.
+Quoted transcript output exposed a first-close delimiter bug: markers inside
+a serialized output string split one real tool into phantom rows. The codec
+now reads the complete Lisp object before accepting its closing delimiter;
+only authorized payloads are opaque to structural indexing. Decoding in place
+and sharing blocks across resumable phases retains bounded traversal without
+changing the wire format or weakening owner/provenance checks.
+Activity classification and insertion
 reuse entries within that render, with independent coalescing counts. Settled
 batch jobs additionally prepare source-backed entries a few at a time and
 reuse them during publication when the reader's disclosure state still matches.
