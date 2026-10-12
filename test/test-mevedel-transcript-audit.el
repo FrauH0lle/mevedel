@@ -530,18 +530,26 @@
          (display (mevedel-transcript-audit-shared-context text shared)))
     (should (equal (plist-get display :text) question))
     (should (equal (plist-get display :context) context))
-    (should (string-match-p "Notes.*Selection.*revision 5" (plist-get display :label)))
+    (should (equal "Discussion · Notes · Selection" (plist-get display :label)))
     (should-not (mevedel-transcript-audit-shared-context text nil))
     (should-not (mevedel-transcript-audit-shared-context text (plist-put (copy-sequence shared) :edited t)))
     (should-not (mevedel-transcript-audit-shared-context (concat "A host rewrite\n" text) shared))
     (should-not (mevedel-transcript-audit-shared-context "An ordinary question" shared)))
-  :doc "Artifact comments label the artifact and the commented part, single-line"
+  :doc "Discussions label the item and the discussed target, single-line"
   (let* ((display (mevedel-transcript-audit-shared-context
-                   "Bigger\n\nShared content snapshot (user-provided data):\nComment on a.html"
-                   (list :kind "artifact" :artifact "a\nb.html" :text "Bigger"
-                         :anchor (list :label "Intro › word \"share\"")))))
+                   "Bigger\n\nShared content snapshot (user-provided data):\nOn a.html"
+                   (list :kind "artifact" :title "a\nb.html" :text "Bigger" :scope "selection"
+                         :targetLabel "Intro › word \"share\""))))
     (should (equal (plist-get display :text) "Bigger"))
     (should (equal (plist-get display :label)
-                   "Artifact comment · a b.html · Intro › word \"share\""))))
+                   "Discussion · a b.html · Intro › word \"share\"")))
+  :doc "A whole-item discussion, or one without a target label, says so"
+  (dolist (case '(("whole" . "Discussion · Notes · Whole item")
+                  ("selection" . "Discussion · Notes · Selection")))
+    (should (equal (cdr case)
+                   (plist-get (mevedel-transcript-audit-shared-context
+                               "Q\n\nShared content snapshot (user-provided data):\nX"
+                               (list :text "Q" :title "Notes" :scope (car case)))
+                              :label)))))
 
 ;;; test-mevedel-transcript-audit.el ends here

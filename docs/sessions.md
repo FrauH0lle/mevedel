@@ -1673,9 +1673,9 @@ session's from its verified publication, never its fixed cache; a PID-lock
 session's folder without links, hidden files and backups -- and creates one
 store artifact per file, whiteboard and document. A file artifact gets an id
 from its file name; a whiteboard or document keeps its own id. A fork's copy
-that did not change is the same artifact as its parent's, and threads the fork
-added join it. Artifact comments move with their file, and each thread keeps
-answering in the session that discussed it. Every new artifact starts with
+that did not change is the same artifact as its parent's. Legacy artifact
+comments are not carried over: discussions replaced them without a migration.
+Every new artifact starts with
 one version. Legacy payload names and bytes are preserved; store bookkeeping
 lives in the separate `.state/ID/` directory. The session is then converted
 as above into the destination, attached to the artifacts it held and without

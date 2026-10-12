@@ -145,7 +145,7 @@ Chat / view
   mevedel-collaboration-artifact-projection.el ApplyPatch artifact projection
   mevedel-collaboration-artifact.el browser artifact fetch and notifications
   mevedel-collaboration-files.el  browser project files: list, read, upload, trash
-  mevedel-collaboration-artifact-comments.el artifact comment store, threads and conversations
+  mevedel-collaboration-discussions.el discussions about store items: actions, routing, requests, auto-resolve
   mevedel-collaboration-history.el archived browser segments and artifact metadata
   mevedel-collaboration-editing.el browser shared editing and selection questions
   mevedel-collaboration-presence.el who else is on each guest's page; lobby counts

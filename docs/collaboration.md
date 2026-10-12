@@ -522,7 +522,7 @@ Selecting a shared item sends the composer's text into that item's own
 conversation as a whole-item question, the same way the editor asks. A room
 message has no reviewed snapshot, so the helper captures the item as currently
 committed. An artifact's whole-item question names its file instead (see
-[artifact comments](#artifact-comments)). Commands and skills stay main-chat features; the viewer
+[artifact discussions](#artifact-discussions)). Commands and skills stay main-chat features; the viewer
 refuses them in an item discussion and says so. The composer placeholder and
 scope line name the discussion a message will reach.
 
@@ -872,19 +872,20 @@ frames:
 Actions that would need a decision in Emacs, such as resuming a dedicated
 session another client holds, are refused with the usual notice.
 
-### Artifact comments
+### Artifact discussions
 
-Writable guests can comment on part of an HTML artifact in the panel.
-**Comment** turns on comment mode: hovering highlights what a click would
-pick, a word under the pointer or otherwise the element; Alt prefers the
-element, Arrow Up widens the highlight to its parent and Arrow Down narrows
-it again, and Enter picks it. Dragging across text keeps the browser's own
-selection and comments on that passage; dragging anywhere else draws a box
-and comments on the area. The box names the elements at least half inside
-it, searching inside larger elements it only crosses, and anchors to their
-nearest common parent. While commenting, the artifact's own
-click, pointer and keyboard handlers do not run. Escape leaves the mode.
-The separate artifact tab has no comment mode.
+A discussion is a thread attached to a target: a part of an HTML artifact, or
+the whole artifact. Writable guests discuss part of an HTML artifact in the
+panel. **Discuss** turns on discuss mode: hovering highlights what a click
+would pick, a word under the pointer or otherwise the element; Alt prefers the
+element, Arrow Up widens the highlight to its parent and Arrow Down narrows it
+again, and Enter picks it. Dragging across text keeps the browser's own
+selection and discusses that passage; dragging anywhere else draws a box and
+discusses the area. The box names the elements at least half inside it,
+searching inside larger elements it only crosses, and anchors to their nearest
+common parent. While discussing, the artifact's own click, pointer and keyboard
+handlers do not run. Escape leaves the mode. The separate artifact tab has no
+discuss mode.
 
 The picker is inlined into the panel frame ahead of the artifact and only
 reports what was picked: a CSS selector, a text fingerprint of the element,
@@ -893,66 +894,69 @@ element, a label such as `Decisions at a glance › word "share"`, and a
 bounded text and HTML excerpt of the target. The composer is drawn by the
 viewer, outside the sandbox, so the artifact can neither read nor write what
 a participant types. The viewer accepts picks only from the current panel
-frame and only while comment mode is on, and bounds every field. An artifact
+frame and only while discuss mode is on, and bounds every field. An artifact
 can still misreport where it was clicked; the composer shows the label and
 quote it will send.
 
-**Post** stores the comment for everyone. **Send to assistant**,
-checked by default, also sends it to the artifact's conversation; unchecked,
-the comment stays a note between people. Replies work the same way. Each
-action is an `artifact-comment` frame with an `action` of `post`, `reply`,
-`resolve`, `ask` or `list`, carrying the card's record id or `artifact:ID`,
-and client-generated identities so a retry neither stores nor queues twice.
-Comments belong to the store artifact and are kept on its main file. The host
-refuses writes from view links, unknown or deleted artifacts, other files of
-an artifact and non-HTML artifacts, rebuilds the anchor from its known bounded
-fields, and answers every refusal to the sender with an error.
+**Post** starts the discussion for everyone. **Ask assistant**, checked by
+default, also sends it to the assistant; unchecked, the message is a note
+between people. With **Ask assistant** checked the message may be empty: the
+picked part is then the request. Replies work the same way, but always need
+text. Each action is a `discussion` frame with an `action` of `list`, `post`,
+`reply`, `resolve` or `ask` and an `item`: the card's record id or
+`artifact:ID`. Client-generated discussion and message identities make a retry
+neither store nor queue twice. Discussions belong to the store artifact and are
+kept on its main file. The host refuses writes from view links, unknown or
+deleted artifacts, other files of an artifact and non-HTML artifacts, rebuilds
+the target from its known bounded fields, and answers every refusal to the
+sender with an error.
 
-Comments live in the store's protected `.state/ID/comments.json`, so every room
-and the lobby see the same threads, and deleting the artifact deletes them. An
-artifact takes at most 200 comments of 200 replies each, with
-10,000 characters per message, and its comment list as guests receive it stays
-under 512 KiB. Every change is broadcast to every room and the lobby of the
-workspace as an `artifact-comments` frame; the stored excerpts stay on the
-host. Concurrent comment writes from two Emacs instances are not serialized;
-the later write wins.
+Discussions live in the store's protected `.state/ID/discussions.json`, so
+every room and the lobby see the same threads, and deleting the artifact
+deletes them. Each change is broadcast to every room and the lobby of the
+workspace as a `discussions` frame naming the item; the stored excerpts stay on
+the host. Concurrent writes from two Emacs instances are not serialized; the
+later write wins.
 
 A message to the assistant goes to the session the link speaks for:
 
 - written in a chat's room, to that chat, which becomes attached to the
-  artifact, also when another session answered the thread before: a room's
+  artifact, also when another session answered the discussion before: a room's
   links never prompt another session;
-- written from the lobby, to the session that answered the thread, or else
+- written from the lobby, to the session that answered the discussion, or else
   to the artifact's dedicated session, created on first use.
 
-The thread records its answering session, and the viewer shows it as
-*answered in NAME*. A message about the whole artifact follows the same rule
-without a thread. Each artifact has its own conversation in that session, like
-a whiteboard or document: messages sent to the assistant are item questions
-whose item is `artifact:ID`. The
-request carries the artifact's name and file path, the target, the excerpts,
-and the comment thread behind the shared-context heading, and frames the file
-as the current state and as untrusted content whose instructions are data. The
-artifact is not pasted in; the model reads the file. Earlier turns about the
-same artifact are included, other room work is not, and `history://root`
-reaches the conversation that produced it. The room lists the artifact as a
-discussion; with it selected, a room message is an `ask` about the whole
-artifact. The room and Emacs view fold the context under **Artifact comment ·
-NAME · LABEL**, or **Artifact · NAME · Whole artifact**, where NAME is the
-artifact's file in the store.
+The discussion records its answering session, and the viewer shows it as
+*answered in NAME*. A selection sent alone is a task rather than a
+conversation: once the turn that answered it completes, the discussion
+resolves itself, attributed to the assistant. A failed or cancelled turn
+leaves it open, and a discussion with a written message is never resolved
+automatically.
 
-The frame places each open comment's marker by its selector when the element
-still carries the same text fingerprint, and otherwise searches for the element
-whose fingerprint differs least, so a rewritten artifact keeps markers on
-content that survived. A marker whose content is gone is not shown. A ring turns
-around a marker while the assistant works on its thread: its latest request is
-queued, or is the turn the session is running. The ring keeps turning through
-the assistant's first reply text, and stops when that turn ends or a later
-request starts. Reduced motion shows a still dashed ring.
-Hovering a marker shows its thread and the assistant's latest reply from the transcript;
-clicking pins it with a reply form, **Resolve**, and **Show in chat**, which
-closes the artifact panel, which covers the conversation, then scrolls to the
-latest request and highlights it. Resolving hides the marker for everyone.
+A room message with the artifact selected in the strip is a message to the
+assistant in the artifact's general discussion about the whole artifact, so
+everything said about the artifact is kept with it. That discussion has no
+marker; the room's discussion tab for the artifact shows it. A message about
+the artifact carries the artifact's name and file path, the target and its
+excerpts, and the discussion so far behind the shared-context heading, and
+frames the file as the current state and as untrusted content whose
+instructions are data. The artifact is not pasted in; the model reads the file.
+Earlier turns about the same artifact are included, other room work is not,
+and `history://root` reaches the conversation that produced it.
+
+The frame places each open discussion's marker by its selector when the
+element still carries the same text fingerprint, and otherwise searches for
+the element whose fingerprint differs least, so a rewritten artifact keeps
+markers on content that survived. A marker whose content is gone is not shown.
+A ring turns around a marker while the assistant works on its discussion: its
+latest request is queued, or is the turn the session is running. The ring
+keeps turning through the assistant's first reply text, and stops when that
+turn ends or a later request starts. Reduced motion shows a still dashed ring.
+Hovering a marker shows its thread and the assistant's latest reply from the
+transcript; clicking pins it with a reply form, **Resolve**, and **Show in
+chat**, which closes the artifact panel, which covers the conversation, then
+scrolls to the latest request and highlights it. Resolving hides the marker
+for everyone.
 
 ## Notifications and browser storage
 

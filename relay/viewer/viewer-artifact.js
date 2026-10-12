@@ -359,11 +359,11 @@
       if (comments) comments.queue(entries);
     }
 
-    function handleComment(frame) {
+    function handleDiscussion(frame) {
       if (comments) comments.handle(frame);
     }
 
-    function storedComments(frame) {
+    function storedDiscussions(frame) {
       if (comments) comments.stored(frame);
     }
 
@@ -382,7 +382,7 @@
 
     return Object.freeze({open, openFile, render, attachedRows, handle, handleDelete, close,
                           page: () => (panel && !panel.hidden ? view.store : null),
-                          setTheme, queue, handleComment, storedComments, discuss, activity});
+                          setTheme, queue, handleDiscussion, storedDiscussions, discuss, activity});
   }
 
   window.mevedelArtifactView = Object.freeze({create});

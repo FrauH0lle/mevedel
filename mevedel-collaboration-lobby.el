@@ -53,11 +53,11 @@
 (autoload 'mevedel-collaboration--handle-store-action "mevedel-collaboration-artifact")
 (autoload 'mevedel-collaboration--handle-store-list "mevedel-collaboration-artifact")
 
-;; `mevedel-collaboration-artifact-comments'
-(declare-function mevedel-collaboration--handle-artifact-comment
-                  "mevedel-collaboration-artifact-comments" (room peer frame))
-(autoload 'mevedel-collaboration--handle-artifact-comment
-  "mevedel-collaboration-artifact-comments")
+;; `mevedel-collaboration-discussions'
+(declare-function mevedel-collaboration-discussions-handle
+                  "mevedel-collaboration-discussions" (room peer frame))
+(autoload 'mevedel-collaboration-discussions-handle
+  "mevedel-collaboration-discussions")
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--admit-hello
@@ -518,8 +518,8 @@ whose link is meant to keep working."
              (mevedel-collaboration--handle-artifact-get lobby peer frame))
             ("artifact-delete"
              (mevedel-collaboration--handle-artifact-delete lobby peer frame))
-            ("artifact-comment"
-             (mevedel-collaboration--handle-artifact-comment lobby peer frame))
+            ("discussion"
+             (mevedel-collaboration-discussions-handle lobby peer frame))
             ("store-list"
              (mevedel-collaboration--handle-store-list lobby peer frame))
             ("store-action"

@@ -1260,7 +1260,7 @@ visible after cloning a Git repository that omits their empty authored directori
     meta.el          ; kind, title, primary file, created, dedicated session
     state.json       ; a whiteboard's or document's state
     versions/        ; numbered copies plus index.el
-    comments.json    ; comment threads, each naming its answering session
+    discussions.json ; an HTML artifact's discussions, each naming its answering session
 ```
 
 Sessions do not own artifacts; they attach to them. A session persists only

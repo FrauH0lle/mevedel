@@ -1,10 +1,10 @@
-/* Artifact comment picker and viewer controller in a real browser.
+/* Artifact discussion picker and viewer controller in a real browser.
  *
  * A static page hosts the viewer-side controller and a sandboxed artifact
  * frame built the way the artifact panel builds it, then real pointer input
  * picks words, elements, text selections and boxes inside the frame.
  *
- * Run: node --test test/collaboration-artifact-comments.browser.mjs
+ * Run: node --test test/collaboration-discussions.browser.mjs
  * Requires `npm ci --prefix shared-editing` and Playwright Chromium.
  */
 import test from 'node:test';
@@ -43,7 +43,7 @@ const HOST = `<!doctype html><html><head><style>
   .artifact-frame{border:0;width:740px;height:540px;display:block}
   .artifact-comment-composer,.artifact-comment-card{position:absolute;background:#fff;border:1px solid #333}
 </style></head><body>
-  <button id="artifact-comment" hidden>Comment</button>
+  <button id="artifact-comment" hidden>Discuss</button>
   <div id="artifact-body"></div>
 </body></html>`;
 
@@ -62,29 +62,30 @@ async function setup(page) {
       if (typeof text === 'string') node.textContent = text;
       return node;
     };
-    // A small stand-in for the host's comment store: it answers each
+    // A small stand-in for the host's discussion store: it answers each
     // action and broadcasts the stored list, as the host does.
     window.store = [];
     window.failNext = null;
     const answer = frame => {
-      const reply = {t: 'artifact-comment', reqId: frame.reqId};
+      const reply = {t: 'discussion', reqId: frame.reqId};
+      const message = () => ({id: frame.messageId, actor: 'Alice', text: frame.text || '',
+                              ...(frame.text ? {} : {alone: true})});
       if (window.failNext) {
         reply.error = window.failNext;
         window.failNext = null;
       } else if (frame.action === 'list') {
-        reply.comments = window.store;
+        reply.discussions = window.store;
       } else if (frame.action === 'post') {
-        window.store.push({id: frame.commentId, actor: 'Alice', text: frame.text,
-                           anchor: frame.anchor, resolved: false, replies: []});
+        window.store.push({id: frame.discussionId, target: frame.target, quote: '',
+                           messages: [message()], resolved: false});
       } else if (frame.action === 'reply') {
-        window.store.find(c => c.id === frame.commentId).replies
-          .push({id: frame.replyId, actor: 'Alice', text: frame.text});
+        window.store.find(d => d.id === frame.discussionId).messages.push(message());
       } else if (frame.action === 'resolve') {
-        window.store.find(c => c.id === frame.commentId).resolved = frame.resolved;
+        window.store.find(d => d.id === frame.discussionId).resolved = frame.resolved;
       }
       if (!reply.error && frame.action !== 'list' && frame.action !== 'ask') {
-        window.controller.stored({artifact: 'schema.html',
-                                  comments: JSON.parse(JSON.stringify(window.store))});
+        window.controller.stored({item: 'artifact:schema.html',
+                                  discussions: JSON.parse(JSON.stringify(window.store))});
       }
       window.controller.handle(reply);
     };
@@ -158,7 +159,7 @@ async function commentMode(page) {
   await page.waitForTimeout(50);
 }
 
-test('artifact comments: pick, send, marker thread, box, selection, relocation',
+test('artifact discussions: pick, send, marker thread, box, selection, relocation',
      {timeout: 120000}, async () => {
   const browser = await chromium.launch();
   try {
@@ -205,14 +206,15 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     await page.keyboard.press('Control+Enter');
     await page.waitForSelector('.artifact-comment-composer', {state: 'detached'});
     const [sent] = await actions(page, 'post');
-    assert.equal(sent.t, 'artifact-comment');
-    assert.equal(sent.id, 'tool-1');
+    assert.equal(sent.t, 'discussion');
+    assert.equal(sent.item, 'tool-1');
     assert.equal(sent.text, 'Say who shares them');
     assert.equal(sent.toAssistant, true);
-    assert.equal(sent.anchor.kind, 'word');
-    assert.equal(sent.anchor.quote, 'share');
-    assert.equal(sent.anchor.selector, '#lead');
-    assert.match(sent.anchor.sig.h, /^[0-9a-f]{16}$/);
+    assert.ok(sent.messageId && sent.messageId !== sent.discussionId);
+    assert.equal(sent.target.kind, 'word');
+    assert.equal(sent.target.quote, 'share');
+    assert.equal(sent.target.selector, '#lead');
+    assert.match(sent.target.sig.h, /^[0-9a-f]{16}$/);
     assert.match(sent.context.text, /countries share the same tables/);
     assert.match(sent.context.html, /^<p id="lead">/);
     assert.equal(await page.getAttribute('#artifact-comment', 'aria-pressed'), 'false');
@@ -223,12 +225,12 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     // transcript, hovering it shows the thread and the reply.
     await page.evaluate(id => window.controller.records([
       {id: 'u1', kind: 'user', guest: 'Alice',
-       shared: {kind: 'artifact', artifact: 'schema.html', questionId: id, commentId: id,
+       shared: {kind: 'artifact', title: 'schema.html', questionId: 'q1', discussionId: id,
                 itemId: 'artifact:schema.html', text: 'Say who shares them'}},
       {id: 'a1', kind: 'assistant', text: 'Named the country teams.'},
-    ]), sent.commentId);
+    ]), sent.discussionId);
     await page.waitForFunction(id => window.located.some(entry => entry.found.includes(id)),
-                               sent.commentId);
+                               sent.discussionId);
     await page.mouse.move(share.x + 6, share.y - 12);
     await page.waitForSelector('.artifact-comment-card');
     const card = await page.textContent('.artifact-comment-card');
@@ -248,7 +250,7 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     await page.waitForFunction(() =>
       /Alice: Only the regional teams/.test(document.querySelector('.artifact-comment-card')?.textContent));
     const [reply] = await actions(page, 'reply');
-    assert.equal(reply.commentId, sent.commentId);
+    assert.equal(reply.discussionId, sent.discussionId);
     assert.equal(reply.toAssistant, false);
     await page.click('.artifact-comment-card >> text=Show in chat');
     assert.equal(await page.evaluate(() => window.revealed), 'u1');
@@ -275,9 +277,9 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
       document.querySelector('.artifact-comment-status')?.textContent
         === 'The session cannot accept a message right now');
     const [boxed] = await actions(page, 'post').then(list => list.slice(-1));
-    assert.equal(boxed.anchor.kind, 'box');
-    assert.equal(boxed.anchor.count, 3);
-    assert.ok(boxed.anchor.region.x1 > boxed.anchor.region.x0);
+    assert.equal(boxed.target.kind, 'box');
+    assert.equal(boxed.target.count, 3);
+    assert.ok(boxed.target.region.x1 > boxed.target.region.x0);
     assert.match(boxed.context.text, /213,150 rows.*42 columns.*637 simulations/);
     await page.click('.artifact-comment-composer >> text=Cancel');
 
@@ -315,7 +317,20 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     await page.mouse.up();
     await page.waitForSelector('.artifact-comment-composer');
     assert.equal(await page.textContent('.artifact-comment-target'), 'heading "SNT Schema v2"');
-    await page.click('.artifact-comment-composer >> text=Cancel');
+    // Without words, the selection itself is the request, but only for the
+    // assistant: a note between people needs a message.
+    await page.uncheck('.artifact-comment-composer input[type=checkbox]');
+    await page.click('.artifact-comment-composer >> text=Post');
+    assert.equal(await page.textContent('.artifact-comment-status'),
+                 'Write a message, or ask the assistant.');
+    await page.check('.artifact-comment-composer input[type=checkbox]');
+    await page.click('.artifact-comment-composer >> text=Post');
+    await page.waitForSelector('.artifact-comment-composer', {state: 'detached'});
+    const [alone] = await actions(page, 'post').then(list => list.slice(-1));
+    assert.equal(alone.text, '');
+    assert.equal(alone.toAssistant, true);
+    assert.equal(alone.target.label, 'heading "SNT Schema v2"');
+    await commentMode(page);
 
     // Dragging across text keeps native selection and sends the quote.
     // Cancelling keeps comment mode on for another try.
@@ -336,18 +351,18 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     await page.evaluate(html => window.show(html, 'tool-2'), REWRITTEN);
     await artifactFrame(page);
     await page.waitForFunction(id => window.located.some(entry => entry.found.includes(id)),
-                               sent.commentId);
+                               sent.discussionId);
     // Content that no longer exists drops its marker.
     await page.evaluate(() => { window.located = []; });
     await page.evaluate(() => window.show('<p>Entirely different page content.</p>', 'tool-3'));
     await artifactFrame(page);
     await page.waitForFunction(id => window.located.some(entry => entry.missing.includes(id)),
-                               sent.commentId);
+                               sent.discussionId);
     // Resolving takes the marker away for everyone.
     await page.evaluate(html => window.show(html, 'tool-4'), ARTIFACT);
     await artifactFrame(page);
     await page.waitForFunction(id => window.located.some(entry => entry.found.includes(id)),
-                               sent.commentId);
+                               sent.discussionId);
     await page.evaluate(() => { window.located = []; });
     const again = await inPage(page, await artifactFrame(page),
                                await wordRect(await artifactFrame(page), 'share'));
@@ -357,7 +372,8 @@ test('artifact comments: pick, send, marker thread, box, selection, relocation',
     await page.click('.artifact-comment-card >> text=Resolve');
     await page.waitForSelector('.artifact-comment-card', {state: 'detached'});
     assert.equal((await actions(page, 'resolve'))[0].resolved, true);
-    assert.equal(await page.textContent('#artifact-comment'), 'Comment');
+    assert.equal(await page.textContent('#artifact-comment'), 'Discuss · 1',
+                 'the selection sent alone is still open');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

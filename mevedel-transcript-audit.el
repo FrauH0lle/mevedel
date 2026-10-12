@@ -234,19 +234,11 @@ Edited or mismatched prompts remain fully visible.  This never changes TEXT."
             :label (let ((flat (lambda (value fallback)
                                  (replace-regexp-in-string
                                   "[\n\r]" " " (or value fallback)))))
-                     (if (equal (plist-get shared :kind) "artifact")
-                         (if (plist-get shared :anchor)
-                             (format "Artifact comment · %s · %s"
-                                     (funcall flat (plist-get shared :artifact) "artifact")
-                                     (funcall flat (plist-get (plist-get shared :anchor) :label)
-                                              "Selection"))
-                           (format "Artifact · %s · Whole artifact"
-                                   (funcall flat (plist-get shared :artifact) "artifact")))
-                       (format "Shared context · %s · %s · revision %s"
-                               (funcall flat (plist-get shared :title) "Shared item")
-                               (if (equal (plist-get shared :scope) "selection")
-                                   "Selection" "Whole item")
-                               (or (plist-get shared :revision) "?"))))))))
+                     (format "Discussion · %s · %s"
+                             (funcall flat (plist-get shared :title) "Shared item")
+                             (funcall flat (plist-get shared :targetLabel)
+                                      (if (equal (plist-get shared :scope) "selection")
+                                          "Selection" "Whole item"))))))))
 
 (defun mevedel-transcript-audit--string-ranges (text)
   "Return trusted audit block ranges in TEXT without decoding them.

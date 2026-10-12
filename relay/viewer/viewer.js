@@ -1334,12 +1334,12 @@
       history.handle(frame);
     } else if (frame.t === 'artifact') {
       artifacts.handle(frame);
-    } else if (frame.t === 'artifact-comment') {
-      artifacts.handleComment(frame);
+    } else if (frame.t === 'discussion') {
+      artifacts.handleDiscussion(frame);
     } else if (frame.t === 'artifact-delete') {
       artifacts.handleDelete(frame);
-    } else if (frame.t === 'artifact-comments') {
-      artifacts.storedComments(frame);
+    } else if (frame.t === 'discussions') {
+      artifacts.storedDiscussions(frame);
     } else if (frame.t === 'store-artifacts') {
       activeStore().show(frame);
       if (!lobby.active()) {

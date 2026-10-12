@@ -11,7 +11,6 @@
                            "mevedel-session-test-support"))
 ;; Name the source: stale bytecode beside the script would otherwise shadow the
 ;; script under test.
-(require 'mevedel-collaboration-artifact-comments)
 (require 'mevedel-migrate-artifacts
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            ".." "scripts" "migrate-artifacts-to-store.el"))
@@ -125,15 +124,17 @@
                            (mapcar (lambda (row) (cons (car row) (sort (copy-sequence (cdr row))
                                                                        #'string<)))
                                    report)))
-            ;; The file artifact, with its comments answering in their session.
+            ;; The file artifact; legacy comments are not carried over.
             (should (equal "<p>mockup</p>"
                            (with-temp-buffer
                              (insert-file-contents (file-name-concat store "mockup" "mockup.html"))
                              (buffer-string))))
-            (let ((thread (car (mevedel-collaboration--artifact-comments-read workspace "mockup"))))
-              (should (equal "Bigger" (plist-get thread :text)))
-              (should (equal "s1" (plist-get thread :session)))
-              (should (equal "Chat s1" (plist-get thread :session-name))))
+            (dolist (id '("mockup" "notes"))
+              (dolist (name '("comments.json" "discussions.json"))
+                (should-not (file-exists-p
+                             (file-name-concat (mevedel-artifact-store-bookkeeping-directory
+                                                workspace id)
+                                               name)))))
             (should (= 1 (length (mevedel-artifact-store-versions workspace "mockup"))))
             ;; The whiteboard keeps its identity and gets a version.
             (should (equal '(:kind whiteboard :title "Plan" :file "state.json")
@@ -146,9 +147,6 @@
                                        (insert-file-contents
                                         (file-name-concat store "notes" "notes.md"))
                                        (buffer-string))))
-            (let ((thread (car (mevedel-collaboration--artifact-comments-read workspace "notes"))))
-              (should (equal "s2" (plist-get thread :session)))
-              (should (equal "Chat s2" (plist-get thread :session-name))))
             ;; Converted sessions are current and attached; originals unchanged.
             (let ((converted (mevedel-migrate-session--read
                               (file-name-concat destination "s1" "session.meta.el"))))
@@ -182,17 +180,7 @@
     (unwind-protect
         (progn
           (mevedel-migrate-artifacts-test--pid-session root "s1")
-          ;; The fork added a thread of its own to the shared file.
-          (write-region (mevedel-shared-editing--json
-                         (list :artifact "mockup.html"
-                               :comments (vector (list :id "abcdefabcdefabcdefab" :actor "Bob"
-                                                       :text "Fork note"
-                                                       :anchor '(:kind "word" :selector "p" :label "p")
-                                                       :resolved :json-false :replies []))))
-                        nil (file-name-concat (mevedel-migrate-artifacts-test--pid-session root "s2")
-                                              "artifacts" "shared-editing" "artifact-comments"
-                                              "fork.json")
-                        nil 'silent)
+          (mevedel-migrate-artifacts-test--pid-session root "s2")
           (let ((diverged (file-name-concat root ".mevedel" "sessions" "s3")))
             (mevedel-migrate-artifacts-test--pid-session root "s3")
             (write-region (mevedel-shared-editing--json
@@ -208,10 +196,6 @@
             (should (equal '("mockup") (cl-remove-if-not (lambda (id) (string-prefix-p "mockup" id))
                                                          (mevedel-artifact-store-ids workspace))))
             (should (member "mockup" (cdr (assoc "s3" report))))
-            (should (equal '("Bigger" "Fork note")
-                           (mapcar (lambda (c) (plist-get c :text))
-                                   (mevedel-collaboration--artifact-comments-read
-                                    workspace "mockup"))))
             (should (member "board-1-2" (cdr (assoc "s3" report))))
             (should (equal "Forked" (plist-get (mevedel-shared-editing--read workspace "board-1-2")
                                                :title)))
@@ -342,7 +326,7 @@
 (mevedel-deftest mevedel-migrate-artifacts--import ()
   ,test
   (test)
-  :doc "removes interrupted imports so retries retain comments and a first version"
+  :doc "removes interrupted imports so retries keep a first version"
   (dolist (kind '(file item))
     (let* ((root (file-name-as-directory (make-temp-file "mevedel-migrate-retry-" t)))
            (workspace (mevedel-workspace--create :type 'project :id "w" :root root))
@@ -352,8 +336,7 @@
                           workspace "s1" "artifacts/shared-editing/board-1.json"
                           mevedel-migrate-artifacts-test--board)
                        (mevedel-migrate-artifacts--move-file
-                        workspace "s1" "artifacts/a.html" "<p>Kept</p>"
-                        (list (list :id "thread" :text "Kept comment")) "Chat s1")))))
+                        workspace "s1" "artifacts/a.html" "<p>Kept</p>")))))
       (unwind-protect
           (progn
             (cl-letf (((symbol-function 'mevedel-artifact-store-record-version)
@@ -362,12 +345,7 @@
             (should-not (mevedel-artifact-store-ids workspace))
             (let ((id (funcall import)))
               (should (equal id (funcall import)))
-              (should (= 1 (length (mevedel-artifact-store-versions workspace id))))
-              (when (eq kind 'file)
-                (should (equal "Kept comment"
-                               (plist-get
-                                (car (mevedel-collaboration--artifact-comments-read workspace id))
-                                :text))))))
+              (should (= 1 (length (mevedel-artifact-store-versions workspace id))))))
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-migrate-artifacts--fresh-id

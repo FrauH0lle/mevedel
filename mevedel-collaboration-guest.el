@@ -74,8 +74,6 @@
                   "mevedel-collaboration-agent" (room peer frame))
 
 ;; `mevedel-collaboration-artifact'
-(declare-function mevedel-collaboration--handle-artifact-comment
-                  "mevedel-collaboration-artifact-comments" (room peer frame))
 (declare-function mevedel-collaboration--handle-artifact-get
                   "mevedel-collaboration-artifact" (room peer frame))
 (declare-function mevedel-collaboration--handle-artifact-delete
@@ -86,6 +84,10 @@
                   "mevedel-collaboration-artifact" (room peer frame))
 (declare-function mevedel-collaboration--store-frame
                   "mevedel-collaboration-artifact" (room &optional rows))
+
+;; `mevedel-collaboration-discussions'
+(declare-function mevedel-collaboration-discussions-handle
+                  "mevedel-collaboration-discussions" (room peer frame))
 
 ;; `mevedel-collaboration-files'
 (declare-function mevedel-collaboration-files-handle-upload
@@ -1188,8 +1190,8 @@ sending guest instead of waiting for an answer."
      (mevedel-collaboration--handle-artifact-get room peer frame))
     ("artifact-delete"
      (mevedel-collaboration--handle-artifact-delete room peer frame))
-    ("artifact-comment"
-     (mevedel-collaboration--handle-artifact-comment room peer frame))
+    ("discussion"
+     (mevedel-collaboration-discussions-handle room peer frame))
     ("store-list"
      (mevedel-collaboration--handle-store-list room peer frame))
     ("store-action"
@@ -1256,7 +1258,7 @@ sending guest instead of waiting for an answer."
 ;; guest extensions.  Neither extension requires this module back.
 (require 'mevedel-collaboration-agent)
 (require 'mevedel-collaboration-artifact)
-(require 'mevedel-collaboration-artifact-comments)
+(require 'mevedel-collaboration-discussions)
 (require 'mevedel-collaboration-editing)
 (require 'mevedel-collaboration-files)
 (require 'mevedel-collaboration-presence)

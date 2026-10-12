@@ -595,11 +595,9 @@
       if (folded) {
         const context = el('details', 'shared-context');
         disclosures.set('shared-context', context);
-        const summary = shared.kind === 'artifact'
-          ? (shared.anchor
-            ? `Artifact comment · ${shared.artifact || 'artifact'} · ${shared.anchor.label || 'Selection'}`
-            : `Artifact · ${shared.artifact || 'artifact'} · Whole artifact`)
-          : `Shared context · ${shared.title || 'Shared item'} · ${shared.scope === 'selection' ? 'Selection' : 'Whole item'} · revision ${shared.revision ?? '?'}`;
+        const flat = value => String(value).replace(/[\n\r]/g, ' ');
+        const summary = `Discussion · ${flat(shared.title || 'Shared item')} · ${
+          flat(shared.targetLabel || (shared.scope === 'selection' ? 'Selection' : 'Whole item'))}`;
         context.append(el('summary', '', summary));
         context.append(el('pre', 'shared-context-body', text.slice(shared.text.length + 2).trimEnd()));
         prose.append(context);

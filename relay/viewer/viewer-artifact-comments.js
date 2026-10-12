@@ -900,8 +900,8 @@ function createArtifactCommentController(options) {
                 draft: null, composer: null, card: null, cardPinned: false};
   let records = [];
   let queued = [];
-  let stored = [];            // the host store's comments for view.name
-  const pending = new Map();  // commentId -> local comment awaiting the store
+  let stored = [];            // the host store's discussions for view.name
+  const pending = new Map();  // discussionId -> local discussion awaiting the store
   const replyDrafts = new Map();
   let requestSequence = 0;
   const inflight = new Map(); // reqId -> {resolve, reject}
@@ -961,11 +961,11 @@ function createArtifactCommentController(options) {
     return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
   }
 
-  // One artifact-comment request; resolves with the host's reply fields.
+  // One discussion request; resolves with the host's reply fields.
   async function request(fields) {
     const reqId = ++requestSequence;
     const answer = new Promise((resolve, reject) => inflight.set(reqId, {resolve, reject}));
-    const ok = await send(Object.assign({t: 'artifact-comment', reqId}, fields));
+    const ok = await send(Object.assign({t: 'discussion', reqId}, fields));
     if (!ok) {
       inflight.delete(reqId);
       throw new Error('Connection lost; try again.');
@@ -975,7 +975,7 @@ function createArtifactCommentController(options) {
 
   // -- Threads ----------------------------------------------------------
 
-  // What the assistant made of a comment's thread: its latest request in
+  // What the assistant made of a discussion: its latest request in
   // the transcript or this guest's queue, and the reply that followed.
   function assistantState(id) {
     let state = '';
@@ -987,7 +987,7 @@ function createArtifactCommentController(options) {
       const shared = record && record.shared;
       if (record && record.kind === 'user') latest = false;
       if (!record || record.kind !== 'user' || !shared || shared.kind !== 'artifact'
-          || shared.commentId !== id) continue;
+          || shared.discussionId !== id) continue;
       state = 'sent';
       recordId = record.id;
       reply = '';
@@ -1004,7 +1004,7 @@ function createArtifactCommentController(options) {
       }
     }
     if (queued.some(entry => entry && entry.shared && entry.shared.kind === 'artifact'
-                    && entry.shared.commentId === id)) state = 'queued';
+                    && entry.shared.discussionId === id)) state = 'queued';
     // The session's running turn is the room's latest user turn: while it is
     // this thread's request the assistant is working on it, through its first
     // reply text and on to the turn's end.
@@ -1012,22 +1012,32 @@ function createArtifactCommentController(options) {
     return {state, recordId, reply, working};
   }
 
+  // How a message reads in a thread: a selection sent alone has no text.
+  const ALONE = 'Sent the selection as the request';
+  const messageView = message => ({
+    id: String(message && message.id || ''),
+    actor: String(message && message.actor || ''),
+    text: message && message.alone === true ? ALONE : String(message && message.text || '')});
+
+  // The open discussions anchored to a part of the artifact; the general
+  // discussion about the whole artifact is the room's item conversation.
   function comments() {
     if (!view.name) return [];
     const list = [];
     const seen = new Set();
-    for (const comment of stored) {
-      if (!comment || typeof comment.id !== 'string' || seen.has(comment.id)) continue;
-      seen.add(comment.id);
-      pending.delete(comment.id);
-      const anchor = cleanAnchor(comment.anchor);
-      if (!anchor || comment.resolved === true) continue;
-      list.push(Object.assign({id: comment.id, anchor, text: String(comment.text || ''),
-                               actor: String(comment.actor || ''),
-                               sessionName: typeof comment.sessionName === 'string'
-                                 ? comment.sessionName : '',
-                               replies: Array.isArray(comment.replies) ? comment.replies : []},
-                              assistantState(comment.id)));
+    for (const discussion of stored) {
+      if (!discussion || typeof discussion.id !== 'string' || seen.has(discussion.id)) continue;
+      seen.add(discussion.id);
+      pending.delete(discussion.id);
+      const anchor = cleanAnchor(discussion.target);
+      const messages = Array.isArray(discussion.messages) ? discussion.messages.map(messageView) : [];
+      if (!anchor || discussion.resolved === true || !messages.length) continue;
+      list.push(Object.assign({id: discussion.id, anchor, text: messages[0].text,
+                               actor: messages[0].actor,
+                               sessionName: typeof discussion.sessionName === 'string'
+                                 ? discussion.sessionName : '',
+                               replies: messages.slice(1)},
+                              assistantState(discussion.id)));
     }
     for (const local of pending.values()) {
       if (local.name === view.name && !seen.has(local.id)) {
@@ -1067,10 +1077,10 @@ function createArtifactCommentController(options) {
     const allowed = !!view.frame && canComment();
     toggle.hidden = !allowed;
     toggle.setAttribute('aria-pressed', view.mode ? 'true' : 'false');
-    toggle.textContent = view.mode ? 'Commenting…' : count ? `Comment · ${count}` : 'Comment';
+    toggle.textContent = view.mode ? 'Discussing…' : count ? `Discuss · ${count}` : 'Discuss';
     toggle.title = view.mode
-      ? 'Click, drag across text, or drag a box around what to comment on. Escape stops.'
-      : 'Point at part of this artifact and comment on it';
+      ? 'Click, drag across text, or drag a box around what to discuss. Escape stops.'
+      : 'Point at part of this artifact and discuss it';
   }
 
   // -- Placement --------------------------------------------------------
@@ -1119,7 +1129,7 @@ function createArtifactCommentController(options) {
 
   // -- Message forms ----------------------------------------------------
 
-  // A textarea with a "Send to assistant" checkbox, on by default, and one
+  // A textarea with an "Ask assistant" checkbox, on by default, and one
   // submit button: posting is one action, and a people-only note is one
   // untick away.
   function messageForm(className, placeholder, submitLabel, draft) {
@@ -1136,7 +1146,7 @@ function createArtifactCommentController(options) {
     const assistant = el('input');
     assistant.type = 'checkbox';
     assistant.checked = true;
-    option.append(assistant, ' Send to assistant');
+    option.append(assistant, ' Ask assistant');
     const submit = el('button', 'btn', submitLabel);
     submit.type = 'submit';
     actions.append(option, submit);
@@ -1150,9 +1160,15 @@ function createArtifactCommentController(options) {
     return {form, input, status, actions, assistant, submit};
   }
 
-  function checkedText(parts) {
+  // The message to send, '' for a selection sent alone, or null when there
+  // is nothing to send: only the assistant takes a selection without words.
+  function checkedText(parts, alone) {
     const text = parts.input.value.trim();
-    if (!text) return null;
+    if (!text) {
+      if (alone && parts.assistant.checked) return '';
+      parts.status.textContent = alone ? 'Write a message, or ask the assistant.' : '';
+      return null;
+    }
     if (new TextEncoder().encode(text).length > MAX_COMMENT_BYTES) {
       parts.status.textContent = 'Message too long.';
       return null;
@@ -1173,10 +1189,12 @@ function createArtifactCommentController(options) {
     closeCard();
     if (view.composer) view.composer.remove();
     view.draft = {anchor, rect, context};
-    const parts = messageForm('artifact-comment-composer', 'What should change here?', 'Post');
+    const parts = messageForm('artifact-comment-composer',
+                              'What should change here? Empty sends the selection as the request.',
+                              'Post');
     const {form, input, status, actions, assistant, submit} = parts;
     form.setAttribute('role', 'dialog');
-    form.setAttribute('aria-label', 'Comment on this part of the artifact');
+    form.setAttribute('aria-label', 'Discuss this part of the artifact');
     form.prepend(el('p', 'artifact-comment-target', anchor.label || 'Selected part'));
     if (anchor.quote && anchor.kind !== 'word') {
       form.insertBefore(el('blockquote', 'artifact-comment-quote', anchor.quote), input);
@@ -1193,18 +1211,20 @@ function createArtifactCommentController(options) {
     });
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      const text = checkedText(parts);
-      if (!text || !view.draft || !view.id) return;
+      const text = checkedText(parts, true);
+      if (text === null || !view.draft || !view.id) return;
       const draft = view.draft;
-      const commentId = newId();
+      const discussionId = newId();
       submit.disabled = true;
       status.textContent = assistant.checked ? 'Posting and sending…' : 'Posting…';
       try {
-        await request({action: 'post', id: view.id, commentId, text, anchor: draft.anchor,
-                       context: draft.context, toAssistant: assistant.checked});
-        if (!stored.some(comment => comment && comment.id === commentId)) {
-          pending.set(commentId, {id: commentId, name: view.name, anchor: draft.anchor, text,
-                                  actor: 'You', replies: [], toAssistant: assistant.checked});
+        await request({action: 'post', item: view.id, discussionId, messageId: newId(), text,
+                       target: draft.anchor, context: draft.context,
+                       toAssistant: assistant.checked});
+        if (!stored.some(discussion => discussion && discussion.id === discussionId)) {
+          pending.set(discussionId, {id: discussionId, name: view.name, anchor: draft.anchor,
+                                     text: text || ALONE, actor: 'You', replies: [],
+                                     toAssistant: assistant.checked});
         }
         if (form === view.composer) {
           closeComposer();
@@ -1283,11 +1303,12 @@ function createArtifactCommentController(options) {
     if (canComment() && stored.some(item => item && item.id === comment.id)) {
       const resolve = el('button', 'btn quiet', 'Resolve');
       resolve.type = 'button';
-      resolve.title = 'Mark this comment done for everyone; its marker goes away';
+      resolve.title = 'Mark this discussion done for everyone; its marker goes away';
       resolve.addEventListener('click', async () => {
         resolve.disabled = true;
         try {
-          await request({action: 'resolve', id: view.id, commentId: comment.id, resolved: true});
+          await request({action: 'resolve', item: view.id, discussionId: comment.id,
+                         resolved: true});
         } catch (error) {
           resolve.disabled = false;
           if (flash) flash(error.message);
@@ -1303,8 +1324,8 @@ function createArtifactCommentController(options) {
         parts.submit.disabled = true;
         parts.status.textContent = parts.assistant.checked ? 'Posting and sending…' : 'Posting…';
         try {
-          await request({action: 'reply', id: view.id, commentId: comment.id, replyId: newId(),
-                         text, toAssistant: parts.assistant.checked});
+          await request({action: 'reply', item: view.id, discussionId: comment.id,
+                         messageId: newId(), text, toAssistant: parts.assistant.checked});
           replyDrafts.delete(comment.id);
           parts.input.value = '';
           parts.status.textContent = '';
@@ -1338,7 +1359,7 @@ function createArtifactCommentController(options) {
     const card = el('section', 'artifact-comment-card');
     card.dataset.comment = id;
     card.setAttribute('role', 'dialog');
-    card.setAttribute('aria-label', 'Comment thread');
+    card.setAttribute('aria-label', 'Discussion');
     view.card = card;
     view.cardPinned = pinned === true;
     fillCard(card, comment);
@@ -1386,9 +1407,9 @@ function createArtifactCommentController(options) {
   if (toggle) toggle.addEventListener('click', () => setMode(!view.mode));
 
   function load(name) {
-    request({action: 'list', id: view.id}).then(reply => {
+    request({action: 'list', item: view.id}).then(reply => {
       if (view.name === name) {
-        stored = Array.isArray(reply.comments) ? reply.comments : [];
+        stored = Array.isArray(reply.discussions) ? reply.discussions : [];
         publishMarkers();
       }
     }).catch(() => {});
@@ -1431,20 +1452,21 @@ function createArtifactCommentController(options) {
     activity() {
       publishMarkers();
     },
-    // The host store changed for the artifact the frame names.
+    // The host store changed for the item the frame names.
     stored(frame) {
-      if (frame && frame.artifact === view.name && Array.isArray(frame.comments)) {
-        stored = frame.comments;
+      if (frame && view.name && frame.item === `artifact:${view.name}`
+          && Array.isArray(frame.discussions)) {
+        stored = frame.discussions;
         publishMarkers();
       }
     },
-    // A message about the whole artifact ID (a card or artifact:STORE),
-    // with attachment IMAGES, into its conversation.
+    // A message to the assistant in the general discussion of artifact ID
+    // (a card or artifact:STORE), with attachment IMAGES.
     discuss(id, text, images = []) {
-      return request({action: 'ask', id, questionId: newId(), text,
-                      ...(images.length ? {images} : {})});
+      return request({action: 'post', item: id, target: {kind: 'whole'}, messageId: newId(),
+                      text, toAssistant: true, ...(images.length ? {images} : {})});
     },
-    // The host's answer to an artifact-comment frame.
+    // The host's answer to a discussion frame.
     handle(frame) {
       const entry = inflight.get(frame.reqId);
       if (!entry) return;

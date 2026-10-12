@@ -272,6 +272,11 @@ marker exists regardless of asynchronous submit hooks.  Blocked or
 failed submissions clear it so the next host prompt is never
 mis-attributed.")
 
+(defvar-local mevedel-view--turn-guest-attribution nil
+  "Guest attribution of the turn this data buffer is running, or nil.
+Set where a prompt is inserted, from its guest attribution or nil, so it
+names the running turn; read and cleared when that turn settles.")
+
 (defvar-local mevedel-pending-inputs--marked-ids nil
   "Pending-input identities marked for deletion.")
 

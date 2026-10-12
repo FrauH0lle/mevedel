@@ -4,11 +4,11 @@
 ;; Explicit, one-time move of a workspace's per-session artifacts into its
 ;; artifact store, outside the runtime loader.  For every closed session of
 ;; the workspace it copies the session's artifact files, whiteboards,
-;; documents and artifact comments into `.mevedel/artifacts/', then converts
+;; documents into `.mevedel/artifacts/', then converts
 ;; the session into DESTINATION with `scripts/migrate-session-v0.5.6.el',
 ;; attached to the artifacts it held and without its old `artifacts/'
-;; entries.  Comment threads keep answering in the session that discussed
-;; them.  The original sessions are never changed: check DESTINATION, then
+;; entries.  Legacy artifact comment stores are not carried over: discussions
+;; replaced comments without a migration.  The original sessions are never changed: check DESTINATION, then
 ;; replace the sessions directory with it.  A rerun reuses artifacts an
 ;; earlier run already moved, and a fork's identical copy of a file reuses
 ;; its parent's.
@@ -24,7 +24,6 @@
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-publication)
 (require 'mevedel-shared-editing)
-(require 'mevedel-collaboration-artifact-comments)
 (load (expand-file-name "migrate-session-v0.5.6.el"
                         (file-name-directory (or load-file-name buffer-file-name)))
       nil t)
@@ -119,20 +118,14 @@ new directory, leaving previous imports untouched."
         (when (file-directory-p directory) (delete-directory directory t))
         (when (file-directory-p bookkeeping) (delete-directory bookkeeping t))))))
 
-(defun mevedel-migrate-artifacts--move-file (workspace session-id logical bytes comments name)
+(defun mevedel-migrate-artifacts--move-file (workspace session-id logical bytes)
   "Move legacy artifact file LOGICAL with BYTES into WORKSPACE's store.
-COMMENTS are its legacy comment threads, which keep answering in session
-SESSION-ID called NAME.  Return the store id."
+SESSION-ID names the session it came from.  Return the store id."
   (let* ((origin (cons session-id logical))
-         (file (file-name-nondirectory logical))
-         (tagged (mapcar (lambda (comment)
-                           (plist-put (plist-put (copy-sequence comment) :session session-id)
-                                      :session-name name))
-                         comments)))
+         (file (file-name-nondirectory logical)))
     (or (mevedel-migrate-artifacts--existing workspace origin)
         ;; A fork copied its parent's files: the same bytes are the same
-        ;; artifact, as for whiteboards and documents, and threads the fork
-        ;; added join the parent's.
+        ;; artifact, as for whiteboards and documents.
         (when-let* ((id (cl-find-if
                          (lambda (id)
                            (let ((meta (mevedel-artifact-store-meta workspace id)))
@@ -142,15 +135,6 @@ SESSION-ID called NAME.  Return the store id."
                                                 (mevedel-artifact-store-primary-path
                                                  workspace id meta))))))
                          (mevedel-artifact-store-ids workspace))))
-          (let* ((stored (mevedel-collaboration--artifact-comments-read workspace id))
-                 (added (cl-remove-if (lambda (comment)
-                                        (cl-find (plist-get comment :id) stored
-                                                 :key (lambda (c) (plist-get c :id))
-                                                 :test #'equal))
-                                      tagged)))
-            (when added
-              (mevedel-collaboration--artifact-comments-write
-               workspace id (append stored added))))
           (mevedel-artifact-store-update-meta
            workspace id :migration-origins
            (cons origin (plist-get (mevedel-artifact-store-meta workspace id)
@@ -164,8 +148,6 @@ SESSION-ID called NAME.  Return the store id."
               (file-name-concat (mevedel-artifact-store-artifact-directory workspace id) file)
               bytes)
              (mevedel-artifact-store-create-meta workspace id file)
-             (when tagged
-               (mevedel-collaboration--artifact-comments-write workspace id tagged))
              (mevedel-artifact-store-record-version workspace id session-id)))))))
 
 (defun mevedel-migrate-artifacts--move-item (workspace session-id logical state)
@@ -216,21 +198,11 @@ Return the store ids the session holds."
   (let* ((session-id (file-name-nondirectory (directory-file-name directory)))
          (portable (file-directory-p (file-name-concat directory ".lease")))
          (publication (and portable (mevedel-session-publication-read directory)))
-         (sidecar (if portable (plist-get publication :sidecar)
-                    (file-name-concat directory "session.meta.el")))
-         (name (and sidecar (file-regular-p sidecar)
-                    (plist-get (mevedel-migrate-session--read sidecar) :session-name)))
          (entries (mevedel-migrate-artifacts--entries directory publication))
-         (comments (make-hash-table :test #'equal))
          ids)
-    ;; Comment stores name their artifact; collect them first.
-    (pcase-dolist (`(,logical . ,bytes) entries)
-      (when (string-prefix-p mevedel-migrate-artifacts--comments-prefix logical)
-        (let ((store (mevedel-migrate-artifacts--json bytes)))
-          (puthash (plist-get store :artifact)
-                   (append (plist-get store :comments) nil) comments))))
     (pcase-dolist (`(,logical . ,bytes) entries)
       (cond
+       ;; Comments were replaced by discussions without a migration.
        ((string-prefix-p mevedel-migrate-artifacts--comments-prefix logical))
        ((string-prefix-p mevedel-migrate-artifacts--items-prefix logical)
         (when (and (string-suffix-p ".json" logical)
@@ -239,10 +211,8 @@ Return the store ids the session holds."
                  workspace session-id logical (mevedel-migrate-artifacts--json bytes))
                 ids)))
        (t
-        (let ((relative (substring logical (length "artifacts/"))))
-          (push (mevedel-migrate-artifacts--move-file
-                 workspace session-id logical bytes (gethash relative comments) name)
-                ids)))))
+        (push (mevedel-migrate-artifacts--move-file workspace session-id logical bytes)
+              ids))))
     (nreverse ids)))
 
 (defun mevedel-migrate-artifacts--drop-legacy (target)

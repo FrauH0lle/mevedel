@@ -159,6 +159,7 @@
                   (submission request &optional preserve-draft))
 (defvar mevedel-view--pending-guest-attribution)
 (defvar mevedel-view--pending-input-edit)
+(defvar mevedel-view--turn-guest-attribution)
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
@@ -2827,6 +2828,7 @@ asynchronous preparation ran is left alone instead of cleared."
            (insert (mevedel--format-hook-audit-record
                     mevedel-view--pending-guest-attribution))
            (setq mevedel-view--pending-guest-attribution nil))
+         (setq mevedel-view--turn-guest-attribution guest-attribution)
          ;; Anchor the data-side marker after the forwarded prompt so
          ;; incremental renders extract only the in-flight assistant
          ;; segments from here forward.  Pushed onto the view buffer's

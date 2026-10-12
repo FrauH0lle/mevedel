@@ -436,8 +436,8 @@ running lobby touches no real state."
                (lambda (_lobby peer _frame) (push (list 'artifact-get peer) routed)))
               ((symbol-function 'mevedel-collaboration--handle-artifact-delete)
                (lambda (_lobby peer _frame) (push (list 'artifact-delete peer) routed)))
-              ((symbol-function 'mevedel-collaboration--handle-artifact-comment)
-               (lambda (_lobby peer _frame) (push (list 'artifact-comment peer) routed)))
+              ((symbol-function 'mevedel-collaboration-discussions-handle)
+               (lambda (_lobby peer _frame) (push (list 'discussion peer) routed)))
               ((symbol-function 'mevedel-collaboration--handle-store-list)
                (lambda (_lobby peer _frame) (push (list 'store-list peer) routed)))
               ((symbol-function 'mevedel-collaboration--handle-store-action)
@@ -481,10 +481,10 @@ running lobby touches no real state."
                      routed))
       ;; The workspace's artifacts are reached by store identity.
       (setq routed nil)
-      (dolist (type '("artifact-get" "artifact-delete" "artifact-comment"
+      (dolist (type '("artifact-get" "artifact-delete" "discussion"
                       "store-list" "store-action"))
         (mevedel-collaboration-lobby--on-frame "/root/" 1 (list :t type)))
-      (should (equal '((store-action 1) (store-list 1) (artifact-comment 1)
+      (should (equal '((store-action 1) (store-list 1) (discussion 1)
                        (artifact-delete 1) (artifact-get 1))
                      routed))
       (setq routed '((new . 1) (open . 1)))

@@ -205,7 +205,10 @@
       (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-record-settlement
-  (:doc "correlates terminal provider tokens with the active request")
+  ()
+  ,test
+  (test)
+  :doc "correlates terminal provider tokens with the active request"
   (let* ((session (mevedel-session--create :name "turn-telemetry"))
          (request (mevedel-request--create
                    :id "request-1" :session session :origin "/root"
@@ -229,6 +232,19 @@
           (should (equal "request-1" (plist-get (cdr captured) :request-id)))
           (should (= 10 (plist-get (cdr captured) :input-tokens)))
           (should (= 3 (plist-get (cdr captured) :output-tokens))))
+      (kill-buffer chat-buf)))
+  :doc "runs the settled functions in the chat buffer, past a failing one"
+  (let* ((chat-buf (generate-new-buffer " *mevedel-turn-settled*"))
+         seen messages)
+    (unwind-protect
+        (let ((mevedel-turn-settled-functions
+               (list (lambda (_outcome) (error "Broken step"))
+                     (lambda (outcome) (push (cons outcome (current-buffer)) seen)))))
+          (mevedel-test--with-captured-messages messages
+            (mevedel--turn-record-settlement
+             (gptel-make-fsm :info (list :buffer chat-buf)) 'error))
+          (should (string-match-p "Broken step" messages))
+          (should (equal (list (cons 'error chat-buf)) seen)))
       (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--run-turn-terminal-hook

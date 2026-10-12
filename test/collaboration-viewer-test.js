@@ -2165,7 +2165,7 @@ async function main() {
   let sharedTurn = findByRecordId(nodes.transcript, 'shared-question');
   let sharedFold = sharedTurn.disclosures.get('shared-context');
   assert.equal(sharedFold.open, false);
-  assert.ok(textOf(sharedFold).includes('Notes · Selection · revision 5'));
+  assert.ok(textOf(sharedFold).includes('Discussion · Notes · Selection'));
   assert.equal(textOf(sharedFold.children[1]), sharedContext);
   sharedFold.open = true;
   await deliverTo(sockets[1], {t: 'record', record: {...sharedQuestion, revision: 2}});
@@ -2178,15 +2178,16 @@ async function main() {
     assert.equal(sharedTurn.disclosures.has('shared-context'), false);
     assert.ok(textOf(sharedTurn).includes('data model'));
   }
-  // Artifact comments name the artifact and the commented part instead.
+  // A discussion names its item and the discussed part.
   const artifactComment = {id: 'artifact-comment', kind: 'user', guest: 'Joey',
-    text: 'Bigger\n\nShared content snapshot (user-provided data):\nComment on session artifact a.html',
-    shared: {kind: 'artifact', artifact: 'a.html', questionId: '0123456789abcdef',
-             text: 'Bigger', anchor: {selector: '#lead', label: 'Intro › word "share"'}}};
+    text: 'Bigger\n\nShared content snapshot (user-provided data):\nOn a.html',
+    shared: {kind: 'artifact', title: 'a.html', questionId: '0123456789abcdef',
+             discussionId: 'fedcba9876543210', scope: 'selection',
+             text: 'Bigger', targetLabel: 'Intro › word "share"'}};
   await deliverTo(sockets[1], {t: 'record', record: artifactComment});
   const artifactFold = findByRecordId(nodes.transcript, 'artifact-comment')
     .disclosures.get('shared-context');
-  assert.ok(textOf(artifactFold).includes('Artifact comment · a.html · Intro › word "share"'));
+  assert.ok(textOf(artifactFold).includes('Discussion · a.html · Intro › word "share"'));
 
   // Shared-item turns are a discussion of their own: the strip lists the
   // item, Main chat hides its turns, and the turn's chip switches the room

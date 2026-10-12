@@ -1,7 +1,7 @@
-/* Artifact panel wiring for comments: the panel inlines the picker into its
- * frame, hears only that frame, and "Show in chat" closes the panel that
- * covers the conversation before revealing the comment's turn.
- * Run: node test/collaboration-viewer-artifact-comments-test.js
+/* Artifact panel wiring for discussions: the panel inlines the picker into
+ * its frame, hears only that frame, and "Show in chat" closes the panel that
+ * covers the conversation before revealing the discussion's turn.
+ * Run: node test/collaboration-viewer-artifact-discussions-test.js
  */
 'use strict';
 
@@ -67,18 +67,24 @@ assert.equal(nodes['artifact-comment'].hidden, false);
 const posted = [];
 frame.contentWindow = {postMessage: data => posted.push(data)};
 
-// Opening the artifact lists its stored comments; the store's broadcast
-// and the transcript's reply become one answered marker.
-assert.deepEqual({...sentFrames.at(-1)}, {t: 'artifact-comment', reqId: 1, action: 'list', id: 'tool-1'});
+// Opening the artifact lists its stored discussions; the store's broadcast
+// and the transcript's reply become one answered marker.  The general
+// discussion about the whole artifact has no marker.
+assert.deepEqual({...sentFrames.at(-1)}, {t: 'discussion', reqId: 1, action: 'list', item: 'tool-1'});
 const anchor = {kind: 'word', selector: '#lead', label: 'word "Hello"', quote: 'Hello', start: 0};
-controller.storedComments({artifact: 'page', comments: [
-  {id: 'c1', actor: 'Alice', text: 'Wave', anchor, resolved: false, replies: []},
-  {id: 'c2', actor: 'Bob', text: 'Done', anchor, resolved: true, replies: []}]});
-controller.storedComments({artifact: 'other', comments: []});
+const discussion = (id, actor, text, extra = {}) =>
+  ({id, target: anchor, quote: 'Hello', resolved: false,
+    messages: [{id: `${id}-m`, actor, text}], ...extra});
+controller.storedDiscussions({item: 'artifact:page', discussions: [
+  {id: 'general', target: {kind: 'whole'}, quote: '', resolved: false,
+   messages: [{id: 'g1', actor: 'Alice', text: 'Overall?'}]},
+  discussion('c1', 'Alice', 'Wave'),
+  discussion('c2', 'Bob', 'Done', {resolved: true})]});
+controller.storedDiscussions({item: 'artifact:other', discussions: []});
 controller.render([
   {id: 'tool-1', kind: 'tool', artifact: 'page.html'},
   {id: 'u1', kind: 'user', guest: 'Alice',
-   shared: {kind: 'artifact', artifact: 'page.html', questionId: 'c1', commentId: 'c1', text: 'Wave'}},
+   shared: {kind: 'artifact', title: 'page.html', questionId: 'c1-m', discussionId: 'c1', text: 'Wave'}},
   {id: 'a1', kind: 'assistant', text: 'Waved.'},
 ]);
 const markers = posted.filter(message => message.t === 'comment-markers').at(-1);
@@ -93,7 +99,7 @@ const lastMarker = () => posted.filter(message => message.t === 'comment-markers
 const delivered = [
   {id: 'tool-1', kind: 'tool', artifact: 'page.html'},
   {id: 'u1', kind: 'user', guest: 'Alice',
-   shared: {kind: 'artifact', artifact: 'page.html', questionId: 'c1', commentId: 'c1', text: 'Wave'}},
+   shared: {kind: 'artifact', title: 'page.html', questionId: 'c1-m', discussionId: 'c1', text: 'Wave'}},
 ];
 controller.render(delivered);
 assert.equal(lastMarker().state, 'sent');
@@ -109,7 +115,7 @@ busy = false;
 controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
 assert.equal(lastMarker().state, 'answered');
 busy = true;
-controller.queue([{id: 9, shared: {kind: 'artifact', commentId: 'c1'}}]);
+controller.queue([{id: 9, shared: {kind: 'artifact', discussionId: 'c1'}}]);
 assert.equal(lastMarker().state, 'working');
 controller.queue([]);
 busy = false;
@@ -128,20 +134,27 @@ const card = nodes['artifact-body'].children.find(child => child.className === '
 assert.match(textOf(card), /Alice · Answered/);
 assert.match(textOf(card), /Waved\./);
 
-// A thread answered in another session says where.
-controller.storedComments({artifact: 'page', comments: [
-  {id: 'c1', actor: 'Alice', text: 'Wave', anchor, resolved: false, replies: []},
-  {id: 'c9', actor: 'Bob', text: 'Elsewhere', anchor: {kind: 'word', selector: '#lead',
-                                                     label: 'Lead', quote: 'Hello', start: 0},
-   resolved: false, replies: [], session: 's2', sessionName: 'Design chat'}]});
+// A selection sent alone reads as such in its thread.
+controller.storedDiscussions({item: 'artifact:page', discussions: [
+  discussion('c1', 'Alice', 'Wave'),
+  {id: 'c5', target: anchor, quote: 'Hello', resolved: false,
+   messages: [{id: 'c5-m', actor: 'Alice', text: '', alone: true}]}]});
+message({source: frame.contentWindow,
+         data: {mevedelComment: 'open', id: 'c5', rect: {left: 1, top: 1, width: 1, height: 1}}});
+assert.match(textOf(nodes['artifact-body'].children.find(
+  child => child.className === 'artifact-comment-card')), /Sent the selection as the request/);
+
+// A discussion answered in another session says where.
+controller.storedDiscussions({item: 'artifact:page', discussions: [
+  discussion('c1', 'Alice', 'Wave'),
+  discussion('c9', 'Bob', 'Elsewhere', {session: 's2', sessionName: 'Design chat'})]});
 message({source: frame.contentWindow,
          data: {mevedelComment: 'open', id: 'c9', rect: {left: 1, top: 1, width: 1, height: 1}}});
 const answeredCard = nodes['artifact-body'].children.find(
   child => child.className === 'artifact-comment-card');
 assert.match(textOf(answeredCard), /answered in Design chat/);
-controller.storedComments({artifact: 'page', comments: [
-  {id: 'c9', actor: 'Bob', text: 'Elsewhere', anchor,
-   resolved: false, replies: [], session: 's3', sessionName: 'Artifact chat'}]});
+controller.storedDiscussions({item: 'artifact:page', discussions: [
+  discussion('c9', 'Bob', 'Elsewhere', {session: 's3', sessionName: 'Artifact chat'})]});
 assert.match(textOf(answeredCard), /answered in Artifact chat/,
              'an open thread follows a changed answering session');
 
@@ -151,14 +164,15 @@ find(card, 'Show in chat').dispatch('click');
 assert.deepEqual(revealed, [{id: 'u1', panelHidden: true}],
                  'the panel closes before the turn is revealed');
 
-// A room message about the whole artifact names it by its store id; the
-// host decides whether the artifact still takes messages.
+// A room message about the whole artifact goes to its general discussion,
+// named by store id; the host decides whether the artifact takes messages.
 controller.discuss('page', 'Tighten the intro');
 assert.deepEqual(JSON.parse(JSON.stringify(sentFrames.at(-1))),
-                 {t: 'artifact-comment', reqId: sentFrames.at(-1).reqId, action: 'ask',
-                  id: 'artifact:page', questionId: sentFrames.at(-1).questionId,
-                  text: 'Tighten the intro'});
+                 {t: 'discussion', reqId: sentFrames.at(-1).reqId, action: 'post',
+                  item: 'artifact:page', target: {kind: 'whole'},
+                  messageId: sentFrames.at(-1).messageId, text: 'Tighten the intro',
+                  toAssistant: true});
 
 
 
-console.log('viewer artifact comments passed');
+console.log('viewer artifact discussions passed');

@@ -571,14 +571,26 @@ is returned here."
 ;;
 ;;; Terminal transaction
 
+(defvar mevedel-turn-settled-functions nil
+  "Abnormal hook run in a root chat buffer once its turn settles.
+Each function receives the terminal outcome symbol, such as `success',
+`error' or `abort'.  A failing function is reported and does not stop
+settlement.")
+
 (defun mevedel--turn-record-settlement (fsm outcome)
-  "Record terminal OUTCOME for FSM's active request."
+  "Record terminal OUTCOME for FSM's active request.
+Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
   (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when (bound-and-true-p mevedel--session)
         (setf (mevedel-session-last-outcome mevedel--session) outcome))
+      (dolist (function mevedel-turn-settled-functions)
+        (condition-case err
+            (funcall function outcome)
+          (error (message "mevedel: turn settlement step %s failed: %s"
+                          function (error-message-string err)))))
       (when (featurep 'mevedel-readiness)
         (mevedel-readiness-record-turn info outcome (mevedel--fsm-error-message fsm)))
       (when (and (bound-and-true-p mevedel--session)
