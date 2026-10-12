@@ -1665,7 +1665,14 @@ GL then crashed Emacs: Emacs's `xg_select` and `pgtk_read_socket` dispatch
 GLib on whichever thread waits, so a Lisp thread in `sleep-for` (the telemetry
 heartbeat) ran GTK's paint, `eglMakeCurrent` failed off the thread holding
 the context, and GDK segfaulted. Stock Emacs with `GDK_GL=always` crashes
-the same way. Dispatch must stay on the main thread.
+the same way. Dispatch must stay on the main thread, and the context must not
+stay current there: Emacs runs `gtk_main_iteration` itself while waiting for a
+frame's map event, so a Lisp thread showing a frame painted with the context
+still current on the main thread and segfaulted (exit 139). Every dispatch and
+iteration now releases the context, so GDK makes it current on whichever
+thread paints; at a 30 Hz change editor CPU was 6.1-6.2% with and without the
+release. Stock pgtk itself hangs when a thread shows a frame after another
+thread waited in `sleep-for`, so that case is checked by hand.
 
 An Emacs patch did all three and passed mevedel's suite, but changes to Emacs
 need a rebuild on every machine and distribution, and LLM-written
@@ -1676,7 +1683,11 @@ RELRO build) for its drawing calls, `gtk_widget_queue_draw`,
 `gdk_window_create_similar_surface`, `cairo_get_target` and GLib dispatch.
 Only Emacs's own calls change. Its damage is each drawing call's extents within
 the clip; a frame counts as shown once its draw handler painted the newest
-surface, so a resize before the flip and the visible bell redraw whole.
+surface, so a resize before the flip redraws whole. The visible bell draws on a
+copy of the frame's surface, which records no damage, so the module also
+redirects `cairo_surface_create_similar` and redraws whole while a copy of a
+shown surface lives; scrolling destroys its copy before queueing the draw.
+Without that the bell was never shown (no commit in its phase, 15 stock).
 Executables importing a drawing call it does not track are refused rather than
 left with stale pixels.
 
@@ -1692,8 +1703,8 @@ and 2.7% and 3.2% with the module and text animation. Waiting with the
 default shimmer cost 3.4% stock native, 10.0% stock text, 0.7% module native
 and 1.2% module text; with bounce, 4.6% stock native (30 fps), 14.9% stock
 text (8 fps), 0.9% module native and 4.5% module text (30 fps). Screenshots after insertions, scrolling, region and mode-line
-changes, a translucent frame, a moving child frame, a resize and the visible
-bell matched both a full `redraw-frame` and stock Emacs pixel for pixel.
+changes, a translucent frame, a moving child frame and a resize matched both
+a full `redraw-frame` and stock Emacs pixel for pixel.
 
 With the module the native presenter saves half a point for the cadenced
 shimmer and three and a half for continuous bounce at 30 fps. It stays, and

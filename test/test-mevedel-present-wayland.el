@@ -38,7 +38,7 @@
                  '(("b") ("a" "[1] -> wl_surface#3.commit()")))))
 
 (mevedel-deftest mevedel-present-wayland
-  (:doc "Presents through GL, only when Emacs drew, and survives waiting threads.")
+  (:doc "Presents through GL, only when Emacs drew, shows the bell and survives waiting threads.")
   (pcase-let* ((_ (skip-unless (mevedel-test--wayland-available-p)))
                (`(,observed ,status . ,trace)
                 (mevedel-test--run-wayland-fixture "present-wayland.el"))
@@ -58,6 +58,8 @@
     (ert-info ((format "Phases: %S" (mapcar (lambda (p) (cons (car p) (length (cdr p)))) phases)))
       ;; Each change was presented.
       (should (> (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "insert" phases nil nil #'equal)) 0))
+      ;; The visible bell, drawn on a copy of the frame's surface.
+      (should (> (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "bell" phases nil nil #'equal)) 0))
       (should (>= (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "thread" phases nil nil #'equal)) 5))
       ;; Nothing drawn, nothing sent.
       (should-not (alist-get "idle" phases nil nil #'equal))

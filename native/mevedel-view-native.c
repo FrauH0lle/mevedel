@@ -190,8 +190,9 @@ static int place(struct animation *a, int x, int y) {
   if (!a->positioned) return 0;
   wl_callback_add_listener(a->positioned,&position_listener,a);
   a->x=x;a->y=y;
-  /* Subsurface positions apply with the next parent commit. */
-  gtk_widget_queue_draw(fixed);
+  /* Subsurface positions apply with the next parent commit, which any
+     redraw makes; redrawing the whole frame would cost a full present. */
+  gtk_widget_queue_draw_area(fixed,x,y,1,1);
   return 1;
 }
 static gboolean tick(gpointer data) {

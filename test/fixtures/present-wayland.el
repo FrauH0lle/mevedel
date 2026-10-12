@@ -4,8 +4,9 @@
 ;; Loaded by a pgtk daemon that `test-mevedel-present-wayland.el' starts
 ;; against a headless compositor.  It enables cheaper presentation, then
 ;; marks phases in the daemon's WAYLAND_DEBUG trace on stderr: a one-character
-;; insertion, redisplays that change nothing, and painting while a Lisp thread
-;; waits.  Observations go to the file named by MEVEDEL_NATIVE_RESULT.
+;; insertion, redisplays that change nothing, the visible bell, and painting
+;; while a Lisp thread waits.  Observations go to
+;; the file named by MEVEDEL_NATIVE_RESULT.
 
 ;;; Code:
 
@@ -61,6 +62,11 @@
     (dotimes (_ 10)
       (redisplay t)
       (sit-for 0.05 t))
+    (present-wayland--mark "bell")
+    ;; The bell draws on a copy of the frame's surface, recording no damage.
+    (let ((visible-bell t)) (ding))
+    (redisplay t)
+    (present-wayland--wait 0.3)
     (present-wayland--mark "thread")
     ;; GLib dispatch from the waiting thread painted with the main thread's
     ;; GL context and crashed.

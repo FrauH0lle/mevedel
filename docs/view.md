@@ -481,10 +481,16 @@ entries for its drawing calls (`cairo_fill`, `cairo_fill_preserve`,
 their clipped extents on each frame surface. Emacs's `gtk_widget_queue_draw`
 becomes a redraw of that region, or nothing. A frame counts as shown only once
 its draw handler painted its newest surface; before that (a resize before the
-flip, the visible bell) redraws stay whole. GL contexts are current on the main
-thread only, so Emacs's calls to `g_main_context_query`, `_pending` and
-`_dispatch` do nothing on other threads: a Lisp thread waiting in `sleep-for`
-used to dispatch GTK painting and crash in GDK. The module refuses, with a
+flip) redraws stay whole, and so do they while a copy of the shown surface made
+with `cairo_surface_create_similar` lives: the visible bell draws on such a copy
+and records no damage. Emacs's calls to `g_main_context_query`, `_pending` and
+`_dispatch` do nothing on threads other than the main thread: a Lisp thread
+waiting in `sleep-for` used to dispatch GTK painting and crash in GDK. A GL
+context can be current on one thread only, so each dispatch and each
+`gtk_main_iteration` releases it: a Lisp thread that shows a frame runs GTK's
+loop itself while it waits for the map event. Moving an animation surface
+redraws one pixel of its frame, enough for the parent commit that applies the
+position. The module refuses, with a
 reason kept in `mevedel-present--state`, on displays other than Wayland,
 architectures other than x86_64 and aarch64, and executables that do not
 import every redirected call or that import a drawing call it does not track
