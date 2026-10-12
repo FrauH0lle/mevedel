@@ -1741,6 +1741,16 @@ power-aware ceiling while the module is active, since their 8 fps existed to
 bound stock PGTK's per-frame cost: 30-fps text bounce costs what the stock
 presenter did.
 
+A later headless regression failed on software EGL, not on GTK's old copying
+path. The Wayland trace showed Mesa allocating its second shared-memory swap
+buffer on the first measured insertion, then alternating two buffers across
+twenty redraws. Waiting after the initial GL draw had not populated that second
+buffer: unchanged redisplays are intentionally suppressed. The fixture now
+inserts and removes a space before marking measured phases and exercises both
+the default renderer and forced software EGL. The zero-allocation, idle,
+visible-bell and thread-safety assertions stay unchanged; software rendering is
+not a reason to skip the test or allow per-frame window copies.
+
 ### October 2026: review of the rendering and wakeup series
 
 A real subprocess regression disproved the safety of the worker heartbeat.

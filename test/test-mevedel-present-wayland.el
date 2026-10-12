@@ -38,34 +38,41 @@
                  '(("b") ("a" "[1] -> wl_surface#3.commit()")))))
 
 (mevedel-deftest mevedel-present-wayland
-  (:doc "Presents through GL, only when Emacs drew, shows the bell and survives waiting threads.")
-  (pcase-let* ((_ (skip-unless (mevedel-test--wayland-available-p)))
-               (`(,observed ,status . ,trace)
-                (mevedel-test--run-wayland-fixture "present-wayland.el"))
-               (phases (mevedel-present-wayland--phases trace))
-               (stats (plist-get observed :stats)))
-    (ert-info ((format "Observed: %S" observed))
-      (should-not (plist-get observed :error))
-      (should (= 0 status))
-      (should (eq 'enabled (plist-get observed :state)))
-      ;; Painting while a Lisp thread waited used to crash in GDK.
-      (should (plist-get observed :survived))
-      ;; Region redraws happened, and redisplays that drew nothing were
-      ;; dropped.
-      (should (> (aref stats 0) 0))
-      (should (> (aref stats 1) 0))
-      (should (= 1 (aref stats 3))))
-    (ert-info ((format "Phases: %S" (mapcar (lambda (p) (cons (car p) (length (cdr p)))) phases)))
-      ;; Each change was presented.
-      (should (> (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "insert" phases nil nil #'equal)) 0))
-      ;; The visible bell, drawn on a copy of the frame's surface.
-      (should (> (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "bell" phases nil nil #'equal)) 0))
-      (should (>= (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "thread" phases nil nil #'equal)) 5))
-      ;; Nothing drawn, nothing sent.
-      (should-not (alist-get "idle" phases nil nil #'equal))
-      ;; GL buffers, not a fresh shared-memory window copy per frame.
-      (dolist (phase phases)
-        (should (= 0 (mevedel-present-wayland--count "wl_shm_pool#[0-9]+\\.create_buffer" (cdr phase))))))))
+  (:doc "Default and software GL reuse buffers, skip idle draws, show the bell and survive threads."
+   :before-each (skip-unless (mevedel-test--wayland-available-p)))
+  (dolist (renderer '(default software))
+    (let ((process-environment
+           (if (eq renderer 'software)
+               (cons "LIBGL_ALWAYS_SOFTWARE=1" process-environment)
+             process-environment)))
+      (ert-info ((format "Renderer: %s" renderer))
+        (pcase-let* ((`(,observed ,status . ,trace)
+                     (mevedel-test--run-wayland-fixture "present-wayland.el"))
+                    (phases (mevedel-present-wayland--phases trace))
+                    (stats (plist-get observed :stats)))
+          (ert-info ((format "Observed: %S" observed))
+            (should-not (plist-get observed :error))
+            (should (= 0 status))
+            (should (eq 'enabled (plist-get observed :state)))
+            ;; Painting while a Lisp thread waited used to crash in GDK.
+            (should (plist-get observed :survived))
+            ;; Region redraws happened, and redisplays that drew nothing were
+            ;; dropped.
+            (should (> (aref stats 0) 0))
+            (should (> (aref stats 1) 0))
+            (should (= 1 (aref stats 3))))
+          (ert-info ((format "Phases: %S" (mapcar (lambda (p) (cons (car p) (length (cdr p)))) phases)))
+            ;; Each change was presented.
+            (should (> (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "insert" phases nil nil #'equal)) 0))
+            ;; The visible bell, drawn on a copy of the frame's surface.
+            (should (> (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "bell" phases nil nil #'equal)) 0))
+            (should (>= (mevedel-present-wayland--count "wl_surface#[0-9]+\\.commit" (alist-get "thread" phases nil nil #'equal)) 5))
+            ;; Nothing drawn, nothing sent.
+            (should-not (alist-get "idle" phases nil nil #'equal))
+            ;; Software EGL also uses shared memory, but neither renderer
+            ;; allocates a fresh shared-memory window copy per frame.
+            (dolist (phase phases)
+              (should (= 0 (mevedel-present-wayland--count "wl_shm_pool#[0-9]+\\.create_buffer" (cdr phase)))))))))))
 
 (mevedel-deftest mevedel-present-wayland/thread
   (:doc "Survives a Lisp thread showing a frame, which runs GTK's loop itself.")

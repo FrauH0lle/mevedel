@@ -53,6 +53,17 @@
     (redraw-frame frame)
     (redisplay t)
     (present-wayland--wait 0.5)
+    ;; Software EGL presents through reusable shared-memory buffers.  Its
+    ;; second buffer is allocated only when drawing while the compositor
+    ;; holds the first.  Exercise the buffer swap before measuring steady
+    ;; presentation; waiting or redisplaying unchanged text cannot warm it.
+    (goto-char (point-max))
+    (insert " ")
+    (redisplay t)
+    (present-wayland--wait 0.1)
+    (delete-char -1)
+    (redisplay t)
+    (present-wayland--wait 0.1)
     (present-wayland--mark "insert")
     (goto-char (point-max))
     (insert "x")

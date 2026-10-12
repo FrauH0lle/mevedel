@@ -510,8 +510,12 @@ import the calls it requires or that import a drawing call it does not track
 (`cairo_show_text`, `cairo_paint_with_alpha` and the like). While it is active,
 text breathe/bounce use the power-aware ceiling instead of 8 fps.
 `test/test-mevedel-present-wayland.el` checks the protocol on a headless nested
-KWin: GL buffers instead of shared memory, no commits for redisplays that drew
-nothing, and painting while a Lisp thread waits.
+KWin with both the default renderer and software EGL: no fresh shared-memory
+buffers during steady presentation, no commits for redisplays that drew
+nothing, and painting while a Lisp thread waits. Software EGL uses reusable
+shared-memory buffers rather than dmabufs, so the fixture exercises a reversible
+text change before measurement to populate the swap buffers; an unchanged
+redisplay cannot do so.
 
 The native surface tests also close real GTK displays and reconnect with fresh
 Wayland bindings. Stock Emacs 31 PGTK leaves a closed display's descriptor in
