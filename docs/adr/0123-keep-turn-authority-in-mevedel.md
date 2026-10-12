@@ -59,7 +59,10 @@ External history changes what the transcript can faithfully reconstruct.
 Claude compaction publishes a successor transcript segment; selected context
 must be acknowledged again before subsequent tools. Cross-engine continuation
 uses the effective segment and labels a new native conversation as excerpt
-continuation. Same-machine resume retains native identity. Operations requiring
+continuation. Same-machine resume retains native identity, including direct
+acquisition of a released or expired lease from an already open read-only view.
+Cooperative transfer from a live owner still refuses retained native histories.
+Operations requiring
 an exact native checkpoint mapping, including Fork and Rewind, refuse before
 effects when that mapping is unavailable. These constraints are documented in
 [session lifecycle](../sessions.md#external-conversation-references), rather
@@ -175,6 +178,12 @@ Receipt establishes SDK acceptance, not model understanding or retention
 through later compaction.
 
 ## Decision history
+
+- **Recovery after client loss:** the cooperative-transfer guard also rejected
+  direct lease acquisition for native sessions. After an Emacs crash, an
+  already open read-only view could not recover even though ordinary resume
+  preserved the same native identity. Direct acquisition now follows resume's
+  history policy; the cooperative protocol retains its native-history guard.
 
 - **Notice lifetime:** waiting for the next root request left a child failure
   banner visible throughout a long-running turn, even after work continued.

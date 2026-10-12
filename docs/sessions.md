@@ -547,10 +547,12 @@ and independent conversation scopes to native message boundaries.
 Direct commands and menu actions report the external-history restriction before
 arming a fork or changing state. Save As refuses before asking for a name or
 saving the parent, and Redo refuses before reading the published-head choices.
-Control requests and takeover commands refuse before creating a request or
-acquiring the lease; an owner rejects requests from a client with stale native
-history information instead of automatically granting them. Read-only following
-remains available.
+Cooperative control requests refuse before creating a request; an owner rejects
+requests from a client with stale native history information instead of
+automatically granting them. Direct acquisition of an unheld or expired lease
+preserves native identities just as ordinary resume does. The next send checks
+the native installation and history, so recovery after an Emacs crash does not
+require copying or discarding native history. Read-only following remains available.
 
 The gptel HTTP request-controls menu is unavailable for a selected external
 provider, including direct `gptel-menu`, prefixed send and mevedel's bridge menu.
@@ -1019,7 +1021,8 @@ against a busy owner sits in `quiescing` until the work it is waiting on
 finishes. Only the owner can say what that work is, so the owner's surface
 names the blocker and the requester's says just that it is waiting.
 
-`mevedel-take-control` is the one command for the requester's side. It routes
+`mevedel-take-control`, also bound to the read-only interaction's `r` key, is
+the one command for the requester's side. It routes
 on lease state: an unheld or expired lease is acquired directly, because
 there is no owner to ask and the lease layer's own confirmation is the whole
 negotiation; a held one is requested. `mevedel-release-control` is the

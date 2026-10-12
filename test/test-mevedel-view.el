@@ -635,6 +635,33 @@
 (mevedel-deftest mevedel-view--sticky-prompt-line ()
   ,test
   (test)
+  :doc "graphical redisplay measures archived prompt visibility without recursion"
+  (skip-unless (mevedel-test--wayland-available-p))
+  (let ((process-environment (copy-sequence process-environment)))
+    (setenv "MEVEDEL_TEST_LOAD_PATH" (prin1-to-string load-path))
+    (pcase-let ((`(,observed ,status . ,_trace)
+                 (mevedel-test--run-wayland-fixture "view-header-wayland.el" 20)))
+      (ert-info ((format "Observed: %S" observed))
+        (should (= status 0))
+        (should (= (plist-get observed :depth) 1))
+        (should-not (plist-get observed :visible))
+        (should (string-match-p "Archived prompt" (plist-get observed :hidden)))
+        (should (equal (plist-get observed :draft) "> draft\nsecond line"))
+        (should (plist-get observed :header-restored)))))
+
+  :doc "ignores a selected window displaying a different buffer"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (with-temp-buffer
+        (insert (make-string 1000 ?x))
+        (set-window-buffer (selected-window) (current-buffer))
+        (set-window-start (selected-window) 900 t)
+        (with-current-buffer view-buf
+          (setq-local mevedel-view--continuation-prompt-cache
+                      '(nil nil nil nil (:segment 1 :pos 1 :preview "Archived prompt")))
+          (should (< (point-max) (window-start (selected-window))))
+          (should-not (mevedel-view--sticky-prompt-line))))))
+
   :doc "two windows share stable rows but compute different prompt text"
   (save-window-excursion
     (mevedel-view-test--with-buffers

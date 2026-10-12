@@ -448,8 +448,8 @@ this view follows."
   "k" #'mevedel-view-control-transfer-keep)
 
 (defvar-keymap mevedel-view--control-transfer-request-map
-  :doc "Keymap for requesting cooperative control from read-only mode."
-  "r" #'mevedel-view-control-transfer-request)
+  :doc "Keymap for taking control from read-only mode."
+  "r" #'mevedel-take-control)
 
 (defun mevedel-view-control-transfer-current-descriptor ()
   "Return the current view's complete control-transfer descriptor, or nil."

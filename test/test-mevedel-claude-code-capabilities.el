@@ -13,6 +13,40 @@
 (require 'mevedel-side-conversation)
 (require 'gptel-transient)
 
+(mevedel-deftest mevedel-take-control/claude-resume (:quiet t)
+  (mevedel-engine-test--with-claude-session
+    (mevedel-request-end)
+    (let ((history `(("root" :engine claude-code :id "retained-native-id"
+                            :host ,(system-name)
+                            :directory ,(expand-file-name mevedel-claude-code-directory)
+                            :state ready)))
+          view)
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-external-conversations session) history)
+            (insert "Retained transcript evidence\n")
+            (mevedel-session-artifacts-save session buffer t)
+            (mevedel-session-durability-lease-release
+             (mevedel-session-save-path session) session)
+            (mevedel-session-persistence-apply-read-only-mode buffer "old owner stopped")
+            (setq view (mevedel-view--ensure buffer))
+            (with-current-buffer view
+              (mevedel-view--full-rerender)
+              (goto-char (mevedel-view--input-start))
+              (insert "> preserve this draft\nsecond line")
+              (call-interactively
+               (lookup-key mevedel-view--control-transfer-request-map (kbd "r")))
+              (should (equal "> preserve this draft\nsecond line"
+                             (mevedel-view--input-text))))
+            (should-not mevedel-session--read-only-mode)
+            (should-not buffer-read-only)
+            (should (eq 'owned (mevedel-session-durability-lease-state
+                               (mevedel-session-save-path session))))
+            (should (equal history (mevedel-session-external-conversations session)))
+            (should (string-match-p "Retained transcript evidence" (buffer-string)))
+            (should-not mevedel--current-request))
+        (when (buffer-live-p view) (kill-buffer view))))))
+
 (mevedel-deftest mevedel-menu/claude-history (:quiet t)
   (mevedel-engine-test--with-claude-session
     (let (view)
@@ -44,7 +78,6 @@
                 (dolist (command `(mevedel-compact mevedel-rewind mevedel-redo
                                    mevedel-side-conversation-open
                                    ,(lambda () (mevedel-session-control-transfer-request session))
-                                   ,(lambda () (mevedel-session-control-transfer-acquire session buffer))
                                    (lambda () (mevedel-save-session t))))
                   (ert-info ((format "Direct command %S" command))
                     (should (string-match-p
@@ -67,11 +100,13 @@
               (let ((lease (copy-tree (mevedel-session-lease session))))
                 (setq-local mevedel-session--read-only-mode t)
                 (unwind-protect
-                    (with-current-buffer view
-                      (dolist (command '(mevedel-take-control mevedel-menu--take-control))
-                        (should (string-match-p
-                                 "unavailable for external conversations"
-                                 (error-message-string (should-error (funcall command) :type 'user-error))))))
+                    (cl-letf (((symbol-function 'mevedel-session-durability-lease-state)
+                               (lambda (_) 'foreign)))
+                      (with-current-buffer view
+                        (dolist (command '(mevedel-take-control mevedel-menu--take-control))
+                          (should (string-match-p
+                                   "unavailable for external conversations"
+                                   (error-message-string (should-error (funcall command) :type 'user-error)))))))
                   (setq-local mevedel-session--read-only-mode nil))
                 (should (equal lease (mevedel-session-lease session))))
               (should (equal before (buffer-string)))

@@ -822,8 +822,10 @@ generic interaction owner places them.
 The owner sees the requester label with `Grant` and `Keep` actions; a granted
 transfer remains quiescing until current requests, executions, prompts, pending
 inputs, and publication work drain, then the final save releases the owner to
-read-only. A read-only client sees `Request control`; its composer remains
-untouched while the polling timer waits for the named successor fence to clear.
+read-only. A read-only client sees `Take control`: `r` acquires an available or
+expired lease, or requests a live owner's lease. Its composer remains untouched
+during acquisition and while the polling timer waits for the named successor
+fence to clear.
 
 The interaction separator is virtual chrome. Task rows, aggregate agent
 status rows, interaction bodies, and request progress are view-owned UI
@@ -1020,6 +1022,9 @@ only when an archived prompt exists, and its answer is kept per window until
 the window's start, scrolling or size, the buffer, its invisibility spec, or the text's
 layout changes: wrapping, text scale, line spacing, line numbers, tab width,
 or the frame font.
+The graphical measurement temporarily uses an empty, static header row:
+Emacs's pixel query evaluates header formats itself, so evaluating the prompt
+header there would recursively repeat the same query before its result is cached.
 Header lines are evaluated on every redisplay, including the many caused by
 timers and streamed output that change nothing on screen.
 Clicking that preview opens the archived segment read-only at the original

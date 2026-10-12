@@ -1303,7 +1303,10 @@ text layout changes: size, wrapping, text scale, line spacing or font."
                            (if (display-graphic-p (window-frame window))
                                ;; Pixel-height rows need not match the frame's
                                ;; canonical character height after text scaling.
-                               (pos-visible-in-window-p next window t)
+                               ;; The pixel probe evaluates header-line-format.
+                               ;; Keep its reserved row without re-entering us.
+                               (let ((header-line-format ""))
+                                 (pos-visible-in-window-p next window t))
                              (< next
                                 (save-excursion
                                   (goto-char (window-start window))
@@ -1320,7 +1323,8 @@ text layout changes: size, wrapping, text scale, line spacing or font."
   "Return the current window's pinned prompt on its own header line."
   (let* ((window (selected-window))
          (local (mevedel-view--pinned-prompt window))
-         (continuation (and (not local) (mevedel-view--continuation-prompt)))
+         (continuation (and (eq (window-buffer window) (current-buffer))
+                            (not local) (mevedel-view--continuation-prompt)))
          (archived (and continuation
                         (not (get-text-property
                               (window-start window)

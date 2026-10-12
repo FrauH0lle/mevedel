@@ -133,7 +133,7 @@
                 #'mevedel-view-control-transfer-keep))
     (should
      (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "r"))
-         #'mevedel-view-control-transfer-request))
+         #'mevedel-take-control))
     (dolist (map (list mevedel-view--control-transfer-map
                        mevedel-view--control-transfer-request-map
                        mevedel-view--control-transfer-status-map))
@@ -240,9 +240,11 @@
               ((symbol-function 'mevedel-view-rerender)
                (lambda (&rest _) (cl-incf scheduled))))
       (test-mevedel-view-control-transfer--with-pair session t
-        (mevedel-take-control)
+        (call-interactively
+         (lookup-key mevedel-view--control-transfer-request-map (kbd "r")))
         (setq state 'expired)
-        (mevedel-take-control)
+        (call-interactively
+         (lookup-key mevedel-view--control-transfer-request-map (kbd "r")))
         (setq state 'foreign)
         (mevedel-take-control))
       (should (= 2 acquired))

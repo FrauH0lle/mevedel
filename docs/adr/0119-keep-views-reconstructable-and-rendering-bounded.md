@@ -1761,6 +1761,13 @@ Review also found two incomplete geometry assumptions. The pinned-prompt memo
 invalidated after text scaling, but its canonical-row walk could still place an
 offscreen prompt inside a graphical viewport; graphical displays now use
 Emacs's pixel visibility query, with horizontal and pixel scroll in the key.
+An October 12 live freeze exposed recursion in that query: Emacs evaluates
+the header format while measuring its height, re-entering the same uncached
+prompt lookup until the stack overflows. The measurement now binds an empty,
+static header row for its duration, preserving the reserved height without
+evaluating the prompt again. A real graphical subprocess regression checks
+bounded header entry, visible and offscreen prompts, and composer preservation;
+the recursion reproduces without the native modules loaded.
 Native labels now include overlay faces, priorities, window restrictions,
 pixel scroll and frame opacity in their cheap layout snapshot. An existing
 surface falls back to text when the frame becomes translucent. The nested KWin

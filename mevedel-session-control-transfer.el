@@ -583,7 +583,8 @@ conflict on the user's behalf."
                   (set-buffer-modified-p nil))
                 (kill-buffer staging-buffer)))))))))
 
-(defun mevedel-session-control-transfer--adopt-control (session buffer)
+(defun mevedel-session-control-transfer--adopt-control
+    (session buffer &optional direct-acquisition)
   "Adopt SESSION's committed state into BUFFER under a freshly held lease.
 
 The caller has already acquired the lease.  Losing it again on any failure is
@@ -591,7 +592,8 @@ the point of the unwind: a client that cannot finish adopting committed state
 must not keep other clients out.
 
 The target incarnation, transcript, and instruction restore are staged before
-the live session or buffer changes."
+the live session or buffer changes.  DIRECT-ACQUISITION resumes an unheld
+session, including its native history, rather than a cooperative transfer."
   (condition-case err
       (let* ((save-path (mevedel-session-save-path session))
              (workspace (mevedel-session-workspace session))
@@ -614,7 +616,8 @@ the live session or buffer changes."
           (error "Transferred session has no valid committed sidecar"))
         (unwind-protect
             (progn
-              (mevedel-engine-assert-local-history refreshed "Session control transfer")
+              (unless direct-acquisition
+                (mevedel-engine-assert-local-history refreshed "Session control transfer"))
               (mevedel-session-control-transfer--stage-session
                session refreshed publication staging-buffer)
               (mevedel-session-control-transfer--insert-committed-segment
@@ -696,8 +699,8 @@ the live session or buffer changes."
 For a lease nobody holds there is no owner to request control from, and for
 an expired one the lease layer's own takeover confirmation is the whole
 negotiation.  Both reduce to acquiring and adopting committed state, which is
-also what a granted transfer ends with."
-  (mevedel-engine-assert-local-history session "Session control transfer")
+also what a granted transfer ends with.  Native history is preserved just as
+on ordinary resume; the engine validates its installation on the next send."
   (unless (buffer-live-p buffer)
     (error "Session buffer is not live"))
   (unless (mevedel-session-save-path session)
@@ -707,7 +710,7 @@ also what a granted transfer ends with."
   (mevedel-session-control-transfer-register-root-buffer session buffer)
   (if (mevedel-session-durability-lease-acquire
        (mevedel-session-save-path session) (buffer-name buffer) session)
-      (mevedel-session-control-transfer--adopt-control session buffer)
+      (mevedel-session-control-transfer--adopt-control session buffer t)
     (user-error "Another client took this session's lease first")))
 
 (defun mevedel-session-control-transfer-poll (session buffer read-only-p)
@@ -797,15 +800,15 @@ the owner can see what a handoff is still waiting for."
             :action 'request
             :attention t
             :title "Control request was declined"
-            :keys '(("r" . "request again"))
-            :help-echo "Request cooperative control"))
+            :keys '(("r" . "take control"))
+            :help-echo "Acquire an available lease or request cooperative control"))
      (t
       (list :kind 'control-transfer
             :action 'request
             :title "This session is read-only here"
-            :detail "Another client holds its lease."
-            :keys '(("r" . "request control"))
-            :help-echo "Request cooperative control")))))
+            :detail "Take control to acquire its lease or ask its current owner."
+            :keys '(("r" . "take control"))
+            :help-echo "Acquire an available lease or request cooperative control")))))
 
 (provide 'mevedel-session-control-transfer)
 

@@ -394,6 +394,7 @@
          (new-file (file-name-concat session-dir "segment-0002.chat.org"))
          (request '(:request-id "request"))
          (drain (lambda () t))
+         native-history
          failure
          (releases 0))
     (make-directory session-dir t)
@@ -437,6 +438,7 @@
                    :session
                    (mevedel-session--create
                     :name "requester" :working-directory root
+                    :external-conversations native-history
                     :turn-count 9 :current-segment 2))))
                ((symbol-function 'mevedel-session-artifacts-read-artifact)
                 (lambda (&rest _)
@@ -494,10 +496,17 @@
                                   (overlay-start restored)
                                   (overlay-end restored)))))))
             (setq failure nil)
+            (setq native-history '(("root" :id "native-history")))
+            (should-error
+             (mevedel-session-control-transfer--adopt-control session buffer)
+             :type 'user-error)
+            (should mevedel-session--read-only-mode)
             (mevedel-test--with-captured-messages nil
               (should
                (mevedel-session-control-transfer--adopt-control
-                session buffer)))
+                session buffer t)))
+            (should (equal native-history
+                           (mevedel-session-external-conversations session)))
             (should (= 9 (mevedel-session-turn-count session)))
             (should (= 2 (mevedel-session-current-segment session)))
             (should (equal "new transcript" (buffer-string)))
@@ -509,7 +518,7 @@
              (mevedel-session-control-transfer-drained-p session))
             (mevedel-session-control-transfer-unregister-drain session drain)
             (should (mevedel-session-control-transfer-drained-p session))
-            (should (= 4 releases))))
+            (should (= 5 releases))))
       (mevedel-session-control-transfer-unregister-root-buffer session buffer)
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
