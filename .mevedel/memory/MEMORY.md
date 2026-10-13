@@ -20,3 +20,10 @@
 - [Keep live-state inspection probes bounded and non-perturbing](bounded-live-inspection-probes.md) - Return scalars or booleans from live Emacs probes; large object dumps and profiling workload distort what you are measuring
 - [Verify consumer-visible state, not intermediate signals](rendered-state-verification-feedback.md) - Assert rendered/consumed state, not internal flags, audit rows, or same-segment tests
 - [Judge inline image previews by displayed size](inline-image-size-feedback.md) - Compact previews are a visual requirement, not a preference for pixel or fractional settings
+- [Artifact comments retain chat context; Git tracking stays user-controlled](artifact-collaboration-user-preferences.md) - Use the viewing chat's context for attached-artifact comments, and leave artifact-store Git tracking to the user or project
+- [Do not attribute guessed values to a reference system](reference-system-values-feedback.md) - Check authoritative documentation before presenting a proposed limit as inherited from another product
+- [Reduce permission prompts' visual weight](permission-prompt-visual-weight.md) - User finds sandbox and permission prompts imposing and prefers collapsing parts of them
+- [View changes must preserve rendering and CPU gains](view-render-performance-constraint.md) - Rendering cost and CPU use are hard constraints; measure graphical-only effects in a graphical environment
+- [Prove injected failures and stubs exercise the intended path](injected-failure-test-evidence.md) - Check injection entry, exact diagnostics, isolated-file behavior, and a discriminating negative control
+- [Preserve controls and conditions when attributing test outcomes](controlled-test-attribution.md) - Green repetitions, whole-prompt matches, and capability skips do not by themselves establish cause or coverage
+- [Trace unreadable addresses back to discovery](resource-discovery-consumption-verification.md) - Check discovery-to-consumption at root and descendant scopes without weakening valid access refusals
