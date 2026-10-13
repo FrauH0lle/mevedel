@@ -789,12 +789,14 @@ Terminology:
   Pending Inputs and an armed session fork do not pause active elapsed time.
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
-  The composer's first line follows the prompt prefix (`[edits] > `);
-  explicit and soft-wrapped continuation lines are indented by the width of
-  the prefix's last line, so the draft forms one aligned column. The indent
-  is a display-only `line-prefix`/`wrap-prefix` on the composer overlay and
-  is recomputed whenever the prompt is rebuilt for another mode or scope;
-  the draft text, submissions, and kills never contain it.
+  The mode badge (`[edits]`, `[Plan · edits]`, `[Editing …]`) sits on its own
+  line above a `> ` prompt, so the badge and the draft start at fixed columns
+  in every mode; Ask mode has no badge. Explicit and soft-wrapped continuation
+  lines are indented by the width of the prompt's last line (two columns, or
+  four after a directive's `◆ > `), so the draft forms one aligned column.
+  The indent is a display-only `line-prefix`/`wrap-prefix` on the composer
+  overlay, recomputed whenever the prompt is rebuilt; the draft text,
+  submissions, and kills never contain it.
 
 Only composer edits are undoable. Renders above the composer record their
 own undo entries, which Emacs never trims between commands: a busy view once
@@ -2022,7 +2024,8 @@ Follow-ups
 
 Waiting for input · 2m 14s · 1 agent blocked · 1 agent running
 
-[auto] > I am drafting a follow-up while the request runs.
+[auto]
+> I am drafting a follow-up while the request runs.
 ```
 
 ## Input History

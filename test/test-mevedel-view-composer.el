@@ -393,20 +393,20 @@
 
   :doc "edits mode renders its canonical name"
   (let ((prompt (mevedel-view--input-prompt-string 'edits)))
-    (should (string= "\n[edits] > " prompt))
+    (should (string= "\n[edits]\n> " prompt))
     (should (eq 'mevedel-view-permission-mode-edits
                 (get-text-property 2 'font-lock-face prompt))))
 
   :doc "full-auto mode renders its canonical name"
   (let ((prompt (mevedel-view--input-prompt-string 'full-auto)))
-    (should (string= "\n[full-auto] > " prompt))
+    (should (string= "\n[full-auto]\n> " prompt))
     (should (eq 'mevedel-view-permission-mode-full-auto
                 (get-text-property 2 'font-lock-face prompt))))
 
   :doc "Plan shows the retained permission mode"
   (let ((mevedel--session
          (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t)))
-    (should (string= "\n[Plan · full-auto] > "
+    (should (string= "\n[Plan · full-auto]\n> "
                      (mevedel-view--input-prompt-string 'full-auto))))
 
   :doc "directive scope is loud and uses its distinct prompt prefix"
@@ -681,7 +681,7 @@
               (should (eq 'edits mevedel-permission-mode))
               (should (eq saved
                           (default-toplevel-value 'mevedel-permission-mode)))
-              (should (string= "\n[edits] > "
+              (should (string= "\n[edits]\n> "
                                (buffer-substring-no-properties
                                 mevedel-view--input-marker
                                 (mevedel-view--input-start))))
@@ -748,7 +748,7 @@
         (should (mevedel-session-plan-mode session))
         (should (eq 'full-auto
                     (mevedel-session-permission-mode session)))
-        (should (string= "\n[Plan · full-auto] > "
+        (should (string= "\n[Plan · full-auto]\n> "
                          (buffer-substring-no-properties
                           mevedel-view--input-marker
                           (mevedel-view--input-start))))
@@ -1506,12 +1506,12 @@
         (should (equal "  " (get-char-property second-line 'wrap-prefix)))
         (should (equal "> first\nsecond" (mevedel-view--input-text))))))
 
-  :doc "a prompt rebuilt for another mode updates the indent width"
+  :doc "the indent stays two columns when the prompt is rebuilt for a mode"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (goto-char (mevedel-view--input-start))
       (insert "draft\nmore")
-      (dolist (case '((full-auto . "[full-auto] > ") (ask . "> ")))
+      (dolist (case '((full-auto . "> ") (ask . "> ")))
         (setq-local mevedel-permission-mode (car case))
         (mevedel-view-refresh-input-prompt)
         (let ((second-line (save-excursion
@@ -1543,7 +1543,7 @@
       (insert "draft")
       (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
-      (should (string= "\n[full-auto] > "
+      (should (string= "\n[full-auto]\n> "
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))
@@ -1556,7 +1556,7 @@
       (insert "> quoted\nsecond line")
       (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
-      (should (string= "\n[full-auto] > "
+      (should (string= "\n[full-auto]\n> "
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))
@@ -1576,7 +1576,7 @@
         (setq-local mevedel-permission-mode 'full-auto)
         (mevedel-view-refresh-input-prompt)
         (should (string= draft (mevedel-view--input-text)))
-        (should (string= "\n[full-auto] > "
+        (should (string= "\n[full-auto]\n> "
                          (buffer-substring-no-properties
                           mevedel-view--input-marker
                           (mevedel-view--input-start))))))))

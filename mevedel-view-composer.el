@@ -640,13 +640,13 @@ rows remain visually distinct from the editable composer."
                        'font-lock-face 'mevedel-view-directive-scope)))
       (if mevedel-view--pending-input-edit
           (propertize
-           (format "\n[Editing %s] %s"
+           (format "\n[Editing %s]\n%s"
                    (plist-get mevedel-view--pending-input-edit :label)
                    mevedel-view--input-prompt)
            'font-lock-face 'mevedel-view-input-prompt)
 	(if (mevedel-view--plan-mode-p)
             (pcase-let* ((`(,label ,_) (mevedel-view--permission-mode-display mode))
-			 (text (format "\n[Plan · %s] %s"
+			 (text (format "\n[Plan · %s]\n%s"
                                        label mevedel-view--input-prompt)))
               (add-text-properties
                0 (length text)
@@ -662,7 +662,7 @@ rows remain visually distinct from the editable composer."
 			  'font-lock-face 'mevedel-view-input-prompt)
             (pcase-let* ((`(,label ,face)
 			  (mevedel-view--permission-mode-display mode))
-			 (text (format "\n[%s] %s"
+			 (text (format "\n[%s]\n%s"
                                        label mevedel-view--input-prompt))
 			 (label-start 2)
 			 (label-end (+ label-start (length label))))
