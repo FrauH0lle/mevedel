@@ -814,12 +814,15 @@ The former 0.1 s timer repainted a whole pgtk frame ten times a second.")
             (setf (mevedel-execution-process--child-group-id child)
                   (process-id
                    (mevedel-execution-process--child-process child))))
-          (when (and
-                 (not (mevedel-execution-process--child-tty-p child))
-                 (process-live-p
-                  (mevedel-execution-process--child-process child)))
-            (process-send-eof
-             (mevedel-execution-process--child-process child)))
+          (let ((process (mevedel-execution-process--child-process child)))
+            (when (and (not (mevedel-execution-process--child-tty-p child))
+                       (process-live-p process))
+              (condition-case err
+                  (process-send-eof process)
+                (error
+                 ;; A fast helper can exit between the liveness check and EOF.
+                 (when (process-live-p process)
+                   (signal (car err) (cdr err)))))))
           (setf (mevedel-execution-process--child-watch-timer child)
                 (mevedel--run-periodic-timer
                  mevedel-execution-process--watch-interval

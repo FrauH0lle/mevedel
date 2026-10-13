@@ -457,6 +457,41 @@
           (should-not (file-exists-p spool)))
       (mevedel-execution-process-release child)
       (delete-directory root t)))
+  :doc "preserves the exit code when a child exits before stdin EOF"
+  (dolist (status '(0 7))
+    (let* ((root (make-temp-file "mevedel-process-eof-" t))
+           (spool (file-name-concat root "output"))
+           (gate (file-name-concat root "exit"))
+           result raced
+           (child (mevedel-execution-process-create
+                   :workdir root :spool-path spool
+                   :terminal-function (lambda (_child value) (setq result value)))))
+      (unwind-protect
+          (cl-letf* ((send-eof (symbol-function 'process-send-eof))
+                     ((symbol-function 'process-send-eof)
+                      (lambda (&optional process)
+                        (when (eq process (mevedel-execution-process--child-process child))
+                          (setq raced t)
+                          (write-region "" nil gate nil 'silent)
+                          (with-timeout (5 (ert-fail "Child did not exit before EOF"))
+                            (while (process-live-p process)
+                              (accept-process-output process 0.01 nil 1))))
+                        (funcall send-eof process))))
+            (write-region "" nil spool nil 'silent)
+            (should (eq child
+                        (mevedel-execution-process-start
+                         child :name "mevedel-test-process-eof"
+                         :command (list "sh" "-c"
+                                        "while [ ! -f \"$1\" ]; do sleep 0.01; done; printf done; exit \"$2\""
+                                        "mevedel-test" gate (number-to-string status))
+                         :coding 'utf-8-unix)))
+            (test-mevedel-execution-process--wait (lambda () result))
+            (should raced)
+            (should (equal status (plist-get result :exit-code)))
+            (should-not (plist-get result :error))
+            (should (equal "done" (plist-get result :output))))
+        (mevedel-execution-process-release child)
+        (delete-directory root t))))
   :doc "drains filter output when the watchdog observes exit first"
   (let* ((root (make-temp-file "mevedel-process-watchdog-" t))
          (spool (file-name-concat root "output"))
