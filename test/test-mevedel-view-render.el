@@ -4931,6 +4931,63 @@
                       (plist-get (mevedel-view--segment-rendering data-buf 1 limit t)
                                  :vtype))))))))
 
+(mevedel-deftest mevedel-view--render-prepared-tool/retry-failure ()
+  ,test
+  (test)
+  :doc "exhaustion and chronological attempt history stay in the existing disclosure"
+  (with-temp-buffer
+    (let* ((attempts
+            (cl-loop for attempt from 1 to 11
+                     collect (list :attempt attempt
+                                   :http-status (if (= attempt 11) "200" "503")
+                                   :type "server_error" :code "capacity"
+                                   :message (format "Capacity failure %d" attempt))))
+           (summary (list :kind 'request-summary :outcome 'error
+                          :backend "Codex" :status "HTTP/2 200"
+                          :error-type "server_error" :error-code "capacity"
+                          :error-data '(:request_id "provider-id")
+                          :message "Model at capacity"
+                          :retry-errors attempts :retry-exhausted t)))
+      (insert (mevedel-tool-render-data-format summary))
+      (let* ((rendering (mevedel-view--segment-rendering
+                         (current-buffer) (point-min) (point-max)))
+             (body (plist-get rendering :body)))
+        (should (eq 'request-failure (plist-get rendering :vtype)))
+        (should (eq 'error (plist-get rendering :status)))
+        (should-not (plist-get rendering :initially-collapsed-p))
+        (should (string-search "retries exhausted" (plist-get rendering :header)))
+        (should (string-search "Automatic retries exhausted after 11 attempts." body))
+        (should (string-search "Provider data: (:request_id \"provider-id\")" body))
+        (should (string-search "Model at capacity" body))
+        (let ((previous -1))
+          (dolist (attempt attempts)
+            (let ((position (string-search
+                             (format "Attempt %d · %s · server_error · capacity: Capacity failure %d"
+                                     (plist-get attempt :attempt)
+                                     (plist-get attempt :http-status)
+                                     (plist-get attempt :attempt)) body)))
+              (should position)
+              (should (> position previous))
+              (setq previous position))))
+        (should (string-search "Retry the request manually." body)))))
+  :doc "legacy failures and nonexhausted retry history do not claim exhaustion"
+  (with-temp-buffer
+    (dolist (attempts '(nil ((:attempt 1 :http-status nil :type nil :code nil
+                             :message "Connection interrupted"))))
+      (let* ((rendering
+              (mevedel-view--render-prepared-tool
+               (list :request-failure
+                     (list :backend "Provider" :outcome 'error :message "Failed"
+                           :retry-errors attempts))
+               (current-buffer)))
+             (body (plist-get rendering :body)))
+        (should (equal "Provider request failed" (plist-get rendering :header)))
+        (should-not (string-search "exhausted" body))
+        (should (string-search "Failed" body))
+        (if attempts
+            (should (string-search "Attempt 1: Connection interrupted" body))
+          (should-not (string-search "Attempt history" body)))))))
+
 (mevedel-deftest mevedel-view--segment-rendering/generic-fallback
   (:before-each (mevedel-tool-clear-registry)
    :after-each (mevedel-tool-clear-registry))

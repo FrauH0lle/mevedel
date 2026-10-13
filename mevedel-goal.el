@@ -1002,7 +1002,9 @@ classifies as an ordinary request failure, so it is retried."
       (mevedel-goal--settle-budget fsm session goal before))))
 
 (defun mevedel-goal-settle-failure (fsm &optional status)
-  "Charge failed Goal turn FSM and pause or retain it for one retry."
+  "Charge failed Goal turn FSM and pause or retain it for one retry.
+Exhausted retries or a permanent request-level error pause the Goal without
+another turn retry, regardless of the provider's failure message."
   (when-let* ((settled (mevedel-goal--settle-accounting fsm)))
     (let ((session (nth 0 settled))
           (goal (nth 1 settled))
@@ -1010,7 +1012,11 @@ classifies as an ordinary request failure, so it is retried."
       (with-current-buffer (plist-get (mevedel-engine-info fsm) :buffer)
         (when (eq (mevedel-goal-status goal) 'active)
           (let ((reason (mevedel-goal--fsm-failure-reason fsm status)))
-            (if (and (mevedel-goal--transient-failure-p reason)
+            (if (and (not (plist-get (mevedel-engine-info fsm)
+                                    :mevedel-retry-exhausted))
+                     (not (plist-get (mevedel-engine-info fsm)
+                                     :mevedel-retry-permanent))
+                     (mevedel-goal--transient-failure-p reason)
                      (< mevedel-goal--transient-retries
                         (length mevedel-goal--transient-retry-delays)))
                 (message "mevedel: Goal retrying in %ds after: %s"

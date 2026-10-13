@@ -257,6 +257,13 @@ early falls in step with this one, sharing its passes from then on."
                  (apply #'concat (nreverse parts))
                  info nil)))))
 
+(defun mevedel-gptel-stream-bridge-discard-batch (info)
+  "Discard provisional inserts owned by the failed attempt INFO."
+  (when-let* ((timer (plist-get info :mevedel-stream-insert-timer)))
+    (cancel-timer timer))
+  (plist-put info :mevedel-stream-insert-timer nil)
+  (plist-put info :mevedel-stream-insert-parts nil))
+
 (defconst mevedel-gptel-stream-bridge--pace-backlog-bytes 4096
   "Reads at least this large mean curl has a backlog to deliver.
 Pausing after such a read capped a large stream at one pipe read per

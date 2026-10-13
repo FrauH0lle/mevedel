@@ -695,6 +695,8 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
                                 (plist-get error-data :code))
                :error-data error-data
                :message (mevedel--fsm-error-message fsm)
+               :retry-errors (copy-tree (plist-get info :mevedel-retry-errors))
+               :retry-exhausted (plist-get info :mevedel-retry-exhausted)
                :retry 'manual))))))
 
 (defun mevedel--run-turn-terminal-hook (fsm event status)

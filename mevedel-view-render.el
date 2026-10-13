@@ -3029,10 +3029,13 @@ DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
             (type (plist-get request-data :error-type))
             (code (plist-get request-data :error-code))
             (error-data (plist-get request-data :error-data))
+            (retry-errors (plist-get request-data :retry-errors))
+            (retry-exhausted (plist-get request-data :retry-exhausted))
             (message-text (plist-get request-data :message)))
         (list
          :header (concat backend " request failed"
-                         (if type (format " · %s" type) ""))
+                         (if type (format " · %s" type) "")
+                         (if retry-exhausted " · retries exhausted" ""))
          :body
          (string-join
           (delq nil
@@ -3043,6 +3046,30 @@ DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
                            (format "Provider data: %S" error-data))
                       ""
                       (and message-text (format "%s" message-text))
+                      (and retry-exhausted
+                           (format "Automatic retries exhausted%s."
+                                   (if retry-errors
+                                       (format " after %d attempts"
+                                               (length retry-errors))
+                                     "")))
+                      (and retry-errors
+                           (concat
+                            "Attempt history (oldest first):\n"
+                            (mapconcat
+                             (lambda (attempt)
+                               (format
+                                "Attempt %s%s: %s"
+                                (plist-get attempt :attempt)
+                                (let ((details
+                                       (delq nil
+                                             (list (plist-get attempt :http-status)
+                                                   (plist-get attempt :type)
+                                                   (plist-get attempt :code)))))
+                                  (if details
+                                      (concat " · " (string-join details " · "))
+                                    ""))
+                                (plist-get attempt :message)))
+                             retry-errors "\n")))
                       ""
                       "Retry the request manually."))
           "\n")

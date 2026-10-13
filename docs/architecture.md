@@ -464,6 +464,52 @@ through post-response hooks. Failed send startup and directive rollback end only
 their own request; nested replacement requests remain active. Interrupted agent
 startup uses the same rollback as provider errors.
 
+### Bounded Codex sample recovery
+
+`mevedel-gptel-retry.el` adds request-local recovery only to mevedel-admitted
+Codex OAuth requests, selected by backend type: root, directive/shared-item,
+and retained-subagent requests. `mevedel-gptel-retry-max-retries` defaults to
+10 retries after the initial attempt, at most 11 physical provider calls per
+logical model sample; zero disables this controller. Each successful sample
+resets the allowance. Root and concurrent children have independent budgets.
+Other gptel requests and separate background retry policies are unchanged.
+Claude Code keeps its built-in retries and mevedel's existing one-time
+credential-refresh-lock replay.
+
+The controller normalizes nested Responses errors, flat `error` events,
+`response.failed` errors, and interrupted streams, including errors delivered
+with HTTP 200. Structured transient server/overload/rate-limit errors, HTTP
+408/5xx, recognized curl/network failures, and narrowly matched temporary
+overload or **model at capacity** messages can retry, even without server retry
+advice. Cancellation, authentication/permission errors, invalid requests,
+model-not-found, context overflow, exhausted quota, and local bookkeeping
+failures do not retry. Output-limit and content-filter stops are not mistaken
+for interrupted transport.
+
+Recovery replays the prepared sample below ordinary WAIT preparation, after
+context and reminder injection. It preserves completed tools, their results,
+sample count, selected model/effort/permissions, and request identity; it does
+not replay the user turn or agent invocation. Attempt identities reject stale
+callbacks. Failed provisional text/reasoning and incomplete tool output are
+rolled back without removing earlier successful work or unrelated transcript
+and composer content. Backoff grows approximately 1, 2, 4, 8, 16, then 30
+seconds with jitter and honors valid server retry deadlines. Request abort,
+agent interruption/deadline, buffer death, and teardown cancel backoff even
+without a registered transport. An independently retained child is not
+interrupted merely because its root is aborted.
+
+Intermediate failures update live status but do not enter terminal settlement
+or publish error blocks. Exhaustion settles once with one expandable ignored
+request summary: the existing provider error payload plus `:retry-errors`
+(chronological, bounded sanitized attempt diagnostics, at most 11) and
+`:retry-exhausted`. The live FSM flag `:mevedel-retry-exhausted` makes the
+affected Goal pause instead of multiplying the bound with settled-turn retries.
+Provider-reported usage is counted once per physical dispatch with a distinct
+telemetry call identity; missing usage remains unknown, not zero. Retry state
+is live request state and is not resumed after restart.
+
+### Request configuration
+
 Direct via `gptel-request` and `gptel-fsm`. Tools registered in
 `gptel--known-tools`. Presets use exact declared names and inherit in parent
 order (later parents win, then the child). Ordinary preset keys resolve to

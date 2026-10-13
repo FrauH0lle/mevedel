@@ -78,6 +78,11 @@
           (gptel-make-openai
            "Codex failure test" :key "test" :models '(test-model)))
          (message-text "An error occurred while processing your request.")
+         (retry-errors
+          '((:attempt 1 :http-status "503" :type "server_error"
+             :code "server_error" :message "Model at capacity")
+            (:attempt 2 :http-status "200" :type "server_error"
+             :code "server_error" :message "Still unavailable")))
          (error-data
           `(:type "server_error"
             :code "server_error"
@@ -91,6 +96,8 @@
                              (copy-marker (point-min)))
                  :backend backend
                  :status "HTTP/2 200"
+                 :mevedel-retry-errors retry-errors
+                 :mevedel-retry-exhausted t
                  :error error-data))))
     (unwind-protect
         (progn
@@ -120,6 +127,8 @@
                              (plist-get data :error-code)))
               (should (equal error-data (plist-get data :error-data)))
               (should (equal message-text (plist-get data :message)))
+              (should (equal retry-errors (plist-get data :retry-errors)))
+              (should (eq t (plist-get data :retry-exhausted)))
               (should (eq 'manual (plist-get data :retry)))
               (should (eq 'mevedel-render-data
                           (get-text-property block-start 'gptel)))
@@ -159,7 +168,9 @@
                      (buffer-substring
                       (match-beginning 0) (point-max))))))
               (should (equal message-text (plist-get data :error-data)))
-              (should (equal message-text (plist-get data :message))))))
+              (should (equal message-text (plist-get data :message)))
+              (should-not (plist-get data :retry-errors))
+              (should-not (plist-get data :retry-exhausted)))))
       (kill-buffer chat-buf)))
 
   :doc "reports provider failures as informational; only a structured model miss moves the session"

@@ -455,6 +455,39 @@
             (should (= 0 (mevedel-goal-turns-run replacement)))))
       (kill-buffer buffer))))
 
+(ert-deftest mevedel-goal-settle-failure/permanent-provider-guard ()
+  "An authoritative permanent provider error wins over transient-looking text."
+  (dolist (permanent '(t nil))
+    (with-temp-buffer
+      (let* ((reason "Model at capacity; temporarily unavailable, retry later")
+             (goal (mevedel-goal--create :id "g" :status 'active :token-budget 100
+                                        :tokens-used 0 :time-used-seconds 0 :turns-run 0))
+             (session (mevedel-session--create :name "main" :goal goal))
+             (fsm (gptel-make-fsm
+                   :info (list :buffer (current-buffer) :mevedel-goal-id "g"
+                               :mevedel-goal-accounting-id "g"
+                               :mevedel-retry-permanent permanent
+                               :tokens-full '(:input 7 :output 2)
+                               :error (list :type "insufficient_quota"
+                                            :code "insufficient_quota" :message reason)))))
+        (setq-local mevedel--session session mevedel-goal--transient-retries 0)
+        ;; Prove this message would otherwise enter the settled-turn retry path.
+        (should (mevedel-goal--transient-failure-p reason))
+        (mevedel-test--with-captured-messages nil
+          (mevedel-goal-settle-failure fsm 'error))
+        (should (eq (if permanent 'paused 'active) (mevedel-goal-status goal)))
+        (should (= (if permanent 0 1) mevedel-goal--transient-retries))
+        (should (= 9 (mevedel-goal-tokens-used goal)))
+        (should (= 1 (mevedel-goal-turns-run goal)))
+        (when permanent
+          (should (equal reason (mevedel-goal-reason goal)))
+          (should-not (mevedel-session-pending-reminders session))
+          (mevedel-goal-settle-failure fsm 'error)
+          (should (= 1 (mevedel-goal-turns-run goal)))
+          (cl-letf (((symbol-function 'mevedel--submit-generated-turn)
+                     (lambda (&rest _) (ert-fail "Permanent failure dispatched a Goal retry"))))
+            (should (eq 'inactive (mevedel-goal-continue-if-idle session)))))))))
+
 (mevedel-deftest mevedel-goal-settle-failure
   (:doc "settles failure only against the attributed Goal lineage")
   ,test
@@ -474,6 +507,31 @@
       (should (eq 'paused (mevedel-goal-status goal)))
       (should (= 60 (mevedel-goal-tokens-used goal)))
       (should-not (mevedel-session-pending-reminders session))))
+
+  :doc "request retry exhaustion pauses without multiplying the provider budget"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create :id "g" :status 'active :token-budget 100
+                                       :tokens-used 0 :time-used-seconds 0 :turns-run 0))
+           (session (mevedel-session--create :name "main" :goal goal))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer (current-buffer) :mevedel-goal-id "g"
+                             :mevedel-goal-accounting-id "g"
+                             :mevedel-retry-exhausted t
+                             :tokens-full '(:input 50 :output 10)
+                             :error "temporary network timeout"))))
+      (setq-local mevedel--session session mevedel-goal--transient-retries 0)
+      (mevedel-goal-settle-failure fsm 'error)
+      (should (eq 'paused (mevedel-goal-status goal)))
+      (should (equal "temporary network timeout" (mevedel-goal-reason goal)))
+      (should (= 0 mevedel-goal--transient-retries))
+      (should (= 60 (mevedel-goal-tokens-used goal)))
+      (should (= 1 (mevedel-goal-turns-run goal)))
+      (should-not (mevedel-session-pending-reminders session))
+      (mevedel-goal-settle-failure fsm 'error)
+      (should (= 1 (mevedel-goal-turns-run goal)))
+      (cl-letf (((symbol-function 'mevedel--submit-generated-turn)
+                 (lambda (&rest _) (ert-fail "Paused Goal dispatched a retry"))))
+        (should (eq 'inactive (mevedel-goal-continue-if-idle session))))))
 
   :doc "retries transient failures with backoff and pauses once exhausted or terminal"
   (let* ((session (mevedel-session--create :name "main"))

@@ -236,6 +236,21 @@ remain held until the Goal resumes. Once a Goal is complete, the next queued
 follow-up is an ordinary non-Goal message. There is no maximum-turn or no-tool
 heuristic.
 
+Codex OAuth requests first use [bounded sample recovery](architecture.md#bounded-codex-sample-recovery):
+10 retries plus the initial attempt per model sample, independently for root
+and child requests, without replaying completed tools or charging extra Goal
+turns. An exhausted controller marks its terminal FSM info with
+`:mevedel-retry-exhausted`; settlement charges known usage and one failed Goal
+turn, then pauses the affected active Goal with the provider's concrete reason.
+It does not use Goal's settled-turn retry allowance to multiply the 11-attempt
+bound. An owned provider error classified as nonretryable similarly carries
+`:mevedel-retry-permanent` and pauses the Goal even if its message resembles a
+transient capacity or network failure. Structured quota/authentication or other
+permanent errors cannot acquire extra settled-turn retries through misleading
+text. Missing attempt usage remains unknown under the existing incomplete
+usage policy. A completed or blocked Goal is not overwritten.
+
+For failures without either controller marker, the existing policy is unchanged.
 Transient transport failures are retried up to five consecutive times, after
 15, 30, 60, 120, and 240 seconds, so a short network outage does not pause the
 Goal. They include timeouts, connection and network errors, HTTP 502-504, and

@@ -64,6 +64,10 @@
 (declare-function mevedel-goal-pause-runtime-failure
                   "mevedel-goal" (buffer reason))
 
+;; `mevedel-gptel-retry'
+(declare-function mevedel-gptel-retry-dispatch "mevedel-gptel-retry" (fsm))
+(autoload 'mevedel-gptel-retry-dispatch "mevedel-gptel-retry")
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--handle-inject
                   "mevedel-reminders" (fsm))
@@ -174,7 +178,7 @@
   (mevedel-context-delivery-stage fsm)
   (mevedel-reminders--handle-inject fsm)
   (mevedel-history-note-dispatch (gptel-fsm-info fsm))
-  (gptel--handle-wait fsm))
+  (mevedel-gptel-retry-dispatch fsm))
 
 
 (defcustom mevedel-compact-auto t

@@ -632,7 +632,8 @@ provider callback."
         retry-timer
         (partial-prefix (or (car partial-cell) ""))
         (partial-chunks nil)
-        (partial-chars 0))
+        (partial-chars 0)
+        sample-owner)
     ;; Accept &rest so the wrap-and-chain forwarder can pass through
     ;; gptel's optional `raw' third argument (see
     ;; `gptel--insert-response' / `gptel-curl--stream-insert-response')
@@ -739,6 +740,14 @@ partial-len=%d :tool-use=%S :stream=%S"
                                  :error-details
                                  (error-message-string err))))))
                         (deliver terminal))))
+          (when-let* ((owner (plist-get info :mevedel-retry-state))
+                      ((not (eq owner sample-owner))))
+            (setq sample-owner owner)
+            (let ((baseline (partial-string)))
+              (plist-put info :mevedel-retry-reset-output
+                         (lambda ()
+                           (setq partial-prefix baseline partial-chunks nil partial-chars 0)
+                           (setcar partial-cell baseline)))))
           (when (and pending-terminal (not fired))
             (deliver pending-terminal))
           (unless fired

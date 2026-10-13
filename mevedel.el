@@ -172,6 +172,8 @@
 (autoload 'mevedel-execution-teardown-all "mevedel-execution")
 (autoload 'mevedel-gptel-bridge-install "mevedel-gptel-bridge")
 (autoload 'mevedel-gptel-bridge-uninstall "mevedel-gptel-bridge")
+(autoload 'mevedel-gptel-retry-install "mevedel-gptel-retry")
+(autoload 'mevedel-gptel-retry-uninstall "mevedel-gptel-retry")
 (autoload 'mevedel-gptel-stream-bridge-install "mevedel-gptel-stream-bridge")
 (autoload 'mevedel-gptel-stream-bridge-uninstall "mevedel-gptel-stream-bridge")
 (autoload 'mevedel-init-install-slash-command "mevedel-init")
@@ -258,6 +260,10 @@
 ;; `mevedel-gptel-bridge'
 (declare-function mevedel-gptel-bridge-install "mevedel-gptel-bridge" ())
 (declare-function mevedel-gptel-bridge-uninstall "mevedel-gptel-bridge" ())
+
+;; `mevedel-gptel-retry'
+(declare-function mevedel-gptel-retry-install "mevedel-gptel-retry" ())
+(declare-function mevedel-gptel-retry-uninstall "mevedel-gptel-retry" ())
 
 ;; `mevedel-gptel-stream-bridge'
 (declare-function mevedel-gptel-stream-bridge-install
@@ -843,6 +849,7 @@ always prompt for the session name."
   ;; Install the gptel stream compatibility bridge.
   (mevedel-gptel-stream-bridge-install)
   (mevedel-telemetry-usage-install)
+  (mevedel-gptel-retry-install)
   (mevedel-gptel-bridge-install)
 
   ;; Restart the collaboration lobbies still running when Emacs last
@@ -933,6 +940,8 @@ always prompt for the session name."
     (mevedel-skills-uninstall-hot-reload))
 
   ;; Remove the gptel stream compatibility bridge.
+  (when (featurep 'mevedel-gptel-retry)
+    (mevedel-gptel-retry-uninstall))
   (when (featurep 'mevedel-gptel-stream-bridge)
     (mevedel-gptel-stream-bridge-uninstall))
   (when (featurep 'mevedel-telemetry-usage)

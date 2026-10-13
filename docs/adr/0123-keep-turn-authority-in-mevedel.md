@@ -144,6 +144,31 @@ exit and may resume after repair, while submitted failure or interruption requir
 explicit continuation. Native history recovery still requires an idle conversation and
 preserves the transcript and effects.
 
+Codex OAuth recovery stays below the admitted turn boundary. The
+`mevedel-gptel-retry` controller normalizes Responses errors even in HTTP-200
+streams and retries a prepared model sample up to 10 times after its initial
+attempt. Success resets that sample allowance; root and retained children have
+independent budgets. Replay bypasses WAIT preparation, retaining tools/results,
+sample count, request identity, model, effort and permissions. Attempt-local
+provisional output is rolled back and obsolete callbacks are inert. Backoff
+is cancellable without a live transport; cancellation, interruption, deadlines,
+buffer death and teardown cannot leave a delayed producer active.
+
+Transient server, overload, temporary rate-limit and recognized transport
+errors, including narrowly matched model-at-capacity messages without retry
+advice, can recover. Authentication/permission, invalid request, model-not-found,
+context overflow, quota exhaustion and local bookkeeping errors cannot;
+output-limit and content-filter completion are not interrupted transport.
+Intermediate failures publish status, not terminal error blocks. Exhaustion
+settles once through the existing pipeline, persists bounded chronological
+attempt diagnostics with the original provider error, and pauses an affected
+Goal rather than invoking its settled-turn retry policy. Reported usage has a
+distinct physical-call identity and is charged once; absent usage stays
+unknown. The controller admits only mevedel-owned Codex OAuth requests, and
+zero `mevedel-gptel-retry-max-retries` disables it. Other providers, background
+retry policies and Claude's built-in retries are unchanged. Details are in
+[bounded sample recovery](../architecture.md#bounded-codex-sample-recovery).
+
 One prompt failure is absorbed instead of returned. Every Claude process on the
 host shares one credential store. A prompt that needs a token refresh while
 another process holds the refresh lock, or left it stale by exiting, fails with

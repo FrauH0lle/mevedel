@@ -202,6 +202,7 @@ Prompt / presets / agents
   mevedel-system.el           system prompt assembly
   mevedel-context-delivery.el retained dynamic context and selected-history acknowledgement
   mevedel-presets.el          gptel presets and request-time FSM assembly
+  mevedel-gptel-retry.el      admitted Codex OAuth sample retries, Responses error normalization, backoff and bounded diagnostics
   mevedel-agents.el           worker/explorer/verifier/reviewer definitions
   mevedel-agent-conversation.el  retained conversation buffers, activity, and saves
   mevedel-agent-control.el    retained-agent tree addressing, turns, mail, waits
