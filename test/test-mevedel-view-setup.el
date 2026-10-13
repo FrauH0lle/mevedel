@@ -17,6 +17,25 @@
 (require 'mevedel-view)
 (require 'mevedel-workspace)
 
+(mevedel-deftest mevedel-surface--enforce-ephemeral
+  (:doc "cursor stays by wrapped hidden markup with both header rows visible")
+  (let ((process-environment (copy-sequence process-environment)))
+    (skip-unless (mevedel-test--wayland-available-p))
+    (setenv "MEVEDEL_TEST_LOAD_PATH" (prin1-to-string load-path))
+    (pcase-let ((`(,observed ,status . ,_trace)
+                 (mevedel-test--run-wayland-fixture "view-cursor-wayland.el" 20)))
+      (ert-info ((format "Observed: %S" observed))
+        (should (= status 0))
+        (should-not (plist-get observed :modified))
+        (let* ((rows (plist-get observed :rows))
+               (origin (aref (plist-get (car rows) :cursor) 2)))
+          (should (= (length rows) 5))
+          (should (equal (mapcar (lambda (row) (plist-get row :hidden)) rows)
+                         '(nil t nil t nil)))
+          (dolist (row rows)
+            (should (< (abs (- (aref (plist-get row :cursor) 2) origin))
+                       (* 2 (plist-get observed :line-height))))))))))
+
 (mevedel-deftest mevedel-view--setup ()
   ,test
   (test)

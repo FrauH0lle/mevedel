@@ -727,7 +727,9 @@ navigation and activation fallbacks."
   (setq-local auto-save-default nil)
   (setq-local make-backup-files nil)
   (setq-local create-lockfiles nil)
-  (set-buffer-modified-p nil))
+  ;; A no-op reset forces redisplay and misplaces point on wrapped hidden markup.
+  (when (buffer-modified-p)
+    (set-buffer-modified-p nil)))
 
 (define-derived-mode mevedel-surface-mode text-mode "MevSurface"
   "Base mode for ephemeral mevedel surfaces with editable regions."

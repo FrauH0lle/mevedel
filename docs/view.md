@@ -8,7 +8,10 @@ submission hooks, root dispatch, and send/fork coordination.
 `mevedel-pending-inputs.el` owns steering, queued follow-ups, automatic
 delivery, and the Pending Inputs cockpit.
 `mevedel-surface-mode`, derived from `text-mode`, supplies shared ephemeral
-buffer behavior for non-transcript surfaces.
+buffer behavior for non-transcript surfaces.  Save-state enforcement clears
+the modified flag only after a modification; ordinary cursor movement does
+not force a mode-line redisplay, which can misplace the cursor on hidden
+Markdown at a wrapped line boundary.
 `mevedel-view-agent.el` owns agent transcript inspection, live agent status,
 and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
