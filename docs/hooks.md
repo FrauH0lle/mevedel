@@ -190,10 +190,10 @@ resources returned after cancellation during yielding startup are released.
 and retain their own timeout. Command completion waits for idle transport before
 advancing the handler chain when its sentinel interrupts remote I/O. The first terminal result is
 retained, the child is released immediately, and request cancellation remains
-effective while that continuation is queued. Remote command exit handling runs
+effective while that continuation is queued. This applies to local predecessors
+too, because a later handler may be remote. Remote command exit handling runs
 after TRAMP drains stderr, preserving final diagnostics before logging or
-building a block reason. This applies to local predecessors
-too, because a later handler may be remote. Each
+building a block reason. Each
 stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.
