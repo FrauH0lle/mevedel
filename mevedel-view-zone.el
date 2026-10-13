@@ -162,7 +162,9 @@ responsible for rerendering the producer."
 ;;; Rendering
 
 (defun mevedel-view-zone--section-properties (region fragment section)
-  "Return text properties for FRAGMENT SECTION in REGION."
+  "Return text properties for FRAGMENT SECTION in REGION.
+A body's activation is a default the body text may override line by line,
+so it is applied by `mevedel-view-zone--body-text' instead."
   (let* ((key (mevedel-view-zone--key region fragment))
          (read-only (plist-get fragment :read-only))
          (collapse-key (and (or (plist-get fragment :collapsible)
@@ -180,12 +182,15 @@ responsible for rerendering the producer."
                   mevedel-view-zone-section ,section
                   mevedel-view-zone-navigatable
                   ,(plist-get fragment :navigatable)
-                  mevedel-view-zone-activate ,(plist-get fragment :activate)
                   mevedel-view-zone-entry ,(plist-get fragment :entry)
                   mevedel-view-zone-collapsible
                   ,(plist-get fragment :collapsible)
                   mevedel-view-zone-collapse-key ,collapse-key
                   mevedel-view-zone-collapsed ,collapsed)))
+    (unless (eq section 'body)
+      (setq props (append `(mevedel-view-zone-activate
+                            ,(plist-get fragment :activate))
+                          props)))
     (unless body-properties-owned
       (setq props
             (append
@@ -228,8 +233,19 @@ responsible for rerendering the producer."
           (concat copy "\n")
         (substring copy 0 (1+ pos)))))))
 
+(defun mevedel-view-zone--add-body-defaults (text fragment)
+  "Return TEXT with FRAGMENT's interactive properties where TEXT lacks them."
+  (dolist (spec '((keymap . :keymap)
+                  (help-echo . :help-echo)
+                  (mevedel-view-zone-activate . :activate))
+                text)
+    (setq text (mevedel-view-zone--add-default-property
+                text (car spec) (plist-get fragment (cdr spec))))))
+
 (defun mevedel-view-zone--body-text (fragment &optional force-newline)
   "Return FRAGMENT body as a string with default interactive properties.
+Text already carrying its own keymap, help, or activation keeps it, so one
+line of a fragment can act differently from the fragment as a whole.
 When FORCE-NEWLINE is non-nil, return one tagged newline for an empty body."
   (let ((body (plist-get fragment :body)))
     (setq body
@@ -239,11 +255,7 @@ When FORCE-NEWLINE is non-nil, return one tagged newline for an empty body."
            (t (format "%s" body))))
     (setq body (mevedel-view-zone--single-trailing-newline
                 body force-newline))
-    (setq body (mevedel-view-zone--add-default-property
-                body 'keymap (plist-get fragment :keymap)))
-    (setq body (mevedel-view-zone--add-default-property
-                body 'help-echo (plist-get fragment :help-echo)))
-    body))
+    (mevedel-view-zone--add-body-defaults body fragment)))
 
 (defun mevedel-view-zone--label-text (fragment)
   "Return FRAGMENT label text, or nil when it has no label."
@@ -279,13 +291,9 @@ When FORCE-NEWLINE is non-nil, return one tagged newline for an empty body."
        body)
       (setq text (concat text body))
       (when body-suffix
-        (setq body-suffix (copy-sequence (format "%s" body-suffix)))
-        (setq body-suffix
-              (mevedel-view-zone--add-default-property
-               body-suffix 'keymap (plist-get fragment :keymap)))
-        (setq body-suffix
-              (mevedel-view-zone--add-default-property
-               body-suffix 'help-echo (plist-get fragment :help-echo)))
+        (setq body-suffix (mevedel-view-zone--add-body-defaults
+                           (copy-sequence (format "%s" body-suffix))
+                           fragment))
         (add-text-properties
          0 (length body-suffix)
          (mevedel-view-zone--section-properties region fragment 'body)

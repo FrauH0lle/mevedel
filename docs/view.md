@@ -1251,8 +1251,12 @@ draft-preserving view machinery as root redraws. `/btw` requires an accepted
 parent prompt and is available only from the live root chat or Plan composer;
 directive, historical, agent, and side scopes cannot create one.
 
-While managed Bash work is live, the status zone shows its session-wide count
-as an `Executions` fragment. Activating it opens the execution cockpit. The
+While yielded (background) Bash commands are live, the status zone lists up to
+five of them by command and owner, followed by `+N more`. Activating a command
+line opens that command's result exactly like a breadcrumb's `[Show result]`:
+its original Bash row, opening the owning agent's transcript first. Activating
+`+N more` opens the execution cockpit. A managed-zone body line keeps its own
+activation; the fragment's activation applies only to lines without one. The
 main cockpit exposes the same surface as `Executions`, and `/ps` opens it
 directly. Its Elapsed and Bytes columns sort by their numbers, not their text. Execution start and settlement reconcile this fragment through the
 normal managed-zone path, preserving composer text, point, and windows.

@@ -1498,22 +1498,47 @@
   (test)
   :doc "caps listed commands and jumps from a line to its Bash row"
   (let ((mevedel-view--status-executions-visible-max 1)
-        shown)
+        (session (mevedel-session-create
+                  "main"
+                  (mevedel-workspace--create
+                   :type 'project :id "/tmp/status-executions/"
+                   :root "/tmp/status-executions/" :name "status-executions")))
+        shown opened)
     (cl-letf (((symbol-function 'mevedel-execution-list-user)
                (lambda (_)
                  '((:execution-id "e1" :owner "/root" :yielded t
                     :command "make test")
                    (:execution-id "e2" :owner "/root" :yielded t
                     :command "make lint"))))
+              ((symbol-function 'mevedel-execution-count-user) (lambda (_) 2))
+              ((symbol-function 'mevedel-view-agent-status-fragment) #'ignore)
+              ((symbol-function 'mevedel-executions-list-open)
+               (lambda (&optional _context) (setq opened t)))
               ((symbol-function 'mevedel-view-audit-show-control-result)
                (lambda (id) (setq shown id))))
-      (let ((body (mevedel-view--status-executions-body 'session)))
+      (let ((body (mevedel-view--status-executions-body session)))
         (should (equal "  ● make test\n  +1 more\n"
                        (substring-no-properties body)))
-        (funcall (get-text-property 4 'mevedel-view-zone-activate body))
-        (should (equal "e1" shown))
         (should-not (get-text-property (1- (length "  ● make test\n"))
-                                       'mouse-face body))))))
+                                       'mouse-face body)))
+      ;; Activate the rendered zone text, which is what RET and clicks read.
+      (with-temp-buffer
+        (insert "> draft")
+        (setq-local mevedel-view--status-marker (copy-marker (point-min) t))
+        (setq-local mevedel-view--interaction-marker
+                    (copy-marker (point-min) t))
+        (setq-local mevedel-view--input-marker (copy-marker (point-min) nil))
+        (mevedel-view-zone-reconcile
+         'status (point-min) (point-min)
+         (mevedel-view--status-fragments (list :session session)))
+        (goto-char (point-min))
+        (search-forward "make test")
+        (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
+        (should (equal "e1" shown))
+        (should-not opened)
+        (search-forward "more")
+        (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
+        (should opened)))))
 
 (mevedel-deftest mevedel-view-open-executions ()
   ,test

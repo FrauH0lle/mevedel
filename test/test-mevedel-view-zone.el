@@ -187,7 +187,29 @@
          'status anchor anchor
          '((:namespace status :id live :body "Live")))
         (set-marker anchor nil)
-        (should (equal "TailLive\n" (buffer-string)))))))
+        (should (equal "TailLive\n" (buffer-string))))))
+
+  :doc "a line's own activation wins over the fragment default in rendered text"
+  (with-temp-buffer
+    (insert "> draft")
+    (mevedel-view-zone-test--setup-markers)
+    (let* ((line-action (lambda () 'line))
+           (fragment-action (lambda () 'fragment))
+           (body (concat
+                  (propertize "own\n" 'mevedel-view-zone-activate line-action)
+                  "plain\n")))
+      (mevedel-view-zone-reconcile
+       'status (point-min) (point-min)
+       (list (list :namespace 'status :id 'rows :body body
+                   :body-suffix "\n" :activate fragment-action)))
+      (goto-char (point-min))
+      (should (eq line-action
+                  (get-text-property (point) 'mevedel-view-zone-activate)))
+      (search-forward "plain")
+      (should (eq fragment-action
+                  (get-text-property (1- (point)) 'mevedel-view-zone-activate)))
+      (should (eq fragment-action
+                  (get-text-property (1+ (point)) 'mevedel-view-zone-activate))))))
 
 (mevedel-deftest mevedel-view-zone-collapse-state-set-p
   (:doc "reports whether collapse state was explicitly stored")
