@@ -6,7 +6,7 @@
 ;; any single mevedel module: colour tinting for overlay styling, tag-query
 ;; prefix/infix conversion, environment-info string assembly for system
 ;; prompts, synthetic transcript insertion and response-marker handling, and
-;; various text and path manipulation utilities.
+;; various text and path manipulation utilities, and nonblocking socket cleanup.
 
 ;;; Code:
 
@@ -156,6 +156,26 @@ prefix argument, or when HERE is non-nil, insert it at point."
 
 ;;
 ;;; External helpers
+
+(defun mevedel--delete-process (process)
+  "Retire PROCESS without waiting for asynchronous network setup.
+Detach a connecting process and delete it once setup settles.  Delete any
+other process immediately.  The caller still owns its buffers."
+  (if (eq (process-status process) 'connect)
+      (progn
+        ;; Emacs can block in gai_suspend when deleting during DNS lookup.
+        (set-process-buffer process nil)
+        (set-process-filter process #'ignore)
+        (set-process-query-on-exit-flag process nil)
+        (let ((collect
+               (lambda (pending _event)
+                 (unless (eq (process-status pending) 'connect)
+                   (set-process-sentinel pending #'ignore)
+                   (delete-process pending)))))
+          (set-process-sentinel process collect)
+          ;; Setup may have settled before the sentinel was installed.
+          (funcall collect process nil)))
+    (delete-process process)))
 
 (defun mevedel-start-helper-capturing-output
     (callback name command read-paths &optional writable-roots session)

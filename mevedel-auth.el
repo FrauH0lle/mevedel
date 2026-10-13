@@ -17,6 +17,10 @@
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
 (declare-function mevedel-transport-run-at-time "mevedel-transport" (seconds function &rest args))
 
+;; `mevedel-utilities'
+(declare-function mevedel--delete-process "mevedel-utilities" (process))
+(autoload 'mevedel--delete-process "mevedel-utilities")
+
 ;; `url-http'
 (defvar url-http-end-of-headers)
 (defvar url-http-response-status)
@@ -85,18 +89,7 @@ Never expose HTTP bodies in errors."
                   (dolist (buffer buffers)
                     (when (buffer-live-p buffer)
                       (when-let* ((process (get-buffer-process buffer)))
-                        (if (eq (process-status process) 'connect)
-                            (progn
-                              ;; Deleting during asynchronous DNS can block inside Emacs.
-                              (set-process-buffer process nil)
-                              (set-process-filter process #'ignore)
-                              (set-process-sentinel
-                               process
-                               (lambda (pending _event)
-                                 (unless (eq (process-status pending) 'connect)
-                                   (set-process-sentinel pending #'ignore)
-                                   (delete-process pending)))))
-                          (delete-process process)))
+                        (mevedel--delete-process process))
                       (kill-buffer buffer))))
                 (finish (payload code)
                   (unless done (setq done t) (clean) (funcall callback payload code)))

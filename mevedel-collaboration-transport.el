@@ -37,6 +37,10 @@
 (autoload 'mevedel-transport-cancel-pending "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
+;; `mevedel-utilities'
+(declare-function mevedel--delete-process "mevedel-utilities" (process))
+(autoload 'mevedel--delete-process "mevedel-utilities")
+
 ;; `websocket'
 (declare-function make-websocket-frame "websocket"
                   (&rest args))
@@ -436,7 +440,7 @@ WS is nil when dialing failed before a connection was created."
     (plist-put transport :state 'down)
     (mevedel-collaboration--transport-discard-input transport)
     (when ws
-      (ignore-errors (delete-process (websocket-conn ws))))
+      (ignore-errors (mevedel--delete-process (websocket-conn ws))))
     (mevedel-collaboration--transport-notify transport 'down)
     (let ((backoff (plist-get transport :backoff)))
       (plist-put transport :backoff
@@ -544,7 +548,9 @@ Return non-nil when the bounded JSON object was written."
   (when-let* ((ws (plist-get transport :ws)))
     (plist-put transport :ws nil)
     (condition-case nil
-        (websocket-close ws)
+        (if (eq (process-status (websocket-conn ws)) 'connect)
+            (mevedel--delete-process (websocket-conn ws))
+          (websocket-close ws))
       (error nil)))
   (mevedel-collaboration--transport-notify transport 'stopped))
 
