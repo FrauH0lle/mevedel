@@ -312,6 +312,7 @@ row redraws a second.")
   recoverable-output-bytes
   recoverable-output-path
   output-tail
+  permission-approvals
   preparation-cancel
   progress-timer
   progress-emitted-at
@@ -1088,6 +1089,9 @@ execution's progress cost."
            (mevedel-execution--record-origin record)))
          :tool-use-id (mevedel-execution--origin-tool-use-id
                        (mevedel-execution--record-origin record))
+         :permission-approvals
+         (mevedel-execution--copy-value
+          (mevedel-execution--record-permission-approvals record))
          :facts (mevedel-execution--facts record))
    properties))
 
@@ -1295,6 +1299,9 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
           :sandbox-summary
           (mevedel-execution-telemetry-context-summary
            (mevedel-execution--record-telemetry-context record))
+          :permission-approvals
+          (mevedel-execution--copy-value
+           (mevedel-execution--record-permission-approvals record))
           :error (mevedel-execution--record-error-data record)
           :claimed-final-p (and claimed t))))
 
@@ -1724,6 +1731,7 @@ process-filter appends use the published path."
               writable-roots temporary-root
               additional-permissions sandbox-permissions artifact-directory
               outcome-function read-only-p tool-args tool-use-id tty
+              permission-approvals
               (yield-time-ms 10000))
   "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
 
@@ -1737,6 +1745,8 @@ OUTCOME-FUNCTION derives canonical outcome from exit code and termination.
 READ-ONLY-P selects the overlapping reader lane; all other calls are exclusive.
 DATA-BUFFER and TOOL-USE-ID identify the authoritative transcript row.
 TOOL-ARGS correlates immutable events with the original call.
+PERMISSION-APPROVALS is trusted display metadata snapshotted at admission,
+not execution authority.
 TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
 terminal settlement."
@@ -1801,6 +1811,8 @@ terminal settlement."
               :tool-args tool-args
               :tool-use-id tool-use-id)
              :outcome-function outcome-function
+             :permission-approvals
+             (mevedel-execution--copy-value permission-approvals)
              :mutating-p (not read-only-p)
              :output-chars 0 :output-head "" :output-tail ""
              :read-offset 0
@@ -2009,6 +2021,7 @@ after WAIT-MS while the process remains live."
      (append
       facts
       (list :owner (mevedel-execution--origin-owner origin)
+            :permission-approvals (mevedel-execution--record-permission-approvals record)
             :yielded (and (mevedel-execution--record-yielded-p record) t)
             :started-at (mevedel-execution--record-started-at record)
             :output-tail

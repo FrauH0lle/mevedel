@@ -25,27 +25,42 @@
 
 (cl-defstruct (mevedel-mcp (:constructor mevedel-mcp--create))
   "Private local server for one caller-owned tool scope."
-  directory listener clients tools dispatch control rejected closed)
+  directory listener clients tools dispatch control rejected lost closed)
 
 (defun mevedel-mcp--encode (message)
   "Return MESSAGE as one newline-terminated JSON line."
   (concat (json-serialize message :null-object :null :false-object :json-false)
           "\n"))
 
-(defun mevedel-mcp--write (client line)
-  "Write encoded LINE to live CLIENT."
+(defun mevedel-mcp--write (client line &optional reply)
+  "Write encoded LINE to live CLIENT; return non-nil when it was written.
+A peer can close after CLIENT was last read, which leaves CLIENT live until
+Emacs reads its end.  The write then fails and Emacs closes CLIENT; that
+lost client is retired like a disconnect.  When the line answered REPLY, a
+(KIND . ID) pair naming a tool call or hook request, the server's lost
+callback learns which reply was lost.  A failure that leaves CLIENT live
+is unexpected and still signals."
   (when (process-live-p client)
-    (process-send-string client line)))
+    (condition-case err
+        (progn (process-send-string client line) t)
+      (error
+       (when (process-live-p client) (signal (car err) (cdr err)))
+       (let ((server (process-get client 'mevedel-mcp-server)))
+         (mevedel-mcp--disconnect client)
+         (when-let* ((lost (and reply server (mevedel-mcp-lost server))))
+           (funcall lost (list :kind (car reply) :id (cdr reply)))))
+       nil))))
 
-(defun mevedel-mcp--send (client message)
-  "Send JSON MESSAGE to live CLIENT."
-  (mevedel-mcp--write client (mevedel-mcp--encode message)))
+(defun mevedel-mcp--send (client message &optional reply)
+  "Send JSON MESSAGE to live CLIENT, answering REPLY; return non-nil if written."
+  (mevedel-mcp--write client (mevedel-mcp--encode message) reply))
 
-(defun mevedel-mcp--error (client id code message)
-  "Reply to CLIENT request ID with error CODE and MESSAGE."
+(defun mevedel-mcp--error (client id code message &optional reply)
+  "Reply to CLIENT request ID with error CODE and MESSAGE, answering REPLY."
   (mevedel-mcp--send
    client (list :jsonrpc "2.0" :id id
-                :error (list :code code :message message))))
+                :error (list :code code :message message))
+   reply))
 
 ;; Calls and hook controls share one pending table, so cancellation and
 ;; disconnect retire whichever is still unanswered.
@@ -72,36 +87,46 @@
         (error nil))))
   (when (process-live-p client) (delete-process client)))
 
-(defun mevedel-mcp--pending (client id start)
+(defun mevedel-mcp--pending (client id kind start)
   "Answer CLIENT request ID when asynchronous START completes.
+KIND is `tool' or `hook', naming the reply should it be lost.
 START receives a completion taking a result plist, or nil and an error
-message.  It may return a canceller for client cancellation or disconnect.
-Only the first completion of a still-pending request answers it."
+message; it returns non-nil when its answer reached the client.  START may
+return a canceller for client cancellation or disconnect.  Only the first
+completion of a still-pending request answers it."
   (let ((calls (process-get client 'mevedel-mcp-calls)))
     (if (gethash id calls)
         ;; Duplicate live IDs cannot identify which invocation is being answered.
         (mevedel-mcp--disconnect client)
       (let* ((cell (cons nil 'pending))
+             (reply (cons kind id))
              (complete
               (lambda (result &optional failure)
                 (when (eq (gethash id calls) cell)
                   (remhash id calls)
                   (setcdr cell 'completed)
-                  (if failure (mevedel-mcp--error client id -32603 failure)
+                  (if failure (mevedel-mcp--error client id -32603 failure reply)
                     ;; Raw-byte text cannot be serialized; the call must still end.
                     (if-let* ((line (ignore-errors
                                       (mevedel-mcp--encode
                                        (list :jsonrpc "2.0" :id id :result result)))))
-                        (mevedel-mcp--write client line)
+                        (mevedel-mcp--write client line reply)
                       (mevedel-mcp--error client id -32603
-                                          "Result is not valid JSON")))))))
+                                          "Result is not valid JSON" reply)))))))
         (puthash id cell calls)
         (condition-case err
             (progn
               (setcar cell (funcall start complete))
               (when (and (eq (cdr cell) 'cancelled) (functionp (car cell)))
                 (funcall (car cell))))
-          (error (funcall complete nil (error-message-string err))))))))
+          (error
+           ;; A failure while START still owes its answer becomes that answer.
+           ;; Once completion began the request is retired, so a failure in
+           ;; it, such as a write to a client that stays live, keeps
+           ;; signalling instead of vanishing in a retired completion.
+           (if (eq (cdr cell) 'completed)
+               (signal (car err) (cdr err))
+             (funcall complete nil (error-message-string err)))))))))
 
 (defun mevedel-mcp--call (server client id params)
   "Dispatch SERVER tool PARAMS for CLIENT request ID."
@@ -114,7 +139,7 @@ Only the first completion of a still-pending request answers it."
             (funcall (mevedel-mcp-rejected server) message)))
       ;; The dispatcher checks NAME against its admitted roster.
       (mevedel-mcp--pending
-       client id
+       client id 'tool
        (lambda (complete)
          (funcall (mevedel-mcp-dispatch server)
                   name args (plist-get params :_meta) complete))))))
@@ -153,8 +178,8 @@ Only the first completion of a still-pending request answers it."
       (mevedel-mcp--send client (list :jsonrpc "2.0" :id id :result '())))
      ((and (equal method "mevedel/control") (mevedel-mcp-control server))
       (mevedel-mcp--pending
-       client id (lambda (complete)
-                   (funcall (mevedel-mcp-control server) params complete))))
+       client id 'hook (lambda (complete)
+                         (funcall (mevedel-mcp-control server) params complete))))
      ((not (eq (process-get client 'mevedel-mcp-state) 'ready))
       (mevedel-mcp--error client id -32600 "Initialize the connection first"))
      ((equal method "tools/list")
@@ -248,13 +273,16 @@ in a directory that was never established."
     (error (if noerror mevedel-mcp--socket-root
              (signal (car err) (cdr err))))))
 
-(defun mevedel-mcp-start (tools dispatch &optional control rejected)
+(defun mevedel-mcp-start (tools dispatch &optional control rejected lost)
   "Start a private local MCP server using TOOLS and DISPATCH.
 TOOLS is a zero-argument function returning MCP tool-schema plists.
 DISPATCH receives a tool name, argument plist, metadata plist and completion
 callback.  Metadata preserves the client's optional protocol extensions;
 it returns a cancellation function.  Completion takes an MCP result plist.
 Completion may be asynchronous, including after ordinary user interactions.
+It returns non-nil when the reply reached the client.  A client that closed
+before its reply is retired, cancelling its other pending work once; nothing
+is retried, so work already done stays done.
 The caller owns authorization, must reject tools outside its roster and must
 reject obsolete request ownership.
 Optional CONTROL handles native hook events on the same private endpoint.
@@ -264,13 +292,17 @@ call answers the hook.  CONTROL may return a canceller, called when the hook
 client disconnects before completion.  CONTROL is not exposed in discovery
 and cannot execute tools.
 Optional REJECTED receives a diagnostic when argument-shape validation
-rejects a call before dispatch.  It may retire a bounded workload."
+rejects a call before dispatch.  It may retire a bounded workload.
+Optional LOST receives (:kind KIND :id ID) when a reply could not be written
+because its client had closed: KIND is `tool' or `hook' and ID the client's
+request id.  It carries no payload and must not end the owner's work, whose
+agent reports its own outcome."
   (let* ((default-directory temporary-file-directory)
          (directory (make-temp-file
                      (file-name-concat (mevedel-mcp-socket-root) "server-") t))
          (server (mevedel-mcp--create :directory directory
                                      :tools tools :dispatch dispatch :control control
-                                     :rejected rejected)))
+                                     :rejected rejected :lost lost)))
     (condition-case err
         (progn
           (set-file-modes directory #o700)

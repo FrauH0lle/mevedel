@@ -243,7 +243,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
          (entry
           (append
            (list :tool-use-id (plist-get context :tool-use-id)
-                 :approval-source-cell (list 'user)
+                 :approval-decision-cell (list '(:source user))
                  :args (plist-get context :args)
                  :patch-session-only-p
                  (plist-get (plist-get context :patch-proposal) :session-only-p)
@@ -290,6 +290,28 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
             (when-let* ((request (plist-get context :request))
                         ((mevedel-request-cancelled-p request)))
               (setq outcome 'aborted))
+            ;; Record only the reviewer decision that actually survived final
+            ;; validation.  Rules, hooks, human fallback and mode transitions
+            ;; can also allow once, but are not automatic reviewer approvals.
+            (when-let* ((approval (car (plist-get entry :approval-decision-cell)))
+                        ((eq outcome 'allow-once))
+                        ((eq (plist-get approval :source) 'reviewer))
+                        ((eq (plist-get approval :outcome) 'allow-once))
+                        ((not (eq 'full-auto
+                                  (mevedel-permission-mode-effective
+                                   session (plist-get context :buffer))))))
+              (setq updated
+                    (plist-put updated :permission-approvals
+                               (append (plist-get updated :permission-approvals)
+                                       (list (copy-tree approval)))))
+              (when-let* ((notify (plist-get updated :tool-event-callback)))
+                (ignore-errors (funcall notify 'permission-approved updated)))
+              (when-let* ((progress (plist-get updated :progress-callback)))
+                (ignore-errors
+                  (funcall progress
+                           (list :type 'permission-approved
+                                 :permission-approvals
+                                 (copy-tree (plist-get updated :permission-approvals)))))))
             (funcall original-settle updated outcome)))
          (workspace (plist-get context :workspace)))
     (mevedel-hooks-run-tool-event
@@ -382,7 +404,8 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                          (if (mevedel-tool-permission--denial-outcome-p
                               outcome)
                              (plist-put updated :permission-denial-provenance
-                                        (car (plist-get queued :approval-source-cell)))
+                                        (plist-get (car (plist-get queued :approval-decision-cell))
+                                                   :source))
                            updated)
                          outcome))))
                (when-let* ((progress (plist-get context :progress-callback)))

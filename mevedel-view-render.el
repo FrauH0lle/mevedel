@@ -151,6 +151,7 @@
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-display-string "mevedel-tool-registry"
 		  (tool-name args))
+(declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
 (declare-function mevedel-tool-get "mevedel-tool-registry"
 		  (name &optional category))
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
@@ -187,6 +188,8 @@
 		  "mevedel-transcript" (limit))
 (declare-function mevedel-transcript--mailbox-find-close
 		  "mevedel-transcript" (open-regexp close-tag limit))
+(declare-function mevedel-transcript--mailbox-open-at-point
+                  "mevedel-transcript" (kind limit))
 (declare-function mevedel-transcript--org-tool-block-parts
 		  "mevedel-transcript" (start end))
 (declare-function mevedel-transcript--skip-leading-properties-drawer
@@ -1811,6 +1814,29 @@ to the input or poll that successfully observed it."
       (plist-put (copy-sequence render-data) :status 'success)
     render-data))
 
+(defun mevedel-view--permission-approval-reason (render-data)
+  "Return the bounded reviewer explanation in canonical RENDER-DATA.
+This is display-only provenance for this invocation, not permission authority.
+Child approvals belong to child render data, never the enclosing call."
+  (let ((records (plist-get render-data :permission-approvals)) reasons)
+    (when (proper-list-p records)
+      (dolist (record records)
+        (when (and (proper-list-p record)
+                   (eq (plist-get record :source) 'reviewer)
+                   (eq (plist-get record :outcome) 'allow-once)
+                   (stringp (plist-get record :reason)))
+          (push (substring-no-properties (plist-get record :reason)) reasons))))
+    (when reasons
+      (truncate-string-to-width
+       (string-join (delete-dups (nreverse reasons)) "\n") 1024 nil nil "…"))))
+
+(defun mevedel-view--permission-approval-hint (reason)
+  "Return a subdued approval hint with REASON as its tooltip, or nil."
+  (when reason
+    (propertize "Auto-approved · once"
+                'font-lock-face 'mevedel-view-tool-metadata
+                'help-echo reason)))
+
 (defun mevedel-view--tool-render-status (result &optional render-data)
   "Return the renderer dispatch status for RESULT and RENDER-DATA."
   (setq render-data (mevedel-view--presentation-render-data render-data))
@@ -1888,6 +1914,10 @@ straight off ARGS and RESULT without needing render-data."
                   (cond
                    ((null plist) nil)
                    ((mevedel-view--rendering-plist-p plist)
+                    (when-let* ((reason (mevedel-view--permission-approval-reason
+                                        render-data)))
+                      (setq plist (plist-put (copy-sequence plist)
+                                             :permission-approval-reason reason)))
                     (if (or (eq status 'error)
                             (and explicit-status
                                  (not (memq (plist-get plist :status)
@@ -1949,6 +1979,8 @@ RENDER-DATA may carry the pipeline's structured `:status'."
           :body (and (not collapsed-only) (stringp result) result)
           :body-mode nil
           :status status
+          :permission-approval-reason
+          (mevedel-view--permission-approval-reason render-data)
           :initially-collapsed-p t)))
 
 (defun mevedel-view-data-buffer-major-mode ()
@@ -2146,6 +2178,9 @@ Execution outcome remains independent of lifecycle and disclosure state."
                          'mevedel-view-zone-activate
                          (lambda ()
                            (mevedel-view-audit-show-control-result id))))))
+        (when-let* ((hint (mevedel-view--permission-approval-hint
+                          (plist-get rendering :permission-approval-reason))))
+          (setq line (concat line "  " hint)))
         line))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
@@ -2406,7 +2441,9 @@ folding a run into a group does not lose the boundary it ran with."
                      (gethash child-id mevedel-view--execution-events)))
          (progress (and (eq (plist-get event :type) 'progress)
                         (append (copy-sequence (plist-get event :facts))
-                                (list :status 'success :live-execution-p t
+                                (list :permission-approvals
+                                      (plist-get event :permission-approvals)
+                                      :status 'success :live-execution-p t
                                       :output-preview-truncated-p
                                       (plist-get event :output-preview-truncated-p)))))
          (latest (or terminal progress))
@@ -2838,7 +2875,9 @@ finish before this function invokes registered renderers or reads live events."
            (direct-progress
             (and (eq (plist-get direct-event :type) 'progress)
                  (append (copy-sequence (plist-get direct-event :facts))
-                         (list :status 'success :live-execution-p t
+                         (list :permission-approvals
+                               (plist-get direct-event :permission-approvals)
+                               :status 'success :live-execution-p t
                                :output-preview-truncated-p
                                (plist-get direct-event :output-preview-truncated-p)))))
            (direct-latest (or direct-terminal direct-progress))
@@ -2864,7 +2903,9 @@ finish before this function invokes registered renderers or reads live events."
                 (let ((facts (copy-sequence (plist-get event :facts))))
                   (append
                    facts
-                   (list :status 'success
+                   (list :permission-approvals
+                         (plist-get event :permission-approvals)
+                         :status 'success
                          :live-execution-p t
                          :output-preview-truncated-p
                          (plist-get event :output-preview-truncated-p))))
@@ -3637,37 +3678,52 @@ content without moving ahead of prior transcript turns."
              mevedel-view--render-insertion-marker)
         history-tail)))
 
-(defun mevedel-view--pending-tool-line-body (label)
+(defun mevedel-view--pending-tool-label (entry)
+  "Return the Calling label for pending tool ENTRY, without its approval hint."
+  (let ((name (nth 1 entry)) (detail (nth 2 entry)))
+    (cond ((equal name "WaitAgent") "Waiting for agents")
+          (detail (format "Calling %s: %s..." name detail))
+          (t (format "Calling %s..." name)))))
+
+(defun mevedel-view--pending-tool-line-body (label &optional approval)
   "Return the propertized fragment body for pending tool LABEL.
+APPROVAL is a reviewer explanation displayed outside the animated span.
 Before insertion the display frame is unknown; use a portable first frame.
 Shimmer animates LABEL's verb and tool name in place, \"Calling Bash\"
 without its arguments, resting until its sweep."
-  (if (eq mevedel-view-tool-spinner-style 'shimmer)
-      (let* ((end (or (string-match-p ":" label) (length label)))
-             (word (substring label 0 end)))
-        (concat
-         (propertize word
-                     'font-lock-face 'mevedel-view-ephemeral
-                     'mevedel-view-inline-spinner-frame t
-                     'mevedel-view-pending-tool-live t
-                     'display (mevedel-view-animation-frame
-                               'shimmer word 0 'mevedel-view-ephemeral
-                               (selected-frame)))
-         (propertize (format "%s\n" (substring label end))
-                     'font-lock-face 'mevedel-view-ephemeral
-                     'mevedel-view-pending-tool-live t)))
-    (let ((frame (mevedel-view-animation-frame
-                  mevedel-view-tool-spinner-style "" 0 'mevedel-view-ephemeral
-                  :multiple)))
-      (concat
-       (propertize frame
-                   'font-lock-face 'mevedel-view-ephemeral
-                   'mevedel-view-inline-spinner-frame t
-                   'mevedel-view-pending-tool-live t
-                   'display frame)
-       (propertize (format "%s\n" label)
-                   'font-lock-face 'mevedel-view-ephemeral
-                   'mevedel-view-pending-tool-live t)))))
+  (let ((body
+         (if (eq mevedel-view-tool-spinner-style 'shimmer)
+             (let* ((end (or (string-match-p ":" label) (length label)))
+                    (word (substring label 0 end)))
+               (concat
+                (propertize word
+                            'font-lock-face 'mevedel-view-ephemeral
+                            'mevedel-view-inline-spinner-frame t
+                            'mevedel-view-pending-tool-live t
+                            'display (mevedel-view-animation-frame
+                                      'shimmer word 0 'mevedel-view-ephemeral
+                                      (selected-frame)))
+                (propertize (format "%s\n" (substring label end))
+                            'font-lock-face 'mevedel-view-ephemeral
+                            'mevedel-view-pending-tool-live t)))
+           (let ((frame (mevedel-view-animation-frame
+                         mevedel-view-tool-spinner-style "" 0
+                         'mevedel-view-ephemeral :multiple)))
+             (concat
+              (propertize frame
+                          'font-lock-face 'mevedel-view-ephemeral
+                          'mevedel-view-inline-spinner-frame t
+                          'mevedel-view-pending-tool-live t
+                          'display frame)
+              (propertize (format "%s\n" label)
+                          'font-lock-face 'mevedel-view-ephemeral
+                          'mevedel-view-pending-tool-live t))))))
+    (if-let* ((hint (mevedel-view--permission-approval-hint approval)))
+        (concat (substring body 0 -1)
+                (propertize "  " 'mevedel-view-pending-tool-live t)
+                (propertize hint 'mevedel-view-pending-tool-live t)
+                (substring body -1))
+      body)))
 
 (defun mevedel-view--pending-tool-fragments (entries)
   "Return live-tail fragments for pending tool ENTRIES."
@@ -3677,7 +3733,9 @@ without its arguments, resting until its sweep."
     (dolist (entry entries)
       (push (list :namespace 'history-live
                   :id (car entry)
-                  :body (mevedel-view--pending-tool-line-body (cdr entry)))
+                  :body (mevedel-view--pending-tool-line-body
+                         (mevedel-view--pending-tool-label entry)
+                         (mevedel-view--permission-approval-reason (nth 3 entry))))
             fragments))
     (when (> total cap)
       (push (list :namespace 'history-live
@@ -4797,6 +4855,15 @@ hint.  Searches that region."
               (let* ((open-start (match-beginning 0))
                      (open-end (match-end 0))
                      (sender (match-string-no-properties 1))
+                     (outcome
+                      (and (eq kind 'agent-result)
+                           (save-match-data
+                             (save-excursion
+                               (goto-char open-start)
+                               (plist-get
+                                (mevedel-transcript--mailbox-open-at-point
+                                 kind open-end)
+                                :outcome)))))
                      (attribution (mevedel-view--insert-attribution sender))
                      (inhibit-read-only t))
                 (delete-region open-start open-end)
@@ -4806,16 +4873,29 @@ hint.  Searches that region."
                   (insert "  ")
                   (insert (propertize
                            (if (eq kind 'agent-result)
-                               "✓ "
+                               (pcase outcome
+                                 ('completed "✓ ")
+                                 ('errored "× ")
+                                 ('interrupted "✗ ")
+                                 (_ "… "))
                              "✉ ")
                            'font-lock-face
                            (if (eq kind 'agent-result)
-                               'mevedel-view-tool-marker
+                               (pcase outcome
+                                 ('completed 'mevedel-view-tool-marker)
+                                 ('errored 'error)
+                                 ('interrupted 'mevedel-view-tool-warning)
+                                 (_ 'mevedel-view-tool-metadata))
                              'mevedel-view-mailbox-header)
                            'mevedel-view-mailbox t))
                   (insert (propertize
                            (cond
-                            ((eq kind 'agent-result) "Finished ")
+                            ((eq kind 'agent-result)
+                             (pcase outcome
+                               ('completed "Finished ")
+                               ('errored "Failed ")
+                               ('interrupted "Stopped ")
+                               (_ "Incomplete ")))
                             (t "message "))
                            'font-lock-face 'mevedel-view-mailbox-header
                            'mevedel-view-mailbox t))
@@ -7467,8 +7547,11 @@ ends at PREFIX-END."
          (pending-labels
           (delq nil
                 (mapcar (lambda (entry)
-                          (let ((label (and (consp entry) (cdr entry))))
-                            (and (stringp label) (string-trim label))))
+                          (let ((label (mevedel-view--pending-tool-label entry))
+                                (hint (mevedel-view--permission-approval-hint
+                                       (mevedel-view--permission-approval-reason
+                                        (nth 3 entry)))))
+                            (string-trim (concat label (and hint (concat "  " hint))))))
                         mevedel-view--pending-tool-calls))))
     (when (> (length mevedel-view--pending-tool-calls)
              mevedel-view-pending-tools-visible-max)

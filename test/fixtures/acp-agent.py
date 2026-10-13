@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import sys
 import subprocess
 import time
@@ -48,6 +49,8 @@ prompt_acknowledgement = True
 compact_before_batch = None
 compact_acknowledgement = True
 crash_after_tool = False
+drop_bridge = False
+hook_timeout = None
 suppress_response_on_stop = False
 expected_image = None
 compaction_events = []
@@ -105,6 +108,11 @@ for line in sys.stdin:
                 hook_acknowledgement = params.get("_meta", {}).get("hookAcknowledgement", True)
                 after_hook_tool = params.get("_meta", {}).get("afterHookTool")
                 crash_after_tool = params.get("_meta", {}).get("crashAfterTool", False)
+                # The CLI loses only its MCP server after sending a call; the
+                # prompt still ends with the CLI's own outcome.
+                drop_bridge = params.get("_meta", {}).get("dropBridge", False)
+                # A native hook killed at its timeout: no reply, no receipt.
+                hook_timeout = params.get("_meta", {}).get("hookTimeout")
                 suppress_response_on_stop = params.get("_meta", {}).get("suppressResponseOnStop", False)
                 expected_image = params.get("_meta", {}).get("expectedImage")
                 compact_before_batch = params.get("_meta", {}).get("compactBeforeBatch")
@@ -287,9 +295,18 @@ for line in sys.stdin:
                                         and decision.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"):
                                     stopped = True
                                     break
-                            call({"jsonrpc": "2.0", "id": next_id, "method": "tools/call",
-                                  "params": {"name": tool["name"], "arguments": tool["args"],
-                                             "_meta": {"claudecode/toolUseId": tool["id"]}}})
+                            request = {"jsonrpc": "2.0", "id": next_id, "method": "tools/call",
+                                       "params": {"name": tool["name"], "arguments": tool["args"],
+                                                  "_meta": {"claudecode/toolUseId": tool["id"]}}}
+                            if drop_bridge:
+                                bridge.stdin.write(json.dumps(request) + "\n")
+                                bridge.stdin.flush()
+                                time.sleep(0.2)
+                                bridge.kill()
+                                bridge.wait(timeout=5)
+                                stopped = True
+                                break
+                            call(request)
                             next_id += 1
                             if crash_after_tool:
                                 sys.exit(7)
@@ -297,6 +314,18 @@ for line in sys.stdin:
                             break
                         sdk_messages(sdk_after_batches, batch_index)
                         if hook_command and batch:
+                            if hook_timeout:
+                                hook = subprocess.Popen(hook_command, shell=True, text=True,
+                                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                                        stderr=subprocess.PIPE, start_new_session=True)
+                                try:
+                                    hook.communicate(json.dumps({"hook_event_name": "PostToolBatch"}),
+                                                     timeout=hook_timeout)
+                                except subprocess.TimeoutExpired:
+                                    os.killpg(hook.pid, signal.SIGKILL)
+                                    hook.communicate()
+                                # The CLI treats a failed hook as advisory and continues.
+                                continue
                             output = subprocess.run(hook_command, shell=True, check=True,
                                                     input=json.dumps({"hook_event_name": "PostToolBatch"}),
                                                     capture_output=True, text=True, timeout=5)

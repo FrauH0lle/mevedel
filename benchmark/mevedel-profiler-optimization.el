@@ -452,7 +452,7 @@ returns additional counters from one unprofiled workload run."
                 (put-text-property start (point)
                                    'mevedel-view-type 'response)))))
          (setq mevedel-view--pending-tool-calls
-               '(("benchmark-call" . "Calling Read: benchmark.el")))
+               '(("benchmark-call" "Read" "benchmark.el" nil)))
          (mevedel-view--insert-pending-tool-lines
           mevedel-view--pending-tool-calls)
          (goto-char (mevedel-view--input-start))

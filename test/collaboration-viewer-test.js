@@ -2125,6 +2125,38 @@ async function main() {
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
 
+  // Approval is a row-local fact, independent of lifecycle status. It survives
+  // settlement and redraw without changing disclosure choices or the draft.
+  const approvedRecord = {id: 'approved-call', kind: 'tool', name: 'ToolCall',
+    status: 'running', result: '', presentation: {
+      id: 'root', name: 'ToolCall', status: 'running', collapsed: true,
+      children: [{id: 'child', name: 'Read', status: 'running', collapsed: true,
+        body: 'retained body', approval: 'Safe <inspection>'},
+        {id: 'sibling', name: 'Read', status: 'running', collapsed: true}],
+    }};
+  await deliverTo(sockets[1], {t: 'record', record: approvedRecord});
+  let approvedTurn = findByRecordId(nodes.transcript, approvedRecord.id);
+  const rootSummary = approvedTurn.disclosures.get('root').children[0];
+  assert.equal(findByClass(rootSummary, 'tool-approval'), null);
+  const hint = findByClass(approvedTurn.disclosures.get('root/child'), 'tool-approval');
+  assert.equal(textOf(hint), 'Auto-approved · once');
+  assert.equal(hint.attributes.title, 'Safe <inspection>');
+  assert.equal(findByClass(approvedTurn.disclosures.get('root/sibling'), 'tool-approval'), null);
+  approvedTurn.disclosures.get('root').open = true;
+  approvedTurn.disclosures.get('root/child').open = true;
+  const failedApproved = {...approvedRecord, revision: 1, status: 'failed', presentation: {
+    ...approvedRecord.presentation, status: 'failed', children: [
+      {...approvedRecord.presentation.children[0], status: 'failed'},
+      approvedRecord.presentation.children[1]],
+  }};
+  await deliverTo(sockets[1], {t: 'record', record: failedApproved});
+  approvedTurn = findByRecordId(nodes.transcript, approvedRecord.id);
+  assert.equal(approvedTurn.disclosures.get('root/child').open, true);
+  assert.equal(approvedTurn.disclosures.get('root/child').className, 'tool failed');
+  assert.equal(textOf(approvedTurn).split('Auto-approved · once').length - 1, 1);
+  assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
+  await deliverTo(sockets[1], {t: 'remove', ids: [approvedRecord.id]});
+
   // Forwarded completion stays one compact line; result bytes travel only
   // after an explicit read-only fetch, including the missing-evidence case.
   const execution = {id: 'forwarded-1', kind: 'execution', status: 'failed',

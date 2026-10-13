@@ -27,6 +27,19 @@ late canceller registrations cannot reopen an ended request.
 Public abort marks that terminal state even while durable settlement retains the
 request. Queue approval checks ownership again after yielding validation and
 removes the head from the current queue, preserving newly admitted siblings.
+Natural terminal completion disposes of the isolated review buffer without
+aborting the finished engine request. Outstanding work uses the engine-returned
+canceller, including synchronous overlong responses and late callbacks.
+
+Shared final permission settlement records accepted reviewer `allow-once`
+provenance as display-only metadata. Canonical outcomes retain its bounded reason
+independently of later success or failure; pending presentation uses invocation
+identity rather than matching command text after approval. Nested calls keep
+their own records even when optional bulky render details are omitted. Handler
+metadata, human fallback, saved rules, hook approval and mode transitions cannot
+claim reviewer approval. Provider messages and ToolCall guest values exclude
+these records, and permission policy never reads them as authority.
+
 See [the reviewer contract](../guardian-prompts.md) and
 [ADR 0080](0080-do-not-depend-on-guardian-availability.md).
 
@@ -51,3 +64,10 @@ Follow-up probes found public abort still draining callbacks without marking
 cancellation, and directory validation dropping a sibling admitted while it
 yielded. Public abort now uses the request owner's cancellation API; queue
 settlement refreshes ownership after validation rather than using its old list.
+
+October 2026 completion probes reproduced a false stopped-request notice from
+aborting naturally completed reviews, and approval projection probes showed that
+accepted decisions needed a common outcome seam to survive failure and nested
+execution. Cleanup now distinguishes terminal completion from cancellation;
+provenance is recorded only after final approval validation and retained outside
+model-visible values. No historical approval is inferred or migrated.

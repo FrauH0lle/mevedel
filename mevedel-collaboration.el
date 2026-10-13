@@ -121,6 +121,8 @@
                   "mevedel-collaboration-projection" (records))
 (declare-function mevedel-collaboration--tool-result-fields
                   "mevedel-collaboration-projection" (result))
+(declare-function mevedel-collaboration-tool-presentation
+                  "mevedel-collaboration-projection" (parsed))
 (autoload 'mevedel-collaboration--canonical-records "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--json-record "mevedel-collaboration-projection")
 (autoload 'mevedel-collaboration--pending-tool-match "mevedel-collaboration-projection")
@@ -1207,6 +1209,8 @@ Runs from a buffer-local hook, so the current buffer names the room."
              existing)
         (dolist (entry pending)
           (when (and (null existing)
+                     (equal (plist-get entry :tool-use-id)
+                            (plist-get info :tool-use-id))
                      (equal (plist-get entry :call-key) call-key)
                      (equal (plist-get entry :status) "running"))
             (setq existing entry)))
@@ -1215,7 +1219,8 @@ Runs from a buffer-local hook, so the current buffer names the room."
                   (mevedel-collaboration--room-canonical-records room))
                  (occurrences (plist-get room :tool-call-occurrences))
                  (occurrence (gethash call-key occurrences 0))
-                 (explicit-id (or (plist-get info :id)
+                 (explicit-id (or (plist-get info :tool-use-id)
+                                  (plist-get info :id)
                                   (plist-get info :call-id)
                                   (plist-get info :tool-call-id)
                                   (plist-get info :tool_call_id)))
@@ -1233,6 +1238,9 @@ Runs from a buffer-local hook, so the current buffer names the room."
                          :result ""
                          :truncated nil
                          :pending t
+                         :tool-use-id (plist-get info :tool-use-id)
+                         :pipeline-calls nil
+                         :presentation nil
                          :identity-fixed t
                          :call-key call-key
                          :baseline-buffer-end
@@ -1251,6 +1259,104 @@ Runs from a buffer-local hook, so the current buffer names the room."
         ;; visible as running before it produces a result.
         (mevedel-collaboration--publish room))))
   nil)
+
+(defun mevedel-collaboration--pipeline-tool-event (event)
+  "Project invocation-scoped approval EVENT onto its existing browser row.
+Nested invocations update only their child presentation.  The transient tree
+is replaced by canonical transcript metadata when the result is inserted."
+  (when-let* ((data (plist-get event :data-buffer))
+              ((buffer-live-p data))
+              (room (mevedel-collaboration--room-for-buffer data))
+              (id (plist-get event :tool-use-id)))
+    (with-current-buffer data
+      (let* ((parent (plist-get event :parent-tool-use-id))
+             (type (plist-get event :type))
+             (pending (plist-get room :pending-tools))
+             (entry (if parent
+                        (cl-find-if
+                         (lambda (row)
+                           (cl-find parent (plist-get row :pipeline-calls)
+                                    :key (lambda (call) (plist-get call :tool-use-id))
+                                    :test #'equal)) pending)
+                      (cl-find id pending :key (lambda (row) (plist-get row :tool-use-id))
+                               :test #'equal))))
+        (when (and (eq type 'started) (not parent) (not entry)
+                   (not (mevedel-collaboration--routine-poll-p
+                         (plist-get event :name) (plist-get event :args) nil nil)))
+          (setq entry (cl-find-if
+                       (lambda (row) (mevedel-collaboration--pending-tool-match
+                                      (list :name (plist-get event :name)
+                                            :args (plist-get event :args)) row)) pending))
+          (unless entry
+            (mevedel-collaboration--pre-tool event)
+            (setq entry (cl-find id (plist-get room :pending-tools)
+                                 :key (lambda (row) (plist-get row :tool-use-id)) :test #'equal)))
+          (when entry (setf (plist-get entry :tool-use-id) id)))
+        (when entry
+          (let* ((calls (plist-get entry :pipeline-calls))
+                 (call (cl-find id calls :key (lambda (node) (plist-get node :tool-use-id))
+                                :test #'equal))
+                 (children-by-parent (make-hash-table :test #'equal))
+                 changed)
+            (pcase type
+              ('started
+               (unless call
+                 (setq call (list :tool-use-id id :parent-tool-use-id parent
+                                  :name (plist-get event :name) :args (plist-get event :args)
+                                  :status 'running :permission-approvals nil)
+                       calls (append calls (list call)) changed t)
+                 (setf (plist-get entry :pipeline-calls) calls)))
+              ('permission-approved
+               (when (eq (plist-get call :status) 'running)
+                 (setf (plist-get call :permission-approvals)
+                       (copy-tree (plist-get event :permission-approvals)))
+                 (setq changed t)))
+              ('settled
+               (when (eq (plist-get call :status) 'running)
+                 (setf (plist-get call :status) (plist-get event :status))
+                 (setq changed t))))
+            (when changed
+              (dolist (node calls)
+                (push node (gethash (plist-get node :parent-tool-use-id)
+                                    children-by-parent)))
+              (cl-labels
+                  ((tree (node depth)
+                     (when (< depth 16)
+                       (let* ((children
+                               (delq nil (mapcar
+                                (lambda (child) (tree child (1+ depth)))
+                                (reverse (gethash (plist-get node :tool-use-id)
+                                                  children-by-parent)))))
+                              (facts (list :status (plist-get node :status)
+                                           :permission-approvals (plist-get node :permission-approvals))))
+                         (when children
+                           (setq facts
+                                 (append facts
+                                         (list :kind 'ptc :calls children
+                                               :live-p (eq (plist-get node :status) 'running)
+                                               :outcome (pcase (plist-get node :status)
+                                                          ('success 'completed)
+                                                          ('cancelled 'interrupted)
+                                                          (_ 'tool-error))
+                                               :completed-count
+                                               (cl-count-if
+                                                (lambda (child)
+                                                  (not (eq (plist-get child :status) 'running)))
+                                                children)))))
+                         (list :id (plist-get node :tool-use-id) :tool (plist-get node :name)
+                               :args (plist-get node :args) :result ""
+                               :status (plist-get node :status) :render-data facts)))))
+                (let* ((root (tree (car calls) 0))
+                       (presentation
+                        (mevedel-collaboration-tool-presentation
+                         (list :name (plist-get root :tool) :args (plist-get root :args)
+                               :result "" :render-data (plist-get root :render-data)))))
+                  (setf (plist-get entry :presentation) presentation
+                        (plist-get entry :status) (plist-get presentation :status))))
+              (mevedel-collaboration--publish room)))))))
+  nil)
+
+(add-hook 'mevedel-pipeline-tool-event-hook #'mevedel-collaboration--pipeline-tool-event)
 
 (defun mevedel-collaboration--post-tool (info)
   "Publish the settled result for gptel tool-call INFO.

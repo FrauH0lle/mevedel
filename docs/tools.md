@@ -127,6 +127,25 @@ thunk that settles its current pipeline continuation exactly once;
 already-started tool-specific effects remain cancellable only when their owner
 exposes that capability.
 
+Accepted automatic approvals enter the common outcome as render-data
+`:permission-approvals`: a list of `(:source reviewer :outcome allow-once :reason
+STRING)` records. Shared permission settlement alone produces these display
+facts, after final validation. Canonical settlement and provider attachment
+replace handler/transform-authored approval fields with those accepted records,
+including when a later pipeline step fails. The ordinary render-data provider
+adapter strips them from API messages; they never enter ToolCall guest values.
+
+`mevedel-pipeline-tool-event-hook` publishes `started`, `permission-approved` and
+`settled` events with the same tool-use ID, parent ID, source, name, args and data
+buffer. Pending-row consumers bind identity at dispatch, not by matching a later
+approval's arguments. Settlement precedes the external result callback. Each
+observer receives a copied snapshot, and observer errors cannot change tool
+settlement. `mevedel-pipeline-active-permission-approvals` exposes a copy while a
+handler starts or resumes so execution admission can retain its own provenance;
+it is never permission authority. Nested PTC progress and audit keep approvals
+on the child, not the envelope, and retain small approval records even when
+oversized optional child details are dropped.
+
 External providers can request `:projection provider` on the structured outcome
 entry point. This keeps typed status, tool identity and media while applying the
 same persistence, feedback and display side channels as direct gptel calls.

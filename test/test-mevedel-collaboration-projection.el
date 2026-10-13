@@ -10,7 +10,139 @@
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-collaboration-projection)
+(require 'mevedel-collaboration)
+(require 'mevedel-collaboration-transport)
+(require 'mevedel-collaboration-guest)
+(require 'mevedel-tool-ptc)
 (require 'mevedel-tool-render-data)
+
+(ert-deftest mevedel-collaboration-approval-presentation ()
+  "Canonical tool projection carries bounded display-only approval reasons."
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "#+begin_tool\n"
+            (propertize
+             (concat "(:name \"ApprovalProbe\" :args nil)\nError: failed\n"
+                     (mevedel-tool-render-data-format
+                      '(:status error :permission-approvals
+                        ((:source reviewer :outcome allow-once :reason "Safe inspection")))
+                      "approved"))
+             'gptel '(tool . "approved"))
+            "#+end_tool\n")
+    (let* ((record (car (mevedel-collaboration--canonical-records (current-buffer))))
+           (presentation (plist-get record :presentation)))
+      (should (equal "Safe inspection" (plist-get presentation :approval)))
+      (should (equal "failed" (plist-get presentation :status)))
+      (should-not (string-match-p "Safe inspection" (plist-get record :result))))))
+
+(mevedel-deftest mevedel-collaboration-tool-presentation/approval ()
+  ,test
+  (test)
+  :doc "direct and nested approvals remain child-scoped within the projection budget"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                           :renderer #'mevedel-tool-ptc--render))
+    (let* ((reason (make-string 3000 ?x))
+           (child (list :id "outer/1" :tool "ApprovalProbe" :status 'error
+                        :args nil :result "Error: failed" :render-data
+                        (list :permission-approvals
+                              (list (list :source 'reviewer :outcome 'allow-once :reason reason)))))
+           (data (list :kind 'ptc :status 'success :outcome 'completed :calls (list child)))
+           (call (list :name "ToolCall" :args '(:expression "(ApprovalProbe)")
+                       :result "Error: failed" :render-data data))
+           (nested (mevedel-collaboration-tool-presentation call)))
+      (should-not (plist-get nested :approval))
+      (should (equal "failed" (plist-get (aref (plist-get nested :children) 0) :status)))
+      (should (<= (length (plist-get (aref (plist-get nested :children) 0) :approval)) 1024))
+      (setf (plist-get call :render-data) (plist-put data :direct-tool "ApprovalProbe"))
+      (let ((direct (mevedel-collaboration-tool-presentation call)))
+        (should (equal "ApprovalProbe" (plist-get direct :name)))
+        (should (equal "failed" (plist-get direct :status)))
+        (should (stringp (plist-get direct :approval)))))))
+
+(mevedel-deftest mevedel-collaboration--pipeline-tool-event ()
+  ,test
+  (test)
+  :doc "browser pending approvals bind exact IDs and survive out-of-order canonical settlement"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (let* ((data (current-buffer))
+           (room (list :data-buffer data :guests (make-hash-table :test #'eql)
+                       :tool-call-occurrences (make-hash-table :test #'equal)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (call '(:name "ApprovalProbe" :args nil)))
+      (cl-labels ((event (type id &rest facts)
+                    (run-hook-with-args
+                     'mevedel-pipeline-tool-event-hook
+                     (append (list :type type :data-buffer data :tool-use-id id) call facts))))
+        (mevedel-collaboration--pre-tool call)
+        (mevedel-collaboration--pre-tool call)
+        (event 'started "first")
+        (event 'started "second")
+        (event 'permission-approved "second" :permission-approvals
+               '((:source reviewer :outcome allow-once :reason "Second only")))
+        (let ((records (plist-get room :records)))
+          (should (= 2 (length records)))
+          (should-not (plist-get (plist-get (car records) :presentation) :approval))
+          (ert-info ((format "Pending: %S" (plist-get room :pending-tools)))
+            (should (equal "Second only" (plist-get (plist-get (cadr records) :presentation) :approval)))))
+        (event 'settled "second" :status 'error)
+        (mevedel-collaboration--post-tool (append call '(:result "Error: failed")))
+        (should (equal "running" (plist-get (car (plist-get room :records)) :status)))
+        (let ((second-id (plist-get (cadr (plist-get room :records)) :id)))
+          (insert "#+begin_tool\n"
+                  (propertize
+                   (concat "(:name \"ApprovalProbe\" :args nil)\nError: failed\n"
+                           (mevedel-tool-render-data-format
+                            '(:status error :permission-approvals
+                              ((:source reviewer :outcome allow-once :reason "Second only"))) "second"))
+                   'gptel '(tool . "second"))
+                  "#+end_tool\n")
+          (mevedel-collaboration--publish room)
+          (let ((settled (cl-find second-id (plist-get room :records)
+                                  :key (lambda (r) (plist-get r :id)) :test #'equal)))
+            (should (equal "failed" (plist-get settled :status)))
+            (should (equal "Second only" (plist-get (plist-get settled :presentation) :approval)))))
+        (should (= 1 (length (plist-get room :pending-tools))))
+        (should (equal "first" (plist-get (car (plist-get room :pending-tools)) :tool-use-id))))))
+  :doc "nested pending approvals decorate only the child, and late events do not change terminal hints"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                           :renderer #'mevedel-tool-ptc--render))
+    (let* ((data (current-buffer))
+           (room (list :data-buffer data :guests (make-hash-table :test #'eql)
+                       :tool-call-occurrences (make-hash-table :test #'equal)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room)))
+      (cl-labels ((event (type id parent name &rest facts)
+                    (run-hook-with-args
+                     'mevedel-pipeline-tool-event-hook
+                     (append (list :type type :data-buffer data :tool-use-id id
+                                   :parent-tool-use-id parent :name name) facts))))
+        (event 'started "outer" nil "ToolCall")
+        (event 'started "child" "outer" "ApprovalProbe")
+        (event 'permission-approved "child" "outer" "ApprovalProbe" :permission-approvals
+               '((:source reviewer :outcome allow-once :reason "Nested only")))
+        (dotimes (terminal 3)
+          (when (= terminal 1)
+            (event 'settled "child" "outer" "ApprovalProbe" :status 'error)
+            (event 'started "child" "outer" "ApprovalProbe")
+            (event 'permission-approved "child" "outer" "ApprovalProbe" :permission-approvals
+                   '((:source reviewer :outcome allow-once :reason "Late"))))
+          (when (= terminal 2)
+            (event 'settled "outer" nil "ToolCall" :status 'success)
+            (event 'started "outer" nil "ToolCall"))
+          (let* ((presentation (plist-get (car (plist-get room :records)) :presentation))
+                 (child (aref (plist-get presentation :children) 0)))
+            (should-not (plist-get presentation :approval))
+            (should (equal "Nested only" (plist-get child :approval)))
+            (should (equal (if (= terminal 2) "warning" "running")
+                           (plist-get presentation :status)))
+            (should (equal (if (> terminal 0) "failed" "running")
+                           (plist-get child :status)))))))))
 
 (mevedel-deftest mevedel-collaboration--canonical-records/bounded-history
   (:doc "stream updates preserve tool records with linear boundary searches")

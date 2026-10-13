@@ -8,7 +8,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 (require 'subr-x)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
@@ -1677,16 +1677,31 @@ The open regex captures the canonical sender path in match group 1.")
 (defun mevedel-transcript--mailbox-open-at-point (kind limit)
   "Return mailbox open metadata for KIND at point before LIMIT.
 The returned plist contains `:kind', `:id', `:open-start', and
-`:open-end'."
+`:open-end'.  Agent results also carry `:outcome', one of `completed',
+`errored', `interrupted', or nil for missing or unknown metadata."
   (let ((regex (mevedel-transcript--mailbox-spec kind :open)))
     (when (and regex
                (<= (point) limit)
                (looking-at regex)
                (<= (match-end 0) limit))
-      (list :kind kind
-            :id (match-string-no-properties 1)
-            :open-start (match-beginning 0)
-            :open-end (match-end 0)))))
+      (let ((open (list :kind kind
+                        :id (match-string-no-properties 1)
+                        :open-start (match-beginning 0)
+                        :open-end (match-end 0))))
+        (when (eq kind 'agent-result)
+          (setq open
+                (plist-put
+                 open :outcome
+                 (save-match-data
+                   (save-excursion
+                     (when (re-search-forward
+                            "\\s-outcome=\"\\([^\"]*\\)\""
+                            (plist-get open :open-end) t)
+                       (cdr (assoc (match-string-no-properties 1)
+                                   '(("completed" . completed)
+                                     ("errored" . errored)
+                                     ("interrupted" . interrupted))))))))))
+        open))))
 
 (defun mevedel-transcript--mailbox-close-line-regexp (close-tag)
   "Return a line-oriented regexp for CLOSE-TAG."

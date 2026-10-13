@@ -52,6 +52,10 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-display-string
+                  "mevedel-tool-registry" (tool-name args))
+
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-segment-bounds
                   "mevedel-tool-render-data" (tool-use-id))
@@ -266,14 +270,16 @@ rebuilding the view.  Nil outside an active exchange.")
   "Counter distinguishing pending tool calls that share a fingerprint.")
 
 (defvar-local mevedel-view--pending-tool-calls nil
-  "Alist of in-flight tool calls, one entry per call.
-Each entry is `(KEY . TOOL-NAME)' where KEY is
-`((NAME . ARGS-PRINT) . SERIAL)' and TOOL-NAME is the displayed tool
-name.  Identical parallel calls share the fingerprint half and are
-told apart by the serial.
+  "List of in-flight tool calls, one entry per call.
+Each entry is (KEY NAME DETAIL METADATA), where KEY is
+`((NAME . ARGS-PRINT) . SERIAL)'.  NAME and DETAIL identify the displayed
+tool.  METADATA holds the durable `:tool-use-id' and accepted
+`:permission-approvals', when known.  Identical parallel calls share the
+fingerprint half and are told apart by the serial.
 
-Pre-tool hook adds an entry; post-tool hook removes one.  The
-render path walks this alist and emits one `Calling X…' line per
+Pre-tool hooks add entries; pipeline admission binds their IDs.
+Settlement removes the exact bound entry.  ID-less post-tool hooks
+remove only unbound entries.  The render path emits one `Calling X…' line per
 entry in arrival order, respecting
 `mevedel-view-pending-tools-visible-max' for truncation when many
 tools are in flight in parallel.")
@@ -1832,11 +1838,71 @@ when an earlier call finished would rebuild every row below it."
 
 (defun mevedel-view--pending-tool-entry (info)
   "Return the pending entry matching tool INFO, or nil.
-Identical parallel calls share a fingerprint, so the first entry still
-holding it is the one that finished."
-  (let ((fingerprint (mevedel-view--pending-tool-fingerprint info)))
-    (cl-find-if (lambda (entry) (equal (car (car entry)) fingerprint))
-                mevedel-view--pending-tool-calls)))
+Durable IDs are exact.  ID-less hooks may only claim unbound entries:
+an out-of-order completion must not consume a bound identical sibling."
+  (let ((id (plist-get info :tool-use-id))
+        (fingerprint (mevedel-view--pending-tool-fingerprint info)))
+    (cl-find-if
+     (lambda (entry)
+       (let ((bound-id (plist-get (nth 3 entry) :tool-use-id)))
+         (if id (equal id bound-id)
+           (and (null bound-id) (equal (car (car entry)) fingerprint)))))
+     mevedel-view--pending-tool-calls)))
+
+(defun mevedel-view-stream-handle-pipeline-event (event)
+  "Bind pending rows and display accepted approval provenance from EVENT.
+Only top-level invocations own pending rows.  PTC publishes nested progress
+on its canonical child records; it must not decorate the whole envelope."
+  (let ((data (plist-get event :data-buffer))
+        (id (plist-get event :tool-use-id)))
+    (when (and (buffer-live-p data) id
+               (not (plist-get event :parent-tool-use-id)))
+      (dolist (view (buffer-list))
+        (when (eq data (buffer-local-value 'mevedel--data-buffer view))
+          (with-current-buffer view
+            (let ((entry (mevedel-view--pending-tool-entry event)) changed)
+              (pcase (plist-get event :type)
+                ('started
+                 (unless (or entry
+                             (equal (plist-get event :name) "Agent")
+                             (mevedel-view--routine-pending-poll-p event))
+                   ;; Admission order matches pre-hook order, even when
+                   ;; approvals and completions later arrive out of order.
+                   (setq entry
+                         (mevedel-view--pending-tool-entry
+                          (list :name (plist-get event :name)
+                                :args (plist-get event :args))))
+                   (unless entry
+                     (setq entry
+                           (list (mevedel-view--pending-tool-claim-key event)
+                                 (plist-get event :name)
+                                 (mevedel-tool-display-string
+                                  (plist-get event :name) (plist-get event :args))))
+                     (setq mevedel-view--pending-tool-calls
+                           (append mevedel-view--pending-tool-calls (list entry))))
+                   (setcdr (nthcdr 2 entry) (list (list :tool-use-id id)))
+                   (setq changed t)))
+                ('permission-approved
+                 (when entry
+                   (setf (nth 3 entry)
+                         (plist-put (nth 3 entry) :permission-approvals
+                                    (copy-tree (plist-get event :permission-approvals))))
+                   (setq changed t)))
+                ('settled
+                 (when entry
+                   (setq mevedel-view--pending-tool-calls
+                         (delq entry mevedel-view--pending-tool-calls)
+                         changed t))))
+              (when (and changed
+                         (eq data (mevedel-view-segments-display-buffer))
+                         (mevedel-view-stream-in-flight-turn-start-position)
+                         (markerp mevedel-view--data-turn-start))
+                (mevedel-view--refresh-pending-tool-lines)
+                (mevedel-view--schedule-tool-boundary-render data))))))))
+  nil)
+
+(add-hook 'mevedel-pipeline-tool-event-hook
+          #'mevedel-view-stream-handle-pipeline-event)
 
 (defun mevedel-view-stream-pre-tool (args)
   "Mark an in-flight tool call from ARGS and schedule a view render.
@@ -1861,14 +1927,13 @@ debounced so bursts of tool boundary hooks coalesce."
       (unless (or (equal name "Agent")
                   (mevedel-view--routine-pending-poll-p args))
         (let ((key (mevedel-view--pending-tool-claim-key args))
-              (label (mevedel-view--tool-status-string
-                      name (plist-get args :args))))
+              (detail (mevedel-tool-display-string name (plist-get args :args))))
           ;; One entry per call, not per key: identical parallel calls
           ;; share a fingerprint, and collapsing them would drop the
           ;; live line while the other call is still running.
           (setq mevedel-view--pending-tool-calls
                 (append mevedel-view--pending-tool-calls
-                        (list (cons key label))))))
+                        (list (list key name detail nil))))))
       ;; Keep the request-level progress row visible; pending-tool lines
       ;; are detail rows below it, not a replacement for elapsed request
       ;; progress.

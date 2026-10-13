@@ -19,9 +19,11 @@ t means the entire external turn completed.  BEFORE-TOOL receives TOOL and ARGS
 before execution.  BOUNDARY runs after each native tool batch, before more model
 work, and may return reminder text.  Either guard may signal to end the workload
 as an error.  Tool functions retain scope validation and helper cancellation.
+A tool result or hook reply whose MCP client closed first stays done locally;
+the terminal info then lists those replies as :mcp-lost, (:kind KIND :id ID).
 Return a canceller; killing the current buffer also retires this scope."
   (let ((buffer (current-buffer)) (calls (make-hash-table :test #'equal))
-        server configuration cancel-text finished)
+        server configuration cancel-text finished lost)
     (cl-labels
         ((live () (and (not finished) (buffer-live-p buffer)))
          (finish (response info)
@@ -31,7 +33,10 @@ Return a canceller; killing the current buffer also retires this scope."
                (with-current-buffer buffer (remove-hook 'kill-buffer-hook #'cancel t)))
              (when server (mevedel-mcp-stop server))
              (when cancel-text (funcall cancel-text))
-             (funcall callback response info)))
+             ;; Replies whose client closed are diagnostics; the agent's own
+             ;; RESPONSE settles the workload.
+             (funcall callback response
+                      (if lost (plist-put (copy-sequence info) :mcp-lost lost) info))))
          (cancel () (finish 'abort (list :buffer buffer :stream t)))
          (fail (err)
            (finish nil (list :buffer buffer :stream t :error (error-message-string err))))
@@ -89,7 +94,10 @@ Return a canceller; killing the current buffer also retires this scope."
                          (with-current-buffer buffer
                            (funcall complete (funcall (plist-get configuration :control) boundary event)))
                        (error (fail err) (signal (car err) (cdr err)))))
-                   (lambda (message) (fail (list 'error message)))))
+                   (lambda (message) (fail (list 'error message)))
+                   (lambda (diagnostic)
+                     (when (< (length lost) 8)
+                       (setq lost (append lost (list diagnostic)))))))
             (setq configuration (funcall launch (vector (mevedel-mcp-configuration server))
                                          (mevedel-mcp-hook-command server)))
             (when (live)

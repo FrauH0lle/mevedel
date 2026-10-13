@@ -444,6 +444,8 @@
          (parsed '(:name "Bash" :result "yielded"
                    :args (:command "sleep 10")
                    :render-data (:execution-id "exec-1" :state running
+                                 :permission-approvals
+                                 ((:source reviewer :outcome allow-once :reason "Retained approval"))
                                  :status success :execution-output "stale output")))
          (original (copy-tree parsed)))
     (cl-letf (((symbol-function 'mevedel-execution-list-user)
@@ -457,6 +459,8 @@
         (should (= 1 (cl-count :status (plist-get live :render-data))))
         (let ((record (mevedel-collaboration--tool-record live "tool")))
           (should (equal "running" (plist-get record :status)))
+          (should (equal "Retained approval"
+                         (plist-get (plist-get record :presentation) :approval)))
           (should (equal "fresh poll output" (plist-get record :result)))
           (should (equal "$ sleep 10\n\nfresh poll output\n\nDetails: running · exec-1"
                          (plist-get (plist-get record :presentation) :body))))
@@ -485,12 +489,19 @@
     (cl-letf (((symbol-function 'mevedel-execution-list-user)
                (lambda (_)
                  '((:execution-id "exec-1" :state running
-                    :output-tail "recent output" :output-preview-truncated-p t)))))
+                    :output-tail "recent output" :output-preview-truncated-p t
+                    :permission-approvals
+                    ((:source reviewer :outcome allow-once :reason "Original execution")))))))
       (dolist (row (list (mevedel-collaboration-tool-presentation direct)
+                         (mevedel-collaboration-tool-presentation
+                          (plist-put (copy-sequence nested) :render-data
+                                     (plist-put (copy-sequence (plist-get nested :render-data))
+                                                :direct-tool "Bash")))
                          (aref (plist-get
                                 (mevedel-collaboration-tool-presentation nested)
                                 :children) 0)))
         (should (equal "running" (plist-get row :status)))
+        (should (equal "Original execution" (plist-get row :approval)))
         (should (string-match-p "output truncated" (plist-get row :header)))
         (should (string-search "recent output" (plist-get row :body)))
         (should-not (string-search "old output" (plist-get row :body))))))

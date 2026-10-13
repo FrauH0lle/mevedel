@@ -370,6 +370,9 @@ polling row becomes a second output owner."
         (let ((copy (copy-sequence parsed))
               (data (copy-sequence data)))
           (setq data (plist-put data :status 'running))
+          (when (plist-member live :permission-approvals)
+            (setq data (plist-put data :permission-approvals
+                                  (copy-tree (plist-get live :permission-approvals)))))
           (setq data (plist-put data :execution-output
                                 (or (plist-get live :output-tail) "")))
           (setq data (plist-put data :output-preview-truncated-p
@@ -534,7 +537,7 @@ are exported, with one shared text/structure budget across the entire tree."
                                         " · " sandbox-line)
                               header))
                     (status
-                     (pcase (or (and (memq (plist-get data :status) '(denied cancelled))
+                     (pcase (or (and (memq (plist-get data :status) '(denied cancelled running warning))
                                      (plist-get data :status))
                                 (mevedel-view--rendering-status rendering data))
                        ('error "failed") ('denied "denied") ('cancelled "cancelled")
@@ -543,6 +546,8 @@ are exported, with one shared text/structure budget across the entire tree."
                                :detail (text (mevedel-collaboration--tool-detail args) 200)
                                :header (text header 1000)
                                :status status
+                               :approval (text (plist-get rendering :permission-approval-reason)
+                                               2048)
                                :collapsed (if (plist-get rendering :initially-collapsed-p)
                                               t :json-false)
                                :format (pcase (plist-get rendering :body-mode)
@@ -563,7 +568,10 @@ are exported, with one shared text/structure budget across the entire tree."
                                 attachments)
                           (when (car attachments)
                             (setf (plist-get (car attachments) :format) "markdown"))))
-               (cl-loop for child in (plist-get rendering :child-calls)
+               (cl-loop for child in (if (and (eq (plist-get data :kind) 'ptc)
+                                               (plist-get data :live-p))
+                                          (plist-get data :calls)
+                                        (plist-get rendering :child-calls))
                         while (>= remaining 512) do
                         (push (node (plist-get child :tool) (plist-get child :args)
                                     (plist-get child :result)
@@ -1255,7 +1263,8 @@ are fresh copies the caller may modify."
 
 (defun mevedel-collaboration--pending-tool-match (info pending)
   "Return non-nil when INFO matches pending tool record PENDING."
-  (and (equal (plist-get pending :call-key)
+  (and (equal (plist-get pending :tool-use-id) (plist-get info :tool-use-id))
+       (equal (plist-get pending :call-key)
               (mevedel-collaboration--tool-call-key info))
        (equal (plist-get pending :name)
               (format "%s" (plist-get info :name)))))
@@ -1314,7 +1323,8 @@ completion instead of seeing a duplicate tool card."
                                        0))))
              (candidates (nthcdr baseline canonical-tools))
              exact candidate)
-        ;; Prefer the exact settled twin, but fall back to the first
+        ;; Bound invocations require the exact canonical tool-use ID.
+        ;; For ID-less hooks, prefer the settled twin, then the first
         ;; unclaimed same-name record at or after this entry's baseline:
         ;; the canonical transcript is authoritative once a record lands
         ;; there, and an unmatched pending would otherwise duplicate it
@@ -1323,7 +1333,9 @@ completion instead of seeing a duplicate tool card."
         ;; transcript-formatted result text diverges from the raw result.
         (dolist (record candidates)
           (unless (memq record claimed)
-            (when (equal (plist-get record :name) (plist-get entry :name))
+            (when (if-let* ((id (plist-get entry :tool-use-id)))
+                      (equal (plist-get record :id) (format "tool-%s" id))
+                    (equal (plist-get record :name) (plist-get entry :name)))
               (unless candidate (setq candidate record))
               (when (and (null exact)
                          (equal (plist-get record :status) status)

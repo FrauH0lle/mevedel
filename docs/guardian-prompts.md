@@ -98,6 +98,18 @@ segment and requested-capability denies when switching to Full Access.
 Changing mode or cancelling the owning request invalidates pending review.
 Provider cleanup failures do not prevent permission settlement.
 
+Natural terminal responses dispose of the isolated buffer without aborting an
+already completed engine request. Timeout, overlong responses and explicit
+cancellation use the engine's returned cancellation function while work remains
+outstanding. Terminal state is recorded before delivering a reply, so cleanup
+and late callbacks cannot deliver it twice or emit a false stopped-request notice.
+
+Only an accepted reviewer `allow-once` records display provenance, including the
+bounded reason, at shared final permission settlement. That record is not a rule
+or grant; stale replies, human fallback and mode-change approvals do not get it.
+The canonical tool outcome retains it independently of execution status and keeps
+it out of provider messages and ToolCall guest values.
+
 ## Decision examples
 
 These are policy examples, not measured model accuracy or guarantees:

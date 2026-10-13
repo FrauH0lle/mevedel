@@ -611,6 +611,26 @@ Agent paths in launch handles and delivery cards use link highlighting.
 Delivery headers use `mevedel-view-mailbox-header`, a keyword face with no
 added bold weight. Completion checkmarks use the same success face as tool rows.
 
+Agent-result cards read the canonical envelope's `outcome` through the shared
+mailbox parser: `completed` shows **✓ Finished**, `errored` shows **× Failed**,
+and `interrupted` shows **Stopped**. Missing or unknown outcomes show
+**Incomplete**, never inferred success. Saved transcripts reconstruct these
+labels without consulting the current agent registry or interpreting body prose.
+
+Accepted reviewer `allow-once` decisions add one subdued **Auto-approved · once**
+hint to the affected tool header, with a bounded explanation on hover. The
+canonical `:permission-approvals` records are display-only: they do not authorize
+anything, and ordinary rules, human approval, and historical calls without
+recorded provenance do not acquire a hint. Status remains independent; an
+approved call can subsequently fail. Pipeline admission binds pending rows to
+durable tool-use IDs before approval, so identical concurrent calls cannot
+exchange hints when they settle out of order. The same header handles settled,
+restored, and nested rows. A direct ToolCall displays its child's approval;
+compound calls never aggregate child approvals onto the enclosing ToolCall.
+Original Bash rows retain approval across execution yield and progress, while
+polling calls do not inherit that approval. Browser tool presentations carry
+the same bounded tooltip and row-local hint, preserving disclosure choices.
+
 Non-empty agent-message and agent-result mailbox bodies start collapsed by
 default; `mevedel-view-mailbox-collapse-line-threshold` can raise that
 threshold.

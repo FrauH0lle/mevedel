@@ -133,6 +133,9 @@ cancellation releases the fence and leaves the machine retryable.
   slow-hook status ownership;
 - agent dispatch, provider send, first response, settlement, waits, and UI
   status ownership transitions;
+- `mcp-reply-lost` when an MCP tool or hook reply finds its client closed,
+  correlated with the owning turn and carrying only reply kind, request ID,
+  and child agent path when applicable, never the reply payload;
 - queued user messages with enqueue/dequeue events and dwell time;
 - `event-loop-lag` whenever the editor's event loop ran more than
   `mevedel-telemetry-lag-threshold` (0.5 s) late. Watching runs while a

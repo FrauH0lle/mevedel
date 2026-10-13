@@ -253,6 +253,17 @@ The handler must deliver a committed result before returning from the section.")
 (defvar mevedel-pipeline--active-tool-use-id nil
   "Tool-use id dynamically visible while a handler starts its work.")
 
+(defvar mevedel-pipeline-permission-approvals nil
+  "Accepted reviewer records dynamically visible to execution admission.
+Display provenance only; never a source of permission authority.")
+
+(defvar mevedel-pipeline-tool-event-hook nil
+  "Observers of invocation identity and display-only approval facts.
+Each receives a plist with :type started, permission-approved, or settled;
+:tool-use-id, :parent-tool-use-id, :source, :name, :args and :data-buffer.
+Approval events include :permission-approvals; settlement includes :status
+and :reason.  Observer errors cannot affect tool execution.")
+
 (defvar mevedel-pipeline--active-call-source nil
   "Call source dynamically visible while a handler starts its work.
 `ptc' names a ToolCall nested call, whose result reaches the script
@@ -268,6 +279,7 @@ instead of the provider transcript.")
   '(mevedel-pipeline--handler-active-p
     mevedel-pipeline--handler-commit
     mevedel-pipeline--active-tool-use-id
+    mevedel-pipeline-permission-approvals
     mevedel-pipeline--active-call-source
     mevedel-pipeline--auto-apply-edit-p
     mevedel-resource-current-attempts
@@ -447,6 +459,49 @@ value so a misbehaving step still produces a legible error."
    ((stringp reason) (format "Error: %s" reason))
    (t (format "Error: %S" reason))))
 
+(defun mevedel-pipeline--copy-display-value (value)
+  "Copy display VALUE, isolating mutable strings and nested vectors."
+  (cond
+   ((stringp value) (copy-sequence value))
+   ((consp value)
+    (cons (mevedel-pipeline--copy-display-value (car value))
+          (mevedel-pipeline--copy-display-value (cdr value))))
+   ((vectorp value)
+    (apply #'vector (mapcar #'mevedel-pipeline--copy-display-value value)))
+   (t value)))
+
+(defun mevedel-pipeline--approval-render-data (context)
+  "Return CONTEXT's render data with only accepted approval provenance.
+Handler and transform authored approval fields are not trusted."
+  (let ((data (cl-loop for (key value) on (plist-get context :render-data) by #'cddr
+                       unless (eq key :permission-approvals)
+                       append (list key value))))
+    (when-let* ((approvals (plist-get context :permission-approvals)))
+      (setq data (plist-put data :permission-approvals
+                            (mevedel-pipeline--copy-display-value approvals))))
+    data))
+
+(defun mevedel-pipeline--tool-event (type context &optional outcome)
+  "Notify display observers of TYPE for CONTEXT and terminal OUTCOME."
+  (let ((event (list :type type
+                     :tool-use-id (plist-get context :tool-use-id)
+                     :parent-tool-use-id (plist-get context :parent-tool-use-id)
+                     :source (plist-get context :call-source)
+                     :name (mevedel-tool-name (plist-get context :tool))
+                     :args (plist-get context :args)
+                     :data-buffer (plist-get context :buffer))))
+    (pcase type
+      ('permission-approved
+       (setq event (plist-put event :permission-approvals
+                              (plist-get context :permission-approvals))))
+      ('settled
+       (setq event (append event (list :status (plist-get outcome :status)
+                                       :reason (plist-get outcome :reason))))))
+    ;; Isolate both errors and mutation of the display snapshot, per observer.
+    (dolist (observer mevedel-pipeline-tool-event-hook)
+      (ignore-errors
+        (funcall observer (mevedel-pipeline--copy-display-value event))))))
+
 (defun mevedel-pipeline--settlement (context &optional reason message)
   "Return the canonical settlement for CONTEXT.
 REASON and MESSAGE describe an early pipeline failure."
@@ -456,7 +511,7 @@ REASON and MESSAGE describe an early pipeline failure."
           :reason (or reason (and (eq status 'error) 'tool-error))
           :result (or failure (plist-get context :result))
           :raw-result (or failure (plist-get context :raw-result))
-          :render-data (plist-get context :render-data)
+          :render-data (mevedel-pipeline--approval-render-data context)
           :media (plist-get context :media)
           :tool-use-id (plist-get context :tool-use-id)
           :parent-tool-use-id (plist-get context :parent-tool-use-id)
@@ -490,8 +545,14 @@ REASON and MESSAGE describe an early pipeline failure."
   "Project canonical OUTCOME into the provider-facing result value."
   (if (plist-get outcome :failure-message)
       (condition-case nil
-          (mevedel-pipeline-append-hook-side-channel
-           (mevedel-pipeline--format-outcome-failure outcome) outcome)
+          (let ((text (mevedel-pipeline-append-hook-side-channel
+                       (mevedel-pipeline--format-outcome-failure outcome) outcome))
+                (data (plist-get outcome :render-data)))
+            (if (plist-get data :permission-approvals)
+                (concat text (mevedel-tool-render-data-format
+                              (plist-put (copy-sequence data) :status 'error)
+                              (plist-get outcome :tool-use-id)))
+              text))
         (error
          (ignore-errors
            (display-warning 'mevedel "Pipeline audit formatting failed" :warning))
@@ -540,6 +601,11 @@ that bypass `mevedel-pipeline-run-tool'."
 (defun mevedel-pipeline-active-tool-use-id ()
   "Return the durable tool-use id of the currently starting handler."
   mevedel-pipeline--active-tool-use-id)
+
+(defun mevedel-pipeline-active-permission-approvals ()
+  "Return a copy of accepted reviewer provenance for the starting handler.
+The records describe this invocation only and never grant authority."
+  (mevedel-pipeline--copy-display-value mevedel-pipeline-permission-approvals))
 
 (defun mevedel-pipeline--discard-resource-attempts (context)
   "Discard prepared resource attempts held by CONTEXT."
@@ -1304,6 +1370,8 @@ buffer."
                             (when cancelled (funcall active)))))))
                   (mevedel-pipeline--active-tool-use-id
                    (plist-get context :tool-use-id))
+                  (mevedel-pipeline-permission-approvals
+                   (copy-tree (plist-get context :permission-approvals)))
                   (mevedel-tools--current-engine (plist-get context :engine))
                   (mevedel-pipeline--active-call-source
                    (plist-get context :call-source))
@@ -1432,7 +1500,7 @@ When neither was produced, passes CONTEXT through unchanged."
   (let* ((result (plist-get context :result))
          (status (plist-get context :status))
          (tool-use-id (plist-get context :tool-use-id))
-         (render-data (plist-get context :render-data))
+         (render-data (mevedel-pipeline--approval-render-data context))
          (sandbox-summary
           (car (plist-get context :sandbox-summary-cell)))
          (render-data
@@ -1805,6 +1873,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                                     (mevedel-current-origin))
                         :call-source (plist-get metadata :source)
                         :progress-callback (plist-get metadata :progress)
+                        :tool-event-callback #'mevedel-pipeline--tool-event
                         :parent-tool-use-id
                         (plist-get metadata :parent-tool-use-id)
                         :buffer dispatch-buffer
@@ -1841,6 +1910,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                  :result-bytes (and (stringp result) (string-bytes result)))
                 (mevedel-tool-repair-record-result
                  repair-entry result nil classification)
+                (mevedel-pipeline--tool-event 'settled context outcome)
                 (condition-case err
                     (funcall callback delivery)
                   (error
@@ -1874,6 +1944,7 @@ delivery: %S"
        :request-id (and request (mevedel-request-id request))
        :origin (mevedel-current-origin)
        :read-only (and (mevedel-tool-read-only-p tool) t))
+      (mevedel-pipeline--tool-event 'started context)
       (mevedel-pipeline--dispatch tool once-callback context steps)
       ;; Handler cleanup must run before this outer settlement canceller.
       (when request
@@ -1959,7 +2030,9 @@ the tool call as a canonical error result rather than escape."
 METADATA may supply `:tool-use-id', `:parent-tool-use-id', `:source',
 `:origin', the owning `:engine', and a `:progress' callback for a nested
 caller.  The progress callback receives `permission-wait' when the call
-enters the permission queue.  Provider-only reminders, persistence,
+enters the permission queue, and a plist with `:type permission-approved'
+and display-only `:permission-approvals' after accepted automatic review.
+Provider-only reminders, persistence,
 nudges, and transcript side channels are not applied unless METADATA
 selects `:projection provider'.  That projection retains structured status
 and media while applying the same persistence and presentation as a direct

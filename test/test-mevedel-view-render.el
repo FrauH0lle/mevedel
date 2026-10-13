@@ -1381,7 +1381,7 @@
       (mevedel-view-test--insert-data data-buf "Response\n" 'response)
       (with-current-buffer view-buf
         (let ((mevedel-view--pending-tool-calls
-               (list (cons 'read "Calling Read…"))))
+               (list (list 'read "Read" nil nil))))
           (mevedel-view--insert-pending-tool-lines
            mevedel-view--pending-tool-calls))
         (setq mevedel-view--pending-tool-calls nil)
@@ -6591,6 +6591,186 @@
    (mevedel-view-audit-mailbox-breadcrumb
     "<bash-execution execution_id=\"not-trailing\"/> suffix" "/root")))
 
+(mevedel-deftest mevedel-view--pending-tool-label
+  (:doc "tuple labels retain the Calling grammar and WaitAgent special case")
+  (dolist (case '(((key "Read" "notes.org" nil) "Calling Read: notes.org...")
+                  ((key "Probe" nil nil) "Calling Probe...")
+                  ((key "WaitAgent" "worker" nil) "Waiting for agents")))
+    (should (equal (cadr case) (mevedel-view--pending-tool-label (car case))))))
+
+(mevedel-deftest mevedel-view--pending-tool-line-body
+  (:doc "approved fragments remain volatile with a nonanimated row-local hint")
+  (let* ((mevedel-view--pending-tool-calls
+          '((key "Read" "notes.org"
+                 (:permission-approvals
+                  ((:source reviewer :outcome allow-once :reason "Read only"))))))
+         (entry (car mevedel-view--pending-tool-calls)))
+    (dolist (mevedel-view-tool-spinner-style '(ascii shimmer))
+      (let* ((body (mevedel-view--pending-tool-line-body
+                    (mevedel-view--pending-tool-label entry) "Read only"))
+             (hint (string-search "Auto-approved · once" body)))
+        (should hint)
+        (should (equal "Read only" (get-text-property hint 'help-echo body)))
+        (should-not (get-text-property hint 'mevedel-view-inline-spinner-frame body))
+        (should-not (get-text-property hint 'display body))
+        (should (get-text-property hint 'mevedel-view-pending-tool-live body))
+        (should (mevedel-view--volatile-live-tail-line-p
+                 (substring-no-properties body)))))))
+
+(mevedel-deftest mevedel-view--permission-approval-reason ()
+  ,test
+  (test)
+  :doc "accepts only reviewer allow-once facts and bounds the plain tooltip"
+  (progn
+    (dolist (records '(nil ((:source human :outcome allow-once :reason "Human"))
+                          ((:source reviewer :outcome deny :reason "Denied"))
+                          ((:source reviewer :outcome allow-once :reason 42))))
+      (should-not (mevedel-view--permission-approval-reason
+                   (list :permission-approvals records))))
+    (let ((reason (mevedel-view--permission-approval-reason
+                   (list :permission-approvals
+                         (list (list :source 'reviewer :outcome 'allow-once
+                                     :reason (propertize (make-string 2000 ?x)
+                                                         'face 'error)))))))
+      (should (<= (length reason) 1024))
+      (should-not (text-properties-at 0 reason))))
+  :doc "nested and direct ToolCall rows keep the child's hint off the envelope"
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                           :renderer #'mevedel-tool-ptc--render))
+    (let* ((approved '(:permission-approvals
+                      ((:source reviewer :outcome allow-once :reason "Child only"))))
+           (child (list :id "outer/1" :tool "ApprovalProbe" :status 'running
+                        :args nil :result "payload" :render-data approved))
+           (data (list :kind 'ptc :status 'success :outcome 'completed :calls (list child))))
+      (with-current-buffer view-buf
+        (dolist (status '(running error success))
+          (setf (plist-get child :status) status)
+          (let* ((rendering (mevedel-view--child-call-rendering child))
+                 (line (mevedel-view--rendering-header-line rendering)))
+            (should (eq status (plist-get rendering :status)))
+            (should (string-search "Auto-approved · once" line))
+            (should (equal "Child only" (plist-get rendering :permission-approval-reason)))))
+        (let ((outer (mevedel-view--render-tool-call
+                      (list :name "ToolCall" :args '(:expression "(progn (ApprovalProbe))")
+                            :result "payload" :render-data data) data-buf)))
+          (should-not (plist-get outer :permission-approval-reason)))
+        (let ((direct (mevedel-view--render-tool-call
+                       (list :name "ToolCall" :args '(:expression "(ApprovalProbe)")
+                             :result "payload" :render-data
+                             (plist-put (copy-sequence data) :direct-tool "ApprovalProbe"))
+                       data-buf)))
+          (should (equal "Child only" (plist-get direct :permission-approval-reason)))))))
+  :doc "original Bash progress retains event approvals, while a poll does not inherit them"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let* ((records '((:source reviewer :outcome allow-once :reason "Original execution")))
+             (facts '(:kind execution :execution-id "exec-approved" :state running))
+             (mevedel-view--execution-events (make-hash-table :test #'equal)))
+        (puthash "original" (list :type 'progress :facts facts
+                                   :permission-approvals records :output-tail "work")
+                 mevedel-view--execution-events)
+        (let ((row (mevedel-view--render-tool-call
+                    '(:name "Bash" :tool-use-id "original" :args (:command "work")
+                      :result "yielded") data-buf)))
+          (should (equal "Original execution" (plist-get row :permission-approval-reason))))
+        (mevedel-tool-register
+         (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                               :renderer #'mevedel-tool-ptc--render))
+        (let* ((child '(:id "original" :tool "Bash" :status success
+                       :args (:command "work") :result "yielded"))
+               (direct (list :name "ToolCall" :args '(:expression "(Bash :command \"work\")")
+                             :result "yielded" :render-data
+                             (list :kind 'ptc :outcome 'completed
+                                   :direct-tool "Bash" :calls (list child)))))
+          (dolist (row (list (mevedel-view--child-call-rendering child)
+                             (mevedel-view--render-tool-call direct data-buf)))
+            (should (equal "Original execution" (plist-get row :permission-approval-reason)))))
+        (let ((row (mevedel-view--render-tool-call
+                    (list :name "WriteStdin" :tool-use-id "poll" :args '(:chars "")
+                          :result "observed" :render-data
+                          (append facts '(:execution-control poll :control-succeeded-p t)))
+                    data-buf)))
+          (should-not (plist-get row :permission-approval-reason)))))))
+
+(ert-deftest mevedel-view-permission-approval-restored-row ()
+  "An accepted approval stays factual beside a failed tool after restoration."
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool\n"
+              (propertize
+               (concat "(:name \"ApprovalProbe\" :args (:value 1))\nError: failed\n"
+                       (mevedel-tool-render-data-format
+                        '(:status error :permission-approvals
+                          ((:source reviewer :outcome allow-once :reason "Read-only verification")))
+                        "approval-row"))
+               'gptel '(tool . "approval-row"))
+              "#+end_tool\n")
+      (mevedel-session-artifacts-stabilize-gptel-bounds))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+    (dotimes (restored 2)
+      (when (= restored 1)
+        (with-current-buffer data-buf
+          (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+            (erase-buffer)
+            (insert text)
+            (mevedel-transcript-restore-properties))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "× ApprovalProbe")
+          (search-forward "Auto-approved · once")
+          (should (equal "Read-only verification"
+                         (get-text-property (match-beginning 0) 'help-echo)))
+          (should (eq 'mevedel-view-tool-metadata
+                      (get-text-property (match-beginning 0) 'font-lock-face)))
+          (should-not (get-text-property (match-beginning 0)
+                                         'mevedel-view-inline-spinner-frame)))))))
+
+(ert-deftest mevedel-view-agent-result-canonical-outcomes ()
+  "Live and restored result cards use envelope outcomes, not payload prose."
+  (dolist (case '(("errored" "× Failed" error)
+                  ("completed" "✓ Finished" mevedel-view-tool-marker)
+                  ("interrupted" "✗ Stopped" mevedel-view-tool-warning)
+                  (nil "… Incomplete" mevedel-view-tool-metadata)
+                  ("bogus" "… Incomplete" mevedel-view-tool-metadata)))
+    (ert-info ((format "Outcome %S" (car case)))
+      (mevedel-view-test--with-buffers
+        (with-current-buffer view-buf
+          (mevedel-view--full-rerender)
+          (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+        (mevedel-view-test--insert-data
+         data-buf
+         (format (concat "<agent-result sender=\"/root/worker\"%s>\n"
+                         "Success; quoted error: pipe closed.\n</agent-result>\n")
+                 (if (car case) (format " outcome=\"%s\"" (car case)) ""))
+         nil)
+        (dotimes (restored 2)
+          (when (= restored 1)
+            (with-current-buffer data-buf
+              (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+                (erase-buffer)
+                (insert text)
+                (mevedel-transcript-restore-properties))))
+          (with-current-buffer view-buf
+            (mevedel-view--full-rerender)
+            (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+            (should (= (point) (+ (mevedel-view--input-start) 4)))
+            (save-excursion
+              (goto-char (point-min))
+              (search-forward (concat (cadr case) " /root/worker"))
+              (should (eq (nth 2 case)
+                          (get-text-property (match-beginning 0) 'font-lock-face)))
+              (search-forward "Success; quoted error: pipe closed.")
+              (should (get-text-property (match-beginning 0)
+                                         'mevedel-view-mailbox-body)))))))))
+
 (mevedel-deftest mevedel-view--decorate-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")
   ,test
@@ -6739,7 +6919,7 @@
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
-     "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nresult\n</agent-result>\n"
+     "<agent-result sender=\"/root/worker\" recipient=\"/root\" outcome=\"completed\">\nresult\n</agent-result>\n"
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -6795,7 +6975,7 @@
       (mevedel-view-test--insert-data
        data-buf
        (concat
-        "<agent-result sender=\"/root/verifier\" recipient=\"/root\">\n"
+        "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
         "Before nested example.\n"
         "```elisp\n"
         "(:body \"<agent-result>\n"
@@ -6823,11 +7003,11 @@
       (mevedel-view-test--insert-data
        data-buf
        (concat
-        "<agent-result sender=\"/root/reviewer\" recipient=\"/root\">\n"
+        "<agent-result sender=\"/root/reviewer\" recipient=\"/root\" outcome=\"completed\">\n"
         "first result\n"
         "</agent-result>\n"
         "Assistant prose between mailbox cards.\n"
-        "<agent-result sender=\"/root/verifier\" recipient=\"/root\">\n"
+        "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
         "second result\n"
         "</agent-result>\n")
        nil)
@@ -6850,7 +7030,7 @@
     (let ((mevedel-view-mailbox-collapse-line-threshold 200))
       (mevedel-view-test--insert-data
        data-buf
-       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nresult\n  </agent-result>\n"
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\" outcome=\"completed\">\nresult\n  </agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
@@ -6865,7 +7045,7 @@
     (mevedel-view-test--with-buffers
       (mevedel-view-test--insert-data
        data-buf
-       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nfirst\n\nsecond\n</agent-result>\n"
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\" outcome=\"completed\">\nfirst\n\nsecond\n</agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
@@ -6898,7 +7078,7 @@
         (setq-local mevedel--session session))
       (mevedel-view-test--insert-data
        data-buf
-       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nline one\nline two\n</agent-result>\n"
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\" outcome=\"completed\">\nline one\nline two\n</agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 3)
@@ -6957,7 +7137,7 @@
     (let ((mevedel-view-mailbox-collapse-line-threshold 0))
       (mevedel-view-test--insert-data
        data-buf
-       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nresult\n</agent-result>\n"
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\" outcome=\"completed\">\nresult\n</agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
@@ -6997,7 +7177,7 @@
           (unwind-protect
               (progn
                 (setq start (point))
-                (insert "<agent-result sender=\"/root/explorer\" recipient=\"/root\">\nfinal body\n</agent-result>\n")
+                (insert "<agent-result sender=\"/root/explorer\" recipient=\"/root\" outcome=\"completed\">\nfinal body\n</agent-result>\n")
                 (add-text-properties
                  start (point)
                  `(mevedel-view-source ,stale-source
@@ -7051,7 +7231,7 @@
       (mevedel-view-test--insert-data
        data-buf
        (concat
-        "<agent-result sender=\"/root/verifier\" recipient=\"/root\">\n"
+        "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
         "Output observed:\n"
         "```elisp\n"
         "(:body \"<agent-result sender=\\\"/root/explorer\\\">\n"
@@ -7085,7 +7265,7 @@
        'response)
       (mevedel-view-test--insert-data
        data-buf
-       "\n<agent-message sender=\"/root/explorer\" recipient=\"/root\">\nHello from your Explorer Agent :)\n</agent-message>\n\n<agent-result sender=\"/root/explorer\" recipient=\"/root\">\nfinal line one\nfinal line two\n</agent-result>\n"
+       "\n<agent-message sender=\"/root/explorer\" recipient=\"/root\">\nHello from your Explorer Agent :)\n</agent-message>\n\n<agent-result sender=\"/root/explorer\" recipient=\"/root\" outcome=\"completed\">\nfinal line one\nfinal line two\n</agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
@@ -8116,7 +8296,7 @@
       (when (= i 1)
         (mevedel-view-test--insert-data
          data-buf
-         "\n<agent-result sender=\"/root/reviewer\">\nReview complete.\nSecond line.\n</agent-result>\n"
+         "\n<agent-result sender=\"/root/reviewer\" outcome=\"completed\">\nReview complete.\nSecond line.\n</agent-result>\n"
          nil)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -8159,7 +8339,7 @@
       (mevedel-view-render-live-update data-buf)
       (mevedel-view-test--insert-data
        data-buf
-       (concat "\n<agent-result sender=\"/root/reviewer\">\nFirst delivery.\n</agent-result>\n"
+       (concat "\n<agent-result sender=\"/root/reviewer\" outcome=\"completed\">\nFirst delivery.\n</agent-result>\n"
                "<agent-message sender=\"/root/explorer\">\nSecond delivery.\n</agent-message>\n")
        nil)
       (mevedel-view-render-live-update data-buf)

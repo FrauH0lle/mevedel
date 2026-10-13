@@ -365,6 +365,7 @@ code, pre { font-family: var(--font-mono); }
 .tool > summary .st.running { color: var(--running); }
 .tool > summary:hover .tname { text-decoration: underline; }
 .tool .tname { font-weight: 600; white-space: nowrap; color: var(--fn); }
+.tool-approval { color: var(--muted); font-size: .8rem; white-space: nowrap; }
 .tool .targ {
   color: var(--muted);
   overflow: hidden;

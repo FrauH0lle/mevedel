@@ -80,6 +80,8 @@
 (autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
 
 ;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-active-permission-approvals
+                  "mevedel-pipeline" ())
 (declare-function mevedel-pipeline-active-tool-use-id
                   "mevedel-pipeline" ())
 (declare-function mevedel-pipeline-tool-results-dir
@@ -488,6 +490,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
        :owner-context (or invocation session)
        :tool-args args
        :tool-use-id (mevedel-pipeline-active-tool-use-id)
+       :permission-approvals (mevedel-pipeline-active-permission-approvals)
        :command launch-command
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)

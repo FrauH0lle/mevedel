@@ -20,6 +20,13 @@
 ;; `mevedel-goal'
 (declare-function mevedel-goal-capture-request "mevedel-goal" (request))
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+
+(defconst mevedel-acp-turn--lost-reply-limit 8
+  "Lost MCP replies one turn records for diagnosis.")
+
 (defun mevedel-acp-turn--close-reasoning (request)
   "Close REQUEST's displayed reasoning block, if one is open."
   (let ((info (mevedel-engine-info request))
@@ -112,6 +119,28 @@ A stop decision cannot be hidden by another hook's block decision."
     (dolist (key '(:tracking-marker :tool-marker))
       (setq info (plist-put info key (plist-get render-info key))))
     (setf (mevedel-engine-info request) info)))
+
+(defun mevedel-acp-turn--reply-lost (request diagnostic)
+  "Record that REQUEST's MCP reply named by DIAGNOSTIC lost its client.
+DIAGNOSTIC is (:kind KIND :id ID) for a tool result or hook reply.  The
+turn keeps its local results and continues: its agent reports the outcome.
+The turn info keeps a bounded list, and telemetry correlates the reply with
+the admitted request and, for a child, its agent path."
+  (let* ((info (mevedel-engine-info request))
+         (lost (plist-get info :mevedel-mcp-lost))
+         (buffer (plist-get info :buffer))
+         (root-p (mevedel-request-p request))
+         (admission (if root-p request (plist-get info :mevedel-request)))
+         (session (and (buffer-live-p buffer)
+                       (buffer-local-value 'mevedel--session buffer))))
+    (when (< (length lost) mevedel-acp-turn--lost-reply-limit)
+      (setf (mevedel-engine-info request)
+            (plist-put info :mevedel-mcp-lost (append lost (list diagnostic)))))
+    (when (and session (fboundp 'mevedel-telemetry-record))
+      (mevedel-telemetry-record
+       session 'mcp-reply-lost :kind (plist-get diagnostic :kind)
+       :request-id (and admission (mevedel-request-id admission))
+       :agent-path (unless root-p (mevedel-agent-invocation-path request))))))
 
 (defun mevedel-acp-turn-start (request launch content tools &optional ready terminal settle prepare)
   "Run admitted REQUEST through ACP with CONTENT and registered TOOLS.
@@ -455,7 +484,10 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                             ;; Reject its authority without running
                                             ;; the queued control transaction.
                                             (funcall complete nil "The owning turn was cancelled")))
-                                         (lambda () (setq abandoned t))))))
+                                         (lambda () (setq abandoned t))))
+                                    nil
+                                    (lambda (diagnostic)
+                                      (mevedel-acp-turn--reply-lost request diagnostic))))
                               (setq configuration
                                     (funcall launch (vector (mevedel-mcp-configuration server))
                                              (mevedel-mcp-hook-command server)))

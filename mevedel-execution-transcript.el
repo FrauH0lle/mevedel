@@ -131,6 +131,9 @@
                  :sandbox-facts
                  (copy-tree
                   (plist-get (plist-get event :observation) :sandbox-facts))
+                 :permission-approvals
+                 (copy-tree
+                  (plist-get (plist-get event :observation) :permission-approvals))
                  :execution-error
                  (copy-tree (plist-get (plist-get event :observation) :error))
                  :execution-output

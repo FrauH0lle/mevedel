@@ -234,18 +234,26 @@ carried into the transcript whole."
     (error nil)))
 
 (defun mevedel-ptc-driver--child-render-data (data)
-  "Return DATA when it is small enough to retain for a child row, else nil.
+  "Return DATA when small enough for a child row, else its approval facts.
 
 Oversized data is dropped whole rather than truncated: a nested
 renderer reads its own structured fields, and a mangled value would
-render worse than no value at all."
+render worse than no value at all.  Small permission provenance survives
+independently of those optional details."
   (when data
-    (condition-case nil
-        (let ((mevedel-ptc-max-value-bytes mevedel-ptc-driver--child-detail-max)
-              (mevedel-ptc-max-value-nodes mevedel-ptc-driver--child-detail-max))
-          (mevedel-ptc-check-value nil data nil nil t)
-          data)
-      (error nil))))
+    (let ((mevedel-ptc-max-value-bytes mevedel-ptc-driver--child-detail-max)
+          (mevedel-ptc-max-value-nodes mevedel-ptc-driver--child-detail-max))
+      (condition-case nil
+          (progn
+            (mevedel-ptc-check-value nil data nil nil t)
+            data)
+        (error
+         (when-let* (((listp data))
+                     (approvals (plist-get data :permission-approvals)))
+           (ignore-errors
+             (let ((small (list :permission-approvals approvals)))
+               (mevedel-ptc-check-value nil small nil nil t)
+               small))))))))
 
 (defun mevedel-ptc-driver--render-value (value)
   "Return the model-visible rendering of a script's final VALUE."
@@ -336,7 +344,11 @@ ERROR-KIND is the interpreter's typed failure category when available."
   (mapcar (lambda (call)
             (list :id (plist-get call :id)
                   :tool (plist-get call :tool)
-                  :status (plist-get call :status)))
+                  :status (plist-get call :status)
+                  :render-data
+                  (when-let* ((approvals (plist-get (plist-get call :render-data)
+                                                    :permission-approvals)))
+                    (list :permission-approvals (copy-tree approvals)))))
           calls))
 
 
@@ -463,6 +475,15 @@ ERROR-KIND is the interpreter's typed failure category when available."
                (record
                 (lambda (task status result &optional outcome)
                   (let* ((id (plist-get task :id))
+                         (previous (cl-find id audit
+                                            :key (lambda (item) (plist-get item :id))
+                                            :test #'equal))
+                         (data (if outcome (plist-get outcome :render-data)
+                                 (when-let* ((approvals
+                                              (plist-get
+                                               (plist-get previous :render-data)
+                                               :permission-approvals)))
+                                   (list :permission-approvals approvals))))
                          (entry
                           (list :id id
 				:order (plist-get task :order)
@@ -481,9 +502,9 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                           result)
 				:batch (plist-get task :batch)
 				:render-data
-				(if direct (plist-get outcome :render-data)
+				(if direct data
                                   (mevedel-ptc-driver--child-render-data
-                                   (plist-get outcome :render-data)))))
+                                   data))))
                          (media (plist-get outcome :media)))
                     (when media
                       (setq entry
@@ -649,11 +670,21 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                     :source 'ptc
                                     :progress
                                     (lambda (event)
-                                      (when (eq event 'permission-wait)
-                                        (push (cons child-id name)
-                                              permission-waits)
-                                        (funcall progress 'progress name
-                                                 known-total)))))))
+                                      (unless settled
+                                        (cond
+                                         ((eq event 'permission-wait)
+                                          (push (cons child-id name) permission-waits))
+                                         ((and (listp event)
+                                               (eq (plist-get event :type)
+                                                   'permission-approved))
+                                          (setq permission-waits
+                                                (assoc-delete-all child-id permission-waits))
+                                          (funcall record task 'running nil
+                                                   (list :render-data
+                                                         (list :permission-approvals
+                                                               (copy-tree
+                                                                (plist-get event :permission-approvals)))))))
+                                        (funcall progress 'progress name known-total)))))))
                           (push (plist-get task :cancel) child-cancellers))
                       (error
                        ;; Malformed child calls are guest values, so a script

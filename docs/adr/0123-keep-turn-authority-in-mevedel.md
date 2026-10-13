@@ -97,9 +97,20 @@ compaction, and its owned terminal acknowledgement for usage and settlement,
 including a reply whose publication is waiting for target transport. It rejects
 new tools and hooks: queued ones receive failure replies without running, so
 the peer can reach its terminal reply, and cannot acquire a replacement turn's
-authority. A hook whose client gave up is not run later. Retained native
-invocations use the same bounded acknowledgement; their runtime canceller
-defers terminal settlement until the connection completes it.
+authority. A hook whose client gave up is not run later. A reply whose client
+closed before Emacs read that it had is not a turn failure: the MCP server
+retires that client, cancels its other pending work once and reports the lost
+tool result or hook reply, without its payload, to the owner. The turn keeps
+its local result and effects, never replays the call, records the loss as a
+bounded diagnostic and lets the agent's own terminal outcome settle it. A lost
+hook reply is not a receipt, so its staged context stays undelivered. Only a
+failed write that leaves the client closed is treated so. Any other write
+failure still signals to the owner, also from a completion made before
+dispatch returns, and the client is answered with that error; an unencodable
+result is answered as an error. Retained native invocations and isolated
+workloads use the same handling and bounded acknowledgement; a retained
+invocation's runtime canceller defers terminal settlement until the
+connection completes it.
 
 Provider identity lives in `mevedel-claude-code-backend.el`: the backend type,
 model metadata, registration, and generic methods are available without ACP,
@@ -243,6 +254,21 @@ through later compaction.
   ready descriptors in no fixed order) failed the turn the same way. The runner
   now first reads ACP output already available, so the receipt's drain is armed
   before the socket work's timer.
+- **Lost MCP client:** a native turn ended with "Process mevedel-mcp <N> no
+  longer connected to pipe; closed it". A reply was written to a client whose
+  peer had closed while Emacs had not yet read its end; Emacs then signals that
+  error and closes the client, and every owner turned it into a turn failure,
+  hiding the agent's real outcome and failing isolated workloads the same way.
+  Why the peer closed was not established. Real-socket regressions reproduce
+  the write, and fixture turns lose only their bridge or a hook at its timeout.
+  Batch Emacs keeps the SIGPIPE disposition it inherits, under which that write
+  kills the process, so those cases run in a child that ignores SIGPIPE as an
+  interactive Emacs does.
+  Review then found an older gap beside it: a completion made before dispatch
+  returned retired its request, so when its write failed on a live client the
+  dispatch failure handler completed it again and the error vanished, leaving
+  the client unanswered. Only a failure while the answer is still owed now
+  becomes the answer; a failure after completion began keeps signalling.
 - **Native call ledger:** call identities were first committed to the session
   sidecar before each tool executed and kept for the conversation's lifetime to
   reject replays. Profiling put that commit at 51 ms of synchronous main-thread

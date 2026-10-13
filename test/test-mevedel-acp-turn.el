@@ -12,6 +12,18 @@
 (require 'mevedel-acp-turn)
 (require 'mevedel-claude-code)
 (require 'mevedel-view-render)
+(require 'mevedel-sigpipe-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-sigpipe-test-support"))
+
+(defconst mevedel-acp-turn-test--file (or load-file-name buffer-file-name)
+  "This file, which the SIGPIPE-ignoring child loads.")
+
+(defun mevedel-acp-turn-test--hold (seconds)
+  "Keep Emacs from reading any process for SECONDS, as a long command does."
+  (let ((end (+ (float-time) seconds)))
+    (while (< (float-time) end))))
 
 (mevedel-deftest mevedel-acp-turn-start (:quiet t)
   ,test
@@ -383,7 +395,7 @@ BODY delivers the receipt and a Read call through `connection', `content' and
               (list (lambda (_) decision)
                     (lambda (call) (setq observed (plist-get call :result)) '(:block nil))))
              payload
-             (capture (lambda (_client line)
+             (capture (lambda (_client line &rest _)
                         (let ((message (json-parse-string line :object-type 'plist
                                                           :false-object :json-false)))
                           (when (plist-get (plist-get message :result) :content)
@@ -481,6 +493,143 @@ BODY delivers the receipt and a Read call through `connection', `content' and
         (if (plist-get decision :block)
             (should (string-search "denied" (buffer-string)))
           (should (eq 'error (plist-get (mevedel-engine-info request) :mevedel-acp-outcome))))))))
+
+;; A reply written after its peer closed kills a batch Emacs that does not
+;; ignore SIGPIPE; these turns run in the child the next case starts.
+(when (mevedel-test-sigpipe-child-p)
+  (mevedel-deftest mevedel-acp-turn-start/lost-mcp-reply (:quiet t)
+    ,test
+    (test)
+
+    :doc "an asynchronous result lost with its bridge stays local and the agent settles the turn"
+    (mevedel-engine-test--with-session
+      (let ((tool (copy-mevedel-tool (mevedel-tool-ensure "Read")))
+            (mevedel-telemetry-enabled t)
+            (path (file-name-concat root "source.txt")))
+        (write-region "evidence" nil path nil 'silent)
+        (setf (mevedel-tool-async-p tool) t
+              (mevedel-tool-handler tool)
+              (lambda (callback _args)
+                ;; The bridge dies while the tool works, and the result
+                ;; arrives before Emacs reads that it closed.
+                (mevedel-acp-turn-test--hold 1)
+                (run-at-time 0 nil callback '(:result "LOCAL-RESULT-5120"))
+                #'ignore))
+        (mevedel-acp-turn-start
+         request
+         (lambda (mcp _hook)
+           (list :command (executable-find "python3") :args (list mevedel-test--acp-peer)
+                 :cwd root :mcp mcp :tool-id-field :claudecode/toolUseId
+                 :meta `((dropBridge . t) (responseText . "AGENT-OUTCOME-2291")
+                         (toolBatches . [[((name . "Read") (id . "lost-1")
+                                           (args . ((file_path . ,path))))]]))))
+         [((type . "text") (text . "batch"))] (list tool))
+        (mevedel-test--await 10 "Lost reply turn did not settle"
+          (not (mevedel-turn-busy-p buffer)))
+        (should (eq 'success (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
+        (should-not (plist-get (mevedel-engine-info request) :error))
+        (should (string-search "LOCAL-RESULT-5120" (buffer-string)))
+        (should (string-search "AGENT-OUTCOME-2291" (buffer-string)))
+        (should (equal '((:kind tool :id 2))
+                       (plist-get (mevedel-engine-info request) :mevedel-mcp-lost)))
+        (let ((events
+               (with-temp-buffer
+                 (insert-file-contents (mevedel-telemetry-path session))
+                 (goto-char (point-min))
+                 (let (entries)
+                   (condition-case nil
+                       (while t (push (read (current-buffer)) entries))
+                     (end-of-file))
+                   entries))))
+          (let ((event (cl-find 'mcp-reply-lost events
+                                :key (lambda (entry) (plist-get entry :event)))))
+            (should event)
+            (should (eq 'tool (plist-get event :kind)))
+            (should (equal (mevedel-request-id request) (plist-get event :request-id)))
+            (should-not (plist-get event :dropped-keys))))))
+
+    :doc "a child's hook reply lost at the hook's timeout leaves its agent to settle the turn"
+    (mevedel-engine-test--with-session
+      (let* ((path (file-name-concat root "source.txt"))
+             (invocation
+              (mevedel-agent-invocation--create
+               :buffer buffer :path "/root/lost-hook" :description "Lost hook child"
+               :runtime-context (list :buffer buffer :mevedel-request request)))
+             (controls 0) terminal-status)
+        (write-region "evidence" nil path nil 'silent)
+        (setq-local mevedel--agent-invocation invocation)
+        (mevedel-acp-turn-start
+         invocation
+         (lambda (mcp hook)
+           (list :command (executable-find "python3") :args (list mevedel-test--acp-peer)
+                 :cwd root :mcp mcp :tool-id-field :claudecode/toolUseId
+                 :control (lambda (_owner _event)
+                            (cl-incf controls)
+                            ;; The native hook gives up while this answers.
+                            (mevedel-acp-turn-test--hold 1)
+                            '(:continue t))
+                 :meta `((hookCommand . ,hook) (hookTimeout . 0.2)
+                         (responseText . "CHILD-OUTCOME-6620")
+                         (toolBatches . [[((name . "Read") (id . "child-read")
+                                           (args . ((file_path . ,path))))]]))))
+         [((type . "text") (text . "batch"))] (list (mevedel-tool-ensure "Read"))
+         nil nil
+         (lambda (status)
+           (setq terminal-status status)
+           (setf (mevedel-agent-invocation-runtime-settled-p invocation) t)))
+        (mevedel-test--await 10 "Lost hook child did not settle" terminal-status)
+        (should (= 1 controls))
+        (should (eq 'success terminal-status))
+        (should-not (plist-get (mevedel-engine-info invocation) :error))
+        (should (string-search "CHILD-OUTCOME-6620" (buffer-string)))
+        (should (equal '((:kind hook :id 1))
+                       (plist-get (mevedel-engine-info invocation) :mevedel-mcp-lost)))))
+
+    :doc "a lost hook reply leaves its staged context undelivered, with no receipt"
+    (mevedel-engine-test--with-claude-session
+      (let* ((directory (file-name-concat root "lib"))
+             (file (file-name-concat directory "evidence.txt"))
+             (hold (lambda (prepare &rest args)
+                     (prog1 (apply prepare args)
+                       (mevedel-acp-turn-test--hold 1)))))
+        (make-directory directory)
+        (write-region "Evidence" nil file nil 'silent)
+        (write-region "PATH-GUIDANCE-4319" nil (file-name-concat directory "AGENTS.md") nil 'silent)
+        (setq-local gptel-system-prompt "Lost hook fixture"
+                    gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+        (advice-add 'mevedel-claude-code-context-prepare :around hold)
+        (unwind-protect
+            (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                       (mevedel-engine-test--claude-launch
+                        (lambda (_system _mcp _model _effort &optional _id hook)
+                          (list :observe #'mevedel-claude-code-context-observe
+                                :meta `((hookCommand . ,hook) (hookTimeout . 0.2)
+                                        (responseText . "Done")
+                                        (toolBatches . [[((name . "Read") (id . "first-read")
+                                                          (args . ((file_path . ,file))))]
+                                                        [((name . "Read") (id . "second-read")
+                                                          (args . ((file_path . ,file))))]])))))))
+              (insert "Read with applicable instructions")
+              (mevedel--send-request "Read with applicable instructions")
+              (mevedel-test--await 10 "Lost hook turn did not settle"
+                (not (mevedel-turn-busy-p buffer))))
+          (advice-remove 'mevedel-claude-code-context-prepare hold))
+        (let ((info (mevedel-engine-info request)))
+          (ert-info ((format "outcome=%S error=%S" (plist-get info :mevedel-acp-outcome)
+                             (plist-get info :error)))
+            (should (equal '((:kind hook :id 1)) (plist-get info :mevedel-mcp-lost)))
+            (should-not (string-search "no longer connected"
+                                       (format "%S" (plist-get info :error))))))
+        ;; Without Claude's receipt the guidance was never delivered.
+        (should (= 0 (mevedel-engine-test--count-evidence "PATH-GUIDANCE-4319")))
+        (should-not (mevedel-session-workspace-instruction-hashes session))))))
+
+(mevedel-deftest mevedel-acp-turn-start/lost-mcp-reply-interactive ()
+  ,test
+  (test)
+  :doc "turns whose MCP replies lose their client, where SIGPIPE is ignored"
+  (mevedel-test-run-sigpipe-tests mevedel-acp-turn-test--file
+                                  "\\`mevedel-acp-turn-start/lost-mcp-reply/"))
 
 (provide 'test-mevedel-acp-turn)
 ;;; test-mevedel-acp-turn.el ends here

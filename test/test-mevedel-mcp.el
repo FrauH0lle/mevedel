@@ -11,6 +11,10 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
+(require 'mevedel-sigpipe-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-sigpipe-test-support"))
 
 (defmacro mevedel-mcp-test--with-runtime (&rest body)
   "Run BODY with a private XDG runtime directory bound to `runtime'."
@@ -264,6 +268,186 @@
         (while (and (process-live-p client) (< (float-time) deadline))
           (accept-process-output nil 0.01)))
       (should (= 1 cancelled)))))
+
+(defmacro mevedel-mcp-test--with-peer (&rest body)
+  "Run BODY with SERVER answered through a raw local PEER socket.
+Dispatch and control store their completions in COMPLETIONS by request id
+and count cancellations in CANCELLED; BODY may replace PEND, which receives
+each request's N and completion.  LOST collects disconnect diagnostics and
+RECEIVED the text PEER read.  CLIENT is the server's end of PEER's connection
+once `connect' returns."
+  (declare (indent 0) (debug t))
+  `(mevedel-mcp-test--with-runtime
+    (let* (completions lost client peer (cancelled 0) (received "")
+           (pend (lambda (id complete)
+                   (push (cons id complete) completions)
+                   (lambda () (cl-incf cancelled))))
+           (server (mevedel-mcp-start
+                    (lambda () [(:name "Wait" :inputSchema (:type "object"))])
+                    (lambda (_name args _meta complete)
+                      (funcall pend (plist-get args :n) complete))
+                    (lambda (event complete)
+                      (funcall pend (plist-get event :n) complete))
+                    nil
+                    (lambda (diagnostic) (push diagnostic lost)))))
+      (unwind-protect
+          (cl-labels
+              ((send (value)
+                 (process-send-string
+                  peer (concat (json-serialize value :null-object :null
+                                               :false-object :json-false)
+                               "\n")))
+               (connect ()
+                 (setq peer (make-network-process
+                             :name "mcp-test-peer" :family 'local :noquery t
+                             :filter (lambda (_process text)
+                                       (setq received (concat received text)))
+                             :sentinel #'ignore
+                             :service (aref (alist-get 'args (mevedel-mcp-configuration server)) 2)))
+                 (mevedel-test--await 5 "Server did not accept the peer"
+                   (setq client (car (mevedel-mcp-clients server)))))
+               (initialize ()
+                 (send '(:jsonrpc "2.0" :id 1 :method "initialize"))
+                 (send '(:jsonrpc "2.0" :method "notifications/initialized")))
+               (call (id n)
+                 (send `(:jsonrpc "2.0" :id ,id :method "tools/call"
+                                  :params (:name "Wait" :arguments (:n ,n)))))
+               (control (id n)
+                 (send `(:jsonrpc "2.0" :id ,id :method "mevedel/control" :params (:n ,n))))
+               (await (&rest ns)
+                 (mevedel-test--await 5 "Requests were not dispatched"
+                   (cl-every (lambda (n) (assq n completions)) ns)))
+               (complete (n &rest result)
+                 (apply (cdr (assq n completions)) (or result '((:content [])))))
+               (response (id)
+                 (let (found)
+                   (mevedel-test--await 5 "The peer received no answer"
+                     (setq found
+                           (seq-find (lambda (message) (equal id (plist-get message :id)))
+                                     (mapcar (lambda (line)
+                                               (json-parse-string line :object-type 'plist))
+                                             (split-string received "\n" t)))))
+                   found))
+               ;; Close the peer's end without letting Emacs read it: the
+               ;; server's client stays live until its end is read.
+               (close-unread ()
+                 (delete-process peer)
+                 (should (process-live-p client))))
+            ,@body)
+        (when (and peer (process-live-p peer)) (delete-process peer))
+        (mevedel-mcp-stop server)))))
+
+(defconst mevedel-mcp-test--file (or load-file-name buffer-file-name)
+  "This file, which the SIGPIPE-ignoring child loads.")
+
+;; Writing to a closed peer kills a batch Emacs that does not ignore SIGPIPE;
+;; these cases run in the child `mevedel-mcp--write' starts.
+(when (mevedel-test-sigpipe-child-p)
+  (mevedel-deftest mevedel-mcp--write/closed-peer ()
+    ,test
+    (test)
+
+    :doc "a tool reply to a peer closed before Emacs read its end retires the client once"
+    (mevedel-mcp-test--with-peer
+    (connect)
+    (initialize)
+    (call 2 1)
+    (call 3 2)
+    (await 1 2)
+    (close-unread)
+    ;; The local result stays the caller's; only the reply is lost.
+    (should-not (complete 1))
+    (should-not (process-live-p client))
+    (should-not (memq client (mevedel-mcp-clients server)))
+    (should (= 1 cancelled))
+    (should (equal '((:kind tool :id 2)) lost))
+    ;; A duplicate or late completion neither writes nor cancels again.
+    (should-not (complete 1))
+    (should-not (complete 2))
+    (accept-process-output nil 0.05)
+    (should (= 1 cancelled))
+    (should (= 1 (length lost))))
+
+    :doc "a hook reply to a peer closed before Emacs read its end is reported as a hook"
+    (mevedel-mcp-test--with-peer
+    (connect)
+    (control 7 1)
+    (await 1)
+    (close-unread)
+    (should-not (complete 1 '(:continue t)))
+    (should-not (process-live-p client))
+    (should (equal '((:kind hook :id 7)) lost)))))
+
+(mevedel-deftest mevedel-mcp--write ()
+  ,test
+  (test)
+
+  :doc "replies to peers closed before Emacs read their end, where SIGPIPE is ignored"
+  (mevedel-test-run-sigpipe-tests mevedel-mcp-test--file "\\`mevedel-mcp--write/closed-peer")
+
+  :doc "a reply after Emacs read the closed end finds its call already retired"
+  (mevedel-mcp-test--with-peer
+    (connect)
+    (initialize)
+    (call 2 1)
+    (await 1)
+    (delete-process peer)
+    (mevedel-test--await 5 "Disconnect was not processed" (not (process-live-p client)))
+    (should (= 1 cancelled))
+    (should-not (complete 1))
+    (should-not lost))
+
+  :doc "a delivered reply reports delivery"
+  (mevedel-mcp-test--with-peer
+    (connect)
+    (initialize)
+    (call 2 1)
+    (await 1)
+    (should (complete 1))
+    (should (process-live-p client))
+    (should-not lost))
+
+  :doc "a failed write to a client that stays live still signals"
+  (mevedel-mcp-test--with-peer
+    (connect)
+    (initialize)
+    (call 2 1)
+    (await 1)
+    (cl-letf (((symbol-function 'process-send-string)
+               (lambda (&rest _) (error "Unexpected write failure"))))
+      (should-error (complete 1)))
+    (should (process-live-p client))
+    (should-not lost))
+
+  :doc "a synchronous reply whose live write fails reaches its owner and its peer"
+  (mevedel-mcp-test--with-peer
+    (let ((send (symbol-function 'process-send-string))
+          (failed 0) owner-error)
+      (setq pend (lambda (_n complete)
+                   ;; The owner answers before dispatch returns.
+                   (condition-case err
+                       (funcall complete '(:content [(:type "text" :text "done")]))
+                     (error (setq owner-error err)
+                            (signal (car err) (cdr err))))))
+      (connect)
+      (initialize)
+      (cl-letf (((symbol-function 'process-send-string)
+                 (lambda (process string)
+                   ;; The result line fails once while its client stays live.
+                   (if (and (eq process client) (= failed 0)
+                            (string-search "\"result\":{\"content\"" string))
+                       (progn (cl-incf failed)
+                              (error "Injected write failure"))
+                     (funcall send process string)))))
+        (call 2 1)
+        (let ((answer (response 2)))
+          (should (= 1 failed))
+          (should (equal "Injected write failure" (cadr owner-error)))
+          (should (equal "Injected write failure"
+                         (plist-get (plist-get answer :error) :message)))))
+      (should (process-live-p client))
+      (should (= 0 (hash-table-count (process-get client 'mevedel-mcp-calls))))
+      (should-not lost))))
 
 (mevedel-deftest mevedel-mcp-socket-root ()
   ,test

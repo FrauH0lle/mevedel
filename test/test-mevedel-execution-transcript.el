@@ -63,6 +63,35 @@
 (mevedel-deftest mevedel-execution-transcript-terminal-render-data ()
   ,test
   (test)
+  :doc "preserves reviewed-command provenance in terminal transcript metadata"
+  (let* ((approvals '((:source reviewer :outcome allow-once :reason "Reviewed")))
+         (render-data
+          (mevedel-execution-transcript-terminal-render-data
+           (list :facts '(:outcome failure)
+                 :observation (list :permission-approvals approvals))))
+         (block (mevedel-tool-render-data-format render-data "approved-call")))
+    (should (eq 'error (plist-get render-data :status)))
+    (should (equal approvals
+                   (plist-get render-data :permission-approvals)))
+    (with-temp-buffer
+      (org-mode)
+      (insert "#+begin_tool (Bash :command \"false\")\n")
+      (let ((start (point)))
+        (insert "(:name \"Bash\" :args (:command \"false\"))\n\nfailed" block)
+        (put-text-property start (point) 'gptel '(tool . "approved-call")))
+      (insert "#+end_tool\n")
+      (let ((persisted
+             (progn
+               (mevedel-session-artifacts-stabilize-gptel-bounds)
+               (buffer-substring-no-properties (point-min) (point-max)))))
+        (erase-buffer)
+        (insert persisted)
+        (mevedel-transcript-restore-properties)
+        (should
+         (equal approvals
+                (plist-get
+                 (mevedel-tool-render-data-for-tool (current-buffer) "approved-call")
+                 :permission-approvals))))))
   :doc "omits the default sandbox boundary"
   (should-not
    (plist-member

@@ -147,7 +147,16 @@ With RAW-P, retain the full pipeline result including hidden render data."
     (unwind-protect
         (let ((closure (cadr (mevedel-ptc-step state))))
           (should-not (mevedel-ptc-driver--child-render-data closure)))
-      (mevedel-ptc-close state))))
+      (mevedel-ptc-close state)))
+  :doc "keeps small accepted approval facts when bulky child details are omitted"
+  (let* ((approvals '((:source reviewer :outcome allow-once :reason "Exact task")))
+         (data (list :kind 'probe :detail (make-string 5000 ?x)
+                     :permission-approvals approvals)))
+    (should (equal (list :permission-approvals approvals)
+                   (mevedel-ptc-driver--child-render-data data)))
+    (should-not
+     (mevedel-ptc-driver--child-render-data
+      (list :permission-approvals (make-string 5000 ?x))))))
 
 
 

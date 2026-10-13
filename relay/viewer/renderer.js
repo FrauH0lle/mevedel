@@ -513,6 +513,11 @@
     const target = header.startsWith(`${name}: `) ? header.slice(name.length + 2)
       : presentation.detail || (header !== name ? header : '');
     summary.append(el('span', 'targ', target));
+    if (typeof presentation.approval === 'string') {
+      const approval = el('span', 'tool-approval', 'Auto-approved · once');
+      approval.setAttribute('title', presentation.approval);
+      summary.append(approval);
+    }
     details.append(summary);
     if (presentation.diff) {
       const diff = renderDiff(presentation.diff);

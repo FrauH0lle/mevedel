@@ -40,12 +40,14 @@
                         (load ,(concat source "c") nil t)
                         (require 'gptel-openai)
                         (load ,(file-name-concat root "test/test-mevedel-view-agent.el") nil t)
-                        (let ((result
-                               (ert-run-test
-                                (ert-get-test 'mevedel-view--agent-live-transcript-dispatch/test))))
-                          (unless (ert-test-passed-p result)
-                            (signal (car (ert-test-result-with-condition-condition result))
-                                    (cdr (ert-test-result-with-condition-condition result))))))))))
+                        (let ((tests (ert-select-tests
+                                      "^mevedel-view--agent-live-transcript-dispatch/test" t)))
+                          (unless tests (error "No agent callback routing tests"))
+                          (dolist (test tests)
+                            (let ((result (ert-run-test test)))
+                              (unless (ert-test-passed-p result)
+                                (signal (car (ert-test-result-with-condition-condition result))
+                                        (cdr (ert-test-result-with-condition-condition result))))))))))))
               (ert-info ((buffer-string))
                 (should (equal 0 status))
                 (should (equal "" (buffer-string)))))))

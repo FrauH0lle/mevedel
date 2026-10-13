@@ -936,6 +936,14 @@ approval. Human queues also recheck policy on mode changes. Already-running
 processes retain their admitted authority; queued children refuse launch if
 the captured permission mode has changed.
 
+Accepted automatic `allow-once` decisions retain display-only reviewer provenance
+after final policy, ownership, evidence and cancellation checks. The affected
+tool row can show **Auto-approved · once**, with the bounded reason available
+to its presentation. This records the approval, not successful execution: a later
+failure retains it. Human approvals and human fallback, saved rules, hook allows,
+ordinary mode policy and Full Access do not manufacture reviewer provenance.
+The record grants no authority and does not affect future calls or polling.
+
 [Approval reviewer](guardian-prompts.md) owns the trusted prompt, bounded evidence
 and JSON response contract. Historical approval counts do not measure the new
 reviewer's safety or achieved reduction in prompts.

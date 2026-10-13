@@ -854,6 +854,51 @@
   (:doc "runs managed commands through confinement and resource capture")
   ,test
   (test)
+  :doc "retains the original approval across yield and independent completion"
+  (let* ((root (make-temp-file "mevedel-managed-approval-" t))
+         (session (test-mevedel-execution--session root))
+         (approvals (list (list :source 'reviewer :outcome 'allow-once
+                               :reason (copy-sequence "Reviewed command"))))
+         observation terminal
+         (mevedel-execution-mailbox-delivery-function
+          (lambda (event _owner)
+            (setq terminal event)
+            t)))
+    (unwind-protect
+        (progn
+          (mevedel-execution-start-bash
+           (lambda (value) (setq observation value))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "while test ! -e release; do sleep 0.02; done; printf done")
+           :tool-use-id "reviewed-command"
+           :permission-approvals approvals
+           :workdir root :writable-roots (list root)
+           :artifact-directory root :yield-time-ms 10)
+          ;; Invocation metadata must be snapshotted, including string leaves.
+          (aset (plist-get (car approvals) :reason) 0 ?X)
+          (test-mevedel-execution--wait (lambda () observation))
+          (should (equal '((:source reviewer :outcome allow-once
+                                   :reason "Reviewed command"))
+                         (plist-get observation :permission-approvals)))
+          (let ((snapshot (car (mevedel-execution-list-user session))))
+            (should (equal '((:source reviewer :outcome allow-once
+                                     :reason "Reviewed command"))
+                           (plist-get snapshot :permission-approvals)))
+            (aset (plist-get (car (plist-get snapshot :permission-approvals)) :reason) 0 ?Y)
+            (should (equal "Reviewed command"
+                           (plist-get
+                            (car (plist-get (car (mevedel-execution-list-user session))
+                                           :permission-approvals)) :reason))))
+          (write-region "release" nil (file-name-concat root "release") nil 'silent)
+          (test-mevedel-execution--wait (lambda () terminal))
+          (should (equal "reviewed-command" (plist-get terminal :tool-use-id)))
+          (should (equal '((:source reviewer :outcome allow-once
+                                   :reason "Reviewed command"))
+                         (plist-get (plist-get terminal :observation)
+                                    :permission-approvals)))
+          (should (equal "done" (plist-get terminal :whole-output))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
   :doc "queued full-access work cannot launch after a restrictive mode change"
   (let* ((root (make-temp-file "mevedel-queued-mode-" t))
          (session (test-mevedel-execution--session root))
