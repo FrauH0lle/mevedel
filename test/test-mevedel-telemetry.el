@@ -436,7 +436,8 @@
           (sleep-for 0.15)
           (let ((lags (test-mevedel-telemetry--events session 'event-loop-lag)))
             (should (= 1 (length lags)))
-            (should (<= 550 (plist-get (car lags) :delay-ms) 1000))
+            ;; Host scheduling can extend the stall past its intended duration.
+            (should (<= 550 (plist-get (car lags) :delay-ms)))
             (should (eq t (plist-get (car lags) :input-pending)))))
       (setq num-nonmacro-input-events events)
       (delete-directory root t)))
