@@ -57,6 +57,7 @@
 ;; `mevedel-view-audit'
 (declare-function mevedel-view-audit-show-result
                   "mevedel-view-audit" (record))
+(autoload 'mevedel-view-audit-show-result "mevedel-view-audit")
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-open-agent-transcript

@@ -48,6 +48,10 @@ Tool display comes from the host's bounded semantic presentation tree and
 selected direct-tool identity. Display metadata is allowlisted rather than
 exposing raw internal render data. Delivered Skill dependencies are historical
 captured bodies, not current file reads. Each browser owns nested disclosures.
+Nested invocation events update host facts immediately but coalesce tree
+construction and publication through the room's existing stream timer. Every
+projection read refreshes dirty pending trees; top-level events publish immediately,
+including settlement. Canonical transcript records replace these transient trees.
 
 Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
@@ -96,6 +100,12 @@ inherit the viewer origin that holds decrypted content and credentials.
 
 ## Decision history
 
+- **Nested event bursts, 2026-10-13:** a 200-child start/approval/settlement
+  burst rebuilt 602 trees and visited 100,902 tree nodes. Reusing the existing
+  publication timer avoids repeating whole-tree projection per child event,
+  without a second cache index or timer. Invocation facts remain synchronous,
+  direct projection reads are fresh, and root settlement publishes final facts
+  immediately.
 - **Browser continuity, 2026-09-24:** compaction removed two still-existing HTML
   artifacts from a live room because the sidebar used only current-segment
   records. Archived publication records now contribute to its artifact catalog,

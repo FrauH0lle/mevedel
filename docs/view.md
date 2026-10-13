@@ -732,8 +732,11 @@ only by the live render: a gptel batch runs every pre-tool hook and later
 every post-tool hook at once, and each batch shares one boundary render. A
 full projection draws settled history and leaves running calls to the live
 turn's next boundary render. Stopping a turn without settling it removes
-running rows and an interim heading, and returns a running group's settled
-marker in place.
+running rows and an interim heading. An abort renders nothing afterwards, so
+the stop redraws the live turn once from the transcript: a group counts only
+calls that reached it, and one formed only by running calls returns to plain
+rows. If that redraw fails, the running decorations are still removed and a
+running group's settled marker is restored in place.
 
 Failed calls split that run around their standalone rows and use
 a red `×` in the `error` face. Warning rows stay groupable; a group containing
@@ -863,7 +866,9 @@ Terminology:
   four after a directive's `◆ > `), so the draft forms one aligned column.
   The indent is a display-only `line-prefix`/`wrap-prefix` on the composer
   overlay, recomputed whenever the prompt is rebuilt; the draft text,
-  submissions, and kills never contain it.
+  submissions, and kills never contain it. An empty final line uses the same
+  overlay's display-only suffix to align its cursor: Emacs does not apply
+  `line-prefix` at end of buffer. Typing there removes that suffix.
 
 Only composer edits are undoable. Renders above the composer record their
 own undo entries, which Emacs never trims between commands: a busy view once
@@ -1524,7 +1529,12 @@ retained as a settled unit, preserved as transcript text, or matched by
 heuristic line text. There is one entry per call, not per distinct tool:
 gptel's tool-call hooks carry no call id, so identical parallel calls are told
 apart by a serial paired with their name/argument fingerprint, which also
-keys each row's animation phase across redraws.
+keys each row's animation phase across redraws. The fingerprint is the tool
+name with the non-nil arguments as key-ordered pairs, compared structurally:
+gptel's hooks see the model's argument plist while pipeline events carry
+every specified argument in spec order, and both must identify one call.
+It shares the argument values, so a large argument is neither copied nor
+truncated into a false match.
 
 When an owning tool or agent turn used materially non-default child access,
 its source-backed row includes a durable `Sandbox:` line directly below the

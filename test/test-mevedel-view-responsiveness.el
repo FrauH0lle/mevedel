@@ -199,7 +199,15 @@
     (should-not (mevedel-view--recover-in-flight-turn-start
                  40 (point-min) (point-max)))
     (should-not (mevedel-view--recover-in-flight-turn-start
-                 10 (point-min) (point-min)))))
+                 10 (point-min) (point-min)))
+    ;; A source whose marker was detached, as when its archive buffer was
+    ;; killed, is skipped instead of signalling.
+    (erase-buffer)
+    (let ((dead (make-marker)))
+      (insert (propertize "dead" 'mevedel-view-source (cons dead dead))
+              (propertize "new" 'mevedel-view-source (cons 10 20)))
+      (should (= 5 (mevedel-view--recover-in-flight-turn-start
+                    10 (point-min) (point-max)))))))
 
 (mevedel-deftest mevedel-view--retain-last-live-render-unit
   (:doc "Only the final unit, across its property runs, is retained.")

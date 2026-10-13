@@ -218,9 +218,17 @@ for name in objects refs packed-refs reftable shallow logs info; do
   fi
 done
 cp -L -- \"$gitdir/HEAD\" \"$shadow/HEAD\" || exit $?
-if [ -f \"$gitdir/index\" ]; then cp -L -- \"$gitdir/index\" \"$shadow/index\" || exit $?; fi
+# Git uses the index mtime to recheck racily clean entries.  A newer copy
+# can hide same-tick, same-size worktree edits from status/diff.
+if [ -f \"$gitdir/index\" ]; then
+  cp -pL -- \"$gitdir/index\" \"$shadow/index\" || exit $?
+fi
 for shared in \"$gitdir\"/sharedindex.* \"$common\"/sharedindex.*; do
-  if [ -f \"$shared\" ]; then cp -L -- \"$shared\" \"$shadow/\" || exit $?; fi
+  # The directories coincide in ordinary worktrees.  Keep the first frozen
+  # copy rather than overwrite it, especially when its mode is read-only.
+  if [ -f \"$shared\" ] && [ ! -e \"$shadow/${shared##*/}\" ]; then
+    cp -pL -- \"$shared\" \"$shadow/\" || exit $?
+  fi
 done
 export GIT_DIR=\"$shadow\" GIT_COMMON_DIR=\"$shadow\" GIT_WORK_TREE=\"$worktree\"
 export GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1

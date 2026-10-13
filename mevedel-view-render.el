@@ -3949,11 +3949,11 @@ DATA-FROM is the first data-buffer position for the in-flight turn."
     (let ((pos history-start)
           first-source)
       (while (and (< pos history-end) (not first-source))
-        (let ((source (get-text-property pos 'mevedel-view-source)))
-          (if (and (consp source)
-                   (integer-or-marker-p (car source))
-                   (>= (mevedel-view-disclosure-source-start source)
-                       data-from))
+        ;; A source whose marker no longer points anywhere, such as one into
+        ;; a killed archive, cannot start the in-flight turn.
+        (let ((start (mevedel-view-disclosure-source-start
+                      (get-text-property pos 'mevedel-view-source))))
+          (if (and start (>= start data-from))
               (setq first-source pos)
             (setq pos (next-single-property-change
                        pos 'mevedel-view-source nil history-end)))))

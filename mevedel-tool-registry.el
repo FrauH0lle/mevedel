@@ -426,6 +426,25 @@ Returns a plist like (:name1 val1 :name2 val2 ...)."
              (push val plist))
     (nreverse plist)))
 
+(defun mevedel-tool-args-key (args)
+  "Return tool-call ARGS as a key that identifies the call under `equal'.
+gptel's tool hooks see the model's argument plist, while the pipeline
+receives `mevedel-tool--positional-to-plist' output: every specified
+argument in spec order, omitted ones as nil.  The key lists ARGS' non-nil
+top-level arguments as (KEY . VALUE) pairs ordered by key, so both forms
+of one call agree.  The pairs are fresh and share ARGS' values: ARGS is
+not modified and large values are neither copied nor truncated.  Nested
+values compare structurally under `equal'.  ARGS that is not a plist is
+returned unchanged."
+  (if (and (consp args) (plistp args))
+      (let (pairs)
+        (while args
+          (when (cadr args)
+            (push (cons (car args) (cadr args)) pairs))
+          (setq args (cddr args)))
+        (sort pairs :key #'car :in-place t))
+    args))
+
 (defconst mevedel-tool--path-description-suffix
   "Pass a raw filesystem path, not Markdown or a web URL."
   "Provider-facing guidance appended to filesystem-only path arguments.")

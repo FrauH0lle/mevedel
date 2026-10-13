@@ -98,6 +98,7 @@
 
 (require 'mevedel-collaboration-artifact-projection)
 (require 'mevedel-shared-conversation)
+(require 'mevedel-tool-registry)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-utilities)
@@ -188,18 +189,29 @@ response.  Matching the ordered role streams lets a replacement retain its
 room-local ID without using a numeric buffer position or a guessed tool-call
 key."
   (let ((by-kind (make-hash-table :test #'equal))
-        (fixed (make-hash-table :test #'equal)))
+        (fixed (make-hash-table :test #'equal))
+        (canonical-ids (make-hash-table :test #'equal)))
+    (dolist (record old)
+      ;; Pending-to-canonical identity transfers must survive later publishes.
+      ;; Derive aliases from the previous snapshot instead of retaining a registry.
+      (when-let* ((canonical-id (plist-get record :canonical-id)))
+        (puthash canonical-id (plist-get record :id) canonical-ids)))
     (dolist (record new)
       (when (plist-get record :identity-fixed)
         (puthash (plist-get record :id) t fixed)))
     (dolist (record (reverse old))
       (unless (or (plist-get record :pending)
-                  (gethash (plist-get record :id) fixed))
+                  (gethash (plist-get record :id) fixed)
+                  (gethash (plist-get record :canonical-id) fixed))
         (push record (gethash (plist-get record :kind) by-kind))))
     (mapcar
      (lambda (record)
        (if (plist-get record :identity-fixed)
-           record
+           (if-let* ((id (gethash (plist-get record :id) canonical-ids)))
+               (plist-put (plist-put (copy-sequence record)
+                                     :canonical-id (plist-get record :id))
+                          :id id)
+             record)
          (let* ((kind (plist-get record :kind))
                 (candidates (gethash kind by-kind))
                 (previous (car candidates)))
@@ -524,6 +536,10 @@ are exported, with one shared text/structure budget across the entire tree."
                     (rendering
                      (or (and tool (mevedel-view--invoke-renderer tool data args result))
                          (mevedel-view--generic-tool-rendering name args result nil data)))
+                    (child-calls (if (and (eq (plist-get data :kind) 'ptc)
+                                          (plist-get data :live-p))
+                                     (plist-get data :calls)
+                                   (plist-get rendering :child-calls)))
                     (sandbox-line
                      (when-let* ((summary (or (plist-get rendering :sandbox-summary)
                                               (plist-get data :sandbox-summary)))
@@ -568,10 +584,7 @@ are exported, with one shared text/structure budget across the entire tree."
                                 attachments)
                           (when (car attachments)
                             (setf (plist-get (car attachments) :format) "markdown"))))
-               (cl-loop for child in (if (and (eq (plist-get data :kind) 'ptc)
-                                               (plist-get data :live-p))
-                                          (plist-get data :calls)
-                                        (plist-get rendering :child-calls))
+               (cl-loop for child in child-calls
                         while (>= remaining 512) do
                         (push (node (plist-get child :tool) (plist-get child :args)
                                     (plist-get child :result)
@@ -587,7 +600,7 @@ are exported, with one shared text/structure budget across the entire tree."
                                     (plist-get child :batch) (plist-get child :status))
                               children))
                (when (or (< (length attachments) (length (plist-get data :attachments)))
-                         (< (length children) (length (plist-get rendering :child-calls))))
+                         (< (length children) (length child-calls)))
                  (setq truncated t))
                (when attachments (setq row (plist-put row :attachments (vconcat (delq nil (nreverse attachments))))))
                (when children (setq row (plist-put row :children (vconcat (delq nil (nreverse children))))))
@@ -1226,15 +1239,10 @@ are fresh copies the caller may modify."
         (push record tools)))
     (nreverse tools)))
 
-(defun mevedel-collaboration--tool-call-fingerprint (info)
-  "Return a bounded stable fingerprint for tool-call INFO."
-  (let ((print-level 4)
-        (print-length 32)
-        (print-circle t))
-    (prin1-to-string (plist-get info :args))))
-
 (defun mevedel-collaboration--tool-call-key (info)
-  "Return the matching key for a gptel tool-call INFO plist."
+  "Return the structural matching key for a gptel tool-call INFO plist.
+Without an explicit ID, compare normalized args with `equal'; gptel hook
+plists omit optional nils that pipeline positional conversion inserts."
   (or (and (plist-get info :id)
            (format "id:%s" (plist-get info :id)))
       (and (plist-get info :call-id)
@@ -1243,9 +1251,8 @@ are fresh copies the caller may modify."
            (format "id:%s" (plist-get info :tool-call-id)))
       (and (plist-get info :tool_call_id)
            (format "id:%s" (plist-get info :tool_call_id)))
-      (format "call:%s\0%s"
-              (plist-get info :name)
-              (mevedel-collaboration--tool-call-fingerprint info))))
+      (list 'call (plist-get info :name)
+            (mevedel-tool-args-key (plist-get info :args)))))
 
 (defun mevedel-collaboration--tool-result-fields (result)
   "Return status, bounded RESULT, and truncation for tool RESULT."
@@ -1304,6 +1311,49 @@ reply streams reprojects only the segments that changed."
          (plist-put room :projection-cache cache)
          cache))))
 
+(defun mevedel-collaboration--refresh-pipeline-presentation (entry)
+  "Refresh ENTRY's dirty invocation tree at a projection boundary."
+  (when (plist-get entry :pipeline-dirty)
+    (let ((calls (plist-get entry :pipeline-calls))
+          (children-by-parent (make-hash-table :test #'equal)))
+      (dolist (node calls)
+        (push node (gethash (plist-get node :parent-tool-use-id) children-by-parent)))
+      (cl-labels
+          ((tree (node depth)
+             (when (< depth 16)
+               (let* ((children
+                       (delq nil (mapcar
+                                  (lambda (child) (tree child (1+ depth)))
+                                  (reverse (gethash (plist-get node :tool-use-id)
+                                                    children-by-parent)))))
+                      (facts (list :status (plist-get node :status)
+                                   :permission-approvals (plist-get node :permission-approvals))))
+                 (when children
+                   (setq facts
+                         (append facts
+                                 (list :kind 'ptc :calls children
+                                       :live-p (eq (plist-get node :status) 'running)
+                                       :outcome (pcase (plist-get node :status)
+                                                  ('success 'completed)
+                                                  ('cancelled 'interrupted)
+                                                  (_ 'tool-error))
+                                       :completed-count
+                                       (cl-count-if
+                                        (lambda (child)
+                                          (not (eq (plist-get child :status) 'running)))
+                                        children)))))
+                 (list :id (plist-get node :tool-use-id) :tool (plist-get node :name)
+                       :args (plist-get node :args) :result ""
+                       :status (plist-get node :status) :render-data facts)))))
+        (let* ((root (tree (car calls) 0))
+               (presentation
+                (mevedel-collaboration-tool-presentation
+                 (list :name (plist-get root :tool) :args (plist-get root :args)
+                       :result "" :render-data (plist-get root :render-data)))))
+          (setf (plist-get entry :presentation) presentation
+                (plist-get entry :status) (plist-get presentation :status)
+                (plist-get entry :pipeline-dirty) nil))))))
+
 (defun mevedel-collaboration--project-records (room)
   "Return the current semantic projection for ROOM.
 
@@ -1317,6 +1367,9 @@ completion instead of seeing a duplicate tool card."
          (claimed nil)
          (remaining nil))
     (dolist (entry pending)
+      (when (plist-get entry :pipeline-dirty)
+        (with-current-buffer (plist-get room :data-buffer)
+          (mevedel-collaboration--refresh-pipeline-presentation entry)))
       (let* ((status (plist-get entry :status))
              (baseline (min (length canonical-tools)
                             (max 0 (or (plist-get entry :baseline-tool-count)
@@ -1347,9 +1400,11 @@ completion instead of seeing a duplicate tool card."
             (let ((index (cl-position candidate canonical :test #'eq)))
               (push candidate claimed)
               (setf (nth index canonical)
-                    (plist-put (plist-put candidate :id
-                                          (plist-get entry :id))
-                               :identity-fixed t)))
+                    (plist-put
+                     (plist-put (plist-put candidate :canonical-id
+                                           (plist-get candidate :id))
+                                :id (plist-get entry :id))
+                     :identity-fixed t)))
           (unless (and (not (equal status "running"))
                        (mevedel-collaboration--suppressed-tool-landed-p
                         (plist-get room :data-buffer) entry))

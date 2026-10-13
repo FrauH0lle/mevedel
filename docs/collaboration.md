@@ -669,6 +669,14 @@ grows with transcript length. Streamed updates therefore coalesce for at least
 0.1 s and four times the previous publish's cost, up to one second, keeping a
 streaming room to about a fifth of the Emacs thread that every room shares
 without letting one slow publish stall the stream.
+Nested tool events update invocation facts synchronously and share that same
+publication timer, rather than rebuilding the entire pending tree for each
+child event. Projection refreshes dirty trees before returning records, including
+direct projection reads before the timer fires. Nested approvals reach guests at
+the coalesced boundary. Top-level tool starts, approvals, and settlement still
+publish immediately; root settlement flushes final status and child-scoped approval
+facts without waiting for the next stream tick. Canonical result insertion replaces
+the transient tree.
 A tool record keeps
 one stable identity from running through its settled canonical result. A
 guest prompt enters the ordinary pending-input queue as a queued follow-up;

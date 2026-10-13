@@ -685,7 +685,10 @@ fixed inspection controls; environment enumeration failure refuses launch.
 This relies on trusted Git/env executables, PATH and dynamic loader, not on the
 classifier replacing ordinary child confinement. Worktree
 `status`/`diff` use a private temporary metadata view with copied HEAD/index
-and flattened effective repository/user/system config. Includes and filter
+and flattened effective repository/user/system config. Main and shared index
+copies retain their original timestamps so Git still detects same-size edits
+whose timestamps match cached file metadata ("racily clean" entries), without
+writing source indexes. Includes and filter
 commands are removed from the launch config; active configured clean/process
 filters and gitlinks cause explicit refusal. Final submodule traversal is
 disabled, so concurrent source config, attributes or index edits cannot enable

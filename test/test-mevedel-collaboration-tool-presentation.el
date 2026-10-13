@@ -102,6 +102,23 @@
                    '(:name "Skill" :result "Visible fallback"
                      :render-data (:attachments malformed))))))
 
+  :doc "structural budget marks omitted live children as truncated"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+        (mevedel-collaboration--max-tool-result-bytes 1400))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                          :renderer #'mevedel-tool-ptc--render))
+    (let* ((calls (cl-loop for index below 10 collect
+                          (list :id (format "env/%d" index) :tool "Probe"
+                                :status 'running :result "")))
+           (display (mevedel-collaboration-tool-presentation
+                     (list :name "ToolCall" :result "" :render-data
+                           (list :kind 'ptc :live-p t :status 'running
+                                 :completed-count 0 :calls calls)))))
+      (should (> (length (plist-get display :children)) 0))
+      (should (< (length (plist-get display :children)) (length calls)))
+      (should (plist-get display :truncated))))
+
   :doc "envelope failure remains ToolCall and child denial is truthful"
   (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
     (mevedel-tool-register

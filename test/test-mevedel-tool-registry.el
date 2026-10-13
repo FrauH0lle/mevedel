@@ -429,6 +429,39 @@
     (should (equal (mevedel-tool--positional-to-plist values specs)
                    '(:a "only-one")))))
 
+(mevedel-deftest mevedel-tool-args-key ()
+  ,test
+  (test)
+  :doc "the model's plist and the pipeline's spec-order plist share a key"
+  (let ((specs '((file_path string) (offset integer) (limit integer))))
+    (should (equal (mevedel-tool-args-key '(:limit 5 :file_path "a"))
+                   (mevedel-tool-args-key
+                    (mevedel-tool--positional-to-plist '("a" nil 5) specs))))
+    (should (equal '((:file_path . "a") (:limit . 5))
+                   (mevedel-tool-args-key '(:limit 5 :file_path "a")))))
+  :doc "different and non-nil false values distinguish calls"
+  (should-not (equal (mevedel-tool-args-key '(:file_path "a"))
+                     (mevedel-tool-args-key '(:file_path "b"))))
+  (should-not (equal (mevedel-tool-args-key '(:pattern "x" :multiline :json-false))
+                     (mevedel-tool-args-key '(:pattern "x"))))
+  :doc "nested values compare structurally, beyond any printer limit"
+  (should (equal (mevedel-tool-args-key `(:edits [(:old "a" :new "b")]))
+                 (mevedel-tool-args-key `(:edits [(:old "a" :new "b")]))))
+  (should-not (equal (mevedel-tool-args-key `(:edits ,(append (make-list 40 1) '(a))))
+                     (mevedel-tool-args-key `(:edits ,(append (make-list 40 1) '(b))))))
+  :doc "shares values without copying and leaves ARGS unchanged"
+  (let* ((body (make-string 100000 ?x))
+         (args (list :content body :file_path "a.el"))
+         (before (copy-tree args))
+         (key (mevedel-tool-args-key args)))
+    (should (eq body (cdr (assq :content key))))
+    (should (equal before args))
+    (should (eq body (plist-get args :content))))
+  :doc "non-plist arguments are returned unchanged"
+  (should (null (mevedel-tool-args-key nil)))
+  (should (equal "raw" (mevedel-tool-args-key "raw")))
+  (should (equal '(:odd) (mevedel-tool-args-key '(:odd)))))
+
 
 ;;
 ;;; JSON boolean truthiness

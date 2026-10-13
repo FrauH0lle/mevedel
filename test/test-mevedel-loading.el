@@ -61,7 +61,7 @@ A child that outlives two minutes is killed and fails the test."
                 (should (equal "" output))))
             (dolist (entry (list root compiled))
               (dolist (scenario '(commands installation artifacts gptel chat chat-in-directory
-                                  tools renderers claude lobby room discuss implement
+                                  tools renderers live-execution claude lobby room discuss implement
                                   directive-preview-implement directive-preview-discuss
                                   directive-answer))
                 (run entry scenario))

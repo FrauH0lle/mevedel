@@ -1227,7 +1227,12 @@ Runs from a buffer-local hook, so the current buffer names the room."
                  (id (if explicit-id
                          (format "tool-%s" explicit-id)
                        (mevedel-collaboration--stable-record-id
-                        "tool" call-key occurrence)))
+                        "tool"
+                        (let ((print-length nil)
+                              (print-level nil)
+                              (print-circle t))
+                          (prin1-to-string call-key))
+                        occurrence)))
                  (entry (apply
                          #'mevedel-collaboration--record
                          id "tool"
@@ -1262,8 +1267,9 @@ Runs from a buffer-local hook, so the current buffer names the room."
 
 (defun mevedel-collaboration--pipeline-tool-event (event)
   "Project invocation-scoped approval EVENT onto its existing browser row.
-Nested invocations update only their child presentation.  The transient tree
-is replaced by canonical transcript metadata when the result is inserted."
+Nested invocations update their facts immediately and coalesce presentation
+with stream publication.  Root events publish immediately.  The transient
+tree is replaced by canonical transcript metadata when the result is inserted."
   (when-let* ((data (plist-get event :data-buffer))
               ((buffer-live-p data))
               (room (mevedel-collaboration--room-for-buffer data))
@@ -1296,7 +1302,6 @@ is replaced by canonical transcript metadata when the result is inserted."
           (let* ((calls (plist-get entry :pipeline-calls))
                  (call (cl-find id calls :key (lambda (node) (plist-get node :tool-use-id))
                                 :test #'equal))
-                 (children-by-parent (make-hash-table :test #'equal))
                  changed)
             (pcase type
               ('started
@@ -1316,44 +1321,10 @@ is replaced by canonical transcript metadata when the result is inserted."
                  (setf (plist-get call :status) (plist-get event :status))
                  (setq changed t))))
             (when changed
-              (dolist (node calls)
-                (push node (gethash (plist-get node :parent-tool-use-id)
-                                    children-by-parent)))
-              (cl-labels
-                  ((tree (node depth)
-                     (when (< depth 16)
-                       (let* ((children
-                               (delq nil (mapcar
-                                (lambda (child) (tree child (1+ depth)))
-                                (reverse (gethash (plist-get node :tool-use-id)
-                                                  children-by-parent)))))
-                              (facts (list :status (plist-get node :status)
-                                           :permission-approvals (plist-get node :permission-approvals))))
-                         (when children
-                           (setq facts
-                                 (append facts
-                                         (list :kind 'ptc :calls children
-                                               :live-p (eq (plist-get node :status) 'running)
-                                               :outcome (pcase (plist-get node :status)
-                                                          ('success 'completed)
-                                                          ('cancelled 'interrupted)
-                                                          (_ 'tool-error))
-                                               :completed-count
-                                               (cl-count-if
-                                                (lambda (child)
-                                                  (not (eq (plist-get child :status) 'running)))
-                                                children)))))
-                         (list :id (plist-get node :tool-use-id) :tool (plist-get node :name)
-                               :args (plist-get node :args) :result ""
-                               :status (plist-get node :status) :render-data facts)))))
-                (let* ((root (tree (car calls) 0))
-                       (presentation
-                        (mevedel-collaboration-tool-presentation
-                         (list :name (plist-get root :tool) :args (plist-get root :args)
-                               :result "" :render-data (plist-get root :render-data)))))
-                  (setf (plist-get entry :presentation) presentation
-                        (plist-get entry :status) (plist-get presentation :status))))
-              (mevedel-collaboration--publish room)))))))
+              (plist-put entry :pipeline-dirty t)
+              (if parent
+                  (mevedel-collaboration--schedule-publish room)
+                (mevedel-collaboration--publish room))))))))
   nil)
 
 (add-hook 'mevedel-pipeline-tool-event-hook #'mevedel-collaboration--pipeline-tool-event)

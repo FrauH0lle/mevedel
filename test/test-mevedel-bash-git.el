@@ -594,7 +594,65 @@
                                   (mevedel-bash-git-prepare
                                    '("git" "rev-parse" "--absolute-git-dir")))))
             (should (equal before (mevedel-bash-git-test--snapshot root)))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+  :doc "copied indexes retain Git's racy-clean checks for same-size worktree edits"
+  (dolist (split '(linked t nil))
+    (let* ((root (progn
+                   (skip-unless (and (executable-find "git") (executable-find "env")
+                                     (executable-find "bash")))
+                   (file-name-as-directory (make-temp-file "mevedel-git-racy-" t))))
+           (default-directory root)
+           (file (file-name-concat root "sample.dat"))
+           (stamp (encode-time 0 0 0 1 1 2000 t)))
+      (unwind-protect
+          (progn
+            (mevedel-bash-git-test--run '("git" "init" "-q" "-b" "main" "."))
+            (mevedel-bash-git-test--run '("git" "config" "user.name" "Test"))
+            (mevedel-bash-git-test--run '("git" "config" "user.email" "test@example.test"))
+            ;; Ignore ctime/subsecond differences to reproduce a same-tick
+            ;; rewrite without relying on the filesystem's clock resolution.
+            (mevedel-bash-git-test--run '("git" "config" "core.trustctime" "false"))
+            (mevedel-bash-git-test--run '("git" "config" "core.checkStat" "minimal"))
+            (with-temp-file file (insert "one\n"))
+            (set-file-times file stamp)
+            (mevedel-bash-git-test--run '("git" "add" "."))
+            (mevedel-bash-git-test--run '("git" "commit" "-q" "-m" "base"))
+            (when split (mevedel-bash-git-test--run '("git" "update-index" "--split-index")))
+            (when (eq split 'linked)
+              (let ((linked (file-name-concat root "linked worktree")))
+                (mevedel-bash-git-test--run (list "git" "worktree" "add" "-q" "-b" "inspect" linked))
+                (setq default-directory (file-name-as-directory linked)
+                      file (file-name-concat linked "sample.dat"))
+                (with-temp-file file (insert "one\n"))
+                (set-file-times file stamp)
+                (mevedel-bash-git-test--run '("git" "add" "sample.dat"))
+                (mevedel-bash-git-test--run '("git" "update-index" "--split-index"))))
+            (with-temp-file file (insert "two\n"))
+            (set-file-times file stamp)
+            ;; Git must hash when worktree and index mtimes coincide.  A copy
+            ;; with a newer mtime must not turn that racy entry into clean data.
+            (dolist (index (directory-files (string-trim
+                                            (mevedel-bash-git-test--run
+                                             '("git" "rev-parse" "--absolute-git-dir"))) t
+                                           "\\`\\(?:index\\|sharedindex\\..*\\)\\'"))
+              (set-file-times index stamp)
+              ;; Preserving metadata must also work for readable, non-writable
+              ;; source indexes; inspection may not require a source chmod.
+              (set-file-modes index #o444))
+            (dolist (args '(("diff" "--stat") ("status" "--short")))
+              (ert-info ((format "index=%S args=%S" split args))
+                (should (string-match-p
+                         "sample.dat"
+                         (mevedel-bash-git-test--run (append '("git" "--no-optional-locks") args))))
+                ;; Native Git may freshen shared-index timestamps even with
+                ;; optional locks off.  Snapshot only our hardened inspection.
+                (let ((before (mevedel-bash-git-test--snapshot root)))
+                  (should (string-match-p
+                           "sample.dat"
+                           (mevedel-bash-git-test--run
+                            (mevedel-bash-git-prepare (cons "git" args)))))
+                  (should (equal before (mevedel-bash-git-test--snapshot root)))))))
+        (delete-directory root t)))))
 
 (provide 'test-mevedel-bash-git)
 ;;; test-mevedel-bash-git.el ends here

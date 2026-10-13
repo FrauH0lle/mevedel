@@ -135,6 +135,8 @@
           (when (= terminal 2)
             (event 'settled "outer" nil "ToolCall" :status 'success)
             (event 'started "outer" nil "ToolCall"))
+          ;; Nested events share the room's coalesced publication boundary.
+          (mevedel-collaboration--publish room)
           (let* ((presentation (plist-get (car (plist-get room :records)) :presentation))
                  (child (aref (plist-get presentation :children) 0)))
             (should-not (plist-get presentation :approval))
@@ -142,7 +144,160 @@
             (should (equal (if (= terminal 2) "warning" "running")
                            (plist-get presentation :status)))
             (should (equal (if (> terminal 0) "failed" "running")
-                           (plist-get child :status)))))))))
+                           (plist-get child :status)))))
+        (when (timerp (plist-get room :publish-timer))
+          (cancel-timer (plist-get room :publish-timer))))))
+  :doc "nested bursts project once per publication and root settlement remains immediate"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (mevedel-tool-register
+     (mevedel-tool--create :name "ToolCall" :category "mevedel"
+                          :renderer #'mevedel-tool-ptc--render))
+    (let* ((data (current-buffer))
+           (room (list :data-buffer data :guests (make-hash-table :test #'eql)
+                       :tool-call-occurrences (make-hash-table :test #'equal)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (render (symbol-function 'mevedel-collaboration-tool-presentation))
+           (renders 0))
+      (cl-labels ((event (type id &rest facts)
+                    (mevedel-collaboration--pipeline-tool-event
+                     (append (list :type type :data-buffer data :tool-use-id id
+                                   :parent-tool-use-id (unless (equal id "outer") "outer")
+                                   :name (if (equal id "outer") "ToolCall" "Probe")) facts))))
+        (unwind-protect
+            (cl-letf (((symbol-function 'mevedel-collaboration-tool-presentation)
+                       (lambda (parsed) (cl-incf renders) (funcall render parsed))))
+              (event 'started "outer")
+              (dotimes (index 32)
+                (event 'started (format "outer/%d" index))
+                (event 'permission-approved (format "outer/%d" index)
+                       :permission-approvals
+                       '((:source reviewer :outcome allow-once :reason "Child only"))))
+              ;; Direct consumers see the latest facts even before the timer.
+              (let* ((display (plist-get (car (mevedel-collaboration--project-records room)) :presentation))
+                     (children (plist-get display :children)))
+                (should-not (plist-get display :approval))
+                (should (= 32 (length children)))
+                (cl-loop for child across children for index from 0 do
+                         (should (equal (plist-get child :id) (format "outer/%d" index)))
+                         (should (equal (plist-get child :approval) "Child only"))
+                         (should (equal (plist-get child :status) "running"))))
+              (should (timerp (plist-get room :publish-timer)))
+              (cancel-timer (plist-get room :publish-timer))
+              (mevedel-collaboration--publish-timer data)
+              (should-not (plist-get room :publish-timer))
+              (dotimes (index 32)
+                (event 'settled (format "outer/%d" index) :status 'error))
+              (event 'settled "outer" :status 'success)
+              (let ((display (plist-get (car (plist-get room :records)) :presentation)))
+                (should (equal (plist-get display :status) "warning"))
+                (cl-loop for child across (plist-get display :children) do
+                         (should (equal (plist-get child :status) "failed"))))
+              (should (<= renders 3)))
+          (when (timerp (plist-get room :publish-timer))
+            (cancel-timer (plist-get room :publish-timer))))))))
+
+(mevedel-deftest mevedel-collaboration--refresh-pipeline-presentation
+  (:doc "only dirty trees are rendered, preserving clean presentation identity")
+  (let* ((entry (list :pipeline-dirty t :status "running" :presentation nil
+                      :pipeline-calls '((:tool-use-id "read" :name "Read" :status success))))
+         (calls 0))
+    (cl-letf (((symbol-function 'mevedel-collaboration-tool-presentation)
+               (lambda (_parsed) (cl-incf calls) (list :status "completed"))))
+      (mevedel-collaboration--refresh-pipeline-presentation entry)
+      (let ((display (plist-get entry :presentation)))
+        (should (equal (plist-get entry :status) "completed"))
+        (should-not (plist-get entry :pipeline-dirty))
+        (mevedel-collaboration--refresh-pipeline-presentation entry)
+        (should (eq display (plist-get entry :presentation)))
+        (should (= calls 1))))))
+
+(mevedel-deftest mevedel-collaboration--pipeline-tool-event/read-producer
+  (:doc "real Read hook/pipeline args bind identical siblings and settle out of order")
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (let* ((data (current-buffer))
+           (room (list :data-buffer data :guests (make-hash-table :test #'eql)
+                       :tool-call-occurrences (make-hash-table :test #'equal)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (tool (mevedel-tool-ensure "Read"))
+           (hook '(:name "Read" :args (:limit 5 :file_path "a.el")))
+           (args (mevedel-tool--positional-to-plist
+                  (gptel--map-tool-args (mevedel-tool-gptel-tool tool) (plist-get hook :args))
+                  (mevedel-tool-args tool))))
+      (should-not (equal args (plist-get hook :args)))
+      (cl-labels ((event (type id &rest facts)
+                    (mevedel-collaboration--pipeline-tool-event
+                     (append (list :type type :data-buffer data :tool-use-id id
+                                   :name "Read" :args args) facts)))
+                  (land (id status result)
+                    (insert "#+begin_tool\n"
+                            (propertize
+                             (concat (prin1-to-string hook) "\n" result "\n"
+                                     (mevedel-tool-render-data-format (list :status status) id))
+                             'gptel (cons 'tool id))
+                            "#+end_tool\n")
+                    (mevedel-collaboration--publish room)))
+        (mevedel-collaboration--pre-tool hook)
+        (let ((first-id (plist-get (car (plist-get room :records)) :id)))
+          (event 'started "first")
+          (should (= 1 (length (plist-get room :pending-tools))))
+          (should (equal first-id (plist-get (car (plist-get room :records)) :id)))
+          (mevedel-collaboration--pre-tool hook)
+          (event 'started "second")
+          (should (= 2 (length (plist-get room :pending-tools))))
+          (should (equal '("first" "second")
+                         (mapcar (lambda (row) (plist-get row :tool-use-id))
+                                 (plist-get room :pending-tools))))
+          (let ((second-id (plist-get (cadr (plist-get room :records)) :id)))
+            (event 'settled "second" :status 'error)
+            ;; The ID-less gptel post-hook must not consume the running twin.
+            (mevedel-collaboration--post-tool (append hook '(:result "Error: failed")))
+            (should (equal '("running" "failed")
+                           (mapcar (lambda (row) (plist-get row :status))
+                                   (plist-get room :records))))
+            (land "second" 'error "Error: failed")
+            (should (= 1 (length (plist-get room :pending-tools))))
+            (should (equal "first" (plist-get (car (plist-get room :pending-tools)) :tool-use-id)))
+            (event 'settled "first" :status 'success)
+            (mevedel-collaboration--post-tool (append hook '(:result "done")))
+            (land "first" 'success "done")
+            (should-not (plist-get room :pending-tools))
+            (should (= 2 (length (plist-get room :records))))
+            (should (equal (list second-id first-id)
+                           (mapcar (lambda (row) (plist-get row :id))
+                                   (plist-get room :records))))))))))
+
+(mevedel-deftest mevedel-collaboration--tool-call-key
+  (:doc "structural call keys ignore omitted nils, not deep or long argument differences")
+  (let ((pairs (list (list nil :json-false)
+                     (list (make-list 40 'a) (append (make-list 39 'a) '(b)))
+                     (list '(:a (:b (:c (:d a)))) '(:a (:b (:c (:d b))))))))
+    (should (equal (mevedel-collaboration--tool-call-key
+                    '(:name "Read" :args (:file_path "a" :limit 5)))
+                   (mevedel-collaboration--tool-call-key
+                    '(:name "Read" :args (:offset nil :limit 5 :file_path "a")))))
+    (dolist (values pairs)
+      (should-not
+       (equal (mevedel-collaboration--tool-call-key (list :name "Probe" :args (list :value (car values))))
+              (mevedel-collaboration--tool-call-key (list :name "Probe" :args (list :value (cadr values)))))))))
+
+(mevedel-deftest mevedel-collaboration--pre-tool/structural-ids
+  (:doc "structurally distinct arguments get distinct browser record identities")
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (let* ((room (list :data-buffer (current-buffer) :guests (make-hash-table :test #'eql)
+                       :tool-call-occurrences (make-hash-table :test #'equal)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room)))
+      (dolist (args '((:file_path "f" :offset 5)
+                      (:file_path "f" :offset "5")
+                      (:pattern "a) (:x . b")
+                      (:pattern "a" :x "b")))
+        (mevedel-collaboration--pre-tool (list :name "Probe" :args args)))
+      (should (= 4 (length (plist-get room :records))))
+      (should (= 4 (length (delete-dups
+                            (mapcar (lambda (record) (plist-get record :id))
+                                    (plist-get room :records)))))))))
 
 (mevedel-deftest mevedel-collaboration--canonical-records/bounded-history
   (:doc "stream updates preserve tool records with linear boundary searches")

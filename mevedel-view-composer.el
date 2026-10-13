@@ -888,7 +888,20 @@ only explicit and soft-wrapped continuation lines receive it."
                       start))
                     ?\s)))
       (overlay-put mevedel-view--composer-keymap-overlay 'line-prefix indent)
-      (overlay-put mevedel-view--composer-keymap-overlay 'wrap-prefix indent))))
+      (overlay-put mevedel-view--composer-keymap-overlay 'wrap-prefix indent)
+      (mevedel-view--update-composer-end))))
+
+(defun mevedel-view--update-composer-end (&rest _)
+  "Align the cursor on an empty final composer line, without changing text.
+Emacs does not apply an overlay's line prefix at end of buffer.  Supply
+that prefix as display text only after a trailing newline; an ordinary
+nonempty final line needs no extra display characters that could wrap."
+  (when (overlayp mevedel-view--composer-keymap-overlay)
+    (overlay-put mevedel-view--composer-keymap-overlay 'after-string
+                 (when (eq (char-before (point-max)) ?\n)
+                   (concat
+                    (overlay-get mevedel-view--composer-keymap-overlay 'line-prefix)
+                    (propertize " " 'cursor t))))))
 
 
 (defvar-local mevedel-view--skill-argument-hint-overlay nil
@@ -1361,6 +1374,7 @@ and other input properties remain untouched."
                  (if mevedel-view--side-conversation-p
                      mevedel-view--side-conversation-keymap
                    mevedel-view--composer-keymap))
+    (add-hook 'after-change-functions #'mevedel-view--update-composer-end nil t)
     (mevedel-view--update-composer-indent)))
 
 ;;
@@ -1670,6 +1684,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
           (delete-region start (point-max))
           (goto-char start)
           (insert text)))
+      (mevedel-view--update-composer-end)
       (mevedel-session--set-dropped-file-grants
        session
        (copy-sequence

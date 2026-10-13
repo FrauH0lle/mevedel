@@ -1491,6 +1491,54 @@
   ,test
   (test)
 
+  :doc "graphical alignment and right-edge EOF transitions use compiled composer code"
+  (let ((process-environment (copy-sequence process-environment))
+        directory)
+    (skip-unless (mevedel-test--wayland-available-p))
+    (setq directory (make-temp-file "mevedel-composer-compiled-" t))
+    (unwind-protect
+        (progn
+          ;; The graphical runner forwards load-path; it does not compile it.
+          ;; Never leave bytecode beside sources used by concurrent tests.
+          (let ((byte-compile-dest-file-function
+                 (lambda (file)
+                   (file-name-concat
+                    directory (concat (file-name-base file) ".elc")))))
+            (dolist (file '("mevedel-view.el" "mevedel-view-composer.el"))
+              (should (byte-compile-file
+                       (file-name-concat mevedel-test--root file)))))
+          (setenv "MEVEDEL_TEST_LOAD_PATH"
+                  (prin1-to-string (cons directory load-path)))
+          (pcase-let ((`(,observed ,status . ,_trace)
+                       (mevedel-test--run-wayland-fixture
+                        "view-composer-wayland.el" 20)))
+            (ert-info ((format "Observed: %S" observed))
+              (should (= status 0))
+              (should (equal '(t t t) (plist-get observed :compiled)))
+              (should (= 5 (length (plist-get observed :alignment))))
+              (dolist (row (plist-get observed :alignment))
+                (let ((x (car (nth 1 row))))
+                  (dolist (position (cl-subseq row 2 5))
+                    (should (= x (car position))))
+                  (should (= x (aref (nth 5 row) 1)))))
+              (should (= 25 (length (plist-get observed :edges))))
+              (dolist (row (plist-get observed :edges))
+                (pcase-let ((`(,mode ,_delta ,reference ,populated ,_always
+                                    ,newline ,typed ,untyped ,restored) row))
+                  (let ((x (car (nth 1 (assq mode (plist-get observed :alignment))))))
+                    (should (equal reference populated))
+                    (should (equal reference restored))
+                    (should (= x (car newline)))
+                    (should (> (cdr newline) (cdr reference)))
+                    (should (= (car typed) (+ x (plist-get observed :character-width))))
+                    (should (= (cdr typed) (cdr newline)))
+                    (should (equal newline untyped)))))
+              ;; Confirm the rejected suffix actually wraps at this edge,
+              ;; rather than merely moving the cursor right on the same row.
+              (should (cl-some (lambda (row) (> (cdr (nth 4 row)) (cdr (nth 2 row))))
+                               (plist-get observed :edges))))))
+      (delete-directory directory t)))
+
   :doc "continuation lines are indented by the prompt width, text untouched"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -1523,7 +1571,81 @@
                              (point))))
           (should (equal (make-string (length (cdr case)) ?\s)
                          (get-char-property second-line 'line-prefix)))
-          (should (equal "draft\nmore" (mevedel-view--input-text))))))))
+          (should (equal "draft\nmore" (mevedel-view--input-text)))))))
+
+  :doc "scope and mode redraws keep indentation, draft, point and selection"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq-local mevedel--session (mevedel-session--create :name "main"))
+      (goto-char (mevedel-view--input-start))
+      (insert "> first\nsecond\n")
+      (goto-char (+ (mevedel-view--input-start) 3))
+      (set-mark (+ (mevedel-view--input-start) 10))
+      (setq mark-active t)
+      (dolist (state '(ask edits full-auto plan editing directive ask))
+        (setq-local mevedel-permission-mode
+                    (if (memq state '(ask edits full-auto)) state 'ask))
+        (setf (mevedel-session-plan-mode mevedel--session) (eq state 'plan))
+        (setq mevedel-view--pending-input-edit
+              (and (eq state 'editing) '(:label "queued input"))
+              mevedel-view--composer-scope
+              (and (eq state 'directive)
+                   (list :directive-id "directive" :action 'retry
+                         :record (mevedel-directive--create :request "Fix it"))))
+        (mevedel-view-refresh-input-prompt)
+        (mevedel-view--render-status)
+        (mevedel-view--interaction-rebuild)
+        (let ((start (mevedel-view--input-start))
+              (indent (if (eq state 'directive) "    " "  ")))
+          (should (equal "> first\nsecond\n"
+                         (buffer-substring-no-properties start (point-max))))
+          (should (= (point) (+ start 3)))
+          (should (= (mark) (+ start 10)))
+          (should mark-active)
+          (should (= (overlay-start mevedel-view--composer-keymap-overlay) start))
+          (should (= (overlay-end mevedel-view--composer-keymap-overlay) (point-max)))
+          (should (equal indent (get-char-property (+ start 8) 'line-prefix)))
+          (should (equal indent (get-char-property (+ start 8) 'wrap-prefix)))
+          (should-not (get-char-property (1- start) 'line-prefix)))))))
+
+(mevedel-deftest mevedel-view--update-composer-end ()
+  ,test
+  (test)
+  :doc "only an empty final line gets display text, typing and deletion update it"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (insert "> draft\n")
+      (let ((display (overlay-get mevedel-view--composer-keymap-overlay 'after-string)))
+        (should (equal "   " display))
+        (should (get-text-property 2 'cursor display)))
+      (should (equal "> draft\n"
+                     (buffer-substring-no-properties
+                      (mevedel-view--input-start) (point-max))))
+      (insert "x")
+      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (delete-char -1)
+      (should (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (delete-char -1)
+      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))))
+
+  :doc "silently restored drafts refresh the empty-line display too"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((session (mevedel-session--create :name "main")))
+        (dolist (text '("draft\n" "other" "\n" ""))
+          (mevedel-view--restore-composer-snapshot
+           (list :text text :point-offset (length text)) session t)
+          (should (eq (and (overlay-get mevedel-view--composer-keymap-overlay
+                                        'after-string) t)
+                      (string-suffix-p "\n" text)))))))
+
+  :doc "buffers without a composer have no display state to update"
+  (with-temp-buffer
+    (insert "line\n")
+    (mevedel-view--update-composer-end)
+    (should-not (overlays-in (point-min) (point-max)))))
 
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")

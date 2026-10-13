@@ -305,7 +305,49 @@ render would see once gptel has written the batch."
       (with-current-buffer view-buf
         (should-not mevedel-view--pending-tool-calls)
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))))))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+
+  :doc "binds hook rows to pipeline args that list omitted optionals in spec order"
+  (mevedel-view-stream-test--with-buffers
+    (let* ((mevedel-view-tool-boundary-render-delay 0)
+           (spec '((file_path string) (offset integer) (limit integer)))
+           ;; gptel's hooks see the model's plist; the pipeline sees the
+           ;; positional values converted back in spec order, nils included.
+           (first '(:name "Read" :args (:limit 5 :file_path "a")))
+           (second '(:name "Read" :args (:file_path "b"))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch data-buf (list first second))
+      (cl-labels ((event (type id call &rest extra)
+                    (run-hook-with-args
+                     'mevedel-pipeline-tool-event-hook
+                     (append (list :type type :tool-use-id id :data-buffer data-buf
+                                   :name "Read"
+                                   :args (mevedel-tool--positional-to-plist
+                                          (mapcar (lambda (arg)
+                                                    (plist-get (plist-get call :args)
+                                                               (intern (format ":%s" (car arg)))))
+                                                  spec)
+                                          spec))
+                             extra))))
+        (event 'started "first" first)
+        (event 'started "second" second)
+        (with-current-buffer view-buf
+          (should (equal '("first" "second")
+                         (mapcar (lambda (entry) (plist-get (nth 3 entry) :tool-use-id))
+                                 mevedel-view--pending-tool-calls))))
+        ;; One running row per call, not a bound twin beside each hook row.
+        (should (= 2 (mevedel-view-stream-test--count-substring
+                      "● Read" (mevedel-view-stream-test--history view-buf))))
+        (event 'settled "second" second :status 'success)
+        (with-current-buffer data-buf (mevedel-view-stream-post-tool second))
+        (with-current-buffer view-buf
+          (should (equal '("first")
+                         (mapcar (lambda (entry) (plist-get (nth 3 entry) :tool-use-id))
+                                 mevedel-view--pending-tool-calls))))
+        (event 'settled "first" first :status 'success)
+        (with-current-buffer data-buf (mevedel-view-stream-post-tool first))
+        (with-current-buffer view-buf
+          (should-not mevedel-view--pending-tool-calls))))))
 
 (mevedel-deftest mevedel-view-stream-begin-turn ()
   ,test
@@ -1354,7 +1396,7 @@ turn's later text, live and after reconstruction."
   ,test
   (test)
   :doc "fingerprints the tool name and its arguments"
-  (should (equal '("Read" . "(:file_path \"a\")")
+  (should (equal '("Read" (:file_path . "a"))
                  (mevedel-view--pending-tool-fingerprint
                   '(:name "Read" :args (:file_path "a")))))
 
@@ -1372,7 +1414,28 @@ turn's later text, live and after reconstruction."
            (mevedel-view--pending-tool-fingerprint
             '(:name "Read" :args (:file_path "a")))
            (mevedel-view--pending-tool-fingerprint
-            '(:name "Read" :args (:file_path "a"))))))
+            '(:name "Read" :args (:file_path "a")))))
+
+  :doc "the hook's model plist and the pipeline's spec-order plist agree"
+  (should (equal
+           (mevedel-view--pending-tool-fingerprint
+            '(:name "Read" :args (:limit 5 :file_path "a")))
+           (mevedel-view--pending-tool-fingerprint
+            '(:name "Read" :args (:file_path "a" :offset nil :limit 5)))))
+
+  :doc "a non-nil false value still distinguishes calls"
+  (should-not (equal
+               (mevedel-view--pending-tool-fingerprint
+                '(:name "Grep" :args (:pattern "x" :multiline :json-false)))
+               (mevedel-view--pending-tool-fingerprint
+                '(:name "Grep" :args (:pattern "x")))))
+
+  :doc "arguments past the printer's limits still distinguish calls"
+  (should-not (equal
+               (mevedel-view--pending-tool-fingerprint
+                `(:name "Edit" :args (:edits ,(append (make-list 40 1) '(a)))))
+               (mevedel-view--pending-tool-fingerprint
+                `(:name "Edit" :args (:edits ,(append (make-list 40 1) '(b))))))))
 
 (mevedel-deftest mevedel-view--routine-pending-poll-p ()
   ,test
@@ -1531,14 +1594,14 @@ turn's later text, live and after reconstruction."
            (mevedel-view-stream-pre-tool
             '(:name "Grep" :args (:pattern "x"))))
           (with-current-buffer view-buf
-            (should (equal '(((("Read" . "(:file_path \"a\")") . 1) "Read" "a")
-                             ((("Grep" . "(:pattern \"x\")") . 2) "Grep" "x"))
+            (should (equal '(((("Read" (:file_path . "a")) . 1) "Read" "a")
+                             ((("Grep" (:pattern . "x")) . 2) "Grep" "x"))
                            mevedel-view--pending-tool-calls)))
           (should-not
            (mevedel-view-stream-post-tool
             '(:name "Read" :args (:file_path "a"))))))
       (with-current-buffer view-buf
-        (should (equal '(((("Grep" . "(:pattern \"x\")") . 2) "Grep" "x"))
+        (should (equal '(((("Grep" (:pattern . "x")) . 2) "Grep" "x"))
                        mevedel-view--pending-tool-calls)))
       (should (= 3 render-count))))
 
@@ -2639,7 +2702,7 @@ turn's later text, live and after reconstruction."
         (should (string-match-p "✓ Read: a" text))
         (should-not (string-match-p "running" text)))))
 
-  :doc "stopping a turn retires running rows and restores the settled marker"
+  :doc "stopping a turn redraws its run from the transcript, counting only calls that ran"
   (mevedel-view-stream-test--with-buffers
     (let ((mevedel-view-tool-boundary-render-delay 0)
           (mevedel-view-tool-group-collapse-threshold 3)
@@ -2656,8 +2719,9 @@ turn's later text, live and after reconstruction."
       (with-current-buffer view-buf
         (mevedel-view-stream-stop)
         (let ((text (mevedel-view-stream-test--history view-buf)))
-          ;; The header keeps the counts it had; only the running look goes.
-          (should (string-match-p "✓ Read 4 files, searched 1 pattern\n" text))
+          ;; The Grep never reached the transcript, so it no longer counts.
+          (should (string-match-p "✓ Read 4 files\n" text))
+          (should-not (string-match-p "searched" text))
           (should-not (string-match-p "running" text))
           (should-not (text-property-any (point-min) (point-max)
                                          'mevedel-view-pending-tool-live t))
@@ -2668,6 +2732,31 @@ turn's later text, live and after reconstruction."
                       (get-text-property (match-beginning 0)
                                          'mevedel-view-type)))
           (should-not mevedel-view--spinner-tool-targets)))))
+
+  :doc "a group formed only by running calls returns to plain rows on stop"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (with-current-buffer view-buf
+        (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4))
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Read" :args (:file_path "a"))
+                      '(:name "Read" :args (:file_path "b")))
+       t)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Grep" :args (:pattern "x"))
+                      '(:name "Grep" :args (:pattern "y"))))
+      (should (string-match-p "· 2 running"
+                              (mevedel-view-stream-test--history view-buf)))
+      (with-current-buffer view-buf
+        (mevedel-view-stream-stop)
+        (let ((text (mevedel-view-stream-test--history view-buf)))
+          (should (string-match-p "✓ Read: a" text))
+          (should (string-match-p "✓ Read: b" text))
+          (should-not (string-match-p "Grep\\|running\\|files" text)))
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
 
   :doc "an expanded running group lists its running calls and stays open"
   (mevedel-view-stream-test--with-buffers

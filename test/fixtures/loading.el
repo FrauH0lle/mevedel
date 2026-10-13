@@ -204,6 +204,31 @@ temporary one."
                (should (equal '("cold") (mevedel-artifact-store-ids workspace)))
                (should-not (seq-filter #'process-live-p (process-list))))
              (kill-buffer (current-buffer)))
+            ('live-execution
+             (require 'mevedel-view)
+             (let ((data (generate-new-buffer " *cold-execution-data*"))
+                   (view (generate-new-buffer " *cold-execution-view*")))
+               (unwind-protect
+                   (progn
+                     (with-current-buffer data (org-mode))
+                     (mevedel-view--setup view data)
+                     (should-not (featurep 'mevedel-view-audit))
+                     (with-current-buffer view
+                       ;; The call can yield before its source row arrives.
+                       ;; Activation must cold-load the evidence owner too.
+                       (mevedel-view-show-live-execution
+                        '(:execution-id "cold-exec" :tool-use-id "cold-tool"
+                          :owner "/root" :command "printf cold"
+                          :execution-output "cold retained output")))
+                     (should (featurep 'mevedel-view-audit))
+                     (with-current-buffer "*mevedel execution result*"
+                       (should buffer-read-only)
+                       (should (equal "printf cold\n\ncold retained output"
+                                      (buffer-string)))))
+                 (when (get-buffer "*mevedel execution result*")
+                   (kill-buffer "*mevedel execution result*"))
+                 (kill-buffer view)
+                 (kill-buffer data))))
             ('send
              (call-process "git" nil nil nil "init" "-q")
              (mevedel-install)

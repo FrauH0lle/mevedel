@@ -15,6 +15,7 @@
 (require 'mevedel-present)
 (require 'mevedel-view-power)
 (require 'mevedel-ptc-interpreter)
+(require 'mevedel-tool-registry)
 (require 'mevedel-view-zone)
 
 ;; `cl-extra'
@@ -51,10 +52,6 @@
                   "mevedel-telemetry" (&optional buffer))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-display-string
-                  "mevedel-tool-registry" (tool-name args))
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-segment-bounds
@@ -135,6 +132,8 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view--refresh-tool-row
                   "mevedel-view-render" (data-buffer tool-use-id))
+(declare-function mevedel-view--render-live-region
+                  "mevedel-view-render" (data-buf settle-p &optional start end))
 (declare-function mevedel-view--request-progress-anchor
                   "mevedel-view-render" ())
 (declare-function mevedel-view--retire-pending-decorations
@@ -1812,12 +1811,10 @@ visible if the control operation fails."
 
 gptel builds its tool-hook arguments from the name, the arguments, and
 the result, so there is no call id to key on: identical parallel calls
-produce the same fingerprint."
+produce the same fingerprint.  Hook and pipeline-event arguments for one
+call agree under `mevedel-tool-args-key'; compare with `equal'."
   (cons (plist-get info :name)
-        (let ((print-level 4)
-              (print-length 32)
-              (print-circle t))
-          (prin1-to-string (plist-get info :args)))))
+        (mevedel-tool-args-key (plist-get info :args))))
 
 (defun mevedel-view--pending-tool-claim-key (info)
   "Return a fresh pending-tool key for tool INFO.
@@ -2105,6 +2102,24 @@ NO-PROGRESS suppresses active-turn presentation."
       (progn
         (mevedel-view--stop-request-progress)
         (mevedel-view--cancel-scheduled-render t)
+        (when (and mevedel-view--pending-tool-calls
+                   (buffer-live-p mevedel--data-buffer)
+                   (eq mevedel--data-buffer (mevedel-view-segments-display-buffer))
+                   (mevedel-view-stream-in-flight-turn-start-position)
+                   (markerp mevedel-view--data-turn-start))
+          ;; Running calls counted toward their group's summary.  An abort
+          ;; renders nothing after this, so redraw the live turn from what
+          ;; reached the transcript, or a group would keep counting calls
+          ;; that never ran.
+          (setq mevedel-view--pending-tool-calls nil)
+          (condition-case err
+              (mevedel-view--render-live-region mevedel--data-buffer nil)
+            ;; Stopping must not fail; retiring the rows below still removes
+            ;; every running decoration.
+            (error
+             (mevedel--warn-once
+              'view-stream-stop-render
+              "Stopped turn render failed: %s" (error-message-string err)))))
         (mevedel-view--retire-pending-tool-rows)
         (setq mevedel-view--pending-tool-calls nil))
     (mevedel-view-stream--release-turn)))
