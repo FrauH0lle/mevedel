@@ -2184,10 +2184,12 @@ Execution outcome remains independent of lifecycle and disclosure state."
         (when-let* ((hint (mevedel-view--permission-approval-hint
                           (plist-get rendering :permission-approval-reason))))
           (setq line (concat line "  " hint)))
-        (if-let* ((count (plist-get rendering :pending-count)))
-            (mevedel-view--running-header
-             line count (plist-get rendering :pending-virtual))
-          line)))))
+        (let ((count (plist-get rendering :pending-count))
+              (failed (plist-get rendering :pending-failed)))
+          (if (or count failed)
+              (mevedel-view--running-header
+               line count (plist-get rendering :pending-virtual) failed)
+            line))))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
@@ -3749,12 +3751,17 @@ portable first frame."
                             (selected-frame)))
     text))
 
-(defun mevedel-view--running-header (line count &optional virtual)
+(defun mevedel-view--running-header (line count &optional virtual failed)
   "Return group header LINE marked running with COUNT calls in flight.
 The settled marker gives way to the running one, and `· N running'
-follows the summary.  Unless VIRTUAL, the replaced marker is kept on the
-running marker so a stopped turn can restore it in place."
-  (let ((marker (mevedel-view--pending-marker 'pending-run)))
+follows the summary; FAILED finished-but-unwritten calls add `· N failed',
+since a folded running group cannot show their rows.  With no call left
+running, a failure takes the `×' marker.  Unless VIRTUAL, the replaced
+marker is kept on the new one so a stopped turn can restore it in place."
+  (let ((marker (if count
+                    (mevedel-view--pending-marker 'pending-run)
+                  (propertize "  × " 'font-lock-face 'error)))
+        (sep (propertize " · " 'font-lock-face 'mevedel-view-tool-metadata)))
     (concat
      (propertize marker
                  'mevedel-view-pending-tool-live t
@@ -3762,11 +3769,15 @@ running marker so a stopped turn can restore it in place."
                  (and (not virtual) (substring line 0 4)))
      (substring line 4)
      (propertize
-      (concat (propertize " · " 'font-lock-face 'mevedel-view-tool-metadata)
-              (mevedel-view--pending-label
-               (propertize (format "%d running" count)
-                           'font-lock-face 'mevedel-view-tool-metadata)
-               'pending-run))
+      (concat (when count
+                (concat sep
+                        (mevedel-view--pending-label
+                         (propertize (format "%d running" count)
+                                     'font-lock-face 'mevedel-view-tool-metadata)
+                         'pending-run)))
+              (when failed
+                (concat sep (propertize (format "%d failed" failed)
+                                        'font-lock-face 'error))))
       'mevedel-view-pending-tool-live t))))
 
 (defun mevedel-view--pending-children (entries)
@@ -3786,6 +3797,15 @@ then, shown finished instead of running."
   "Return how many in-flight ENTRIES are still running, or nil for none."
   (let ((count (cl-count-if-not #'mevedel-view--pending-entry-settled-p
                                 entries)))
+    (and (> count 0) count)))
+
+(defun mevedel-view--pending-failed-count (entries)
+  "Return how many in-flight ENTRIES finished failed, or nil for none."
+  (let ((count (cl-count-if
+                (lambda (entry)
+                  (memq (mevedel-view--pending-entry-settled-p entry)
+                        '(error failed denied blocked)))
+                entries)))
     (and (> count 0) count)))
 
 (defun mevedel-view--insert-pending-tool-row (entry)
@@ -3833,6 +3853,7 @@ will once settled; otherwise each call gets its own running row."
                          (mevedel-view--pending-children entries))
                 :vtype 'tool-group
                 :pending-count (mevedel-view--pending-running-count entries)
+                :pending-failed (mevedel-view--pending-failed-count entries)
                 :pending-virtual t))
          '(mevedel-view-type tool-pending
            mevedel-view-pending-tool-live t))
@@ -4189,14 +4210,22 @@ the render so user toggles survive streaming ticks."
                     ;; does not move when the first result brings it.  It is
                     ;; part of the running decoration: a turn stopped before
                     ;; any result removes it with the rows.
-                    (when (mevedel-view--live-turn-needs-header-p
-                           (min (or (mevedel-view-stream-in-flight-turn-start-position)
-                                    render-start)
-                                render-start)
-                           (point) data-buf)
-                      (mevedel-view--insert-assistant-header
-                       nil '(mevedel-view-pending-tool-live t)))
-                    (mevedel-view--insert-pending-run left))))
+                    (let ((interim (mevedel-view--live-turn-needs-header-p
+                                    (min (or (mevedel-view-stream-in-flight-turn-start-position)
+                                             render-start)
+                                         render-start)
+                                    (point) data-buf)))
+                      (when interim
+                        (mevedel-view--insert-assistant-header
+                         nil '(mevedel-view-pending-tool-live t)))
+                      (mevedel-view--insert-pending-run left)
+                      ;; The interim turn ends like the turn it stands for,
+                      ;; so the rows below stay put when results land.
+                      (when interim
+                        (insert (propertize "\n" 'mevedel-view-pending-tool-live t)
+                                (propertize "\n"
+                                            'font-lock-face 'mevedel-view-turn-rule
+                                            'mevedel-view-pending-tool-live t)))))))
               (mevedel-view--ensure-request-progress data-buf))
             (mevedel-view--debug-log
              'incremental-after-insert
@@ -6515,6 +6544,7 @@ and follow the settled children."
             :expandable-p t
             :child-calls children
             :pending-count (mevedel-view--pending-running-count pending)
+            :pending-failed (mevedel-view--pending-failed-count pending)
             :status (and (cl-some
                           (lambda (entry)
                             (eq (mevedel-view--rendering-status

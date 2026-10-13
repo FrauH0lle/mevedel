@@ -707,12 +707,16 @@ run rather than joining the earlier one, inside the turn where they will
 settle. A call the pipeline reports finished keeps its place until its
 result reaches the transcript (for a gptel batch, after the whole batch):
 its row shows `✓`, or `×` for a failure, and it leaves the running count,
-so one early finisher never reshapes the run. The ID-less post-tool hook
+so one early finisher never reshapes the run. A folded running group cannot
+show those rows, so its header adds `· N failed`; once no call is left
+running, a failure takes the group's marker as `×`. The ID-less post-tool hook
 that precedes the result retires such a finished call first and never a
 bound sibling still running. A response that opens with tool
 calls has no turn in the transcript until the first result lands, so the
 live render draws its `Assistant` heading with the running calls; the row
-therefore does not move down when the heading would otherwise appear.
+therefore does not move down when the heading would otherwise appear. The
+interim turn also ends with the settled turn's blank line and rule, so the
+progress row below does not move either.
 Directive requests keep their own heading instead. An expanded running group lists its
 running calls after its settled children; they are not expandable, have no
 transcript source, and key no disclosure state. A fold or expansion of a

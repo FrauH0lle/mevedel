@@ -2748,13 +2748,13 @@ turn's later text, live and after reconstruction."
           (should (string-match-p (if prose "Let me look." "Assistant\n  ● ")
                                   running))
           (mevedel-view-stream-test--batch data-buf calls t)
-          ;; Settling flips the marker and drops the count; the heading and
-          ;; rows keep their lines.  Settled rows may gain result metadata.
+          ;; Settling flips the marker and drops the count; the heading,
+          ;; rows and the progress row below keep their lines.  Settled
+          ;; rows may gain result metadata.
           (cl-flet ((layout (text)
-                      (let ((text (replace-regexp-in-string
-                                   " · [0-9]+ running\\| ([^()\n]*)$" ""
-                                   (string-replace "●" "✓" text))))
-                        (substring text 0 (string-match "\n\n*Working" text)))))
+                      (replace-regexp-in-string
+                       " · [0-9]+ running\\| ([^()\n]*)$\\| · [0-9]+s" ""
+                       (string-replace "●" "✓" text))))
             (should (equal (layout running)
                            (layout (mevedel-view-stream-test--history
                                     view-buf)))))))))
@@ -2822,6 +2822,35 @@ turn's later text, live and after reconstruction."
         (should (= 1 (mevedel-view-stream-test--count-substring
                       "✓ Read 4 files" (mevedel-view-stream-test--history
                                         view-buf)))))))
+
+  :doc "a folded running group counts calls that failed before their results"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (calls (mapcar (lambda (file) (list :name "Read" :args (list :file_path file)))
+                         '("a" "b" "c" "d"))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch data-buf calls)
+      (cl-flet ((event (type call id &rest extra)
+                  (run-hook-with-args
+                   'mevedel-pipeline-tool-event-hook
+                   (append (list :type type :tool-use-id id :data-buffer data-buf)
+                           extra call))))
+        (cl-loop for call in calls for i from 1
+                 do (event 'started call (format "id-%d" i)))
+        (event 'settled (car calls) "id-1" :status 'error)
+        (should (string-match-p "● Read 4 files · 3 running · 1 failed\n"
+                                (mevedel-view-stream-test--history view-buf)))
+        (cl-loop for call in (cdr calls) for i from 2
+                 do (event 'settled call (format "id-%d" i)))
+        ;; Nothing left running: the failure takes the marker.
+        (let ((text (mevedel-view-stream-test--history view-buf)))
+          (should (string-match-p "× Read 4 files · 1 failed\n" text))
+          (should-not (string-match-p "running\\|●" text)))
+        ;; A stop restores the group's own header.
+        (with-current-buffer view-buf (mevedel-view-stream-stop))
+        (should-not (string-match-p "failed\\|running"
+                                    (mevedel-view-stream-test--history view-buf))))))
 
   :doc "a call reported finished draws a still finished row below the threshold"
   (mevedel-view-stream-test--with-buffers
