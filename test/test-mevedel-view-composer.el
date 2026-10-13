@@ -385,11 +385,14 @@
   ,test
   (test)
 
-  :doc "ask mode renders an undecorated prompt"
+  :doc "ask mode shows its badge like every other mode"
   (let ((prompt (mevedel-view--input-prompt-string 'ask)))
-    (should (string= "\n> " prompt))
-    (should (eq 'mevedel-view-input-prompt
-                (get-text-property 0 'font-lock-face prompt))))
+    (should (string= "\n[ask]\n> " prompt))
+    (should (eq 'mevedel-view-permission-mode-ask
+                (get-text-property 2 'font-lock-face prompt)))
+    ;; Same line count as other modes, so switching never moves the draft.
+    (should (= (cl-count ?\n prompt)
+               (cl-count ?\n (mevedel-view--input-prompt-string 'edits)))))
 
   :doc "edits mode renders its canonical name"
   (let ((prompt (mevedel-view--input-prompt-string 'edits)))
@@ -1531,7 +1534,7 @@
   (let ((mevedel-permission-mode 'ask))
     (mevedel-view-test--with-buffers
       (with-current-buffer view-buf
-        (should (string= "\n> "
+        (should (string= "\n[ask]\n> "
                          (buffer-substring-no-properties
                           mevedel-view--input-marker
                           (mevedel-view--input-start)))))))

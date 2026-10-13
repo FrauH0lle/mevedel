@@ -858,7 +858,7 @@ Terminology:
   **Composer** refers only to the editable unsent input body.
   The mode badge (`[edits]`, `[Plan · edits]`, `[Editing …]`) sits on its own
   line above a `> ` prompt, so the badge and the draft start at fixed columns
-  in every mode; Ask mode has no badge. Explicit and soft-wrapped continuation
+  in every mode, Ask included, so switching modes never moves the draft. Explicit and soft-wrapped continuation
   lines are indented by the width of the prompt's last line (two columns, or
   four after a directive's `◆ > `), so the draft forms one aligned column.
   The indent is a display-only `line-prefix`/`wrap-prefix` on the composer
@@ -2000,6 +2000,7 @@ Idle session with no live status or queued controls:
 ```text
 main  ~/project/                                      ask · idle · gpt-5.5 · 20 tools
 
+[ask]
 > draft starts here
 ```
 
@@ -2024,6 +2025,7 @@ Follow-ups
 
 Working... · 42s
 
+[ask]
 > editable composer draft
 ```
 

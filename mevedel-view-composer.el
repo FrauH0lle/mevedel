@@ -657,10 +657,9 @@ rows remain visually distinct from the editable composer."
                '(font-lock-face mevedel-view-plan-mode)
                text)
               text)
-	  (if (eq mode 'ask)
-              (propertize (concat "\n" mevedel-view--input-prompt)
-			  'font-lock-face 'mevedel-view-input-prompt)
-            (pcase-let* ((`(,label ,face)
+	  ;; Every mode, Ask included, shows its badge, so the draft keeps
+	  ;; its line when the mode changes.
+	  (pcase-let* ((`(,label ,face)
 			  (mevedel-view--permission-mode-display mode))
 			 (text (format "\n[%s]\n%s"
                                        label mevedel-view--input-prompt))
@@ -674,7 +673,7 @@ rows remain visually distinct from the editable composer."
                label-start label-end
                `(font-lock-face ,face)
                text)
-              text)))))))
+              text))))))
 
 
 ;;

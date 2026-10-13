@@ -3032,7 +3032,7 @@ turn's later text, live and after reconstruction."
       (let ((zone-text (buffer-substring-no-properties
                         (point)
                         (mevedel-view--input-start))))
-        (should (string-match-p "Working[^\n]*\n\n> \\'" zone-text)))
+        (should (string-match-p "Working[^\n]*\n\n\\[ask\\]\n> \\'" zone-text)))
       (mevedel-view--stop-spinner)
       (should-not (text-property-any
                    (point-min) mevedel-view--input-marker
