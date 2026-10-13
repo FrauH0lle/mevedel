@@ -930,9 +930,10 @@ spanning lines")))
                  :context 'fork
                  :agent "explorer"))
          save-called status-called stop-called
-         baseline-recorded permission-restored
+         baseline-recorded scoped-permission-seen
          queue-drain-scheduled post-hook-called)
-    (setf (mevedel-session-skills session) (list skill))
+    (setf (mevedel-session-skills session) (list skill)
+          (mevedel-session-permission-mode session) 'ask)
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
         (cl-letf (((symbol-function 'mevedel-agent-get)
@@ -958,15 +959,17 @@ spanning lines")))
                    (lambda (_fsm) (setq baseline-recorded t)))
                   ((symbol-function 'mevedel--run-turn-terminal-hook)
                    (lambda (_fsm event status)
+                     (setq scoped-permission-seen
+                           (and (eq 'full-auto
+                                    (mevedel-request-permission-mode-override
+                                     mevedel--current-request))
+                                (null mevedel--pending-permission-mode)))
                      (setq stop-called
                            (list event status
                                  (not
                                   (null
                                    (bound-and-true-p
                                     mevedel--current-request)))))))
-                  ((symbol-function
-                    'mevedel--implementation-permission-mode-restore)
-                   (lambda () (setq permission-restored t)))
                   ((symbol-function
                     'mevedel-view--schedule-follow-up-drain)
                    (lambda (_fsm) (setq queue-drain-scheduled t)))
@@ -977,6 +980,7 @@ spanning lines")))
                  (list (lambda (_start _end)
                          (setq post-hook-called t)
                          (error "Broken post-response hook")))))
+            (setq mevedel--pending-permission-mode 'full-auto)
             (insert "$delegate do the thing")
             (goto-char (point-max))
             (should (eq 'skill (mevedel-skills-input-dispatch-command)))
@@ -992,7 +996,9 @@ spanning lines")))
             (should (equal (list session (current-buffer) t) save-called))
             (should (equal '(Stop completed t) stop-called))
             (should baseline-recorded)
-            (should permission-restored)
+            (should scoped-permission-seen)
+            (should-not mevedel--pending-permission-mode)
+            (should (eq 'ask (mevedel-session-permission-mode session)))
             (should queue-drain-scheduled)
             (should post-hook-called)
             (should (equal '(" Ready" success) status-called)))))))

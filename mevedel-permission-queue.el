@@ -32,6 +32,9 @@
 
 
 ;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-for-context
+                  "mevedel-permission-mode" (context))
+(autoload 'mevedel-permission-mode-for-context "mevedel-permission-mode")
 (declare-function mevedel-permission-mode-effective
                   "mevedel-permission-mode"
                   (&optional session data-buffer surface-buffer))
@@ -297,7 +300,7 @@ live Eval and hook cards.  It is quoted explanation, never authorization."
   "Resolve automatic review for ENTRY before human admission to SESSION."
   (let* ((session (or session (mevedel-queue--current-session)))
          (entry (plist-put (copy-sequence entry) :session session))
-         (mode (mevedel-permission-mode-effective session (plist-get entry :data-buffer))))
+         (mode (mevedel-permission-mode-for-context entry)))
     (setq entry
           (plist-put entry :permission-id
                      (or (plist-get entry :permission-id)
@@ -365,7 +368,13 @@ ENTRY plist keys:
           (append
            (list :permission-id (plist-get entry :permission-id)
                  :permission-mode-base
-                 (and session (mevedel-session-permission-mode session)))
+                 (and session (mevedel-session-permission-mode session))
+                 ;; Audit facts describe admission, not later session changes.
+                 ;; Policy reevaluation never treats this observation as authority.
+                 :permission-mode-effective
+                 (or (plist-get entry :permission-mode-effective)
+                     (mevedel-permission-mode-for-context
+                      (plist-put (copy-sequence entry) :session session))))
            entry))
     ;; A permission entry without a request id starts new work.  Entries
     ;; attached to an already-live request are allowed to settle while the
@@ -466,8 +475,7 @@ ENTRY plist keys:
                 (mevedel-sandbox-pending-facts
                  nil (plist-get entry :sandbox-permissions)
                  (mevedel-sandbox-mode-effective
-                  session (mevedel-permission-mode-effective
-                           session (plist-get entry :data-buffer)))
+                  session (mevedel-permission-mode-for-context entry))
                  directory)
                 :sandbox)
                '(bubblewrap refused))

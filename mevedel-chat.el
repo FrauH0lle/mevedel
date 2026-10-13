@@ -26,6 +26,7 @@
   (require 'gptel-request))
 
 (require 'mevedel-hooks)
+(require 'mevedel-implementation-policy)
 (require 'mevedel-journal-idle)
 (require 'mevedel-reminders)
 (require 'mevedel-claude-code-backend)
@@ -128,12 +129,6 @@
 (declare-function mevedel-model-apply-session-policy
                   "mevedel-models" (session &optional buffer))
 
-;; `mevedel-permission-mode'
-(declare-function mevedel--implementation-permission-mode-apply
-                  "mevedel-permission-mode" (mode))
-(declare-function mevedel--implementation-permission-mode-restore
-                  "mevedel-permission-mode" ())
-
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-validate-persistent-stores
                   "mevedel-permission-persistence" (workspace))
@@ -198,6 +193,8 @@
 (declare-function mevedel-request-untracked-effects "mevedel-structs"
                   (cl-x) t)
 (declare-function mevedel-session-audit-session "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-buffer-name "mevedel-structs"
+                  (session-name workspace))
 (declare-function mevedel-session-dedicated-artifact "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-create "mevedel-structs"
 		  (name workspace &optional working-directory session-id))
@@ -1254,6 +1251,8 @@ skill-expanded model input and transcript render data."
   (let* ((hook-context
           (and prompt-submission
                (mevedel-prompt-submission-context prompt-submission)))
+         (preparation (or mevedel-implementation-policy--admission-preparation
+                          (mevedel-implementation-policy-capture-preparation)))
          (stored-prompt
           (if prepared-outcome
               (concat (plist-get prepared-outcome :transcript-input)
@@ -1265,6 +1264,8 @@ skill-expanded model input and transcript render data."
           (and prepared-outcome
                (concat (plist-get prepared-outcome :model-input)
                        (or (plist-get prepared-outcome :render-data) "")))))
+    (when preparation
+      (mevedel-implementation-policy-assert-preparation preparation))
     (mevedel--insert-local-user-turn
      stored-prompt display-text nil hook-context)
     (when prompt-submission
@@ -1272,6 +1273,10 @@ skill-expanded model input and transcript render data."
       (mevedel-session-naming-consider
        mevedel--session
        (or (mevedel-prompt-submission-display-text prompt-submission) display-text prompt)))
+    ;; Insertion/view hooks can yield or change a Goal before the first model
+    ;; transform.  A staged kickoff policy must not become Direct authority.
+    (when preparation
+      (mevedel-implementation-policy-assert-preparation preparation))
     (mevedel--send-request
      (or model-input (and hook-context stored-prompt)))))
 
@@ -1285,20 +1290,35 @@ LOCAL-SEND starts the caller's native gptel send when that engine is selected.
 NATIVE-INPUT replaces a missing MODEL-INPUT only for an external engine, which
 reads no prompt transforms; gptel keeps its stored transcript prompt.
 The effective model and effort apply only to this request, not saved selection."
-  (let* ((policy (mevedel-skills-request-model-policy))
-         (gptel-backend (plist-get policy :backend))
-         (gptel-model (plist-get policy :model))
-         (gptel-reasoning-effort (plist-get policy :effort)))
-    (if (mevedel-claude-code-backend-p gptel-backend)
-        (mevedel-claude-code-send (or model-input native-input))
-      (when (and mevedel--session (not mevedel--current-directive-uuid)
-                 (assoc "root" (mevedel-session-external-conversations mevedel--session)))
-        (mevedel-claude-code-release-history mevedel--session))
-      (setq-local mevedel--pending-model-input model-input)
-      (unwind-protect (let ((mevedel--dispatching t))
-                        (mevedel-auth-assert-ready gptel-backend)
-                        (funcall local-send))
-        (setq-local mevedel--pending-model-input nil)))))
+  (condition-case err
+      (let* ((policy (mevedel-skills-request-model-policy))
+             (backend (plist-get policy :backend)))
+        ;; Never bind the shared root's selection around startup: synchronous
+        ;; hooks and yielding checks can change that baseline.  gptel's model
+        ;; transform owns its private prompt locals; native takes explicit args.
+        (if (mevedel-claude-code-backend-p backend)
+            (mevedel-claude-code-send (or model-input native-input) policy)
+          (when (and mevedel--session (not mevedel--current-directive-uuid)
+                     (assoc "root" (mevedel-session-external-conversations mevedel--session)))
+            (mevedel-claude-code-release-history mevedel--session))
+          (setq-local mevedel--pending-model-input model-input)
+          (unwind-protect (let ((mevedel--dispatching t))
+                            (mevedel-auth-assert-ready backend)
+                            (funcall local-send))
+            (setq-local mevedel--pending-model-input nil))))
+    (error
+     ;; A stale preparation does not own the current Goal (or its failure).
+     (let* ((preparation mevedel-implementation-policy--admission-preparation)
+            (goal (plist-get preparation :goal)))
+       (when (and (not (eq (car err) 'mevedel-stale-implementation-preparation))
+                  (or (not preparation)
+                      (and goal mevedel--session
+                           (eq goal (mevedel-session-goal mevedel--session))
+                           (equal (plist-get preparation :goal-id) (mevedel-goal-id goal))
+                           (equal (plist-get preparation :policy)
+                                  (mevedel-goal-implementation-policy goal)))))
+         (mevedel-implementation-policy-pause-failure (current-buffer) err)))
+     (signal (car err) (cdr err)))))
 
 (defun mevedel--send-request (&optional model-input)
   "Send the current prompt through the selected conversation engine.
@@ -1317,32 +1337,56 @@ MODEL-INPUT replaces the stored prompt for this request only."
   "Implement the plan described by ACTION-PLIST.
 
 ACTION-PLIST is a plist with keys:
-  :permission-mode - Permission mode for implementation
+  :implementation-policy - Accepted request-local model, effort and mode
+  :implementation-goal - Expected Goal owner, nil for Direct
+  :implementation-goal-id - Reserved kickoff identity, nil for Direct
   :display-text   - Optional compact transcript display text
   :prompt-submission - Accepted prompt transaction
   :prepared-outcome - Prepared skill and transcript components."
-  (let* ((permission-mode (plist-get action-plist :permission-mode))
+  (let* ((policy (copy-tree
+                 (mevedel-implementation-policy-validate
+                  (plist-get action-plist :implementation-policy))))
          (display-text (or (plist-get action-plist :display-text)
                            "Implement accepted plan"))
          (prompt-submission (plist-get action-plist :prompt-submission))
          (prepared-outcome (plist-get action-plist :prepared-outcome))
+         (goal (plist-get action-plist :implementation-goal))
+         (goal-id (plist-get action-plist :implementation-goal-id))
          (prompt (and prompt-submission
                       (mevedel-prompt-submission-input prompt-submission))))
     (unless prompt
       (error "Implementation requires an accepted prompt submission"))
+    (unless policy
+      (error "Implementation requires an accepted policy"))
+    ;; Preparation/publication can yield to another admission or settlement.
+    ;; Neither Direct nor Goal owns that turn: reject before staging policy or
+    ;; inserting input, rather than letting WAIT attach our FSM to its request.
+    (when (or mevedel--current-request mevedel--turn-settlements-pending)
+      (signal 'mevedel-stale-implementation-preparation nil))
+    ;; Do not reinterpret a stale Goal kickoff as a Direct policy override.
+    (when (or goal goal-id)
+      (unless (and goal mevedel--session
+                   (eq goal (mevedel-session-goal mevedel--session))
+                   (equal goal-id (mevedel-goal-id goal))
+                   (eq 'active (mevedel-goal-status goal))
+                   (equal policy (mevedel-goal-implementation-policy goal)))
+        (signal 'mevedel-stale-implementation-preparation nil)))
     (condition-case err
         (progn
-          (mevedel--implementation-permission-mode-apply permission-mode)
-          ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
-          (mevedel--close-unclosed-blocks)
-          (when prepared-outcome
-            (setq-local mevedel-skills--pending-request-context
-                        (plist-get prepared-outcome :request-context)))
-          (mevedel--submit-generated-turn
-           prompt display-text prompt-submission prepared-outcome))
+          (setq-local mevedel--pending-implementation-policy policy)
+          (let ((mevedel-implementation-policy--admission-preparation
+                 (mevedel-implementation-policy-capture-preparation)))
+            ;; Closing blocks can run the same insertion hooks as the prompt.
+            (mevedel--close-unclosed-blocks)
+            (when prepared-outcome
+              (setq-local mevedel-skills--pending-request-context
+                          (plist-get prepared-outcome :request-context)))
+            (mevedel--submit-generated-turn
+             prompt display-text prompt-submission prepared-outcome)))
       (error
        (setq-local mevedel-skills--pending-request-context nil)
-       (mevedel--implementation-permission-mode-restore)
+       (when (eq policy mevedel--pending-implementation-policy)
+         (setq-local mevedel--pending-implementation-policy nil))
        (signal (car err) (cdr err))))))
 
 ;; Before session persistence's exit hook: handlers see their sessions

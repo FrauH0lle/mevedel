@@ -512,7 +512,7 @@
       (kill-buffer source-buffer))))
 
 (mevedel-deftest mevedel-plan-handoff--prepare-worktree-target
-  (:doc "copies the accepted artifact and selected settings into the target")
+  (:doc "copies the accepted artifact and preset without overwriting target defaults")
   ,test
   (test)
   (let* ((source-save (make-temp-file "mevedel-plan-worktree-source-" t))
@@ -523,6 +523,9 @@
            :preset-name 'source-preset))
          (target-session (mevedel-session--create
                           :name "target"
+                          :permission-mode 'ask
+                          :model-provider "Baseline:model"
+                          :reasoning-effort 'low
                           :save-path (make-temp-file "mevedel-plan-target-" t)))
          (source-buffer (generate-new-buffer " *mevedel-plan-target-source*"))
          (target-buffer (generate-new-buffer " *mevedel-plan-target-data*"))
@@ -532,7 +535,8 @@
           (make-directory (file-name-directory path) t)
           (write-region "# Accepted" nil path nil 'silent)
           (with-current-buffer target-buffer
-            (setq-local mevedel--session target-session))
+            (setq-local mevedel--session target-session
+                        mevedel-goal-token-budget 1234))
           (cl-letf (((symbol-function
                       'mevedel-plan-handoff--worktree-target-buffer)
                      (lambda (_) target-buffer))
@@ -563,12 +567,15 @@
                     (mevedel-plan-handoff--prepare-worktree-target
                      source-session source-buffer record)))
               (should (eq 'submit (plist-get prepared :step)))
-              (should (eq 'full-auto mode))
+              (should-not mode)
+              (should (eq 'ask (mevedel-session-permission-mode target-session)))
+              (should (equal "Baseline:model" (mevedel-session-model-provider target-session)))
+              (should (eq 'low (mevedel-session-reasoning-effort target-session)))
               (should (= 4 archive-arity))
               (should (equal "local/plans/accepted-20260813-120000.md"
                              (plist-get
                               (plist-get prepared :target-accepted) :path)))
-              (should (= 4321
+              (should (= 1234
                          (buffer-local-value
                           'mevedel-goal-token-budget target-buffer)))
               (should (eq 'source-preset
@@ -968,6 +975,12 @@
                (target (if (eq location 'here) data
                          (generate-new-buffer " *handoff-progress-target*")))
                (session (mevedel-session--create :name "handoff"))
+               (goal (and (eq execution 'goal)
+                          (mevedel-goal--create
+                           :id "reserved" :status 'active
+                           :implementation-policy
+                           '(:model-provider "Test:model" :reasoning-effort nil
+                             :permission-mode edits))))
                (fsm (gptel-make-fsm :info nil))
                (draft "> quoted\nsecond line")
                dispatched)
@@ -984,14 +997,19 @@
                   (goto-char (+ (mevedel-view--input-start) 3))
                   (mevedel-view--update-spinner "Preparing implementation..." owner)
                   (should (timerp mevedel-view--spinner-timer)))
+                (setf (mevedel-session-goal session) goal)
                 (cl-letf (((symbol-function 'mevedel-plan-handoff--start-goal)
-                           (lambda (&rest _) t))
+                           (lambda (&rest _) goal))
+                          ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                           ((symbol-function
                             'mevedel-plan-handoff--clear-target-goal-reservation)
                            #'ignore)
                           ((symbol-function 'mevedel--implement-plan)
-                           (lambda (&rest _)
+                           (lambda (action)
                              (should (eq (current-buffer) target))
+                             (should (eq goal (plist-get action :implementation-goal)))
+                             (should (equal (and goal "reserved")
+                                            (plist-get action :implementation-goal-id)))
                              (with-current-buffer view
                                (should (eq mevedel-view--spinner-owner
                                            (unless (eq owner 'plan-preparation)
@@ -1003,7 +1021,8 @@
                              (setq dispatched t)
                              fsm)))
                   (mevedel-plan-handoff--dispatch-submission
-                   session data nil (list :execution execution :mode 'edits)
+                   session data '(:goal-id "reserved") (list :execution execution :mode 'edits
+                                          :model-provider "Test:model")
                    nil session target "Implement"
                    (mevedel-prompt-submission-create
                     :input "Implement" :outcome '(:model-input "Implement"))))
@@ -1044,8 +1063,6 @@
                 (lambda (_session _artifact) "# Accepted"))
                ((symbol-function 'mevedel-view--interaction-target-buffer)
                 (lambda (_) view-buffer))
-               ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                #'ignore)
                ((symbol-function 'mevedel-skills-input-prepare-user-input)
                 (lambda (input _) input))
                ((symbol-function

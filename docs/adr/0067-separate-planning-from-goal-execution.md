@@ -42,12 +42,47 @@ effort, defaulting to session policy. Both Plan flows share this initialization;
 the user's approval selection remains authoritative through revisions, accepted
 handoffs, and retries.
 
+Accepted implementation settings are scoped to execution, not to ordinary
+session policy. Direct captures the selected backend/model, effort, and
+permission mode on one request and reuses that snapshot for retries. Goal
+stores an optional strict implementation policy and uses it for active ordinary
+root turns, including follow-ups, continuation, and resume. New ordinary chat
+with a paused, blocked, budget-limited, or complete Goal uses the baseline;
+already-admitted turns retain their captured policy until settlement. Both Here
+and Worktree leave session baselines unchanged. Worktree keeps its usual or
+restored target policy plus the inherited preset. The selected budget belongs
+only to the Goal, not `mevedel-goal-token-budget`.
+
+`mevedel-implementation-policy.el` owns the strict serializable record
+`(:model-provider STRING :reasoning-effort SYMBOL-or-nil :permission-mode MODE)`,
+exact model resolution, and current root-policy selection. Missing models or
+unsupported effort fail without baseline fallback. The Goal constructor
+persists policy before source recovery is cleared. The strict Goal codec
+requires the field even when its value is `nil`; older Goal records are rejected
+without migration, while transcripts remain readable.
+
+Implementation children inherit the owning request's permission-mode override,
+including nested delegation, while model workloads remain independent. Live
+hard denies, shared rules, grants, and workflow ceilings remain in force through
+the common permission path. Unrelated child, control, summary, and directive
+requests do not inherit an ambient Goal policy. Directive implementation keeps
+its own request-local settings on that same path. Views, logs, and reminders
+show effective settings without promoting them to defaults. There is no
+session-policy snapshot/restore scheme.
+
 ## Rationale and consequences
 
 Separating planning from persistent execution gives each one responsibility and
 allows either to be used independently. The cost is an explicit accepted-plan
 handoff. Session-only working files let a planner prepare its artifacts without
 granting implementation authority over the workspace.
+
+The accepted policy gives execution a stable selection without taking ownership
+of the user's ordinary session settings. Persisting it on a Goal also gives
+resume and continuation the same authority as kickoff. Request-local mode
+projection reuses existing enforcement rather than creating a second permission
+system; strict resolution refuses to silently run an accepted plan on a
+different model.
 
 Delegation lets a planner gather evidence in parallel and obtain an independent
 critique before proposing. Because the stamp belongs to the turn, a planning
@@ -57,6 +92,17 @@ implement. Mail and results that reach an agent after Plan ends remain advisory
 text acted on under that agent's own authority.
 
 ## Decision history
+
+Accepted-plan handoff previously installed its selected model, effort, and
+permission mode as ordinary settings in the executing session, and installed
+its Goal budget as the session's new-Goal default. In Here execution this
+overwrote the user's ordinary chat policy; Worktree selection likewise became
+the target baseline. That ownership mismatch moved the decision to request-owned
+Direct settings and Goal-owned persistent implementation policy. Saving and
+restoring the previous session settings was rejected: restoration at settlement
+would clobber concurrent user changes made while implementation was running.
+Keeping the baseline untouched removes that race instead of attempting to
+repair it afterward.
 
 The September 2026 preset configuration used Astra for planning and Sol for
 workers, but accepted-plan implementation still inherited Astra from the root

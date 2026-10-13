@@ -37,6 +37,9 @@
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
 
+;; `gptel-request'
+(declare-function gptel--model-name "ext:gptel-request" (model))
+
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-teardown-session
                   "mevedel-agent-control" (session))
@@ -88,9 +91,10 @@
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
 
-;; `mevedel-models'
-(declare-function mevedel-model-current-label "mevedel-models"
-                  (&optional buffer))
+;; `mevedel-implementation-policy'
+(declare-function mevedel-implementation-policy-current
+                  "mevedel-implementation-policy" (&optional session buffer))
+(autoload 'mevedel-implementation-policy-current "mevedel-implementation-policy")
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-pending-inputs-clear
@@ -1368,7 +1372,14 @@ when one of them changes."
            (permission-mode (mevedel-view--effective-permission-mode))
            (plan-mode (and session (mevedel-session-plan-mode session)))
            (state (mevedel-request-state-label data-buffer))
-           (model (buffer-local-value 'gptel-model data-buffer))
+           (request (buffer-local-value 'mevedel--current-request data-buffer))
+           (model-policy (and request (mevedel-request-model-policy request)))
+           (implementation (unless model-policy
+                             (mevedel-implementation-policy-current session data-buffer)))
+           (provider (plist-get implementation :model-provider))
+           (model (or (plist-get model-policy :model)
+                      (and provider (substring provider (1+ (string-search ":" provider))))
+                      (buffer-local-value 'gptel-model data-buffer)))
            (goal (and session (mevedel-session-goal session)))
            (goal-status (and goal (mevedel-goal-status goal)))
            (goal-turns (and goal (mevedel-goal-turns-run goal)))
@@ -1395,10 +1406,7 @@ when one of them changes."
                          (format "Plan/%s" permission-label)
                        permission-label))
                (scope (mevedel-view-composer-scope-label))
-               (model-label (mevedel-model-current-label data-buffer))
-               (model (if (string= model-label "none")
-                          "model none"
-                        model-label))
+               (model (if model (gptel--model-name model) "model none"))
                (phase-model
                 (if goal
                     (format "%s · %d turns · %s" goal-status goal-turns model)

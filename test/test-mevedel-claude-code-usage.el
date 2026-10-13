@@ -14,7 +14,7 @@
 (mevedel-deftest mevedel--send-request/claude-continuation-unknown-usage (:quiet t)
   (mevedel-engine-test--with-claude-session
     (let* ((mevedel-goal-token-budget 100)
-           (goal (mevedel-goal-create "Complete both prompts" session))
+           (goal (mevedel-goal-create "Complete both prompts" :session session))
            (next t) outcomes)
       (setq-local gptel-system-prompt "Continuation usage fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)

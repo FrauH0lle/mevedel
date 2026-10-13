@@ -16,7 +16,7 @@
                   (100 ((inputTokens . 10) (cachedWriteTokens . 0)) 10 budget-limited)))
     (mevedel-engine-test--with-claude-session
       (let* ((mevedel-goal-token-budget (nth 0 case))
-             (goal (mevedel-goal-create "Read a large input and complete later" session))
+             (goal (mevedel-goal-create "Read a large input and complete later" :session session))
              (input (make-string 40000 ?x)))
         (setq-local gptel-system-prompt "Goal fixture" gptel-tools nil)
         (cl-letf (((symbol-function 'mevedel-claude-code-launch)
@@ -50,7 +50,7 @@
 (mevedel-deftest mevedel--send-request/claude-goal-startup-failure (:quiet t)
   (mevedel-engine-test--with-claude-session
     (let* ((mevedel-goal-token-budget 100)
-           (goal (mevedel-goal-create "Continue after login" session)))
+           (goal (mevedel-goal-create "Continue after login" :session session)))
       (setq-local gptel-system-prompt "Goal fixture" gptel-tools nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                  (mevedel-engine-test--claude-launch
@@ -71,7 +71,7 @@
   (mevedel-engine-test--with-claude-session
     (let* ((mevedel-goal-token-budget 100)
            (file (file-name-concat root "evidence.txt"))
-           (goal (mevedel-goal-create "Read the two samples and finish" session))
+           (goal (mevedel-goal-create "Read the two samples and finish" :session session))
            (before
             [(((type . "stream_event") (parent_tool_use_id . nil)
                (event . ((type . "message_start")
@@ -210,7 +210,7 @@
 (mevedel-deftest mevedel-agent-control-spawn/claude-goal-usage (:quiet t)
   (mevedel-engine-test--with-claude-session
     (let* ((mevedel-goal-token-budget 100)
-           (goal (mevedel-goal-create "Investigate with a retained child" session))
+           (goal (mevedel-goal-create "Investigate with a retained child" :session session))
            (file (file-name-concat root "evidence.txt"))
            (launches 0) record invocation warnings readings)
       (write-region "Evidence" nil file nil 'silent)

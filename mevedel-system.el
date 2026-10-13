@@ -28,6 +28,7 @@
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel-backend)
 (defvar gptel-model)
+(defvar gptel-reasoning-effort)
 (defvar gptel-system-prompt)
 (defvar gptel-tools)
 
@@ -46,10 +47,20 @@
                   "mevedel-resource" (context &optional scheme))
 (autoload 'mevedel-resource-completion-metadata "mevedel-resource")
 
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer request invocation))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-mode-effective
                   "mevedel-sandbox" (&optional session permission-mode))
 (autoload 'mevedel-sandbox-mode-effective "mevedel-sandbox")
+
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills-request-model-policy "mevedel-skills-invoke" ())
+(autoload 'mevedel-skills-request-model-policy "mevedel-skills-invoke")
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-prompt-section
@@ -990,6 +1001,13 @@ to conversation delivery, leaving only the stable system contract."
   "Return the exact effective prompt report for DATA-BUFFER."
   (with-current-buffer data-buffer
     (let* ((session mevedel--session)
+           (policy (mevedel-skills-request-model-policy))
+           (gptel-backend (plist-get policy :backend))
+           (gptel-model (plist-get policy :model))
+           (effort (plist-get policy :effort))
+           (gptel-reasoning-effort effort)
+           (permission-mode (mevedel-permission-mode-effective session data-buffer))
+           (sandbox-mode (mevedel-sandbox-mode-effective session permission-mode))
            (preset (mevedel-session-preset-name session))
            (profile (mevedel-system--prompt-profile-for-preset preset))
            (prompt (mevedel-system--effective-system-prompt))
@@ -1026,11 +1044,11 @@ to conversation delivery, leaving only the stable system contract."
 							 (insert (format "Preset: %s\nProfile: %s\nBackend: %s\nModel: %s\n"
 									 (or preset "none") (or profile "unknown") backend model))
 							 (insert (format "Reasoning effort: %s\nWorking directory: %s\n"
-									 (or (mevedel-session-reasoning-effort session) "default")
+                                         (or effort "default")
 									 (mevedel-session-working-directory session)))
 							 (insert (format "Permission mode: %s\nEffective sandbox: %s\nSandbox preference: %s\n"
-									 (mevedel-session-permission-mode session)
-                                                                 (mevedel-sandbox-mode-effective session)
+									 permission-mode
+                                                                 sandbox-mode
 									 (mevedel-session-sandbox-mode session)))
 							 (insert "External instructions: no separately exposed external instruction channel\n\n")
 							 (buffer-string)))

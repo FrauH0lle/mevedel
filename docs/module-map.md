@@ -26,6 +26,7 @@ Data model
   mevedel-journal-evidence.el  frozen completed transcript and bounded session working notes
   mevedel-journal-pins.el      source-session and publication retention for captures
   mevedel-models.el           model tier/provider resolution, context budget
+  mevedel-implementation-policy.el strict serializable implementation record, exact model resolution, current root policy
   mevedel-memory-proposal.el  bounded consolidation reply and captured-scope validation
   mevedel-memory-scope.el     bounded memory/instruction before-state and original target checks
   mevedel-memory-reference.el bounded, dated workspace-path reference observations
@@ -59,7 +60,7 @@ Data model
   mevedel-telemetry-usage.el  frozen per-provider-call identity and normalized usage
   mevedel-plan.el             lifecycle-neutral plan data and artifacts
   mevedel-plan-handoff.el     durable accepted-plan preparation and kickoff
-  mevedel-permission-mode.el  mode normalization, session scoping, lifecycle
+  mevedel-permission-mode.el  mode normalization, effective request/invocation projection, session transitions
   mevedel-permission-rules.el rule parsing, matching, buckets, resource grants
   mevedel-permission-persistence.el target-aware authority store codec
   mevedel-permissions.el      permission preflight and 8-step decision facade

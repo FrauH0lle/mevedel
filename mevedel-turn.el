@@ -33,6 +33,8 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-permission-mode-override
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-plan-read-only
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-require-path
@@ -82,6 +84,18 @@
 (autoload 'mevedel-hooks-event-plist "mevedel-hooks")
 (autoload 'mevedel-hooks-run-event "mevedel-hooks")
 
+;; `mevedel-implementation-policy'
+(declare-function mevedel-implementation-policy-assert-preparation
+                  "mevedel-implementation-policy" (preparation))
+(declare-function mevedel-implementation-policy-current
+                  "mevedel-implementation-policy" (&optional session buffer))
+(declare-function mevedel-implementation-policy-validate
+                  "mevedel-implementation-policy" (policy))
+(defvar mevedel-implementation-policy--admission-preparation nil)
+(autoload 'mevedel-implementation-policy-assert-preparation "mevedel-implementation-policy")
+(autoload 'mevedel-implementation-policy-current "mevedel-implementation-policy")
+(autoload 'mevedel-implementation-policy-validate "mevedel-implementation-policy")
+
 ;; `mevedel-journal-capture'
 (declare-function mevedel-journal-capture-checkpoint "mevedel-journal-capture" (session buffer))
 (declare-function mevedel-journal-capture-checkpoint-start "mevedel-journal-capture" (session buffer callback))
@@ -118,9 +132,13 @@
 (autoload 'mevedel-pending-inputs-requeue-steering "mevedel-pending-inputs")
 
 ;; `mevedel-permission-mode'
-(declare-function mevedel--implementation-permission-mode-restore
-                  "mevedel-permission-mode" ())
-(autoload 'mevedel--implementation-permission-mode-restore "mevedel-permission-mode")
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer request invocation))
+(declare-function mevedel-permission-mode-normalize
+                  "mevedel-permission-mode" (mode))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+(autoload 'mevedel-permission-mode-normalize "mevedel-permission-mode")
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-request
@@ -436,7 +454,24 @@ recovery state alone."
                              (mevedel-session-pending-follow-ups session))
                      :key (lambda (entry) (plist-get entry :state)))
       (mevedel-session-set-pending-input-failure-paused session nil)))
-  (let* ((origin (mevedel-current-origin))
+  ;; Readiness and recovery checks can yield.  Recheck immediately before
+  ;; capture, keeping ordinary policy inspection independent of admission.
+  (when mevedel-implementation-policy--admission-preparation
+    (mevedel-implementation-policy-assert-preparation
+     mevedel-implementation-policy--admission-preparation))
+  (let* ((implementation-policy
+          (let ((mevedel--current-directive-uuid
+                 (or directive-uuid mevedel--current-directive-uuid)))
+            (copy-tree (mevedel-implementation-policy-validate
+                        (mevedel-implementation-policy-current session)))))
+         (permission-mode-override
+          (when-let* ((mode (or mevedel--pending-permission-mode
+                               (plist-get implementation-policy :permission-mode)
+                               (and mevedel--agent-invocation
+                                    (mevedel-agent-invocation-permission-mode-override
+                                     mevedel--agent-invocation)))))
+            (mevedel-permission-mode-normalize mode)))
+         (origin (mevedel-current-origin))
          (id (format "request-%s-%s"
                      (format-time-string "%Y%m%dT%H%M%S")
                      (substring
@@ -447,6 +482,8 @@ recovery state alone."
          (request (mevedel-request--create
                    :id id
                    :session session
+                   :implementation-policy implementation-policy
+                   :permission-mode-override permission-mode-override
                    :turn (1+ (or (mevedel-session-turn-count session) 0))
                    :file-snapshots (make-hash-table :test #'equal)
                    :untracked-effects nil
@@ -464,7 +501,9 @@ recovery state alone."
     (setf (mevedel-request-context request)
           (list :buffer (current-buffer) :mevedel-request-id id
                 :mevedel-request request))
-    (setq mevedel--current-request request)
+    (setq mevedel--current-request request
+          mevedel--pending-implementation-policy nil
+          mevedel--pending-permission-mode nil)
     ;; Emacs auto-saves only after input; an unattended turn needs its own
     ;; mid-turn checkpoints.
     (mevedel-session-persistence-start-checkpoints)
@@ -480,11 +519,11 @@ recovery state alone."
     (when (fboundp 'mevedel-telemetry-record)
       (mevedel-telemetry-record
        session 'request-queued :request-id id :origin origin
-       :permission-mode (mevedel-session-permission-mode session)
+       :permission-mode (mevedel-permission-mode-effective session nil nil request)
        :sandbox-mode (mevedel-sandbox-mode-effective session))
       (mevedel-telemetry-record
        session 'request-start :request-id id :origin origin
-       :permission-mode (mevedel-session-permission-mode session)
+       :permission-mode (mevedel-permission-mode-effective session nil nil request)
        :sandbox-mode (mevedel-sandbox-mode-effective session)))
     request))
 
@@ -653,6 +692,7 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (let* ((error-data (plist-get info :error))
+             (request (plist-get info :mevedel-request))
              (backend (or (plist-get info :backend) gptel-backend))
              (backend-name
               (and backend
@@ -670,9 +710,12 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
              mevedel--session "request" category
              (concat (mevedel-recovery-message category) "; see the transcript")
              nil)
-            ;; Only a structured "model not found" moves the session, and
-            ;; the move is announced.
+            ;; Ordinary root model recovery may move the session.  Accepted
+            ;; implementation choices fail strictly without changing defaults,
+            ;; even if their Goal has stopped since this request was admitted.
             (when-let* (((eq category 'model))
+                         ((not (and request
+                                    (mevedel-request-implementation-policy request))))
                          ((eq chat-buffer (mevedel-session-root-buffer mevedel--session)))
                          (selector (format "%s:%s" backend-name
                                            (gptel--model-name
@@ -818,14 +861,6 @@ The terminal admission hold stays live between publication and this phase."
           (mevedel-session-collection-schedule mevedel--session)
           (when (buffer-live-p mevedel--view-buffer)
             (mevedel-view-rerender mevedel--view-buffer)))))))
-
-(defun mevedel--turn-restore-permission-mode (fsm)
-  "Restore any temporary permission mode for FSM's request buffer."
-  (when-let* ((info (mevedel-engine-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (mevedel--implementation-permission-mode-restore))))
 
 (defun mevedel--turn-end-request (fsm)
   "End the active mevedel request for FSM's request buffer."
@@ -982,8 +1017,7 @@ A step returning `mevedel-turn-pending' stays at the front and calls
                 (cancel-checkpoint)
                 (when (mevedel--turn-current-p fsm)
                   (if on-cancel (funcall on-cancel)
-                    (mevedel--run-turn-steps fsm '(mevedel--turn-restore-permission-mode
-                                                   mevedel--turn-end-request)))))
+                    (mevedel--run-turn-steps fsm '(mevedel--turn-end-request)))))
             (setf (mevedel-engine-info fsm)
                   (plist-put (mevedel-engine-info fsm) :mevedel-turn-settled nil))
             (release))))
@@ -1110,7 +1144,7 @@ The turn's request disappeared without settling, so the full
 transaction cannot run: there is no reservation to commit and no
 request to end.  What still can run does: the settlement telemetry the
 lost teardown never recorded, the autosave that publishes the
-transcript, the StopFailure hook, the permission-mode restore, and
+transcript, the StopFailure hook, and
 idling the root roster that only `mevedel-request-end' would otherwise
 touch.  The buffer remains busy until this deferred chain finishes."
   (mevedel--turn-stamp-settled fsm)
@@ -1122,7 +1156,6 @@ touch.  The buffer remains busy until this deferred chain finishes."
          #'mevedel--turn-checkpoint
          (lambda (machine)
            (mevedel--run-turn-terminal-hook machine 'StopFailure 'lost))
-         #'mevedel--turn-restore-permission-mode
          (lambda (machine)
            (when-let* ((buffer (mevedel--turn-buffer machine)))
              (with-current-buffer buffer
@@ -1130,7 +1163,6 @@ touch.  The buffer remains busy until this deferred chain finishes."
                  (setf (mevedel-session-agent-root-activity mevedel--session)
                        'idle))))))
    (lambda ()
-     (mevedel--turn-restore-permission-mode fsm)
      (when-let* ((buffer (mevedel--turn-buffer fsm)))
        (with-current-buffer buffer
          (when (bound-and-true-p mevedel--session)
@@ -1172,7 +1204,6 @@ inverting them drops the turn's file-history checkpoints."
            #'mevedel--turn-checkpoint
            (lambda (machine)
              (mevedel--run-turn-terminal-hook machine 'Stop 'completed))
-           #'mevedel--turn-restore-permission-mode
            #'mevedel--turn-end-request
            (lambda (machine)
              (mevedel--turn-after-publication
@@ -1181,11 +1212,30 @@ inverting them drops the turn's file-history checkpoints."
              (mevedel--turn-after-publication
               #'mevedel-view--schedule-follow-up-drain machine)))))))
 
+(defun mevedel--turn-clear-pending-policy (fsm)
+  "Clear only the unadmitted submission policy captured in FSM's info.
+An older terminal callback must not clear a replacement submission."
+  (when-let* ((info (mevedel-engine-info fsm))
+              ((not (plist-get info :mevedel-request-id)))
+              (buffer (plist-get info :buffer))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (unless mevedel--current-request
+        (when (and (plist-member info :mevedel-pending-implementation-policy)
+                   (eq mevedel--pending-implementation-policy
+                       (plist-get info :mevedel-pending-implementation-policy)))
+          (setq mevedel--pending-implementation-policy nil))
+        (when (and (plist-member info :mevedel-pending-permission-mode)
+                   (eq mevedel--pending-permission-mode
+                       (plist-get info :mevedel-pending-permission-mode)))
+          (setq mevedel--pending-permission-mode nil))))))
+
 (defun mevedel--fail-turn (fsm status)
   "Run failure cleanup for FSM with terminal STATUS.
 
 Deferred for the same reason as `mevedel--complete-turn\=': the failure chain
 also autosaves, and it reaches here from the same process sentinel."
+  (mevedel--turn-clear-pending-policy fsm)
   (cond
    ((mevedel--turn-settled-p fsm)
     (mevedel--turn-stamp-settled fsm))
@@ -1195,8 +1245,7 @@ also autosaves, and it reaches here from the same process sentinel."
     (mevedel--turn-commit fsm)
     (mevedel--turn-stamp-settled fsm)
     (let ((admission-cleanup
-           (list #'mevedel--turn-restore-permission-mode
-                 #'mevedel--turn-end-request)))
+           (list #'mevedel--turn-end-request)))
       (mevedel--defer-turn-steps
        fsm
        (append

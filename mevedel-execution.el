@@ -15,6 +15,8 @@
   (require 'mevedel-session-durability)
   (require 'subr-x))
 
+(require 'mevedel-structs)
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-runtime-settled-p
@@ -102,7 +104,8 @@
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
-                  "mevedel-permission-mode" (&optional session data-buffer surface-buffer))
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer request invocation))
 (autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
 
 ;; `mevedel-permission-persistence'
@@ -172,6 +175,8 @@
   "mevedel-session-durability")
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-cancelled-p "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (declare-function mevedel-session--set-execution-state
                   "mevedel-structs" (session state))
 (declare-function mevedel-session-audit-target "mevedel-structs" (session))
@@ -766,7 +771,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
          child)))
 
 
-(defun mevedel-execution--preparation-authority (session roots)
+(defun mevedel-execution--preparation-authority (session roots &optional request invocation)
   "Snapshot mutable launch authority for SESSION and local discovery ROOTS.
 Only scalar policy and path facts are serialized, never live runtime objects."
   (let* ((authority (and session (mevedel-execution--mutation-target session)))
@@ -775,8 +780,9 @@ Only scalar policy and path facts are serialized, never live runtime objects."
          (print-level nil))
     (prin1-to-string
      (list
-      (mevedel-permission-mode-effective session)
-      (mevedel-sandbox-mode-effective session)
+      (mevedel-permission-mode-effective session nil nil request invocation)
+      (mevedel-sandbox-mode-effective
+       session (mevedel-permission-mode-effective session nil nil request invocation))
       (and (boundp 'mevedel-memory-dirs) mevedel-memory-dirs)
       (and (boundp 'mevedel-workspace-additional-roots)
            mevedel-workspace-additional-roots)
@@ -800,6 +806,7 @@ Only scalar policy and path facts are serialized, never live runtime objects."
 CALLBACK receives preparation facts.  ROOTS, ADDITIONAL, PERMISSIONS and
 TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
   (let ((buffer (current-buffer))
+        (request mevedel--current-request)
         (invocation (and (boundp 'mevedel--agent-invocation)
                          mevedel--agent-invocation))
         (target (and session (mevedel-session-execution-target session)))
@@ -809,11 +816,15 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
            (condition-case nil
                (and (buffer-live-p buffer)
                     (mevedel-execution--owner-admissible-p invocation)
+                    (or (null request)
+                        (and (not (mevedel-request-cancelled-p request))
+                             (eq request (buffer-local-value
+                                          'mevedel--current-request buffer))))
                     (eq target (and session (mevedel-session-execution-target session)))
                     (equal snapshot
                            (with-current-buffer buffer
                              (mevedel-execution--preparation-authority
-                              session (cons workdir roots)))))
+                              session (cons workdir roots) request invocation))))
              (error nil))))
       (mevedel-sandbox-prepare-start
        (lambda (preparation)
@@ -828,7 +839,7 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
        (lambda (argv receive)
          (unless snapshot
            (setq snapshot (mevedel-execution--preparation-authority
-                           session (cons workdir roots))))
+                           session (cons workdir roots) request invocation)))
          (let ((child (mevedel-execution--start-process
                        (lambda (result)
                          (if (valid-p)
@@ -843,7 +854,9 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
            (lambda ()
              (when child (mevedel-execution-process-stop child 'aborted)))))
        command workdir roots additional permissions
-       (mevedel-sandbox-mode-effective session) temporary-root))))
+       (mevedel-sandbox-mode-effective
+        session (mevedel-permission-mode-effective session nil nil request invocation))
+       temporary-root))))
 
 
 ;;
@@ -1769,7 +1782,10 @@ terminal settlement."
               mevedel-execution-live-limit)
       (signal 'mevedel-execution-limit
               (list "A session may have at most 64 live Bash processes")))
-    (let* ((permission-mode (mevedel-permission-mode-effective session data-buffer))
+    (let* ((invocation (and (buffer-live-p data-buffer)
+                            (buffer-local-value 'mevedel--agent-invocation data-buffer)))
+           (permission-mode (mevedel-permission-mode-effective
+                             session data-buffer nil request invocation))
            (raw-command (plist-get tool-args :command))
            (command-text (and (stringp raw-command) raw-command))
            (command-properties
@@ -1847,32 +1863,35 @@ terminal settlement."
                       admitted-lease)
                 (condition-case err
                     (with-current-buffer (or data-buffer (current-buffer))
-                      (unless (eq permission-mode
-                                  (mevedel-permission-mode-effective session data-buffer))
-                        (signal 'mevedel-execution-error
-                                '("Permission mode changed while execution was queued; submit the operation again")))
-                      (let ((cancel
-                             (mevedel-execution--prepare
-                              (lambda (preparation)
-                                (unless (mevedel-execution--record-finished-p record)
-                                  (setf (mevedel-execution--record-preparation-cancel record) nil)
-                                  (condition-case failure
-                                      (progn
-                                        (unless (mevedel-execution--owner-admissible-p owner-context)
-                                          (error "Execution owner is terminal"))
-                                        (mevedel-execution--start-admitted record preparation))
-                                    (error
-                                     (mevedel-sandbox-cleanup preparation)
-                                     (setf (mevedel-execution--record-error-data record) failure
-                                           (mevedel-execution--record-exit-code record) -1
-                                           (mevedel-execution--record-termination record) 'spawn-failed)
-                                     (mevedel-execution--finish-managed record)))))
-                              command workdir writable-roots additional-permissions
-                              sandbox-permissions session owner temporary-root)))
-                        (unless (or (mevedel-execution--record-finished-p record)
-                                    (mevedel-execution-process-launch-attempted-p
-                                     (mevedel-execution--record-child record)))
-                          (setf (mevedel-execution--record-preparation-cancel record) cancel))))
+                      (let ((mevedel--current-request request)
+                            (mevedel--agent-invocation invocation))
+                        (unless (eq permission-mode
+                                    (mevedel-permission-mode-effective
+                                     session data-buffer nil request invocation))
+                          (signal 'mevedel-execution-error
+                                  '("Permission mode changed while execution was queued; submit the operation again")))
+                        (let ((cancel
+                               (mevedel-execution--prepare
+                                (lambda (preparation)
+                                  (unless (mevedel-execution--record-finished-p record)
+                                    (setf (mevedel-execution--record-preparation-cancel record) nil)
+                                    (condition-case failure
+                                        (progn
+                                          (unless (mevedel-execution--owner-admissible-p owner-context)
+                                            (error "Execution owner is terminal"))
+                                          (mevedel-execution--start-admitted record preparation))
+                                      (error
+                                       (mevedel-sandbox-cleanup preparation)
+                                       (setf (mevedel-execution--record-error-data record) failure
+                                             (mevedel-execution--record-exit-code record) -1
+                                             (mevedel-execution--record-termination record) 'spawn-failed)
+                                       (mevedel-execution--finish-managed record)))))
+                                command workdir writable-roots additional-permissions
+                                sandbox-permissions session owner temporary-root)))
+                          (unless (or (mevedel-execution--record-finished-p record)
+                                      (mevedel-execution-process-launch-attempted-p
+                                       (mevedel-execution--record-child record)))
+                            (setf (mevedel-execution--record-preparation-cancel record) cancel)))))
                   (error
                    (setf (mevedel-execution--record-error-data record) err
                          (mevedel-execution--record-exit-code record) -1

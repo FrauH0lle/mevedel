@@ -263,11 +263,11 @@
     (should (eq entry (mevedel-session-pending-plan-approval session)))
     (should rendered))
 
-  :doc "keeps acceptance settled after Goal-save or Mode-transition failure"
-  (dolist (failure '(goal-save mode-transition))
+  :doc "keeps acceptance settled after reservation-save or submission failure"
+  (dolist (failure '(goal-save submission))
     (let* ((session
             (mevedel-session--create
-             :authority-mode 'pid-lock :name "test" :plan-mode t))
+             :authority-mode 'pid-lock :name "test" :plan-mode t :permission-mode 'ask))
            (chat-buffer (generate-new-buffer " *plan-committed-failure*"))
            (selection
             (list :location 'here :context 'current
@@ -281,7 +281,7 @@
            (saves 0)
            (transitions 0)
            (submissions 0)
-           (mode-fails (eq failure 'mode-transition)))
+           (submission-fails (eq failure 'submission)))
       (unwind-protect
           (progn
             (with-current-buffer chat-buffer
@@ -303,15 +303,13 @@
                     (when (and (eq failure 'goal-save) (= saves 1))
                       (error "Reservation save failed"))))
                  ((symbol-function 'mevedel-permission-mode-transition)
-                  (lambda (mode)
+                  (lambda (_mode)
                     (cl-incf transitions)
-                    (if mode-fails
-                        (error "Mode transition failed")
-                      (setf (mevedel-session-permission-mode session)
-                            mode))))
+                    (ert-fail "Implementation changed the session mode")))
                  ((symbol-function 'mevedel-plan-handoff--submit)
                   (lambda (&rest _)
-                    (cl-incf submissions))))
+                    (cl-incf submissions)
+                    (when submission-fails (error "Submission failed")))))
               (mevedel-plan-approval-settle entry outcome)
               (mevedel-plan-approval-settle entry outcome)
             (let* ((metadata (mevedel-session-plan-metadata session))
@@ -323,18 +321,16 @@
               (should (eq 'accepted (plist-get metadata :status)))
               (should (string-match-p "failed"
                                       (plist-get retry :failure)))
-              (should (= (if (eq failure 'goal-save) 0 1)
-                         transitions))
+              (should (= 0 transitions))
               (should (= 2 saves))
-              (should (= 0 submissions)))
-            (setq mode-fails nil)
+              (should (= (if (eq failure 'goal-save) 0 1) submissions)))
+            (setq submission-fails nil)
             (mevedel-retry-plan-implementation session chat-buffer)
-            (should (eq 'edits
+            (should (eq 'ask
                         (mevedel-session-permission-mode session)))
-            (should (= (if (eq failure 'goal-save) 1 2)
-                       transitions))
+            (should (= 0 transitions))
             (should (= 3 saves))
-            (should (= 1 submissions))
+            (should (= (if (eq failure 'goal-save) 1 2) submissions))
             (should (= 1 archives))))
         (when (buffer-live-p chat-buffer) (kill-buffer chat-buffer))))))
 
@@ -1256,9 +1252,6 @@
                                  :outcome
                                  (list :model-input input
                                        :transcript-input input)))))
-                    ((symbol-function
-                      'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (action)
@@ -1277,8 +1270,11 @@
                  (address (mevedel-plan-resource-address
                            (plist-get metadata :accepted-path))))
             (should-not (mevedel-session-plan-mode session))
-            (should (eq 'full-auto
+            (should (eq 'edits
                         (mevedel-session-permission-mode session)))
+            (should (equal '(:model-provider "OpenAI:gpt-5" :reasoning-effort nil
+                             :permission-mode full-auto)
+                           (plist-get implementation :implementation-policy)))
             (should (eq 'accepted (plist-get metadata :status)))
             (should-not (plist-member metadata :verification-pending))
             (should-not (plist-member metadata :accepted-absolute-path))
@@ -1326,9 +1322,6 @@
                                  :outcome
                                  (list :model-input input
                                        :transcript-input input)))))
-                    ((symbol-function
-                      'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (saved-session _buffer)
                        (when (and (not (mevedel-session-goal saved-session))
@@ -1363,6 +1356,11 @@
             (should (equal (plist-get metadata :accepted-path)
                            (mevedel-goal-plan-reference goal)))
             (should (= 4321 (mevedel-goal-token-budget goal)))
+            (should (equal '(:model-provider "OpenAI:gpt-5" :reasoning-effort nil
+                             :permission-mode full-auto)
+                           (mevedel-goal-implementation-policy goal)))
+            (should (eq 'edits (mevedel-session-permission-mode session)))
+            (should (= 1234 (buffer-local-value 'mevedel-goal-token-budget data-buffer)))
             (should-not (plist-member metadata :accepted-absolute-path))
             (should (string-match-p (regexp-quote address) hook-input))
             (should-not (string-match-p (regexp-quote accepted) hook-input))

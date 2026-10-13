@@ -49,6 +49,61 @@
        (mevedel-workspace-clear-registry)
        (delete-directory root t))))
 
+(mevedel-deftest mevedel-request-begin-implementation-authority (:quiet t)
+  ,test
+  (test)
+  :doc "admission captures copied full policy and never restores baseline"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (let ((policy (list :model-provider "Provider:model" :reasoning-effort nil
+                        :permission-mode 'full-auto)))
+      (setf (mevedel-session-permission-mode session) 'ask)
+      (setq mevedel--pending-implementation-policy policy)
+      (let ((admitted (mevedel-request-begin session)))
+        (should (equal policy (mevedel-request-implementation-policy admitted)))
+        (should-not (eq policy (mevedel-request-implementation-policy admitted)))
+        (should (eq 'full-auto (mevedel-request-permission-mode-override admitted)))
+        (should-not mevedel--pending-implementation-policy)
+        (should (eq 'ask (mevedel-session-permission-mode session)))
+        (setf (mevedel-session-permission-mode session) 'edits)
+        (mevedel-request-end)
+        (should (eq 'edits (mevedel-session-permission-mode session))))))
+
+  :doc "stale request teardown leaves incoming pending policy for admission"
+  (mevedel-turn-ownership-test--with-session
+    (let ((policy (list :model-provider "Provider:model" :reasoning-effort nil
+                        :permission-mode 'edits)))
+      (setq mevedel--pending-implementation-policy policy)
+      (let ((admitted (mevedel-request-begin session)))
+        (should (mevedel-request-cancelled-p request))
+        (should (equal policy (mevedel-request-implementation-policy admitted)))
+        (should (eq 'edits (mevedel-request-permission-mode-override admitted)))
+        (should-not mevedel--pending-implementation-policy))))
+
+  :doc "pending mode survives major mode and is consumed without session writes"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (setf (mevedel-session-permission-mode session) 'full-auto)
+    (setq mevedel--pending-permission-mode 'ask)
+    (org-mode)
+    (let ((admitted (mevedel-request-begin session "directive")))
+      (should (eq 'ask (mevedel-request-permission-mode-override admitted)))
+      (should-not (mevedel-request-implementation-policy admitted))
+      (should-not mevedel--pending-permission-mode)
+      (mevedel-request-end)
+      (should (eq 'full-auto (mevedel-session-permission-mode session)))))
+
+  :doc "child admission captures inherited permission but no full model policy"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (setq mevedel--agent-invocation
+          (mevedel-agent-invocation--create
+           :parent-session session :path "/root/child"
+           :permission-mode-override 'edits))
+    (let ((admitted (mevedel-request-begin session)))
+      (should (eq 'edits (mevedel-request-permission-mode-override admitted)))
+      (should-not (mevedel-request-implementation-policy admitted)))))
+
 (mevedel-deftest mevedel-request-begin-ownership (:quiet t)
   ,test
   (test)
@@ -188,13 +243,13 @@
                  (lambda (machine)
                    (funcall save machine)
                    ;; Inject the reentrant replacement at the publication seam.
-                   (setq mevedel--current-request replacement
-                         mevedel--implementation-permission-mode-saved '(ask))
+                   (setq mevedel--current-request replacement)
+                   (setf (mevedel-request-permission-mode-override replacement) 'edits)
                    (setf (mevedel-session-permission-mode session) 'full-auto))))
         (mevedel--complete-turn fsm))
       (should (eq replacement mevedel--current-request))
       (should (eq 'full-auto (mevedel-session-permission-mode session)))
-      (should (equal '(ask) mevedel--implementation-permission-mode-saved))
+      (should (eq 'edits (mevedel-request-permission-mode-override replacement)))
       (should-not mevedel--turn-settlements-pending)
       (should (mevedel-session-artifacts-artifact-present-p
                      session (format "segment-%04d.chat.org"

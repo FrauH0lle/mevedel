@@ -1399,7 +1399,7 @@ then decides again until the invocation is allowed or denied."
            (when session
              (setq permission-context
                    (plist-put permission-context :mode
-                              (mevedel-permission-mode-effective session))))
+                              (mevedel-permission-mode-for-context permission-context))))
            (let* ((decision (mevedel-tool-exec-permission--decide
                              tool-name detail request permission-context
                              settled))

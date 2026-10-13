@@ -486,8 +486,6 @@
             (org-mode)
             (setq-local mevedel--session session)
             (setq-local mevedel--current-request nil)
-            (setq-local mevedel--implementation-permission-mode-saved
-                        '(ask))
             (insert "Lost response\n"))
           (let ((mevedel-stop-failure-functions
                  (list (lambda (event) (push event hook-events)))))
@@ -506,7 +504,7 @@
             (mevedel-transport-cancel-pending)
             (with-current-buffer chat-buf
               (should-not (mevedel-turn-busy-p))
-              (should (eq 'ask (mevedel-session-permission-mode session))))
+              (should (eq 'full-auto (mevedel-session-permission-mode session))))
             (dolist (fsm fsms)
               (should-not (plist-get (gptel-fsm-info fsm)
                                      :mevedel-turn-settled))
@@ -549,7 +547,8 @@
                                  (plist-get event :terminal-reason))))
                    hook-events))
           (should (eq 'idle (mevedel-session-agent-root-activity session)))
-          (should (eq 'ask (mevedel-session-permission-mode session)))
+          ;; Lost implementation teardown cannot restore over a live baseline.
+          (should (eq 'full-auto (mevedel-session-permission-mode session)))
           (should (= 1 (mevedel-session-turn-count session)))
           (should-not (buffer-local-value
                        'mevedel--turn-settlements-pending chat-buf))
@@ -698,19 +697,23 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
-(mevedel-deftest mevedel--turn-restore-permission-mode ()
+(mevedel-deftest mevedel--turn-clear-pending-policy ()
   ,test
   (test)
-  :doc "restores permission mode in the live request buffer"
+  :doc "clears unadmitted policy only for its exact submission identity"
   (let ((chat-buf (generate-new-buffer " *mevedel-turn-permission*"))
-        called-buffer)
+        (policy (list :permission-mode 'edits)))
     (unwind-protect
-        (cl-letf (((symbol-function
-                    'mevedel--implementation-permission-mode-restore)
-                   (lambda () (setq called-buffer (current-buffer)))))
-          (mevedel--turn-restore-permission-mode
-           (gptel-make-fsm :info (list :buffer chat-buf)))
-          (should (eq chat-buf called-buffer)))
+        (with-current-buffer chat-buf
+          (setq-local mevedel--pending-implementation-policy policy)
+          (mevedel--turn-clear-pending-policy
+           (gptel-make-fsm :info (list :buffer chat-buf
+                                      :mevedel-pending-implementation-policy (copy-sequence policy))))
+          (should (eq policy mevedel--pending-implementation-policy))
+          (mevedel--turn-clear-pending-policy
+           (gptel-make-fsm :info (list :buffer chat-buf
+                                      :mevedel-pending-implementation-policy policy)))
+          (should-not mevedel--pending-implementation-policy))
       (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-end-request ()
@@ -773,8 +776,6 @@
                                    (with-current-buffer chat-buf
                                      (and mevedel--current-request 'live)))
                              events)))
-                    ((symbol-function 'mevedel--turn-restore-permission-mode)
-                     (lambda (_fsm) (push 'restore events)))
                     ((symbol-function 'mevedel--turn-end-request)
                      (lambda (_fsm)
                        (push 'request-end events)
@@ -794,7 +795,7 @@
           (should (equal (nreverse events)
                          '(turn (plan success) baseline save
                            (Stop completed live)
-                           restore request-end (drain t))))
+                           request-end (drain t))))
           (with-current-buffer chat-buf
             (should-not mevedel--current-request)))
       (kill-buffer chat-buf)))
@@ -850,8 +851,6 @@
               ((symbol-function 'mevedel--run-turn-terminal-hook)
                (lambda (_fsm event status)
                  (push (list event status) events)))
-              ((symbol-function 'mevedel--turn-restore-permission-mode)
-               (lambda (_fsm) (push 'restore events)))
               ((symbol-function 'mevedel--turn-fail-pending-input)
                (lambda (_fsm) (push 'pending-input-failure events)))
               ((symbol-function 'mevedel--turn-end-request)
@@ -873,7 +872,7 @@
            (and (eq (car case) 'error)
                 '(failure-record))
            `(pending-input-failure save (StopFailure ,(car case))
-             restore request-end goal-save goal-retry)))))
+             request-end goal-save goal-retry)))))
     (should-not drained)))
 
   :doc "transport rejection still performs local failure admission cleanup"
@@ -890,9 +889,6 @@
           (cl-letf (((symbol-function 'mevedel--turn-commit) #'ignore)
                     ((symbol-function 'mevedel-transport-run-when-idle)
                      (lambda (&rest _) nil))
-                    ((symbol-function
-                      'mevedel--turn-restore-permission-mode)
-                     (lambda (_) (push 'restore events)))
                     ((symbol-function 'mevedel--turn-fail-pending-input)
                      (lambda (_) (push 'pending-input-failure events)))
                     ((symbol-function 'mevedel--turn-end-request)
@@ -901,7 +897,7 @@
                        (with-current-buffer chat-buf
                          (setq mevedel--current-request nil)))))
             (mevedel--fail-turn fsm 'aborted))
-          (should (equal '(pending-input-failure restore request-end)
+          (should (equal '(pending-input-failure request-end)
                          (nreverse events)))
           (with-current-buffer chat-buf
             (should-not mevedel--current-request)))
@@ -969,9 +965,6 @@
                      (lambda (_fsm) (cl-incf saves)))
                     ((symbol-function 'mevedel--run-turn-terminal-hook)
                      (lambda (_fsm _event _status) (cl-incf hooks)))
-                    ((symbol-function
-                      'mevedel--turn-restore-permission-mode)
-                     #'ignore)
                     ((symbol-function 'mevedel--turn-fail-pending-input)
                      #'ignore)
                     ((symbol-function 'mevedel-goal-persist-failure) #'ignore)

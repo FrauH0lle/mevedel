@@ -204,7 +204,16 @@
               (should (string-search "External full description" text))
               (should-not (string-search "Loaded full description" text))
               (should (string-search "external gptel tool" text))
-              (should (string-search "Estimated total" text)))))
+              (should (string-search "Estimated total" text))))
+          (with-current-buffer data
+            (setq-local mevedel--current-request
+                        (mevedel-request--create
+                         :session session :permission-mode-override 'full-auto))
+            (let* ((report (mevedel-system--effective-prompt-report data))
+                   (text (plist-get (car (plist-get report :sections)) :body)))
+              (should (string-search "Permission mode: full-auto" text))
+              (should (string-search "Effective sandbox: off" text))
+              (should (eq 'edits (mevedel-session-permission-mode session))))))
       (when (buffer-live-p inspector) (kill-buffer inspector))
       (when (buffer-live-p data) (kill-buffer data))
       (mevedel-tool-clear-registry)

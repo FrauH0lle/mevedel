@@ -53,7 +53,7 @@
          (session
           (mevedel-session--create
            :authority-mode 'pid-lock
-           :name "test" :save-path save-dir :permission-mode 'full-auto
+           :name "test" :save-path save-dir :permission-mode 'ask
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
          (data-buffer (generate-new-buffer " *plan-fresh-data*"))
@@ -80,8 +80,6 @@
                      (lambda (source) (setq hook-source source)))
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_buffer) view-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-view--submit-planned-input)
                      (lambda (input _before _blocked callback &optional _after)
                        (push input prompts)
@@ -95,7 +93,9 @@
                      (lambda (action)
                        (cl-incf attempts)
                        (should (eq 'full-auto
-                                   (plist-get action :permission-mode)))
+                                   (plist-get (plist-get action :implementation-policy)
+                                              :permission-mode)))
+                       (should (eq 'ask (mevedel-session-permission-mode session)))
                        (when (= attempts 1)
                          (error "Transport refused"))
                        (setq request-fsm (gptel-make-fsm :info nil)))))
@@ -188,7 +188,7 @@
           (mevedel-session--create
            :authority-mode 'pid-lock
            :name "target" :session-id "target" :save-path target-save
-           :working-directory default-directory :permission-mode 'full-auto))
+           :working-directory default-directory :permission-mode 'ask))
          (source-buffer (generate-new-buffer " *plan-goal-source*"))
          (target-buffer (generate-new-buffer " *plan-goal-target*"))
          (view-buffer (generate-new-buffer " *plan-goal-target-view*")))
@@ -208,8 +208,6 @@
                      (lambda (buffer)
                        (should (eq target-buffer buffer))
                        view-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-view--submit-planned-input)
                      (lambda (input _before _blocked callback &optional _after)
                        (funcall callback
@@ -227,8 +225,13 @@
           (let ((goal (mevedel-session-goal target-session)))
             (should goal)
             (should (= 7000 (mevedel-goal-token-budget goal)))
+            (should (equal '(:model-provider "Test:test-model" :reasoning-effort nil
+                             :permission-mode full-auto)
+                           (mevedel-goal-implementation-policy goal)))
             (should (equal "local/plans/accepted-20260813-120000.md"
                            (mevedel-goal-plan-reference goal))))
+          (should (eq 'ask (mevedel-session-permission-mode target-session)))
+          (should (= 1234 (buffer-local-value 'mevedel-goal-token-budget target-buffer)))
           (should (eq 'ask
                       (mevedel-session-permission-mode source-session))))
       (dolist (buffer (list view-buffer target-buffer source-buffer))
@@ -242,6 +245,8 @@
          (body "Crash-window plan")
          (goal (mevedel-goal--create
                 :id "reserved" :status 'paused :reason "session resumed"
+                :implementation-policy
+                '(:model-provider "Test:test-model" :reasoning-effort nil :permission-mode edits)
                 :plan-reference "local/plans/accepted-20260813-120000.md"))
          (record
           (list :step 'submit :goal-id "reserved"
@@ -269,8 +274,6 @@
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-view--submit-planned-input)
                      (lambda (input _before _blocked callback &optional _after)
                        (funcall callback
@@ -327,8 +330,6 @@
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-view--submit-planned-input)
                      (lambda (input _before _blocked callback &optional _after)
                        (funcall callback
@@ -386,8 +387,6 @@
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-view--submit-planned-input)
                      (lambda (input _before _blocked callback &optional _after)
                        (funcall callback
@@ -509,8 +508,6 @@
                                      (error-message-string err)))))))
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_buffer) view-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-view--submit-planned-input)
                      (lambda (input _before _blocked callback &optional _after)
                        (push input prompts)
@@ -651,8 +648,6 @@
                      (lambda (buffer)
                        (should (eq target-buffer buffer))
                        view-buffer))
-                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                     #'ignore)
                     ((symbol-function 'mevedel-view--submit-planned-input)
                      (lambda (input _before _blocked callback &optional _after)
                        (push input prompts)
@@ -698,7 +693,7 @@
                           (mevedel-session-preset-name target-session)))
               (should (eq 'ask
                           (mevedel-session-permission-mode source-session)))
-              (should (eq 'full-auto
+              (should (eq 'ask
                           (mevedel-session-permission-mode target-session))))
             (mevedel-retry-plan-implementation
              source-session source-buffer)
@@ -919,8 +914,6 @@
                 (lambda (buffer)
                   (should (eq target-buffer buffer))
                   view-buffer))
-               ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
-                #'ignore)
                ((symbol-function 'mevedel-view--submit-planned-input)
                 (lambda (input _before _blocked callback &optional _after)
                   (push input prompts)

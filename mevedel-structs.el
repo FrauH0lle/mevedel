@@ -406,6 +406,7 @@ owner alongside the newly committed session state."
   objective          ; non-empty free-form string
   status             ; active, paused, blocked, budget-limited, or complete
   reason             ; non-empty string for paused/blocked/budget-limited
+  implementation-policy ; exact model/effort/permission snapshot or nil
   token-budget       ; positive integer or nil
   tokens-used        ; non-negative integer; lower bound when incomplete
   tokens-incomplete-p ; missing native usage in an accounted request
@@ -740,6 +741,15 @@ Set at request start and cleared by the request lifecycle owner.")
 (defvar-local mevedel--agent-invocation nil
   "Invocation that owns this retained agent conversation buffer.")
 
+(defvar-local mevedel--pending-implementation-policy nil
+  "Accepted implementation policy waiting for request admission.")
+
+(defvar-local mevedel--pending-permission-mode nil
+  "Mode-only permission override waiting for request admission.")
+
+(put 'mevedel--pending-implementation-policy 'permanent-local t)
+(put 'mevedel--pending-permission-mode 'permanent-local t)
+
 (cl-defstruct (mevedel-request (:constructor mevedel-request--create))
   "Per-request state, scoped to a single LLM request/response cycle.
 Created at request start, cleared in the termination handler."
@@ -749,6 +759,8 @@ Created at request start, cleared in the termination handler."
   fsm               ; owning root gptel FSM, or nil for non-provider requests
   context           ; request-owned workflow context for external engines
   model-policy      ; frozen effective backend/model/effort, independent of selection
+  implementation-policy ; accepted full policy captured at admission, or nil
+  permission-mode-override ; scoped canonical authority, or nil for live baseline
   workspace-instruction-hashes ; fresh directive's acknowledged path instructions
   file-snapshots    ; hash-table: filepath -> original content at request start
   untracked-effects ; alist: source -> reason capture cannot be complete

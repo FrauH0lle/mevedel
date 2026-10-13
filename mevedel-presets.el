@@ -34,8 +34,10 @@
 (autoload 'gptel-make-preset "gptel")
 
 ;; `gptel-request'
+(declare-function gptel--fsm-transition "ext:gptel-request" (machine &optional new-state))
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
 (declare-function gptel--tool-result-p "ext:gptel-request" (info))
+(declare-function gptel-fsm-handlers "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (defvar gptel-request--transitions)
@@ -66,6 +68,13 @@
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-capture-request "mevedel-goal" (fsm))
+
+;; `mevedel-implementation-policy'
+(declare-function mevedel-implementation-policy-assert-preparation
+                  "mevedel-implementation-policy" (preparation))
+(autoload 'mevedel-implementation-policy-assert-preparation
+  "mevedel-implementation-policy")
+(defvar mevedel-implementation-policy--admission-preparation)
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--find-directive-by-uuid
@@ -794,8 +803,61 @@ owners derive it from their FSM. CANCELLED-P overrides either with aborted."
                          (with-current-buffer buffer
                            (copy-marker (point-max) nil)))))
       (setf (gptel-fsm-info fsm) info)
-      (mevedel-preset--final-patch-handler
-       fsm #'mevedel-preset--settle-terminal))))
+      (if (plist-get info :mevedel-preparation-rejected)
+          ;; No request was admitted.  An ambient replacement request must
+          ;; not supply captures, patches or cancellation for this machine.
+          (mevedel-preset--settle-terminal fsm)
+        (mevedel-preset--final-patch-handler
+         fsm #'mevedel-preset--settle-terminal)))))
+
+(defun mevedel-preset--reject-preparation (fsm)
+  "Visibly settle stale, unadmitted FSM without touching a newer request."
+  (let* ((info (gptel-fsm-info fsm))
+         (buffer (plist-get info :buffer))
+         (reason "Implementation context changed during preparation; submit again"))
+    (plist-put info :status "Request not sent")
+    (plist-put info :error (list :type "stale_implementation_preparation" :message reason))
+    (plist-put info :mevedel-preparation-rejected t)
+    (setf (gptel-fsm-info fsm) info)
+    (message "mevedel: request not sent: %s" reason)
+    (when (and (buffer-live-p buffer)
+               (buffer-local-value 'mevedel--current-request buffer))
+      ;; gptel's error presentation and last-FSM handler are buffer-scoped.
+      ;; A late callback must leave the replacement's UI and FSM intact.
+      (setf (gptel-fsm-handlers fsm)
+            (cons (list 'ERRS #'mevedel-preset--settle-terminal)
+                  (assq-delete-all 'ERRS (copy-sequence (gptel-fsm-handlers fsm))))))
+    (gptel--fsm-transition fsm 'ERRS)))
+
+(defun mevedel-preset--guard-preparation (fsm handlers)
+  "Run WAIT HANDLERS only while FSM's preparation still owns its authority.
+Catch stale admission after yielding checks too.  gptel runs sibling handlers
+even after a nested terminal transition, so this gate owns the whole group."
+  (condition-case err
+      (progn
+        (when-let* ((info (gptel-fsm-info fsm))
+                    ((not (plist-get info :mevedel-request-begun)))
+                    (preparation (plist-get info :mevedel-implementation-preparation)))
+          (with-current-buffer (plist-get info :buffer)
+            (mevedel-implementation-policy-assert-preparation preparation)))
+        (mapc (lambda (handler) (funcall handler fsm)) handlers))
+    (mevedel-stale-implementation-preparation
+     (mevedel-preset--reject-preparation fsm))
+    (error
+     ;; Request readiness can detect a replacement admitted while it yielded
+     ;; and signal before reaching policy capture.  Settle that stale machine,
+     ;; but leave errors unrelated to changed preparation on their old path.
+     (if (when-let* ((info (gptel-fsm-info fsm))
+                    ((not (plist-get info :mevedel-request-begun)))
+                    ((not (plist-get info :mevedel-request-id)))
+                    (preparation (plist-get info :mevedel-implementation-preparation)))
+           (condition-case nil
+               (with-current-buffer (plist-get info :buffer)
+                 (mevedel-implementation-policy-assert-preparation preparation)
+                 nil)
+             (mevedel-stale-implementation-preparation t)))
+         (mevedel-preset--reject-preparation fsm)
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-preset--build-handlers (handlers)
   "Build the standard mevedel FSM handler chain from base HANDLERS.
@@ -841,10 +903,15 @@ alist with mevedel-specific handlers added:
                             (when mevedel--session
                               (mevedel-session-artifacts-assert-new-mutation-authority
                                mevedel--session)
+                              (when-let* ((preparation
+                                           (plist-get info :mevedel-implementation-preparation)))
+                                (mevedel-implementation-policy-assert-preparation preparation))
                               (unless mevedel--current-request
-                                (mevedel-request-begin
-                                 mevedel--session
-                                 mevedel--current-directive-uuid))
+                                (let ((mevedel-implementation-policy--admission-preparation
+                                       (plist-get info :mevedel-implementation-preparation)))
+                                  (mevedel-request-begin
+                                   mevedel--session
+                                   mevedel--current-directive-uuid)))
                               (when (and mevedel--current-request
                                          (fboundp 'mevedel-request-id))
                                 (setf (mevedel-request-fsm
@@ -895,6 +962,11 @@ alist with mevedel-specific handlers added:
         (mevedel--add-termination-handler
          #'mevedel-preset--terminal-handler handlers))
   (setq handlers (mevedel--wrap-terminal-handlers handlers))
+  (when-let* ((wait-entry (assq 'WAIT handlers)))
+    (let ((wait-handlers (cdr wait-entry)))
+      (setcdr wait-entry
+              (list (lambda (fsm)
+                      (mevedel-preset--guard-preparation fsm wait-handlers))))))
   handlers)
 
 

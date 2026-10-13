@@ -616,8 +616,9 @@ have none.  The executable stays literal; paths are not reduced to names."
                    (and (boundp 'mevedel--session) mevedel--session))))
     (or (and permission-context
              (plist-get permission-context :mode))
-        (and session (mevedel-session-permission-mode session))
-        mevedel-permission-mode)))
+        (if permission-context
+            (mevedel-permission-mode-for-context permission-context)
+          (mevedel-permission-mode-effective session)))))
 
 (defun mevedel-bash-policy-effective-sandbox-mode
     (&optional permission-context)

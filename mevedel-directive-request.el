@@ -126,10 +126,9 @@
                   "mevedel-overlays" (instruction &optional of-type pred))
 
 ;; `mevedel-permission-mode'
-(declare-function mevedel--implementation-permission-mode-apply
+(declare-function mevedel-permission-mode-normalize
                   "mevedel-permission-mode" (mode))
-(declare-function mevedel--implementation-permission-mode-restore
-                  "mevedel-permission-mode" ())
+(autoload 'mevedel-permission-mode-normalize "mevedel-permission-mode")
 
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-append-implementation-input
@@ -909,7 +908,8 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
               (setq cleanup-planning-session mevedel--session))
             (when-let* ((mode (and implementation-p
                                     (plist-get options :permission-mode))))
-              (mevedel--implementation-permission-mode-apply mode)
+              (setq mevedel--pending-permission-mode
+                    (mevedel-permission-mode-normalize mode))
               (setq cleanup-mode-applied-p t))
             (setq cleanup-request-context-set-p t)
 	    (setq mevedel--current-directive-uuid
@@ -1013,7 +1013,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
        (when (and cleanup-mode-applied-p
                   (buffer-live-p cleanup-chat-buffer))
          (with-current-buffer cleanup-chat-buffer
-           (mevedel--implementation-permission-mode-restore)))
+           (setq mevedel--pending-permission-mode nil)))
        (when cleanup-planning-session
          (setf (mevedel-session-directive-planning cleanup-planning-session)
                nil))

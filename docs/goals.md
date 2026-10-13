@@ -28,12 +28,20 @@ The session sidecar stores a strict Goal record containing:
 - `active`, `paused`, `blocked`, `budget-limited`, or `complete` status plus an
   optional reason;
 - token, elapsed-time, and turn accounting;
-- an optional token budget and accepted-plan reference; and
+- an optional token budget, accepted-plan reference, and implementation policy; and
 - creation and update timestamps.
 
 An invalid persisted Goal record loads as no Goal. An active Goal loaded from a
 saved session is demoted to `paused` with a session-resumed reason so recovery
 cannot dispatch work without an explicit `/goal resume`.
+
+The required `:implementation-policy` field is `nil` for a Goal without an
+accepted implementation override. A present policy is the strict serializable
+record `(:model-provider STRING :reasoning-effort SYMBOL-or-nil
+:permission-mode MODE)`, with an exact `BACKEND:MODEL` label and canonical
+`ask`, `edits`, or `full-auto` mode. No extra or missing fields are accepted.
+Older Goal records lacking this field are rejected, not migrated; their
+transcripts remain readable, but their Goal state is not restored.
 
 The state controls whether another ordinary turn may start. Pausing ends a
 running Goal turn at its next tool boundary: running tools finish and the turn
@@ -77,10 +85,36 @@ the same context and accounting as automatic turns. Same-turn steering instead
 joins the already-running Goal turn at its next model interaction boundary and
 does not create or charge another turn.
 
+An accepted-plan Goal's implementation policy selects the root turn's backend,
+model, reasoning effort, and permission-mode override. Each active ordinary
+root turn captures it at admission, whether it comes from user input or
+automatic continuation. `/goal resume` uses the same durable policy. Ordinary
+chat while the Goal is paused, blocked, budget-limited, or complete uses the
+session baseline; a turn already admitted retains its captured settings until
+settlement. If accepted Goal authority changes during asynchronous preparation,
+the unsent request is rejected rather than pairing a prepared model with new
+permissions or a different Goal. A fresh submission uses the current policy.
+Goals created without an implementation policy use ordinary session policy
+throughout.
+
+Policy resolution is exact: a missing provider/model or unsupported effort
+fails visibly and pauses active Goal execution rather than substituting the
+session model. The implementation selection never changes the session's stored
+model, effort, permission mode, or new-Goal budget default. No snapshot/restore
+cycle can overwrite a user change made while implementation runs.
+
+The permission override follows the common permission resolver and is inherited
+by child implementation turns, including nested delegation. Current hard
+denies, shared rules, resource grants, and workflow restrictions remain live.
+Children keep their own model workload policies; unrelated child, summary,
+control, and directive work does not inherit an ambient root implementation
+policy. Directive settings remain separately request-local.
+
 `/goal edit <objective>` revises the live objective and rotates the Goal ID
-while retaining status, budget, accounting, accepted-plan reference, and
-creation time. The revised objective has highest authority; an accepted Plan
-remains binding only where consistent with it. An already-running turn no longer
+while retaining status, budget, accounting, accepted-plan reference,
+implementation policy, and creation time. The revised objective has highest
+authority; an accepted Plan remains binding only where consistent with it. An
+already-running turn no longer
 sees `UpdateGoal` and its stale calls are rejected, but that turn is still charged to the
 revised Goal through a separate request-local accounting identity. Only edit
 rotates that identity and queued follow-up ownership with the Goal, so editing
@@ -185,6 +219,10 @@ when usage is incomplete.
 `CreateGoal` accepts an optional positive `token_budget`, supplied only when
 explicitly requested. Omission uses `mevedel-goal-token-budget`; the tool cannot
 invent a limit or change the configured default.
+
+An accepted Plan supplies its selected budget directly to the Goal record,
+including `nil` for Unlimited. That selection does not change
+`mevedel-goal-token-budget` in either a Here or Worktree session.
 
 Crossing the limit never aborts an in-flight request or tool. At each root
 tool-result boundary, durable usage plus the turn's known provider usage is
@@ -349,24 +387,33 @@ parsing Markdown headings. The first ordinary Goal turn receives the prepared
 context, resolved artifact path, full plan, and kickoff; later turns use the
 small request-local Goal context and may reread the validated artifact.
 
-The Plan-selected permission mode and Goal budget apply to the target session.
-For Worktree execution, the source session's permission mode and Goal state
-remain unchanged; Here execution uses the current session. Derived
+The prepared Goal owns the Plan-selected implementation policy and token budget,
+not the target session's ordinary defaults. Here keeps the current session's
+baseline; Worktree keeps the target's usual or restored baseline plus its
+inherited preset, and leaves the source policy and Goal state unchanged. Derived
 artifact authority exists only while the target Goal is unfinished and never
 alters user grants.
 
 Plan approval reserves the Goal identity before asynchronous preparation. The
 source retry record blocks a competing Here Goal; a prepared Worktree target
 holds the same kickoff reservation locally. Recovery reuses completed summary,
-segment, Worktree, settings, mode, artifact, and Goal construction steps. A
+segment, Worktree, preset, artifact, and Goal construction steps. A
 durable Goal is recognized only by the reserved ID together with its accepted
-plan reference, so an unrelated unfinished target Goal is never overwritten.
+plan reference and matching implementation policy, so an unrelated unfinished
+target Goal or a conflicting policy is never overwritten.
 A matching Goal restored as paused after a crash is reactivated without
 scheduling; the still-owned Plan handoff supplies its one explicit kickoff.
 
-After durable construction, Plan recovery is cleared before the explicit
-kickoff. If startup then fails, the Goal is paused with the concrete error and
-`/goal resume` uses the normal continuation path. User input owned by that Goal
+The Goal constructor persists the implementation policy and budget with the
+Goal before Plan recovery is cleared and the explicit kickoff starts. A failed
+construction save restores the previous Goal only if the provisional Goal is
+still owned and unchanged; newer public Goal controls remain intact even when
+they restore identical record contents, such as a pause followed by resume.
+Kickoff retains that exact owner and reserved identity across publication.
+Changed ownership, identity, status, or policy rejects stale kickoff authority
+before dispatch. An actual startup failure pauses only the still-owned matching
+Goal with the concrete error, and `/goal resume` uses the normal continuation
+path. User input owned by that Goal
 remains queued while paused; on resume it runs before a generic continuation.
 During a Here handoff the same ordering keeps the prepared kickoff first and
 post-acceptance input second. Worktree source input never transfers to or

@@ -72,6 +72,7 @@
   :doc "v0.5.6 keeps Goal accounting and gains the current defaults"
   (let* ((data (test-mevedel-session-persistence--complete-sidecar nil))
          (goal '(:id "g" :objective "Keep the goal" :status active :reason nil
+                     :implementation-policy nil
                      :token-budget 100 :tokens-used 20 :time-used-seconds 1
                      :turns-run 1 :plan-reference nil :created-at "created" :updated-at "updated")))
     (dolist (key '(:external-conversations :recovery-issues :pending-follow-ups :pending-steering
@@ -82,6 +83,7 @@
     (let ((restored (mevedel-session-codec--goal-from-plist
                      (plist-get (mevedel-migrate-session--sidecar data) :goal))))
       (should (= 20 (mevedel-goal-tokens-used restored)))
+      (should-not (mevedel-goal-implementation-policy restored))
       (should-not (mevedel-goal-tokens-incomplete-p restored)))
     (should-not (plist-member goal :tokens-incomplete-p)))
 
@@ -111,6 +113,9 @@
   :doc "v0.5.9 Goals gain incomplete-usage tracking and invalid Goals fail loudly"
   (mevedel-migration-test--with-source "v0.5.9"
     (let* ((goal '(:id "g" :objective "Keep the goal" :status active :reason nil
+                       :implementation-policy
+                       (:model-provider "Unavailable:implementer"
+                        :reasoning-effort high :permission-mode edits)
                        :token-budget 100 :tokens-used 20 :time-used-seconds 1
                        :turns-run 1 :plan-reference nil :created-at "created"
                        :updated-at "updated"))
@@ -119,9 +124,17 @@
            (loaded (plist-get (mevedel-session-codec-deserialize converted workspace)
                               :session)))
       (should (= 20 (mevedel-goal-tokens-used (mevedel-session-goal loaded))))
+      (should (equal (plist-get goal :implementation-policy)
+                     (mevedel-goal-implementation-policy
+                      (mevedel-session-goal loaded))))
       (should-error (mevedel-migrate-session--sidecar
                      (plist-put (copy-tree old) :goal
-                                (plist-put (copy-tree goal) :status 'unknown))))))
+                                (plist-put (copy-tree goal) :status 'unknown))))
+      (let ((missing-policy (copy-tree goal)))
+        (cl-remf missing-policy :implementation-policy)
+        (should-error
+         (mevedel-migrate-session--sidecar
+          (plist-put (copy-tree old) :goal missing-policy))))))
 
   :doc "v0.5.10 keeps its fields and starts with no attached artifacts"
   (let ((data (test-mevedel-session-persistence--complete-sidecar

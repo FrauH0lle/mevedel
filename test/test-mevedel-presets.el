@@ -48,6 +48,20 @@
 ;;
 ;;; FSM handler chain builder
 
+(defun mevedel-presets-test--guarded-wait-handlers (handlers)
+  "Inspect WAIT HANDLERS behind their single preparation gate."
+  (let ((fsm (gptel-make-fsm))
+        (group (cdr (assq 'WAIT handlers)))
+        enclosed)
+    (should (= 1 (length group)))
+    (cl-letf (((symbol-function 'mevedel-preset--guard-preparation)
+               (lambda (machine wait-handlers)
+                 (should (eq machine fsm))
+                 (setq enclosed wait-handlers))))
+      (funcall (car group) fsm))
+    (should enclosed)
+    enclosed))
+
 (mevedel-deftest mevedel-preset--build-transitions ()
   ,test
   (test)
@@ -110,7 +124,7 @@
                   (copy-tree base-handlers))))
     ;; WAIT entry should have deferred inject handler prepended
     (should (memq #'mevedel-tools--handle-plan-tool-filter
-                  (cdr (assq 'WAIT result))))
+                  (mevedel-presets-test--guarded-wait-handlers result)))
     (should (memq #'mevedel-compact-estimation-record-token-baseline
                   (cdr (assq 'TPRE result))))
     ;; One terminal orchestrator owns patch, callback, and settlement order.
@@ -179,7 +193,7 @@
                           (DONE)))
          (result (mevedel-preset--build-handlers
                   (copy-tree base-handlers)))
-         (wait-handlers (cdr (assq 'WAIT result)))
+         (wait-handlers (mevedel-presets-test--guarded-wait-handlers result))
          (gate-pos (cl-position #'mevedel--compact-handle-wait
                                 wait-handlers))
          (begin-pos (cl-position-if
@@ -212,7 +226,7 @@
          (handlers
           (mevedel-preset--build-handlers
            `((WAIT ,#'gptel--handle-wait) (DONE) (ERRS) (ABRT))))
-         (begin-handler (car (cdr (assq 'WAIT handlers))))
+         (begin-handler (car (mevedel-presets-test--guarded-wait-handlers handlers)))
          (fsm (gptel-make-fsm :info (list :buffer buffer))))
     (mevedel-tools-register)
     (unwind-protect

@@ -155,6 +155,8 @@
          (plist (mevedel-session-codec--goal-to-plist goal)))
     (should (equal "g1" (plist-get plist :id)))
     (should (eq 'blocked (plist-get plist :status)))
+    (should (plist-member plist :implementation-policy))
+    (should-not (plist-get plist :implementation-policy))
     (should (= 1000 (plist-get plist :token-budget)))
     (should (= 345 (plist-get plist :tokens-used)))
     (should (= 12 (plist-get plist :time-used-seconds)))
@@ -169,11 +171,13 @@
   :doc "rebuilds the current strict Goal schema"
   (let ((goal (mevedel-session-codec--goal-from-plist
                '(:id "g1" :objective "Ship" :status active :reason nil
+                 :implementation-policy nil
                  :token-budget 1000 :tokens-used 25 :tokens-incomplete-p nil
                  :time-used-seconds 7 :turns-run 2
                  :plan-reference "local/plans/accepted.md"
                  :created-at "created" :updated-at "updated"))))
     (should (mevedel-goal-p goal))
+    (should-not (mevedel-goal-implementation-policy goal))
     (should (equal "Ship" (mevedel-goal-objective goal)))
     (should (= 1000 (mevedel-goal-token-budget goal)))
     (should (= 25 (mevedel-goal-tokens-used goal)))
@@ -183,6 +187,7 @@
   (let ((goal (mevedel-session-codec--goal-from-plist
                '(:id "g2" :objective "Ship" :status budget-limited
                  :reason "Token budget reached: 110/100 tokens used"
+                 :implementation-policy nil
                  :token-budget 100 :tokens-used 110 :tokens-incomplete-p nil
                  :time-used-seconds 9 :turns-run 3
                  :plan-reference nil
@@ -203,11 +208,51 @@
                     (mevedel-session-codec--goal-to-plist goal))))
     (should (mevedel-goal-tokens-incomplete-p restored))
     (should (= 12 (mevedel-goal-tokens-used restored))))
+  :doc "round-trips policy through a real file without resolving an unavailable provider"
+  (let* ((policy '(:model-provider "Unavailable:implementer"
+                   :reasoning-effort nil :permission-mode edits))
+         (goal (mevedel-goal--create
+                :id "policy" :objective "Ship" :status 'blocked :reason "Need input"
+                :implementation-policy policy :token-budget 50
+                :tokens-used 12 :time-used-seconds 2 :turns-run 1
+                :created-at "created" :updated-at "updated"))
+         (path (make-temp-file "mevedel-goal-policy-sidecar-")))
+    (unwind-protect
+        (progn
+          (mevedel-session-codec-write
+           path (mevedel-session-codec--goal-to-plist goal))
+          (let ((restored (mevedel-session-codec--goal-from-plist
+                           (mevedel-session-codec-read path))))
+            (should (equal policy (mevedel-goal-implementation-policy restored)))
+            (should (= 50 (mevedel-goal-token-budget restored)))
+            (should (eq 'blocked (mevedel-goal-status restored)))))
+      (delete-file path)))
+  :doc "rejects malformed policy rather than discarding only its authority fields"
+  (let ((valid '(:id "g1" :objective "Ship" :status active :reason nil
+                 :implementation-policy nil :token-budget nil
+                 :tokens-used 0 :tokens-incomplete-p nil
+                 :time-used-seconds 0 :turns-run 0 :plan-reference nil
+                 :created-at "created" :updated-at "updated")))
+    (dolist (policy '(42
+                      (:model-provider "Unavailable:implementer")
+                      (:model-provider "Unavailable:implementer"
+                       :reasoning-effort nil :permission-mode unknown)
+                      (:model-provider "Unavailable:implementer"
+                       :reasoning-effort "high" :permission-mode ask)
+                      (:model-provider "Unavailable:implementer"
+                       :reasoning-effort nil :permission-mode ask :extra t)
+                      (:model-provider "Unavailable:implementer"
+                       :reasoning-effort nil :permission-mode ask
+                       :permission-mode full-auto)))
+      (let ((plist (copy-tree valid)))
+        (plist-put plist :implementation-policy policy)
+        (should-error (mevedel-session-codec--goal-from-plist plist)))))
   :doc "keeps sessions without a Goal empty"
   (should-not (mevedel-session-codec--goal-from-plist nil))
   :doc "rejects old, incomplete, and unsafe Goal records"
   (let ((valid '(:id "g1" :objective "Ship" :status active
-                 :reason nil :token-budget nil :tokens-used 0 :tokens-incomplete-p nil
+                 :reason nil :implementation-policy nil
+                 :token-budget nil :tokens-used 0 :tokens-incomplete-p nil
                  :time-used-seconds 0 :turns-run 0 :plan-reference nil
                  :created-at "created" :updated-at "updated")))
     (dolist (change '((:id "../escape")
@@ -220,6 +265,9 @@
         (should-error
          (mevedel-session-codec--goal-from-plist plist)
          :type 'error)))
+    (let ((missing-policy (copy-tree valid)))
+      (cl-remf missing-policy :implementation-policy)
+      (should-error (mevedel-session-codec--goal-from-plist missing-policy)))
     (should-error
      (mevedel-session-codec--goal-from-plist
       '(:id "old" :objective "Ship" :status active :phase planning)))))
@@ -1017,6 +1065,9 @@
 
   :doc "demotes a persisted active Goal to paused on session resume"
   (let* ((goal '(:id "g1" :objective "Ship" :status active :reason nil
+                 :implementation-policy
+                 (:model-provider "Unavailable:implementer"
+                  :reasoning-effort high :permission-mode edits)
                  :token-budget nil :tokens-used 9 :tokens-incomplete-p nil :time-used-seconds 4
                  :turns-run 2 :plan-reference nil
                  :created-at "created" :updated-at "updated"))
@@ -1026,6 +1077,8 @@
          (restored (mevedel-session-goal (plist-get result :session))))
     (should (eq 'paused (mevedel-goal-status restored)))
     (should (equal "session resumed" (mevedel-goal-reason restored)))
+    (should (equal (plist-get goal :implementation-policy)
+                   (mevedel-goal-implementation-policy restored)))
     (should (= 9 (mevedel-goal-tokens-used restored))))
 
   :doc "loads an old Goal schema as no Goal"

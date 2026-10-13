@@ -38,6 +38,12 @@
                                          prompt-submission))
 (autoload 'mevedel--submit-generated-turn "mevedel-chat")
 
+;; `mevedel-implementation-policy'
+(declare-function mevedel-implementation-policy-validate
+                  "mevedel-implementation-policy" (policy))
+(autoload 'mevedel-implementation-policy-validate
+  "mevedel-implementation-policy")
+
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-pending-inputs-follow-up-changed
                   "mevedel-pending-inputs" (session))
@@ -147,6 +153,11 @@ Their sum outlasts a short network outage such as a dropped Wi-Fi link.")
 ;;
 ;;; Durable record
 
+(defvar mevedel-goal--provisional-owners nil
+  "Dynamically scoped constructor rollback claims.
+Each entry is (GOAL . TOUCHED).  Touching GOAL revokes its claim even if
+its durable contents later return to their original values.")
+
 (defun mevedel-goal--assert-mutation-authority (session &optional buffer)
   "Require SESSION mutation authority before changing Goal state.
 BUFFER defaults to the current buffer."
@@ -164,11 +175,12 @@ BUFFER defaults to the current buffer."
     (user-error "Goal objective must not be blank"))
   (string-trim objective))
 
-(defun mevedel-goal--assert-token-budget ()
-  "Signal an error unless `mevedel-goal-token-budget' is valid."
-  (unless (or (null mevedel-goal-token-budget)
-              (and (integerp mevedel-goal-token-budget)
-                   (> mevedel-goal-token-budget 0)))
+(cl-defun mevedel-goal--assert-token-budget
+    (&optional (budget mevedel-goal-token-budget))
+  "Signal an error unless BUDGET is a positive integer or nil.
+Omission checks the effective default for new Goals."
+  (unless (or (null budget)
+              (and (integerp budget) (> budget 0)))
     (error "Goal token budget must be a positive integer or nil")))
 
 (defun mevedel-goal--valid-plan-reference-p (reference)
@@ -176,17 +188,23 @@ BUFFER defaults to the current buffer."
   (or (null reference)
       (mevedel-plan-artifact-path-p reference)))
 
-(defun mevedel-goal-create (objective &optional session plan-reference id)
+(cl-defun mevedel-goal-create
+    (objective &key session plan-reference id implementation-policy
+               (token-budget mevedel-goal-token-budget))
   "Create and persist a lifecycle-neutral Goal for OBJECTIVE.
 SESSION defaults to the current session.  PLAN-REFERENCE is an optional
-session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
+session-relative accepted-plan artifact.  ID may preallocate the Goal identity.
+IMPLEMENTATION-POLICY is an optional durable implementation snapshot.
+Omitting TOKEN-BUDGET inherits the effective new-Goal default; explicit nil
+means unlimited.  Neither choice changes that default."
   (setq objective (mevedel-goal--validate-objective objective)
         session (or session mevedel--session))
   (unless session
     (error "No active session for Goal"))
   (unless (mevedel-goal--valid-plan-reference-p plan-reference)
     (error "Invalid accepted-plan reference"))
-  (mevedel-goal--assert-token-budget)
+  (mevedel-goal--assert-token-budget token-budget)
+  (mevedel-implementation-policy-validate implementation-policy)
   (mevedel-goal--assert-mutation-authority session)
   (let* ((previous (mevedel-session-goal session))
          (now (format-time-string "%FT%T%z"))
@@ -194,34 +212,61 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
                 :id (or id (mevedel-goal-new-id))
                 :objective objective
                 :status 'active
-                :token-budget mevedel-goal-token-budget
+                :implementation-policy (copy-tree implementation-policy)
+                :token-budget token-budget
                 :tokens-used 0
                 :time-used-seconds 0
                 :turns-run 0
                 :plan-reference plan-reference
                 :created-at now
-                :updated-at now)))
+                :updated-at now))
+         (provisional-state (copy-tree goal t))
+         (provisional-owner (cons goal nil))
+         (mevedel-goal--provisional-owners
+          (cons provisional-owner mevedel-goal--provisional-owners)))
     (setf (mevedel-session-goal session) goal)
     (condition-case err
         (mevedel-session-artifacts-save session (current-buffer))
       (error
-       (setf (mevedel-session-goal session) previous)
+       ;; Saving can yield to public controls that replace or mutate GOAL.
+       ;; Public mutation revokes ownership even if the original values return.
+       (when (and (eq (mevedel-session-goal session) goal)
+                  (not (cdr provisional-owner))
+                  (equal goal provisional-state))
+         (setf (mevedel-session-goal session) previous))
        (signal (car err) (cdr err))))
     (setq mevedel-goal--transient-retries 0)
     (when (fboundp 'mevedel-telemetry-record)
       (mevedel-telemetry-record session 'goal-start :goal-id (mevedel-goal-id goal)))
     goal))
 
-(defun mevedel-goal-ensure (objective session plan-reference id)
+(cl-defun mevedel-goal-ensure
+    (objective session plan-reference id
+               &key implementation-policy
+               (token-budget mevedel-goal-token-budget))
   "Return the durable Goal identified by ID and PLAN-REFERENCE in SESSION.
 Create it for OBJECTIVE when absent.  A matching Goal restored as paused is
-reactivated without scheduling because its caller owns the prepared kickoff."
+reactivated without scheduling because its caller owns the prepared kickoff.
+Its stored IMPLEMENTATION-POLICY must match the caller's snapshot.  Existing
+accounting and budget remain unchanged.  For creation, omission of TOKEN-BUDGET
+inherits the effective default; explicit nil means unlimited."
+  (mevedel-implementation-policy-validate implementation-policy)
+  (mevedel-goal--assert-token-budget token-budget)
   (mevedel-goal--assert-mutation-authority session)
   (let ((current (mevedel-session-goal session)))
     (cond
      ((and current
            (equal id (mevedel-goal-id current))
            (equal plan-reference (mevedel-goal-plan-reference current)))
+      (let ((stored (mevedel-goal-implementation-policy current)))
+        (mevedel-implementation-policy-validate stored)
+        (unless (and (eq (null stored) (null implementation-policy))
+                     (cl-every
+                      (lambda (key)
+                        (equal (plist-get stored key)
+                               (plist-get implementation-policy key)))
+                      '(:model-provider :reasoning-effort :permission-mode)))
+          (error "Reserved Goal %s has a conflicting implementation policy" id)))
       (unless (memq (mevedel-goal-status current) '(active paused))
         (error "Reserved Goal %s has terminal status %s"
                id (mevedel-goal-status current)))
@@ -234,7 +279,9 @@ reactivated without scheduling because its caller owns the prepared kickoff."
       (error "Target session has unfinished Goal %s; expected reserved Goal %s for %s"
              (mevedel-goal-id current) id plan-reference))
      (t
-      (mevedel-goal-create objective session plan-reference id)))))
+      (mevedel-goal-create
+       objective :session session :plan-reference plan-reference :id id
+       :implementation-policy implementation-policy :token-budget token-budget)))))
 
 (defun mevedel-goal--current ()
   "Return the current session Goal or signal `user-error'."
@@ -244,7 +291,10 @@ reactivated without scheduling because its caller owns the prepared kickoff."
       (user-error "No current Goal")))
 
 (defun mevedel-goal--touch (goal)
-  "Update GOAL's modification timestamp."
+  "Update GOAL's modification timestamp and revoke constructor rollback."
+  (dolist (owner mevedel-goal--provisional-owners)
+    (when (eq (car owner) goal)
+      (setcdr owner t)))
   (setf (mevedel-goal-updated-at goal) (format-time-string "%FT%T%z"))
   goal)
 
@@ -453,7 +503,7 @@ Reads the current buffer's request for request-scoped Plan mode."
       ;; Preserve the completed Goal's final charge before replacing it.
       ;; A cleared, unrelated Goal retains its old request attribution.
       (when replacing (mevedel-goal-settle-turn fsm))
-      (let ((goal (mevedel-goal-create objective mevedel--session)))
+      (let ((goal (mevedel-goal-create objective :session mevedel--session)))
         (when fsm
           (setq info (mevedel-engine-info fsm))
           (when replacing

@@ -1826,14 +1826,18 @@ an exact user-authored escalation rule skips the prompt"
     (should (eq 'allow outcome)))
   :doc "one-shot qualified allow:
 an inherited escalation rule still requires one-time sandbox approval"
-  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "one-shot-escalation"))
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "one-shot-escalation"
+                   :permission-mode 'ask :sandbox-mode 'best-effort))
          (mevedel--session session)
+         ;; A dynamic fallback must not replace this session's Ask authority.
          (mevedel-permission-mode 'full-auto)
          (mevedel-permission-rules
           '(("Bash" :pattern "pwd"
              :sandbox-permissions require-escalated
              :action allow)))
          entry outcome)
+    (should (eq 'ask (mevedel-permission-mode-effective session)))
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                (lambda (queued &optional _session)
                  (setq entry queued)
@@ -1849,7 +1853,9 @@ an inherited escalation rule still requires one-time sandbox approval"
     (should (eq 'sandbox (plist-get entry :kind)))
     (should (plist-get entry :once-only))
     (should (eq 'allow outcome))
-    (should-not (mevedel-session-permission-rules session)))
+    (should-not (mevedel-session-permission-rules session))
+    (should-not (mevedel-session-resource-grants session))
+    (should (eq 'ask (mevedel-session-permission-mode session))))
   :doc "ordinary allow is insufficient:
 an unqualified command rule cannot authorize full escalation"
   (let ((mevedel-permission-mode 'edits)

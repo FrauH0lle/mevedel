@@ -7,8 +7,8 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
+;; Composer dispatch uses runtime sequence functions as well as CL macros.
+(require 'cl-lib)
 
 ;; The durable-transaction macro must expand for interpreted loads too,
 ;; so this is a load-time dependency rather than a compile-time one.
@@ -109,6 +109,20 @@
                   "mevedel-hooks" (event decision))
 (autoload 'mevedel-hooks-event-plist "mevedel-hooks")
 
+;; `mevedel-implementation-policy'
+(declare-function mevedel-implementation-policy-assert-preparation
+                  "mevedel-implementation-policy" (preparation))
+(declare-function mevedel-implementation-policy-capture-preparation
+                  "mevedel-implementation-policy" ())
+(declare-function mevedel-implementation-policy-pause-failure
+                  "mevedel-implementation-policy" (buffer problem &optional preparation))
+(autoload 'mevedel-implementation-policy-assert-preparation
+  "mevedel-implementation-policy")
+(autoload 'mevedel-implementation-policy-capture-preparation
+  "mevedel-implementation-policy")
+(autoload 'mevedel-implementation-policy-pause-failure
+  "mevedel-implementation-policy")
+
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-buffer-workspace
                   "mevedel-instruction-registry" (buffer))
@@ -127,7 +141,7 @@
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-expand-user-input
-		  "mevedel-mentions" (text session &optional fresh-p))
+			  "mevedel-mentions" (text session &optional fresh-p model))
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions"
@@ -288,6 +302,7 @@
 (declare-function mevedel-skills-dispatch-prepared-fork
 		  "mevedel-skills-invoke" t t)
 (declare-function mevedel-skills-request-model-policy "mevedel-skills-invoke" ())
+(defvar mevedel-skills--pending-request-context)
 (autoload 'mevedel-skills-request-model-policy "mevedel-skills-invoke")
 
 ;; `mevedel-skills-plan'
@@ -2064,6 +2079,16 @@ ran survives the send."
          (hook-context (plist-get outcome :hook-context))
          (all-audits (plist-get outcome :hook-audits))
          (request-context (plist-get outcome :request-context))
+         (failure-preparation
+          (when (buffer-live-p data-buffer)
+            (with-current-buffer data-buffer
+              ;; A staged kickoff owns this unadmitted policy, not an ordinary
+              ;; submission finishing preparation in the same root.  Refuse
+              ;; before replacing its skill context or interpreting its Goal.
+              (when (and (not dispatch) mevedel--pending-implementation-policy)
+                (signal 'mevedel-stale-implementation-preparation nil))
+              (mevedel-implementation-policy-capture-preparation))))
+         context-installed-p
          (render-data (or (plist-get outcome :render-data) ""))
          (fork-outcome (plist-get outcome :fork-outcome))
          (view-context
@@ -2076,6 +2101,9 @@ ran survives the send."
         (progn
           (when before-send
             (funcall before-send))
+          (when failure-preparation
+            (with-current-buffer data-buffer
+              (mevedel-implementation-policy-assert-preparation failure-preparation)))
           (cond
            (dispatch
             (funcall dispatch submission))
@@ -2105,7 +2133,8 @@ ran survives the send."
            (t
             (with-current-buffer data-buffer
               (setq-local mevedel-skills--pending-request-context
-                          request-context))
+                          request-context)
+              (setq context-installed-p t))
             (mevedel-view--forward-input
              (concat transcript-input render-data)
              :display-text input
@@ -2117,7 +2146,12 @@ ran survives the send."
       (error
        (when (buffer-live-p data-buffer)
          (with-current-buffer data-buffer
-           (setq-local mevedel-skills--pending-request-context nil)))
+           (when (and context-installed-p
+                      (not mevedel--current-request)
+                      (eq request-context mevedel-skills--pending-request-context))
+             (setq-local mevedel-skills--pending-request-context nil))))
+       (mevedel-implementation-policy-pause-failure
+        data-buffer err failure-preparation)
        (message "mevedel: skill dispatch failed: %s"
                 (error-message-string err))
        (when on-block
@@ -2755,6 +2789,12 @@ the input zone (where the assistant turn will be rendered);
 after the forwarded prompt, where the LLM's response will begin."
   (cl-labels
       ((send-now (stored-input view-text accepted request-input)
+         ;; Direct Worktree policy is staged in Target while its durable retry
+         ;; belongs to Source.  It is not ambient authority for another prompt,
+         ;; including a public send reentering from insertion/readiness hooks.
+         (when (buffer-local-value 'mevedel--pending-implementation-policy
+                                   mevedel--data-buffer)
+           (signal 'mevedel-stale-implementation-preparation nil))
          (when (mevedel-turn-busy-p mevedel--data-buffer)
            (user-error "The session became busy before dispatch"))
          (when before-send
@@ -2812,6 +2852,9 @@ asynchronous preparation ran is left alone instead of cleared."
             (or model-input input)))
           (data-buffer mevedel--data-buffer)
           (session (mevedel-view--session))
+          (preparation
+           (with-current-buffer data-buffer
+             (mevedel-implementation-policy-capture-preparation)))
           (_admission
            (progn
              (mevedel-request-assert-target-ready session)
@@ -2819,6 +2862,9 @@ asynchronous preparation ran is left alone instead of cleared."
                (with-current-buffer mevedel--data-buffer
                  (mevedel-readiness-assert
                   session (plist-get (mevedel-skills-request-model-policy) :backend))))
+             (when preparation
+               (with-current-buffer data-buffer
+                 (mevedel-implementation-policy-assert-preparation preparation)))
              (when (mevedel-turn-busy-p mevedel--data-buffer)
                (user-error "The session became busy before dispatch"))))
           (dropped-file-grants

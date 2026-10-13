@@ -1362,23 +1362,24 @@
            (mevedel-prompt-submission-create
             :input "Accepted plan artifact: /accepted.md\n\n# Current plan"
             :state 'committed))
-          sent-prompt sent-display sent-submission)
-      (cl-letf (((symbol-function
-                  'mevedel--implementation-permission-mode-apply)
-                 #'ignore)
-                ((symbol-function 'mevedel--submit-generated-turn)
+          sent-prompt sent-display sent-submission sent-policy)
+      (cl-letf (((symbol-function 'mevedel--submit-generated-turn)
                  (lambda (prompt display accepted &optional _prepared)
                    (setq sent-prompt prompt
                          sent-display display
-                         sent-submission accepted))))
+                         sent-submission accepted
+                         sent-policy mevedel--pending-implementation-policy))))
         (mevedel--implement-plan
-         (list :permission-mode 'edits
+         (list :implementation-policy
+               '(:model-provider "Test:model" :reasoning-effort nil :permission-mode edits)
                :display-text "Implement accepted plan as Goal"
                :prompt-submission submission)))
       (should (equal (mevedel-prompt-submission-input submission)
                      sent-prompt))
       (should (equal "Implement accepted plan as Goal" sent-display))
-      (should (eq submission sent-submission))))
+      (should (eq submission sent-submission))
+      (should (equal '(:model-provider "Test:model" :reasoning-effort nil :permission-mode edits)
+                     sent-policy))))
 
   :doc "stages prepared skill request context for the implementation turn"
   (with-temp-buffer
@@ -1389,17 +1390,33 @@
             '(:model-input "expanded" :transcript-input "authored"
               :request-context (:invoked-skills (alpha))))
            seen)
-      (cl-letf (((symbol-function
-                  'mevedel--implementation-permission-mode-apply)
-                 #'ignore)
-                ((symbol-function 'mevedel--submit-generated-turn)
+      (cl-letf (((symbol-function 'mevedel--submit-generated-turn)
                  (lambda (&rest _)
                    (setq seen mevedel-skills--pending-request-context))))
         (mevedel--implement-plan
-         (list :permission-mode 'edits
+         (list :implementation-policy
+               '(:model-provider "Test:model" :reasoning-effort nil :permission-mode edits)
                :prompt-submission submission
                :prepared-outcome prepared)))
-      (should (equal '(:invoked-skills (alpha)) seen)))))
+      (should (equal '(:invoked-skills (alpha)) seen))))
+
+  :doc "startup failure clears staged policy without changing the session baseline"
+  (with-temp-buffer
+    (org-mode)
+    (let ((session (mevedel-session--create :permission-mode 'ask
+                                           :model-provider "Baseline:model"))
+          (submission (mevedel-prompt-submission-create :input "Implement")))
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel--submit-generated-turn)
+                 (lambda (&rest _) (error "Request startup failed"))))
+        (should-error
+         (mevedel--implement-plan
+          (list :implementation-policy
+                '(:model-provider "Test:model" :reasoning-effort nil :permission-mode edits)
+                :prompt-submission submission))))
+      (should-not mevedel--pending-implementation-policy)
+      (should (eq 'ask (mevedel-session-permission-mode session)))
+      (should (equal "Baseline:model" (mevedel-session-model-provider session))))))
 
 
 ;;

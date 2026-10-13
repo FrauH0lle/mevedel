@@ -15,6 +15,7 @@
   (require 'gptel-request)
   (require 'mevedel-structs))
 (require 'mevedel-plan)
+(require 'mevedel-implementation-policy)
 
 ;; `mevedel-chat'
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
@@ -50,7 +51,7 @@
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-ensure "mevedel-goal"
-                  (objective session plan-reference id))
+                  (objective session plan-reference id &rest args))
 (declare-function mevedel-goal-new-id "mevedel-goal" nil)
 (declare-function mevedel-goal-pause-runtime-failure "mevedel-goal"
                   (buffer reason))
@@ -66,22 +67,6 @@
                   (start end binding &optional object))
 (autoload 'mevedel-mention-bindings-ranges "mevedel-mention-bindings")
 (autoload 'mevedel-mention-bindings-set "mevedel-mention-bindings")
-
-;; `mevedel-models'
-(declare-function mevedel-model-resolve-provider
-                  "mevedel-models" (spec &optional noerror))
-(declare-function mevedel-model-set-session-effort
-                  "mevedel-models" (session effort &optional buffer))
-(declare-function mevedel-model-set-session-provider
-                  "mevedel-models" (session provider &optional buffer))
-(autoload 'mevedel-model-resolve-provider "mevedel-models")
-(autoload 'mevedel-model-set-session-effort "mevedel-models")
-(autoload 'mevedel-model-set-session-provider "mevedel-models")
-
-;; `mevedel-permission-mode'
-(declare-function mevedel-permission-mode-transition
-                  "mevedel-permission-mode" (mode))
-(autoload 'mevedel-permission-mode-transition "mevedel-permission-mode")
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan--metadata-put "mevedel-plan"
@@ -161,7 +146,6 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
-(defvar mevedel-goal-token-budget)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--submit-planned-input
@@ -310,15 +294,6 @@ reservation while its prepared kickoff has not started."
     plan-markdown)
    selection))
 
-(defun mevedel-plan-handoff--apply-model-policy
-    (selection session buffer)
-  "Apply SELECTION's accepted model policy to SESSION in BUFFER."
-  (when-let* ((label (plist-get selection :model-provider)))
-    (mevedel-model-set-session-provider
-     session (mevedel-model-resolve-provider label) buffer)
-    (mevedel-model-set-session-effort
-     session (plist-get selection :reasoning-effort) buffer)))
-
 (defun mevedel-plan-handoff-validate-skill-bindings (prompt session)
   "Signal when an explicit skill binding in PROMPT is unavailable in SESSION."
   (dolist (range (mevedel-mention-bindings-ranges prompt))
@@ -422,9 +397,8 @@ reservation while its prepared kickoff has not started."
 
 (defun mevedel-plan-handoff--prepare-worktree-target
     (session chat-buffer record)
-  "Prepare RECORD's target artifact, settings, and Mode for SESSION."
+  "Prepare RECORD's target artifact and inherited preset for SESSION."
   (let* ((selection (plist-get record :selection))
-         (mode (plist-get selection :mode))
          (target-buffer (mevedel-plan-handoff--worktree-target-buffer record))
          (target-session
           (buffer-local-value 'mevedel--session target-buffer))
@@ -460,13 +434,7 @@ reservation while its prepared kickoff has not started."
                   (list :implementation-goal-id
                         (plist-get record :goal-id)))))
       (with-current-buffer target-buffer
-        (when (eq (plist-get selection :execution) 'goal)
-          (setq-local mevedel-goal-token-budget
-                      (plist-get selection :goal-token-budget)))
         (mevedel-preset-restore-session target-session target-buffer)
-        (mevedel-plan-handoff--apply-model-policy
-         selection target-session target-buffer)
-        (mevedel-permission-mode-transition mode)
         (when-let* (((eq (plist-get selection :context) 'summary))
                     (summary (plist-get record :summary)))
           (let ((current (mevedel-compact-evidence-previous-summary)))
@@ -815,26 +783,26 @@ the durable retry was retained"
     prepared))
 
 (defun mevedel-plan-handoff--start-goal
-    (session chat-buffer record accepted target-session target-buffer)
-  "Construct RECORD's Goal and durably finish SESSION's Plan handoff."
+    (record accepted target-session target-buffer)
+  "Construct RECORD's durable Goal and return its exact owner object."
   (with-current-buffer target-buffer
-    (setq-local mevedel-goal-token-budget
-                (plist-get
-                 (plist-get record :selection) :goal-token-budget))
     (mevedel-goal-ensure
      mevedel-plan-handoff--accepted-goal-objective
      target-session
      (plist-get accepted :path)
      (or (plist-get record :goal-id)
-         (error "Accepted Goal handoff has no reserved identity"))))
-  (mevedel-plan-handoff--goal-handoff-complete session chat-buffer)
-  t)
+         (error "Accepted Goal handoff has no reserved identity"))
+     :implementation-policy
+     (mevedel-implementation-policy-from-selection (plist-get record :selection))
+     :token-budget (plist-get (plist-get record :selection) :goal-token-budget))))
 
 (defun mevedel-plan-handoff--dispatch-submission
     (session chat-buffer record selection accepted target-session
              target-buffer display-text submission)
   "Dispatch one accepted SUBMISSION and settle its durable handoff state."
   (let ((goal-p (eq (plist-get selection :execution) 'goal))
+        (goal-id (plist-get record :goal-id))
+        (policy (copy-tree (mevedel-implementation-policy-from-selection selection)))
         goal-started
         request-fsm)
     (condition-case err
@@ -853,14 +821,18 @@ the durable retry was retained"
           (when goal-p
             (setq goal-started
                   (mevedel-plan-handoff--start-goal
-                   session chat-buffer record accepted
-                   target-session target-buffer))
+                   record accepted target-session target-buffer))
+            ;; Keep the exact owner before either publication can yield.
+            (mevedel-plan-handoff--goal-handoff-complete session chat-buffer)
             (mevedel-plan-handoff--clear-target-goal-reservation
              target-session target-buffer))
           (with-current-buffer target-buffer
             (setq request-fsm
                   (mevedel--implement-plan
-                   (list :permission-mode (plist-get selection :mode)
+                   (list :implementation-policy
+                         policy
+                         :implementation-goal goal-started
+                         :implementation-goal-id (and goal-p goal-id)
                          :display-text display-text
                          :prompt-submission submission
                          :prepared-outcome
@@ -872,9 +844,15 @@ the durable retry was retained"
        (let ((reason (mevedel-plan-handoff--failure-reason err)))
          (if goal-started
              (progn
-               (mevedel-goal-pause-runtime-failure target-buffer reason)
+               (when (and (not (eq (car err) 'mevedel-stale-implementation-preparation))
+                          (buffer-live-p target-buffer)
+                          (eq target-session (buffer-local-value 'mevedel--session target-buffer))
+                          (eq goal-started (mevedel-session-goal target-session))
+                          (equal goal-id (mevedel-goal-id goal-started))
+                          (equal policy (mevedel-goal-implementation-policy goal-started)))
+                 (mevedel-goal-pause-runtime-failure target-buffer reason))
                (message
-                "mevedel: Goal kickoff did not start: %s; resume with /goal resume"
+                "mevedel: Goal kickoff did not start: %s; inspect the current Goal before resuming"
                 reason))
            (mevedel-plan-handoff--implementation-failed
             session chat-buffer reason)))))))
@@ -917,8 +895,6 @@ the durable retry was retained"
               "Implement accepted plan"))
            (view-buffer
             (mevedel-view--interaction-target-buffer target-buffer)))
-      (mevedel-plan-handoff--apply-model-policy
-       selection target-session target-buffer)
       (with-current-buffer target-buffer
         (setq prompt
               (mevedel-skills-input-prepare-user-input prompt target-session))
@@ -948,6 +924,7 @@ the durable retry was retained"
                   "\\`[^:]+:.+\\'"
                   (plist-get selection :model-provider)))
       (error "Accepted plan implementation lacks a model snapshot"))
+    (mevedel-implementation-policy-from-selection selection)
     (unless (memq (plist-get record :step)
                   '(prepare-context prepare-summary prepare-worktree
                     prepare-target submit))
@@ -982,10 +959,6 @@ the durable retry was retained"
         (cl-remf record :failure)
         (mevedel-plan--metadata-put session :implementation-retry record)
         (mevedel-session-artifacts-save session chat-buffer)
-        (when (eq location 'here)
-          (with-current-buffer chat-buffer
-            (mevedel-permission-mode-transition
-             (plist-get selection :mode))))
         (while record
           (pcase (plist-get record :step)
             ('prepare-worktree

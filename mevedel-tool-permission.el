@@ -29,6 +29,8 @@
 (autoload 'mevedel-bash-policy-decision-specifier-value "mevedel-bash-policy")
 
 ;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-for-context
+                  "mevedel-permission-mode" (context))
 (declare-function mevedel-permission-mode-effective
                   "mevedel-permission-mode"
                   (&optional session data-buffer surface-buffer))
@@ -111,8 +113,7 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
                (not (plist-get decision :logged)))
       (let* ((tool (plist-get context :tool))
              (tool-name (and tool (mevedel-tool-name tool)))
-             (mode (or (and session (mevedel-session-permission-mode session))
-                       mevedel-permission-mode))
+             (mode (mevedel-permission-mode-for-context context))
              (raw (mevedel-permission-decision-raw-outcome decision))
              (outcome (or (plist-get decision :outcome)
                           (mevedel-permission--normalize-outcome raw)))
@@ -180,9 +181,7 @@ when the normal resolver returns `ask'; explicit denials stay intact."
       ('deny 'deny)
       ('ask
        (if (and (not (eq 'full-auto
-                        (mevedel-permission-mode-effective
-                         (plist-get context :session)
-                         (plist-get context :buffer))))
+                        (mevedel-permission-mode-for-context context)))
                 (memq outcome '(allow approve implement implement-clear)))
            'ask
          outcome))
@@ -264,8 +263,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
             (when one-shot-p
               (setq outcome (mevedel-permission--one-shot-prompt-outcome outcome)))
             (unless (eq 'full-auto
-                        (mevedel-permission-mode-effective
-                         session (plist-get context :buffer)))
+                        (mevedel-permission-mode-for-context context))
               (condition-case err
                   (mevedel-permission-queue-validate-approval entry outcome)
                 (error (setq outcome (cons 'deny (error-message-string err))))))
@@ -273,8 +271,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
             ;; and fallback outcomes before any queue entry exists.
             (when (memq outcome '(allow allow-once allow-session always-allow))
               (let* ((full-access-p
-                      (eq 'full-auto (mevedel-permission-mode-effective
-                                      session (plist-get context :buffer))))
+                      (eq 'full-auto (mevedel-permission-mode-for-context context)))
                      (resolved (mevedel-permission-queue--reevaluate
                                 (plist-put (copy-sequence entry) :session session)))
                      (denied-p
@@ -298,8 +295,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                         ((eq (plist-get approval :source) 'reviewer))
                         ((eq (plist-get approval :outcome) 'allow-once))
                         ((not (eq 'full-auto
-                                  (mevedel-permission-mode-effective
-                                   session (plist-get context :buffer))))))
+                                  (mevedel-permission-mode-for-context context)))))
               (setq updated
                     (plist-put updated :permission-approvals
                                (append (plist-get updated :permission-approvals)
@@ -355,8 +351,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                                  'PermissionRequest)
                       `(deny . ,reason))))
           ((eq 'full-auto
-               (mevedel-permission-mode-effective
-                session (plist-get context :buffer)))
+               (mevedel-permission-mode-for-context context))
            (funcall settle updated 'allow))
           ((and (eq permission-decision 'allow) (not one-shot-p))
            (setq updated

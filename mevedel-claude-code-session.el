@@ -14,6 +14,7 @@
 (require 'mevedel-claude-code-context)
 (require 'mevedel-claude-code-history)
 (require 'mevedel-context-delivery)
+(require 'mevedel-implementation-policy)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-shared-conversation)
 (require 'mevedel-skills-core)
@@ -21,8 +22,9 @@
 (require 'mevedel-tools)
 (require 'mevedel-transcript)
 
-;; `gptel'
-(defvar gptel-reasoning-effort)
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills-request-model-policy "mevedel-skills-invoke" ())
+(autoload 'mevedel-skills-request-model-policy "mevedel-skills-invoke")
 
 ;; `mevedel-structs'
 (defvar mevedel--current-directive-uuid)
@@ -112,12 +114,21 @@ This command does not start a model request or resume a paused Goal."
         (mevedel-recovery-save session)))))
 
 ;;;###autoload
-(defun mevedel-claude-code-send (&optional model-input)
-  "Send MODEL-INPUT through the session's selected Claude subscription model.
-When omitted, read the latest submitted prompt from the canonical transcript."
-  (unless (and mevedel--session (mevedel-claude-code-backend-p gptel-backend))
-    (user-error "Select Claude Code in a mevedel session first"))
-  (let* ((session mevedel--session)
+(defun mevedel-claude-code-send (&optional model-input model-policy)
+  "Send MODEL-INPUT through the effective Claude subscription MODEL-POLICY.
+When input is omitted, read the latest submitted canonical transcript prompt.
+An omitted policy resolves through the common request model resolver."
+  (let* ((mevedel-implementation-policy--admission-preparation
+          (mevedel-implementation-policy-capture-preparation))
+         (model-policy (or model-policy (mevedel-skills-request-model-policy)))
+         (backend (plist-get model-policy :backend))
+         (model-id (plist-get model-policy :model))
+         (model (gptel--model-name model-id))
+         (effort (plist-get model-policy :effort))
+         (session (or (and mevedel--session
+                           (mevedel-claude-code-backend-p backend)
+                           mevedel--session)
+                      (user-error "Select Claude Code in a mevedel session first")))
          (buffer (current-buffer))
          (directive mevedel--current-directive-uuid)
          ;; A shared-item question keeps its own context, apart from the room.
@@ -135,10 +146,6 @@ When omitted, read the latest submitted prompt from the canonical transcript."
                          (not (plist-get history :id))
                          (mevedel-engine-root-history-p session)
                          (mevedel-claude-code-history-excerpt session))))
-         (backend gptel-backend)
-         (model-id gptel-model)
-         (model (gptel--model-name gptel-model))
-         (effort gptel-reasoning-effort)
          (prompt (concat
                   (when shared (mevedel-shared-conversation-prefix session shared t))
                   (mevedel-tool-render-data-strip-non-media
@@ -171,18 +178,14 @@ When omitted, read the latest submitted prompt from the canonical transcript."
     (mevedel-acp-turn-start
      request
      (lambda (mcp hook-command)
-       (let ((gptel-backend backend) (gptel-model model-id)
-             (gptel-reasoning-effort effort))
-         (mevedel-claude-code-launch
-          (with-current-buffer buffer
-            (mevedel-claude-code-context-system request system-prompt selected))
-          mcp model effort (plist-get history :id) hook-command)))
+       (mevedel-claude-code-launch
+        (with-current-buffer buffer
+          (mevedel-claude-code-context-system request system-prompt selected))
+        mcp model effort (plist-get history :id) hook-command))
      (lambda ()
-       (let ((gptel-backend backend) (gptel-model model-id)
-             (gptel-reasoning-effort effort))
-         (mevedel-claude-code-context-prompt
-          request (vconcat (when excerpt (vector `((type . "text") (text . ,excerpt))))
-                           (mevedel-claude-code-context-input request prompt)) history)))
+       (mevedel-claude-code-context-prompt
+        request (vconcat (when excerpt (vector `((type . "text") (text . ,excerpt))))
+                         (mevedel-claude-code-context-input request prompt)) history))
      tools
      (lambda (id)
        (mevedel-claude-code-history-assert-current history)
@@ -210,13 +213,11 @@ When omitted, read the latest submitted prompt from the canonical transcript."
        (mevedel-claude-code-history-settle request history record outcome))
      nil
      (lambda (done)
-       (let ((gptel-backend backend) (gptel-model model-id)
-             (gptel-reasoning-effort effort))
-         (mevedel-preset-prepare-request request)
-         (when (functionp system-prompt)
-           (setq system-prompt (funcall system-prompt)))
-         (mevedel-claude-code-context-selected
-          (lambda (value) (setq selected value) (funcall done))))))
+       (mevedel-preset-prepare-request request)
+       (when (functionp system-prompt)
+         (setq system-prompt (funcall system-prompt)))
+       (mevedel-claude-code-context-selected
+        (lambda (value) (setq selected value) (funcall done)))))
     request))
 
 (provide 'mevedel-claude-code-session)

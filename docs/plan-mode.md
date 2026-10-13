@@ -235,14 +235,48 @@ blocked, paused, or budget-limited. When Goal is selected, the approval shows
 the proposal's target token budget. `b` accepts a positive integer; empty input
 means Unlimited. The setting starts from the effective session default, stays
 local to the pending proposal, survives Execution toggles and revised
-proposals, and applies only on acceptance. The first proposal resolves the
+proposals, and on acceptance sets only the new Goal's budget, not the
+`mevedel-goal-token-budget` default. The first proposal resolves the
 `plan-implementation` workload and snapshots its model and effort into the same
 persisted selection. Later preset changes do not replace that selection.
-`M` changes only
-that implementation snapshot; choosing a model that cannot support the
-selected effort resets effort to its default. Cancellation or Plan exit leaves
-the session model unchanged. Acceptance applies the stored snapshot to every
-implementation target and retry.
+`M` changes only that implementation snapshot; choosing a model that cannot
+support the selected effort resets effort to its default. Cancellation, Plan exit, and
+acceptance all leave the ordinary session model, effort, and permission mode
+unchanged. Every implementation target and retry uses the accepted snapshot
+within its implementation scope.
+
+### Implementation-scoped policy
+
+The accepted Model, effort, and Mode form one strict implementation policy.
+Direct captures it on the one implementation request; retries reuse the same
+accepted selection rather than resolving new defaults. Goal stores it on the
+durable Goal and uses it for every active ordinary root Goal turn, including
+user follow-ups, automatic continuation, and turns after `/goal resume`.
+Ordinary chat while the Goal is paused, blocked, budget-limited, or complete
+uses the session baseline. An already-admitted implementation turn retains its
+captured policy through settlement even if the Goal stops meanwhile.
+
+Neither Here nor Worktree promotes these settings to session defaults. A new
+Worktree target retains its usual session defaults and inherited preset; a
+reopened target retains its restored baseline. The accepted selection is not
+installed as that baseline. Summary, control, directive, and unrelated child
+requests do not inherit an ambient Goal implementation policy. Directive
+implementation retains its own request-local selection on the common
+permission path.
+
+Children started from an implementation turn inherit its permission-mode
+override for that child turn, including nested delegation, but retain their
+own model workload resolution. The override changes mode-based decisions only:
+current hard denies, shared permission rules, grants, and workflow ceilings
+remain effective. Views, permission logs, and reminders report effective
+request settings without changing stored defaults. There is no session-policy
+snapshot/restore cycle; user changes to the baseline remain intact.
+
+The exact backend/model and effort must resolve at dispatch. An unavailable
+provider/model or unsupported effort fails visibly rather than falling back to
+the session model; an active Goal pauses on that runtime failure. A provider's
+structured rejection of an accepted model also leaves the baseline untouched,
+instead of applying ordinary session-model fallback recovery.
 
 ## Acceptance and recovery
 
@@ -311,10 +345,11 @@ disclosure. Its expansion is independent of the Prompt drawer, hook context,
 and ordinary system-reminder batches; attachments do not increase the reminder
 batch count.
 
-For Worktree execution, the target session owns the Goal, accepted artifact,
-selected permission mode, accepted model/effort snapshot, and selected Goal
-budget. The source session keeps its original permission mode and the accepted-plan
-and handoff-recovery metadata. Branch acceptance first proves that Git and its worktree
+For Worktree execution, the target session owns the Goal and accepted artifact;
+its implementation request or Goal owns the selected policy, and the Goal owns
+the selected budget. Both source and target keep their ordinary policy baselines.
+The source keeps the accepted-plan and handoff-recovery metadata. Branch
+acceptance first proves that Git and its worktree
 command are available on the source session's execution target; preparation
 then persists the deterministic branch/directory reservation before Git
 mutation, creates the linked worktree on that target, and opens the target
@@ -332,19 +367,29 @@ bounded retry record, and `mevedel-retry-plan-implementation` resumes from the
 completed preparation step instead of recreating artifacts, summaries, or
 worktrees. A post-acceptance preparation failure settles the original approval;
 it never restores an action that could archive the same proposal again. Here
-retries also reapply the accepted Mode before dispatch. Goal execution reserves
-and persists its Goal ID in that record.
-A retry reuses a target Goal only when both the reserved ID and target-local
-accepted-plan reference match; a different unfinished Goal remains untouched
-and is reported as a conflict.
+and Worktree retries capture the same accepted implementation policy at dispatch
+without changing either session baseline. Goal execution reserves and persists
+its Goal ID in that record.
+A retry reuses a target Goal only when the reserved ID, target-local
+accepted-plan reference, and stored implementation policy match; a different
+unfinished Goal or conflicting policy remains untouched and is reported as a
+conflict.
 
-Goal construction is the Plan recovery boundary. Once the target Goal is
-durable, the source retry is cleared before kickoff. A kickoff startup failure
-therefore pauses the Goal with its runtime reason and is resumed with ordinary
-`/goal resume`, not Plan retry. Direct keeps the exact prepared retry record
+Goal construction is the Plan recovery boundary. The target Goal, including
+its implementation policy and selected budget, is persisted before the source
+retry is cleared and kickoff starts. Kickoff retains the exact Goal owner and
+reserved identity across publication. If that Goal is paused, cleared, replaced,
+edited, or given a different policy before dispatch, or another request starts,
+the stale kickoff is rejected without sending or pausing the current Goal.
+An actual startup failure pauses only the still-owned matching Goal with its
+runtime reason; recovery uses ordinary `/goal resume`, not Plan retry.
+Direct keeps the exact prepared retry record
 through request startup and clears it only when the canonical request settles
 successfully, whether gptel's FSM or an external engine such as Claude Code owns
-it. Provider errors and aborts retain the record with the terminal reason for
+it. While kickoff authority is staged before admission, a competing ordinary
+composer submission is refused rather than inheriting that authority, including
+in a Worktree target whose retry record belongs to the source session.
+Provider errors and aborts retain the record with the terminal reason for
 `mevedel-retry-plan-implementation`. Recorded reasons are bounded text: error
 data can carry whole requests or sessions, so printing is depth-limited and
 truncated rather than copying transcripts into the record and echo area.

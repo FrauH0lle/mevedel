@@ -70,6 +70,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-request-plan-read-only "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-permission-mode-override
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-directive-planning
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
@@ -364,6 +366,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   (turn-count 0 :type integer)
   (tool-catalog nil :type list)
   (plan-read-only nil :type boolean)
+  ;; Accepted implementation permission inherited by this invocation only.
+  permission-mode-override
   ;; Persistence
   (agent-id nil :type (or null string))
   (path nil :type (or null string))
@@ -496,6 +500,12 @@ discovery without adding an availability reminder."
       (push (mevedel-reminders-make-max-turns-warning) reminders))
     (mevedel-agent-invocation--create
      :agent agent
+     :permission-mode-override
+     (if mevedel--current-request
+         (mevedel-request-permission-mode-override mevedel--current-request)
+       (and mevedel--agent-invocation
+            (mevedel-agent-invocation-permission-mode-override
+             mevedel--agent-invocation)))
      :reminders reminders
      :hook-rules (copy-sequence (mevedel-agent-hook-rules agent))
      :turn-count 0

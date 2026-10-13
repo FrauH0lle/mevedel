@@ -44,6 +44,8 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-reminders
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-runtime-settled-p
@@ -93,8 +95,11 @@
                   (relative-path))
 (autoload 'mevedel-plan-resource-address "mevedel-plan")
 
-;; `mevedel-permissions'
-(defvar mevedel-permission-mode)
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer request invocation))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
@@ -210,6 +215,7 @@ only when a frozen agent template must survive a cold session resume."
   content
   interval
   last-fired
+  permission-mode-observation ; last mode actually delivered by mode-constraints
   recipe)
 
 (defvar mevedel-reminders--recipe-schemas
@@ -306,13 +312,14 @@ read-safe list whose first element names a trusted constructor in
    :recipe (copy-tree recipe)))
 
 (defun mevedel-reminder-clone (reminder)
-  "Return a shallow copy of REMINDER with LAST-FIRED reset to nil.
+  "Return a shallow copy of REMINDER with delivery observations reset.
 
 Trigger, content, and interval are shared by reference; only the
-per-invocation state (LAST-FIRED) is reset so cloned reminders track
+per-invocation state is reset so cloned reminders track
 their own firing history."
   (let ((clone (copy-mevedel-reminder reminder)))
     (setf (mevedel-reminder-last-fired clone) nil
+          (mevedel-reminder-permission-mode-observation clone) nil
           (mevedel-reminder-recipe clone)
           (copy-tree (mevedel-reminder-recipe reminder)))
     clone))
@@ -390,15 +397,23 @@ CTX is the firing context passed to the reminder's trigger function.
 A reminder fires when its trigger returns non-nil AND the interval
 policy permits firing.  For nil interval the reminder always fires,
 for `one-shot' it fires only if it has never fired, for integer
-interval it fires once enough turns have passed since the last fire."
+interval it fires once enough turns have passed since the last fire.
+Mode constraints bypass throttling when the delivered permission mode changes."
   (and (funcall (mevedel-reminder-trigger reminder) ctx)
        (let ((interval (mevedel-reminder-interval reminder))
              (last-fired (mevedel-reminder-last-fired reminder)))
-         (cond
-          ((null interval) t)
-          ((eq interval 'one-shot) (null last-fired))
-          (t (or (null last-fired)
-                 (>= (- turn-count last-fired) interval)))))))
+         (let ((due (cond
+                     ((null interval) t)
+                     ((eq interval 'one-shot) (null last-fired))
+                     (t (or (null last-fired)
+                            (>= (- turn-count last-fired) interval))))))
+           (if (eq (mevedel-reminder-type reminder) 'mode-constraints)
+               (let ((mode (mevedel-reminders--session-mode ctx))
+                     (observed (mevedel-reminder-permission-mode-observation reminder)))
+                 (or (and observed (not (eq observed mode)))
+                     (null observed)
+                     (and (not (eq mode 'ask)) due)))
+             due)))))
 
 (defun mevedel-reminders-format-block (content)
   "Wrap CONTENT in a `<system-reminder>' XML block."
@@ -432,6 +447,9 @@ with `:entries' in reminder order, each (:type TYPE :body BODY), and
       (when (mevedel-reminders--should-fire-p reminder turn-count ctx)
         (let* ((result (funcall (mevedel-reminder-content reminder) ctx))
                (body (if (stringp result) result (plist-get result :body)))
+               (permission-mode
+                (and (eq (mevedel-reminder-type reminder) 'mode-constraints)
+                     (mevedel-reminders--session-mode ctx)))
                (commit (and (not (stringp result))
                             (plist-get result :commit))))
           (when body
@@ -439,7 +457,10 @@ with `:entries' in reminder order, each (:type TYPE :body BODY), and
                   entries))
           (when commit (push commit commits))
           (push (lambda ()
-                  (setf (mevedel-reminder-last-fired reminder) turn-count))
+                  (setf (mevedel-reminder-last-fired reminder) turn-count)
+                  (when permission-mode
+                    (setf (mevedel-reminder-permission-mode-observation reminder)
+                          permission-mode)))
                 commits))))
     (list :entries (nreverse entries)
           :commits (nreverse commits))))
@@ -816,28 +837,30 @@ prompt transform and from WAIT-time handlers that run before injection."
 ;;; Tier 1 built-in reminders
 
 (defun mevedel-reminders--session-mode (session)
-  "Return the effective permission mode for SESSION.
+  "Return the effective permission mode for SESSION or an agent invocation.
 Falls back to the global `mevedel-permission-mode' default."
-  (or (mevedel-session-permission-mode session)
-      (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
-      'ask))
+  (if (mevedel-session-p session)
+      (mevedel-permission-mode-effective session)
+    (mevedel-permission-mode-effective
+     (mevedel-agent-invocation-parent-session session) nil nil nil session)))
 
 (defvar mevedel-reminders--mode-constraint-messages
-  '((edits . "Permission mode: `edits'. Native edits and confined Bash/batch Eval are automatic. Ordinary native reads include OS-readable paths; configured credential masks remain. Live Eval and additional authority require approval.")
+  '((ask . "Permission mode: `ask'. Full Access is not active. Native edits use patch review; uncertain Bash, live Eval and additional authority require approval. Execution uses the configured sandbox preference. Explicit hard denies, Plan restrictions and resource boundaries remain.")
+    (edits . "Permission mode: `edits'. Native edits and confined Bash/batch Eval are automatic. Ordinary native reads include OS-readable paths; configured credential masks remain. Live Eval and additional authority require approval.")
     (full-auto . "Permission mode: `full-auto'. Full Access under the target OS account: no confinement or permission prompts. Native tools and live Eval are automatic. Explicit hard denies, Plan restrictions and integrity checks remain."))
   "Alist mapping permission mode symbols to reminder body strings.")
 
 (defun mevedel-reminders-make-mode-constraints (&optional interval)
   "Create the mode-constraints reminder.
 
-Fires when the session's permission mode is not `ask'.  INTERVAL
-defaults to 5 turns so the reminder repeats sparsely across long
-sessions rather than spamming every turn."
+Fires initially and on every delivered effective-mode change, including
+returning to Ask.  INTERVAL defaults to 5 turns between unchanged non-Ask
+repeats.
+The delivery observation changes only when the payload reaches the request."
   (mevedel-reminder-create
    :type 'mode-constraints
    :recipe (list 'mode-constraints interval)
-   :trigger (lambda (session)
-              (not (eq (mevedel-reminders--session-mode session) 'ask)))
+   :trigger (lambda (_session) t)
    :content (lambda (session)
               (let ((mode (mevedel-reminders--session-mode session)))
                 (or (alist-get mode mevedel-reminders--mode-constraint-messages)

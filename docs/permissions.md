@@ -8,6 +8,11 @@ target-aware I/O. `mevedel-permissions.el` is the decision facade that combines
 those facts with tool policy. `mevedel-permission-review.el` owns optional
 automatic exception review before human queue admission.
 
+`mevedel-implementation-policy.el` owns accepted implementation-policy data and
+exact model resolution. The mode owner projects its request-local permission
+override through this same decision facade; implementation policy is not a
+separate rule store or a session-mode transition.
+
 ## Decision flow
 
 ```mermaid
@@ -164,13 +169,28 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
   mutation-capable tool and for mutation-capable delegation. These denies are
   a hard capability ceiling: broader session, workspace, or global allows
   cannot enable mutation during that discussion request.
-- Goals use the same tool permission policy as ordinary root conversation
-  turns. Goal lifecycle state never raises the session permission mode.
-- Standalone Plan approval applies the selected Ask, Edits, or Full Auto mode to
-  the session that performs Direct implementation. Here changes the source
-  session; Worktree leaves the source mode unchanged and applies the selection
-  only after the target session and accepted artifact are prepared. Summary
-  generation does not raise either session's permission mode.
+- Goals use the same tool permission chain as ordinary root conversation turns.
+  An accepted-plan Goal may supply a durable implementation mode for its active
+  root turns, but neither Goal lifecycle nor that policy changes the session's
+  baseline permission mode.
+- Standalone Plan approval captures the selected Ask, Edits, or Full Access mode
+  on the Direct implementation request, or on the Goal for active implementation
+  turns. Here and Worktree both leave session baselines unchanged; retries and
+  Goal resume reuse the accepted policy. Ordinary chat with a paused, blocked,
+  budget-limited, or complete Goal uses the baseline. An admitted turn keeps its
+  captured override through settlement.
+- Directive implementation selections use the same request-local mode path.
+  Summary, control, unrelated child, and directive requests do not inherit an
+  ambient Goal implementation policy. No policy snapshot is restored at
+  settlement, so concurrent user changes to session defaults are not overwritten.
+
+The common effective-mode resolver checks the owning request's override, then
+the child invocation or pending submission when no request owns the decision,
+and otherwise the live session baseline. Asynchronous checks retain their
+explicit request/invocation identity rather than borrowing a newer request in
+the same buffer. The override changes mode fallback and confinement selection,
+not rule ownership: live hard denies, shared rules, resource grants, and workflow
+restrictions still pass through the ordinary chain.
 
 ## Rule format
 
@@ -467,8 +487,13 @@ permission chain.
 ## Prompt queues
 
 The root session owns one authority boundary for its complete agent tree. Every
-child uses the root session's permission mode, sandbox mode, user-authoritative
-permission rules, and resource grants. A child may exercise that existing
+child uses the root session's sandbox preference, user-authoritative permission
+rules, and resource grants. A child turn started from an implementation request
+also captures that request's permission-mode override, including through nested
+delegation; without an override it uses the live root-session mode. A later
+follow-up captures its new caller's override, not an ambient Goal or an earlier
+implementation turn's mode. Child model workloads remain independent of this
+permission inheritance. A child may exercise that existing
 authority but cannot broaden it independently. Permission prompts from the
 complete tree are therefore queued on the root session, not displayed as
 independent blocking overlays, and carry the requesting agent's canonical path
@@ -626,6 +651,11 @@ does not include raw ApplyPatch content, arbitrary tool args, or extra raw
 Bash/Eval payloads. Prompt lifecycle events remain separate: queue
 enqueue/resolve/abort/coalesce events describe prompt handling without raw
 Bash commands or Eval expressions.
+
+Mode fields describe the invocation's effective request policy, including an
+implementation override, rather than assuming the stored session baseline.
+Permission presentation and reminders use the same effective-mode path without
+promoting the override to a session default.
 
 Each queued card gets a `:permission-id` at admission, separate from the owning
 `:request-id` and nested tool-call identifiers. Its captured

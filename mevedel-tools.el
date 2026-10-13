@@ -70,7 +70,7 @@
 (declare-function mevedel-mentions-commit-expansion
                   "mevedel-mentions" (session expansion))
 (declare-function mevedel-mentions-expand-user-input
-                  "mevedel-mentions" (text session &optional fresh-p))
+                  "mevedel-mentions" (text session &optional fresh-p model))
 (declare-function mevedel-mentions-wrap-prompt-media
                   "mevedel-mentions" (prompt contexts backend model request))
 (autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
@@ -571,17 +571,19 @@ data BUFFER's view postpones it."
                   ((buffer-live-p view)))
         (mevedel-view-interaction-blocking-p view))))
 
-(defun mevedel-tools-steering-expand (session entry &optional fresh)
+(defun mevedel-tools-steering-expand (session entry &optional fresh model)
   "Expand steering ENTRY for SESSION from the current request buffer.
 Expansion reads a dropped file through a real Read check, so ENTRY's grants
 are activated first; the caller restores them when delivery fails.  FRESH
-excludes historical mention deduplication.  The caller delivers the
+excludes historical mention deduplication.  MODEL optionally supplies the
+captured request's media capabilities; otherwise use the ambient model.
+The caller delivers the
 expansion's `:media-contexts' with the prompt text."
   (mevedel-session-activate-dropped-file-grants
    session (plist-get entry :dropped-file-grants))
   (mevedel-mentions-expand-user-input
    (or (plist-get entry :model-input) (plist-get entry :input))
-   session fresh))
+   session fresh model))
 
 (defun mevedel-tools-steering-commit (session entry expansion &optional fresh)
   "Consume delivered steering ENTRY and commit its EXPANSION for SESSION.
@@ -652,7 +654,8 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
             (unwind-protect
                 (let* ((expansion
                         (with-current-buffer buffer
-                          (mevedel-tools-steering-expand session entry)))
+                          (mevedel-tools-steering-expand
+                           session entry nil (plist-get info :model))))
                        (prompt
                         (car (gptel--parse-list
                               backend

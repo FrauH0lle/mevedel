@@ -8,6 +8,7 @@
 
 (require 'gptel)
 (require 'gptel-gemini)
+(require 'gptel-openai-responses)
 (require 'gptel-request)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
@@ -313,13 +314,15 @@ this collapses both shapes to the delivered text."
          (r (mevedel-reminder-create
              :type 'a :trigger trigger :content content :interval 7
              :recipe '(pending-events)))
-         (_  (setf (mevedel-reminder-last-fired r) 42))
+         (_  (setf (mevedel-reminder-last-fired r) 42
+                    (mevedel-reminder-permission-mode-observation r) 'full-auto))
          (clone (mevedel-reminder-clone r)))
     (should (eq 'a (mevedel-reminder-type clone)))
     (should (eq trigger (mevedel-reminder-trigger clone)))
     (should (eq content (mevedel-reminder-content clone)))
     (should (equal 7 (mevedel-reminder-interval clone)))
     (should (null (mevedel-reminder-last-fired clone)))
+    (should-not (mevedel-reminder-permission-mode-observation clone))
     (should (equal '(pending-events)
                    (mevedel-reminder-recipe clone)))
     (should-not (eq r clone))
@@ -1133,12 +1136,14 @@ this collapses both shapes to the delivered text."
   ,test
   (test)
 
-  :doc "does not fire when session permission mode is `ask'"
+  :doc "advertises initial Ask once and does not repeat it unchanged"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-mode-constraints)))
     (setf (mevedel-session-permission-mode session) 'ask)
-    (should-not (mevedel-reminders--should-fire-p r 0 session)))
+    (should (mevedel-reminders--should-fire-p r 0 session))
+    (test-mevedel-reminders--collect-and-commit (list r) 0 session)
+    (should-not (mevedel-reminders--should-fire-p r 10 session)))
 
   :doc "fires when session permission mode is not `ask'"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
@@ -1159,6 +1164,55 @@ this collapses both shapes to the delivered text."
     (setf (mevedel-session-permission-mode session) 'weird-mode)
     (should (string-match-p "weird-mode"
                             (funcall (mevedel-reminder-content r) session))))
+
+  :doc "effective mode changes reach provider payload before throttling allows repeats"
+  (dolist (host '("example.test" "api.openai.com"))
+    (dolist (scenario '((ask full-auto nil) (full-auto nil ask)))
+      (with-temp-buffer
+        (let* ((session (mevedel-session--create
+                         :permission-mode (car scenario)))
+               (reminder (mevedel-reminders-make-mode-constraints))
+               (full-auto (mevedel-reminders-make-full-auto-mode))
+               (backend (gptel-make-openai
+                         "scoped-reminder" :host host :key "test" :models '(test)))
+               ;; The default OpenAI host selects the native Responses backend.
+               (payload-key (if (gptel-openai-responses-p backend) :input :messages))
+               previous)
+          (setq-local mevedel--session session)
+          (dolist (override (cdr scenario))
+            (setq-local mevedel--current-request
+                        (mevedel-request--create
+                         :session session :permission-mode-override override))
+            (let* ((mode (or override (car scenario)))
+                   (batch (mevedel-reminders--collect-from
+                           (list reminder full-auto) 0 session))
+                   (data (list payload-key (vector (list :role "user" :content "task"))))
+                   (fsm (gptel-make-fsm
+                         :info (list :buffer (current-buffer) :backend backend
+                                     :data data :position (copy-marker (point-max))))))
+              (should (eq previous (mevedel-reminder-permission-mode-observation reminder)))
+              (should (eq mode (mevedel-reminders--session-mode session)))
+              (should (cl-find 'mode-constraints (plist-get batch :entries)
+                               :key (lambda (entry) (plist-get entry :type))))
+              (when (eq mode 'ask)
+                (should-not (cl-find 'full-auto-mode (plist-get batch :entries)
+                                     :key (lambda (entry) (plist-get entry :type)))))
+              (mevedel-reminders--stage-batch
+               fsm (plist-get batch :entries) (plist-get batch :commits))
+              (should (eq data (plist-get (gptel-fsm-info fsm) :data)))
+              (should (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
+              (mevedel-reminders--handle-inject fsm)
+              (let* ((messages (plist-get data payload-key))
+                     (body (plist-get (aref messages (1- (length messages))) :content)))
+                (ert-info ((format "Host %S scenario %S override %S" host scenario override))
+                  (should (= 2 (length messages)))
+                  (should (equal "task" (plist-get (aref messages 0) :content)))
+                  (should (string-search (format "Permission mode: `%s'." mode) body))))
+              (should (eq mode (mevedel-reminder-permission-mode-observation reminder)))
+              (should (eq (car scenario) (mevedel-session-permission-mode session)))
+              (setq previous mode)))
+          (should-not (plist-get (mevedel-reminders--collect-from (list reminder) 0 session)
+                                 :entries))))))
 
   :doc "default interval throttles to 5 turns"
   (let ((r (mevedel-reminders-make-mode-constraints)))

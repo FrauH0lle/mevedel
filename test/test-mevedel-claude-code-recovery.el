@@ -189,7 +189,7 @@
       (let ((mevedel-session--read-only-mode t))
         (should-error (mevedel-claude-code-recover-history) :type 'user-error))
       (should (eq history (mevedel-session-external-conversations session)))
-      (mevedel-goal-create "Do not resume through recovery" session)
+      (mevedel-goal-create "Do not resume through recovery" :session session)
       (should-error (mevedel-claude-code-recover-history) :type 'user-error)
       (should (eq history (mevedel-session-external-conversations session)))
       (mevedel-goal-pause)

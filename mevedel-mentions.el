@@ -1072,15 +1072,16 @@ Dispatches per `mevedel-mention-handlers'."
       (dolist (update (plist-get expansion :dedup-updates))
         (puthash (car update) (cons turn (cdr update)) mentions-shown)))))
 
-(defun mevedel-mentions-expand-user-input (text session &optional fresh-p)
+(defun mevedel-mentions-expand-user-input (text session &optional fresh-p model)
   "Expand bound mentions in TEXT for SESSION into a structured result.
 Return text, reminder items, media contexts, and deferred deduplication
 updates.  The caller must explicitly stage the reminder items and
 commit the result after accepting every media context.
 FRESH-P excludes historical deduplication for a separately selected
-conversation."
+conversation.  MODEL selects media capabilities for this expansion only;
+when omitted, use the current buffer's `gptel-model'."
   (let ((chat-buffer (current-buffer))
-        (model gptel-model))
+        (model (or model gptel-model)))
     (with-temp-buffer
       (setq-local gptel-model model)
       (insert text)

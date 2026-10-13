@@ -33,8 +33,160 @@
       (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                  (lambda (&rest _) (error "Disk full"))))
         (should (equal "Disk full"
-                       (error-message-string (should-error (mevedel-goal-create "Ship"))))))
+                       (error-message-string
+                        (should-error
+                         (mevedel-goal-create
+                          "Ship" :token-budget 50
+                          :implementation-policy
+                          '(:model-provider "Unavailable:implementer"
+                            :reasoning-effort high :permission-mode edits)))))))
       (should (eq previous (mevedel-session-goal session)))))
+
+  :doc "preserves newer public Goal controls when the older constructor save fails"
+  (dolist (control '(clear replace pause edit budget))
+    (ert-info ((format "Public control during save: %s" control))
+      (let* ((previous (mevedel-goal--create :id "previous" :status 'complete))
+             (session (mevedel-session--create :name "main" :goal previous))
+             (policy '(:model-provider "Unavailable:implementer"
+                       :reasoning-effort high :permission-mode edits))
+             (saves 0)
+             provisional newer)
+        (with-temp-buffer
+          (setq-local mevedel--session session mevedel-goal-token-budget 90)
+          (cl-letf (((symbol-function 'format-time-string)
+                     (lambda (&rest _) "now"))
+                    ((symbol-function 'mevedel-goal-new-id)
+                     (lambda () "edited"))
+                    ((symbol-function 'mevedel-goal-schedule-continuation) #'ignore)
+                    ((symbol-function 'mevedel-session-artifacts-save)
+                     (lambda (saved-session saved-buffer &rest _)
+                       (should (eq session saved-session))
+                       (should (eq (current-buffer) saved-buffer))
+                       (cl-incf saves)
+                       ;; Only the older save fails; nested public saves succeed.
+                       (when (= saves 1)
+                         (setq provisional (mevedel-session-goal session))
+                         (pcase control
+                           ('clear (mevedel-goal-clear))
+                           ('replace
+                            (mevedel-goal-clear)
+                            (setq newer
+                                  (mevedel-goal-create
+                                   "Ship" :id "provisional" :token-budget 50
+                                   :implementation-policy policy))
+                            ;; Equal-shaped replacement still has a newer owner.
+                            (should (equal provisional newer))
+                            (should-not (eq provisional newer)))
+                           ('pause (setq newer (mevedel-goal-pause)))
+                           ('edit (setq newer (mevedel-goal-edit "Revised")))
+                           ('budget (setq newer (mevedel-goal-set-budget 75))))
+                         (error "Disk full")))))
+            (should (equal "Disk full"
+                           (error-message-string
+                            (should-error
+                             (mevedel-goal-create
+                              "Ship" :id "provisional" :token-budget 50
+                              :implementation-policy policy)))))
+            (should (= saves (if (eq control 'replace) 3 2)))
+            (should (eq newer (mevedel-session-goal session)))
+            (should-not (eq previous (mevedel-session-goal session)))
+            (pcase control
+              ('clear (should-not (mevedel-session-goal session)))
+              ('replace (should-not (eq provisional newer)))
+              (_ (should (eq provisional newer))))
+            (when newer
+              (should (equal "now" (mevedel-goal-updated-at newer)))
+              (should (equal policy (mevedel-goal-implementation-policy newer)))
+              (should (= (if (eq control 'budget) 75 50)
+                         (mevedel-goal-token-budget newer)))
+              (should (eq (if (eq control 'pause) 'paused 'active)
+                          (mevedel-goal-status newer)))
+              (should (equal (and (eq control 'pause) "paused by user")
+                             (mevedel-goal-reason newer)))
+              (should (equal (if (eq control 'edit) "edited" "provisional")
+                             (mevedel-goal-id newer)))
+              (should (equal (if (eq control 'edit) "Revised" "Ship")
+                             (mevedel-goal-objective newer))))
+            (should (= 90 mevedel-goal-token-budget)))))))
+
+  :doc "preserves public mutation authority even when the provisional record returns to its original contents"
+  (dolist (control '(pause-resume budget-return))
+    (ert-info ((format "Same-clock public mutation: %s" control))
+      (let* ((previous (mevedel-goal--create :id "previous" :status 'complete))
+             (session (mevedel-session--create :name "main" :goal previous))
+             (policy '(:model-provider "Unavailable:implementer"
+                       :reasoning-effort high :permission-mode edits))
+             (saves 0)
+             provisional original-state)
+        (with-temp-buffer
+          (setq-local mevedel--session session mevedel-goal-token-budget 90)
+          (cl-letf (((symbol-function 'format-time-string)
+                     (lambda (&rest _) "now"))
+                    ((symbol-function 'mevedel-goal-schedule-continuation) #'ignore)
+                    ((symbol-function 'mevedel-session-artifacts-save)
+                     (lambda (saved-session saved-buffer &rest _)
+                       (should (eq session saved-session))
+                       (should (eq (current-buffer) saved-buffer))
+                       (cl-incf saves)
+                       (when (= saves 1)
+                         (setq provisional (mevedel-session-goal session)
+                               original-state (copy-tree provisional t))
+                         (pcase control
+                           ('pause-resume
+                            (should (eq provisional (mevedel-goal-pause)))
+                            (should (eq 'paused (mevedel-goal-status provisional)))
+                            (should (eq provisional (mevedel-goal-resume))))
+                           ('budget-return
+                            (should (eq provisional (mevedel-goal-set-budget 75)))
+                            (should (= 75 (mevedel-goal-token-budget provisional)))
+                            (should (eq provisional (mevedel-goal-set-budget 50)))))
+                         ;; Both identity and durable contents are back at A.
+                         (should (eq provisional (mevedel-session-goal session)))
+                         (should (equal original-state provisional))
+                         (error "Disk full")))))
+            (should (equal "Disk full"
+                           (error-message-string
+                            (should-error
+                             (mevedel-goal-create
+                              "Ship" :id "provisional" :token-budget 50
+                              :implementation-policy policy)))))
+            (should (= 3 saves))
+            (should (eq provisional (mevedel-session-goal session)))
+            (should (equal original-state (mevedel-session-goal session)))
+            (should-not (eq previous (mevedel-session-goal session)))
+            (should (= 90 mevedel-goal-token-budget)))))))
+
+  :doc "retains rollback authority when public controls touch an unrelated Goal"
+  (let* ((previous (mevedel-goal--create :id "previous" :status 'complete))
+         (session (mevedel-session--create :name "main" :goal previous))
+         (other (mevedel-goal--create
+                 :id "provisional" :objective "Other" :status 'active))
+         (other-session (mevedel-session--create :name "other" :goal other))
+         (saves 0))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'format-time-string)
+                 (lambda (&rest _) "now"))
+                ((symbol-function 'mevedel-goal-schedule-continuation) #'ignore)
+                ((symbol-function 'mevedel-session-artifacts-save)
+                 (lambda (saved-session saved-buffer &rest _)
+                   (should (eq (current-buffer) saved-buffer))
+                   (cl-incf saves)
+                   (when (eq session saved-session)
+                     (with-temp-buffer
+                       (setq-local mevedel--session other-session)
+                       (mevedel-goal-pause)
+                       (mevedel-goal-resume))
+                     (error "Disk full")))))
+        (should (equal "Disk full"
+                       (error-message-string
+                        (should-error
+                         (mevedel-goal-create "Ship" :id "provisional")))))
+        (should (= 3 saves))
+        (should (eq previous (mevedel-session-goal session)))
+        (should (eq other (mevedel-session-goal other-session)))
+        (should (eq 'active (mevedel-goal-status other)))))
+    (should-not mevedel-goal--provisional-owners))
 
   :doc "creates and persists the phase-free durable Goal record"
   (let* ((saved nil)
@@ -44,13 +196,14 @@
                      (lambda (&rest _) (setq saved t))))
             (with-temp-buffer
               (setq-local mevedel--session session)
-              (mevedel-goal-create "Ship it" session nil "goal-1")))))
+              (mevedel-goal-create "Ship it" :session session :id "goal-1")))))
     (should saved)
     (should (eq goal (mevedel-session-goal session)))
     (should (equal "goal-1" (mevedel-goal-id goal)))
     (should (equal "Ship it" (mevedel-goal-objective goal)))
     (should (eq 'active (mevedel-goal-status goal)))
     (should-not (mevedel-goal-reason goal))
+    (should-not (mevedel-goal-implementation-policy goal))
     (should-not (mevedel-goal-token-budget goal))
     (should (= 0 (mevedel-goal-tokens-used goal)))
     (should (= 0 (mevedel-goal-time-used-seconds goal)))
@@ -58,7 +211,45 @@
     (should-not (mevedel-goal-plan-reference goal))
     (should (stringp (mevedel-goal-created-at goal)))
     (should (equal (mevedel-goal-created-at goal)
-                   (mevedel-goal-updated-at goal)))))
+                   (mevedel-goal-updated-at goal))))
+
+  :doc "stores a copied policy and distinguishes omitted budget from explicit unlimited"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create :name "main"))
+          (policy (list :model-provider "Unavailable:implementer"
+                        :reasoning-effort nil :permission-mode 'edits))
+          (global-budget (default-value 'mevedel-goal-token-budget)))
+      (setq-local mevedel--session session mevedel-goal-token-budget 90)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore))
+        (let ((goal (mevedel-goal-create
+                     "Unlimited" :implementation-policy policy :token-budget nil)))
+          (should-not (mevedel-goal-token-budget goal))
+          (should (equal policy (mevedel-goal-implementation-policy goal)))
+          (should-not (eq policy (mevedel-goal-implementation-policy goal)))
+          (plist-put policy :permission-mode 'ask)
+          (should (eq 'edits
+                      (plist-get (mevedel-goal-implementation-policy goal)
+                                 :permission-mode))))
+        (should (= 50 (mevedel-goal-token-budget
+                       (mevedel-goal-create "Bounded" :token-budget 50))))
+        (let ((ordinary (mevedel-goal-create "Ordinary")))
+          (should (= 90 (mevedel-goal-token-budget ordinary)))
+          (should-not (mevedel-goal-implementation-policy ordinary))))
+      (should (= 90 mevedel-goal-token-budget))
+      (should (equal global-budget (default-value 'mevedel-goal-token-budget)))))
+
+  :doc "rejects malformed policy or explicit budget before replacing the Goal"
+  (with-temp-buffer
+    (let* ((previous (mevedel-goal--create :id "previous" :status 'complete))
+           (session (mevedel-session--create :name "main" :goal previous)))
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
+                 (lambda (&rest _) (ert-fail "Saved invalid Goal"))))
+        (should-error (mevedel-goal-create "Ship" :token-budget 0))
+        (should-error
+         (mevedel-goal-create "Ship" :implementation-policy
+                              '(:model-provider "Unavailable:implementer"))))
+      (should (eq previous (mevedel-session-goal session))))))
 
 (mevedel-deftest mevedel-goal-start
   ()
@@ -114,8 +305,21 @@
                       :type 'user-error))
       (should-not (mevedel-session-goal session)))))
 
+(mevedel-deftest mevedel-goal--assert-token-budget
+  (:doc "checks explicit budgets independently of the effective default")
+  (with-temp-buffer
+    (setq-local mevedel-goal-token-budget 0)
+    (should-error (mevedel-goal--assert-token-budget))
+    (should-not (mevedel-goal--assert-token-budget nil))
+    (should-not (mevedel-goal--assert-token-budget 50))
+    (dolist (invalid '(0 -1 1.5 "50"))
+      (should-error (mevedel-goal--assert-token-budget invalid)))))
+
 (mevedel-deftest mevedel-goal-ensure
-  (:doc "reactivates only the matching reserved Goal without scheduling")
+  ()
+  ,test
+  (test)
+  :doc "reactivates only the matching reserved Goal without scheduling"
   (let* ((goal (mevedel-goal--create
                 :id "reserved" :status 'paused :reason "session resumed"
                 :plan-reference "local/plans/accepted.md"))
@@ -142,7 +346,77 @@
      (with-temp-buffer
        (mevedel-goal-ensure
         "Objective" session "local/plans/accepted.md" "reserved")))
-    (should (eq goal (mevedel-session-goal session)))))
+    (should (eq goal (mevedel-session-goal session))))
+
+  :doc "preserves the reserved policy and edited budget across recovery"
+  (with-temp-buffer
+    (let* ((policy '(:model-provider "Unavailable:implementer"
+                     :reasoning-effort high :permission-mode edits))
+           (goal (mevedel-goal--create
+                  :id "reserved" :status 'paused :reason "session resumed"
+                  :implementation-policy policy :token-budget 150
+                  :tokens-used 12 :turns-run 2
+                  :plan-reference "local/plans/accepted.md"))
+           (session (mevedel-session--create :name "target" :goal goal)))
+      (setq-local mevedel--session session mevedel-goal-token-budget 90)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore))
+        (should (eq goal
+                    (mevedel-goal-ensure
+                     "Objective" session "local/plans/accepted.md" "reserved"
+                     :implementation-policy
+                     '(:permission-mode edits :reasoning-effort high
+                       :model-provider "Unavailable:implementer")
+                     :token-budget 50))))
+      (should (eq 'active (mevedel-goal-status goal)))
+      (should (equal policy (mevedel-goal-implementation-policy goal)))
+      (should (= 150 (mevedel-goal-token-budget goal)))
+      (should (= 12 (mevedel-goal-tokens-used goal)))
+      (should (= 2 (mevedel-goal-turns-run goal)))
+      (should (= 90 mevedel-goal-token-budget))))
+
+  :doc "rejects each reserved policy conflict before reactivation or save"
+  (with-temp-buffer
+    (let* ((policy '(:model-provider "Unavailable:implementer"
+                     :reasoning-effort high :permission-mode edits))
+           (goal (mevedel-goal--create
+                  :id "reserved" :status 'paused :reason "session resumed"
+                  :implementation-policy policy :token-budget 150
+                  :plan-reference "local/plans/accepted.md"))
+           (session (mevedel-session--create :name "target" :goal goal)))
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
+                 (lambda (&rest _) (ert-fail "Saved conflicting Goal"))))
+        (dolist (change '((:model-provider "Unavailable:other")
+                          (:reasoning-effort nil)
+                          (:permission-mode ask)))
+          (let ((conflict (copy-tree policy)))
+            (plist-put conflict (car change) (cadr change))
+            (should-error
+             (mevedel-goal-ensure
+              "Objective" session "local/plans/accepted.md" "reserved"
+              :implementation-policy conflict))))
+        (should-error
+         (mevedel-goal-ensure
+          "Objective" session "local/plans/accepted.md" "reserved")))
+      (should (eq 'paused (mevedel-goal-status goal)))
+      (should (equal "session resumed" (mevedel-goal-reason goal)))
+      (should (equal policy (mevedel-goal-implementation-policy goal)))
+      (should (= 150 (mevedel-goal-token-budget goal)))))
+
+  :doc "creates a reserved Goal with explicit unlimited budget without changing defaults"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "target"))
+           (policy '(:model-provider "Unavailable:implementer"
+                     :reasoning-effort nil :permission-mode ask)))
+      (setq-local mevedel--session session mevedel-goal-token-budget 90)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore))
+        (let ((goal (mevedel-goal-ensure
+                     "Objective" session "local/plans/accepted.md" "reserved"
+                     :implementation-policy policy :token-budget nil)))
+          (should (equal "reserved" (mevedel-goal-id goal)))
+          (should (equal policy (mevedel-goal-implementation-policy goal)))
+          (should-not (mevedel-goal-token-budget goal))))
+      (should (= 90 mevedel-goal-token-budget)))))
 
 (mevedel-deftest mevedel-goal-active-context
   (:doc "pauses when verified publication bytes violate the accepted hash")
@@ -665,6 +939,51 @@
     (should (eq 'blocked (mevedel-goal-status goal)))
     (should (equal "Need a credential." (mevedel-goal-reason goal)))
     (should-error (mevedel-tool-goal-update 'complete nil session "goal-1"))))
+
+(mevedel-deftest mevedel-goal-clear
+  (:doc "keeps policy through lifecycle controls and drops it on clear or ordinary replacement")
+  (with-temp-buffer
+    (let* ((policy '(:model-provider "Unavailable:implementer"
+                     :reasoning-effort high :permission-mode edits))
+           (session (mevedel-session--create :name "main"))
+           saved-policies)
+      (setq-local mevedel--session session mevedel-goal-token-budget 90)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
+                 (lambda (saved-session &rest _)
+                   (push (when-let* ((saved-goal (mevedel-session-goal saved-session)))
+                           (copy-tree (mevedel-goal-implementation-policy saved-goal)))
+                         saved-policies)))
+                ((symbol-function 'mevedel-goal-schedule-continuation) #'ignore))
+        (let ((goal (mevedel-goal-create
+                     "Ship" :implementation-policy policy :token-budget 50)))
+          (mevedel-goal-pause)
+          (should (eq 'paused (mevedel-goal-status goal)))
+          (mevedel-goal-resume)
+          (mevedel-tool-goal-update 'blocked "Need input" session (mevedel-goal-id goal))
+          (should (equal policy (mevedel-goal-implementation-policy goal)))
+          (mevedel-goal-resume)
+          (let ((old-id (mevedel-goal-id goal)))
+            (mevedel-goal-edit "Revised objective")
+            (should-not (equal old-id (mevedel-goal-id goal))))
+          (should (equal policy (mevedel-goal-implementation-policy goal)))
+          (setf (mevedel-goal-tokens-used goal) 10)
+          (mevedel-goal-set-budget 10)
+          (should (eq 'budget-limited (mevedel-goal-status goal)))
+          (mevedel-goal-set-budget "none")
+          (should (eq 'active (mevedel-goal-status goal)))
+          (mevedel-tool-goal-update 'complete nil session (mevedel-goal-id goal))
+          (should (equal policy (mevedel-goal-implementation-policy goal)))
+          (should-error (mevedel-goal-resume) :type 'user-error)
+          (should (cl-every (lambda (saved) (equal policy saved)) saved-policies))
+          (mevedel-goal-clear)
+          (should-not (mevedel-session-goal session))
+          (should-not (car saved-policies))
+          (mevedel-goal-start "Ordinary replacement")
+          (let ((replacement (mevedel-session-goal session)))
+            (should-not (eq goal replacement))
+            (should-not (mevedel-goal-implementation-policy replacement))
+            (should (= 90 (mevedel-goal-token-budget replacement))))))
+      (should (= 90 mevedel-goal-token-budget)))))
 
 (mevedel-deftest mevedel-goal-resume
   ()

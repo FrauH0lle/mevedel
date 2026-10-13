@@ -17,6 +17,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-models)
+(require 'mevedel-implementation-policy)
 (require 'mevedel-skills-core)
 (require 'mevedel-turn)
 
@@ -256,13 +257,20 @@ resolve through this one seam rather than read the buffer's
 even after the pending skill context has been consumed."
   (or (and mevedel--current-request
            (mevedel-request-model-policy mevedel--current-request))
-      (mevedel-model-resolve-workload
-       (and (bound-and-true-p mevedel--session)
-            (not mevedel--agent-invocation)
-            (mevedel-session-plan-mode mevedel--session)
-            'planning)
-       (plist-get mevedel-skills--pending-request-context :model)
-       (plist-get mevedel-skills--pending-request-context :effort))))
+      (let* ((implementation (mevedel-implementation-policy-current))
+             (base (mevedel-implementation-policy-model implementation))
+             (gptel-backend (if base (plist-get base :backend) gptel-backend))
+             (gptel-model (if base (plist-get base :model) gptel-model))
+             (gptel-reasoning-effort
+              (if base (plist-get base :effort)
+                (and (boundp 'gptel-reasoning-effort) gptel-reasoning-effort))))
+        (mevedel-model-resolve-workload
+         (and (bound-and-true-p mevedel--session)
+              (not mevedel--agent-invocation)
+              (mevedel-session-plan-mode mevedel--session)
+              'planning)
+         (plist-get mevedel-skills--pending-request-context :model)
+         (plist-get mevedel-skills--pending-request-context :effort)))))
 
 (defun mevedel-skills--transform-apply-request-model-policy (fsm)
   "Pre-realize transform: apply the root request policy to prompt locals.
@@ -279,6 +287,15 @@ Policy never changes after this realization boundary."
     (when (and chat-buffer (buffer-live-p chat-buffer))
       (let ((policy
              (with-current-buffer chat-buffer
+               ;; This synchronous first transform runs before asynchronous
+               ;; preparation.  Terminal cleanup must identify this submission,
+               ;; not whichever pending policy a later callback happens to see.
+               (plist-put info :mevedel-pending-implementation-policy
+                          mevedel--pending-implementation-policy)
+               (plist-put info :mevedel-pending-permission-mode
+                          mevedel--pending-permission-mode)
+               (plist-put info :mevedel-implementation-preparation
+                          (mevedel-implementation-policy-capture-preparation))
                (mevedel-skills-request-model-policy))))
         (setq-local gptel-backend (plist-get policy :backend))
         (setq-local gptel-model (plist-get policy :model))

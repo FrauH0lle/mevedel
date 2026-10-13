@@ -40,6 +40,12 @@
 (autoload 'mevedel-execution-target-restore-incarnation
   "mevedel-execution-target")
 
+;; `mevedel-implementation-policy'
+(declare-function mevedel-implementation-policy-validate
+                  "mevedel-implementation-policy" (policy))
+(autoload 'mevedel-implementation-policy-validate
+  "mevedel-implementation-policy")
+
 ;; `mevedel-permission-mode'
 (defvar mevedel-permission-mode)
 
@@ -76,6 +82,7 @@
 (declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-goal-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x))
+(declare-function mevedel-goal-implementation-policy "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-plan-reference "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x))
@@ -413,6 +420,10 @@ are mapped below the opened workspace root before containment is checked."
         :objective (mevedel-goal-objective goal)
         :status (mevedel-goal-status goal)
         :reason (mevedel-goal-reason goal)
+        :implementation-policy
+        (copy-tree
+         (mevedel-implementation-policy-validate
+          (mevedel-goal-implementation-policy goal)))
         :token-budget (mevedel-goal-token-budget goal)
         :tokens-used (mevedel-goal-tokens-used goal)
         :tokens-incomplete-p (mevedel-goal-tokens-incomplete-p goal)
@@ -425,7 +436,8 @@ are mapped below the opened workspace root before containment is checked."
 (defun mevedel-session-codec--goal-from-plist (plist)
   "Reconstruct a `mevedel-goal' from PLIST, or nil."
   (when plist
-    (let ((keys '(:id :objective :status :reason :token-budget :tokens-used :tokens-incomplete-p
+    (let ((keys '(:id :objective :status :reason :implementation-policy
+                  :token-budget :tokens-used :tokens-incomplete-p
                   :time-used-seconds :turns-run :plan-reference
                   :created-at :updated-at)))
       (unless
@@ -468,11 +480,14 @@ are mapped below the opened workspace root before containment is checked."
                (stringp (plist-get plist :created-at))
                (stringp (plist-get plist :updated-at)))
         (error "Invalid Goal sidecar")))
+    (mevedel-implementation-policy-validate
+     (plist-get plist :implementation-policy))
     (mevedel-goal--create
      :id (plist-get plist :id)
      :objective (plist-get plist :objective)
      :status (plist-get plist :status)
      :reason (plist-get plist :reason)
+     :implementation-policy (copy-tree (plist-get plist :implementation-policy))
      :token-budget (plist-get plist :token-budget)
      :tokens-used (plist-get plist :tokens-used)
      :tokens-incomplete-p (plist-get plist :tokens-incomplete-p)

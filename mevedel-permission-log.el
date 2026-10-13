@@ -28,6 +28,12 @@
 (autoload 'mevedel-session-publication-append-diagnostic
   "mevedel-session-publication")
 
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer request invocation))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
@@ -137,7 +143,7 @@
                :permission-mode-effective
                (or (plist-get props :permission-mode-effective)
                    (plist-get props :mode)
-                   (mevedel-session-permission-mode session))
+                   (mevedel-permission-mode-effective session))
                props)))))
 
 (provide 'mevedel-permission-log)

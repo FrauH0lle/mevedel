@@ -392,7 +392,7 @@
                    :dropped-file-grants (list (cdr spec)))))
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session &optional _fresh)
+                (lambda (input _session &optional _fresh _model)
                   (when (equal input "fails")
                     (error "Expansion failed"))
                   (list :text input))))
@@ -431,7 +431,7 @@
                  :dropped-file-grants (list dropped)))
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session &optional _fresh)
+                (lambda (input _session &optional _fresh _model)
                   (list :text input
                         :media-contexts (list (list dropped "image/png"))))))
             (mevedel-tools--handle-steering-inject fsm))
@@ -474,7 +474,7 @@
           ;; Verified bytes are staged per request; without one they fail.
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session &optional _fresh)
+                (lambda (input _session &optional _fresh _model)
                   (list :text input
                         :media-contexts
                         (list (list dropped "image/png" "bytes"))))))
@@ -509,7 +509,7 @@
                  :dropped-file-grants (list dropped)))
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session &optional _fresh) (list :text input)))
+                (lambda (input _session &optional _fresh _model) (list :text input)))
                ((symbol-function
                  'mevedel-tools--insert-session-injected-prompt)
                 (lambda (&rest _) (error "Transcript insertion failed"))))
@@ -546,7 +546,7 @@
              (list :input input :request-id "request-partial")))
           (cl-letf
               (((symbol-function 'mevedel-mentions-expand-user-input)
-                (lambda (input _session &optional _fresh)
+                (lambda (input _session &optional _fresh _model)
                   (when (equal input "fails")
                     (error "Expansion failed"))
                   (list :text input))))

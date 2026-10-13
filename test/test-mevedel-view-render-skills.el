@@ -10,6 +10,7 @@
                            "mevedel-engine-test-support"))
 (require 'mevedel-plan-handoff)
 (require 'mevedel-pipeline)
+(require 'mevedel-reminders)
 (require 'mevedel-resource)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-plan)
@@ -35,7 +36,7 @@
            (source (file-name-concat skill-root "alpha" "SKILL.md"))
            (plan "# Accepted disclosure plan\nKeep the attachment visible.\n")
            (draft "> unfinished\ncomposer draft")
-           launched)
+           launched owner launch-policy)
       (unwind-protect
           (progn
             (dolist (entry '(("base" "BASE ATTACHMENT BODY")
@@ -43,9 +44,17 @@
               (let ((dir (file-name-concat skill-root (car entry))))
                 (make-directory dir t)
                 (write-region
-                 (format "---\nname: %s\ndescription: Fixture skill\ncontext: inline\n---\n%s\n"
+                 (format "---\nname: %s\ndescription: Fixture skill\ncontext: inline\nmodel: \"Claude Code:opus\"\neffort: xhigh\n---\n%s\n"
                          (car entry) (cadr entry))
                  nil (file-name-concat dir "SKILL.md") nil 'silent)))
+            (mevedel-model-set-session-provider
+             session (mevedel-model-resolve-provider "Claude Code:haiku") buffer)
+            (mevedel-permission-mode-set-raw 'ask)
+            ;; This lightweight session omits ordinary installation defaults.
+            ;; Request-scoped policy does not run a session-mode transition to
+            ;; install the separate full-auto lifecycle reminder.
+            (mevedel-session-ensure-reminder
+             session (mevedel-reminders-make-mode-constraints))
             (setq-local gptel-system-prompt "Plan skill fixture" gptel-tools nil)
             (mevedel-skills-install session buffer)
             (mevedel-chat-install-request-hooks)
@@ -58,13 +67,18 @@
                    (selection
                     (list :location 'here :context 'current :execution 'direct
                           :mode 'full-auto :model-provider "Claude Code:sonnet"
+                          :reasoning-effort 'high
                           :skills
                           (list (list :name "alpha" :source-file source))
                           :instructions "Also use $alpha.")))
-              (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+              (cl-letf (((symbol-function 'gptel-request)
+                         (lambda (&rest _)
+                           (ert-fail "Accepted native handoff fell back to an API request")))
+                        ((symbol-function 'mevedel-claude-code-launch)
                          (mevedel-engine-test--claude-launch
-                          (lambda (&rest _args)
-                            (setq launched t)
+                          (lambda (_system _mcp model effort &optional _id _hook)
+                            (setq launched t owner mevedel--current-request
+                                  launch-policy (list model effort))
                             (list :meta '((echoAllText . t)))))))
                 (mevedel-plan-handoff-start session buffer selection accepted)
                 (should-not
@@ -73,6 +87,22 @@
                 (mevedel-test--await 5
                     (format "Plan preparation did not launch: %s" mevedel-test--captured)
                   launched)
+                ;; Selected attachments are instructions: their opus/xhigh
+                ;; policies must not replace the accepted request settings.
+                (should (equal '("sonnet" high) launch-policy))
+                (should
+                 (equal '(:model-provider "Claude Code:sonnet"
+                          :reasoning-effort high :permission-mode full-auto)
+                        (mevedel-request-implementation-policy owner)))
+                (should (eq 'full-auto (mevedel-request-permission-mode-override owner)))
+                (should (eq 'full-auto
+                            (mevedel-permission-mode-effective session buffer nil owner)))
+                (should (equal "Claude Code:haiku" (mevedel-session-model-provider session)))
+                (should-not (mevedel-session-reasoning-effort session))
+                (should (eq 'ask (mevedel-session-permission-mode session)))
+                (should (equal "haiku" (gptel--model-name gptel-model)))
+                (should-not gptel-reasoning-effort)
+                (should (eq 'ask mevedel-permission-mode))
                 ;; Before polling the fixture, the request's user turn must
                 ;; already expose the attachments in the live view.
                 (with-current-buffer view
@@ -101,11 +131,23 @@
                   (should (string-search plan received))
                   (should (string-search "ALPHA ATTACHMENT BODY" received))
                   (should (string-search "BASE ATTACHMENT BODY" received))
+                  (should (string-search "Permission mode: `full-auto'" received))
                   (should-not (string-search "mevedel-render-data" received)))
+                (should (eq 'success
+                            (plist-get (mevedel-engine-info owner) :mevedel-acp-outcome)))
+                (should-not mevedel--pending-implementation-policy)
+                (should-not mevedel--current-request)
+                (should-not (mevedel-session-goal session))
+                (should (equal "Claude Code:haiku" (mevedel-session-model-provider session)))
+                (should-not (mevedel-session-reasoning-effort session))
+                (should (eq 'ask (mevedel-session-permission-mode session)))
+                (should (equal "haiku" (gptel--model-name gptel-model)))
+                (should-not gptel-reasoning-effort)
+                (should (eq 'ask mevedel-permission-mode))
                 (with-current-buffer view
                   (should (= 1 (how-many "2 attached skills (base, alpha)"
                                          (point-min) (mevedel-view--input-start))))
-                  (should (string-search "1 system reminder (full-auto-mode)" (buffer-string)))
+                  (should (string-search "1 system reminder (mode-constraints)" (buffer-string)))
                   (should (string-search "ALPHA ATTACHMENT BODY" (buffer-string)))
                   (should (string-search "BASE ATTACHMENT BODY" (buffer-string)))
                   (mevedel-view--full-rerender)

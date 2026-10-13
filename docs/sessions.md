@@ -221,8 +221,8 @@ Sessions auto-save lazily and at turn settlement under
 `<workspace-root>/.mevedel/sessions/<timestamp>-<12-hex-suffix>/`.
 Ordinary model turns and awaited fork-skill turns share one
 successful-turn transaction.  It advances the turn, records the token
-baseline, saves before request teardown, runs `Stop`, restores temporary
-permission state, ends the request, and schedules queued follow-up delivery.
+baseline, saves before request teardown, runs `Stop`, ends request-local
+policy scope and the request, and schedules queued follow-up delivery.
 Error and abort settlement also save before request teardown, preserving partial
 responses and request-local file checkpoints. `mevedel-abort` additionally saves
 from cleanup that runs even if cancellation signals an error or quit.
@@ -330,8 +330,9 @@ the explicit `:agent-registry` containing retained paths, frozen
 configurations, activity, mailboxes, and conversation locations. It records
 only the selected `:preset-name`; resume rebuilds mevedel variables from that
 currently registered trusted preset, so sidecar data cannot name or populate
-buffer locals. It also records the session's exact `:model-provider` and
-explicit `:reasoning-effort` and the durable ToolCall audit checkpoint. The checkpoint contains the ToolCall call and bounded child audit,
+buffer locals. It also records the session's baseline `:model-provider` and
+explicit `:reasoning-effort`, independently of implementation overrides, and
+the durable ToolCall audit checkpoint. The checkpoint contains the ToolCall call and bounded child audit,
 never an interpreter continuation. A Session Fork also copies the source
 session's permission mode, sandbox mode, session permission rules, and resource
 grants at the fork point. Parent and child then diverge independently.
@@ -1454,6 +1455,10 @@ A saved model selection that no longer resolves uses
 with a notice; without either, history stays readable while requests wait for a
 model choice.
 
+That fallback is for the ordinary session baseline only. An accepted
+implementation policy resolves its exact provider/model and effort without
+fallback; a failure leaves Direct retryable or pauses active Goal work.
+
 Recovery issues are informational unless an owner that re-checks them reports
 them as blocking: Codex login, a missing preset (cleared by applying any
 preset) and a saved model with no available fallback (cleared by selecting a
@@ -1471,10 +1476,20 @@ model-not-found signal (provider code or HTTP 404) moves a session to
 Standalone Plan metadata and its implementation retry record live in the
 sidecar; draft and accepted artifacts live under `local/plans/`. The retry
 record identifies completed preparation steps, cached Summary evidence, an
-existing Worktree target, and any reserved Goal construction. It allows retry
+existing Worktree target, the accepted implementation selection, and any reserved
+Goal construction. It allows retry
 without repeating an accepted rotation, summary, target creation, or Goal.
 See [Plan execution](plan-mode.md) for the Here/Worktree, Fresh/Summary, and
 Direct/Goal workflows and their failure handling.
+
+Direct implementation captures the accepted model, effort, and permission mode
+on one request; retry reuses that selection. Goal construction persists them on
+the Goal before clearing source recovery. Both Here and Worktree leave ordinary
+session policy untouched. A new Worktree target retains its usual defaults plus
+the inherited preset; reopening retains its restored baseline. The accepted
+budget sets the Goal slot only, never `mevedel-goal-token-budget`. There is no
+baseline snapshot/restore scheme, so concurrent user setting changes survive
+settlement. Effective views, logs, and reminders do not become saved defaults.
 
 The telemetry stream and diagnostics directory are observational artifacts,
 not resumable state. They are append-only within a run and are never consulted
@@ -1487,7 +1502,24 @@ boundary, and profiler procedure.
 
 The Goal remains in the session sidecar as a strict record: identity,
 objective, status/reason, token/time/turn accounting, optional budget, optional
-accepted-plan reference, and timestamps. Its `:tokens-incomplete-p` flag preserves
+accepted-plan reference and implementation policy, and timestamps. The required
+`:implementation-policy` value is either `nil` or exactly
+`(:model-provider STRING :reasoning-effort SYMBOL-or-nil :permission-mode MODE)`;
+the provider label is `BACKEND:MODEL` and MODE is `ask`, `edits`, or `full-auto`.
+`mevedel-implementation-policy.el` owns validation, exact model resolution, and
+current root-policy selection. Active ordinary root Goal turns and resume use
+that record; new ordinary chat with an inactive Goal uses the baseline.
+Already-admitted turns retain their snapshot through settlement. Child
+implementation turns inherit only the permission-mode override, not the root's
+full model policy; summary, control, directive, and unrelated child work is
+excluded.
+
+There is no migration for this Goal shape. Older records without
+`:implementation-policy` and malformed policies load as no Goal; transcript
+history stays readable. This does not change the top-level session schema or
+introduce an older-Goal compatibility reader.
+
+The Goal's `:tokens-incomplete-p` flag preserves
 missing native usage across save and reopen; the numeric count then records only
 a lower bound. Provider usage is authoritative when available. The request
 estimator supplies the fallback for gptel; native requests with missing counters

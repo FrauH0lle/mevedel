@@ -448,7 +448,7 @@ owned here; mutable policy or evidence never inherits an older approval."
                t)))
          (cancel (reason)
            (if (and (eq reason 'policy)
-                    (eq (mevedel-permission-mode-effective session buffer) 'full-auto))
+                    (eq (mevedel-permission-mode-for-context entry) 'full-auto))
                (deliver (pcase (mevedel-permission-queue--reevaluate entry)
                           ('allow 'allow-once) ('deny 'deny-once)
                           (`(deny . ,reason) (cons 'deny reason)) (_ 'aborted))

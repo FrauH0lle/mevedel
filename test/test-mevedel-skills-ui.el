@@ -1525,11 +1525,23 @@ spanning lines")))
                         :model (list :backend gptel-backend :model 'haiku)))
       (setq-local mevedel-skills-input--pending-inline-attachments
                   (list (list :name "alpha")))
-      (let (model)
+      (let ((baseline gptel-model)
+            (gptel-use-tools nil)
+            (gptel-use-context nil)
+            fsm)
         (mevedel-test--with-captured-messages nil
           (mevedel-skills--gptel-send-advice
-           (lambda (&rest _) (setq model gptel-model))))
-        (should (eq 'haiku model)))
+           (lambda (&rest _)
+             (should (eq baseline gptel-model))
+             (setq fsm
+                   (gptel-request nil :dry-run t
+                     :transforms
+                     '(mevedel-skills--transform-apply-request-model-policy))))))
+        ;; The model applies to gptel's private prompt and realized payload,
+        ;; not a binding around the shared source buffer's send callback.
+        (should (eq 'haiku (plist-get (gptel-fsm-info fsm) :model)))
+        (should (equal "haiku" (plist-get (plist-get (gptel-fsm-info fsm) :data) :model)))
+        (should (eq baseline gptel-model)))
       (should (null mevedel-skills--pending-request-context))
       (should (null mevedel-skills-input--pending-inline-attachments))))
 

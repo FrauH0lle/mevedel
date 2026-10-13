@@ -453,7 +453,7 @@
       (mevedel-claude-code-context-system request "sys")
       (mevedel-claude-code-context-test--steer session request "IMAGE-STEER-3108")
       (cl-letf (((symbol-function 'mevedel-claude-code-context--images)
-                 (lambda (contexts) (and contexts (list image))))
+                 (lambda (contexts &optional _model) (and contexts (list image))))
                 ((symbol-function 'mevedel-mentions-expand-user-input)
                  (lambda (text &rest _)
                    (list :text text :media-contexts '(("board.png" "image/png"))))))

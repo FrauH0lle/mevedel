@@ -7,8 +7,18 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'mevedel-structs))
+(require 'mevedel-structs)
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (invocation))
+(declare-function mevedel-agent-invocation-permission-mode-override
+                  "mevedel-agents" (invocation))
+
+;; `mevedel-implementation-policy'
+(declare-function mevedel-implementation-policy-current
+                  "mevedel-implementation-policy" (&optional session buffer))
+(autoload 'mevedel-implementation-policy-current "mevedel-implementation-policy")
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue--coalesce
@@ -57,6 +67,10 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
+(defvar mevedel--agent-invocation)
+(defvar mevedel--current-request)
+(defvar mevedel--pending-implementation-policy)
+(defvar mevedel--pending-permission-mode)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
@@ -109,13 +123,56 @@ they are responsible for."
       (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
       'ask))
 
-(defun mevedel-permission-mode-effective
-    (&optional session data-buffer surface-buffer)
+(cl-defun mevedel-permission-mode-effective
+    (&optional session data-buffer surface-buffer
+               (request nil request-supplied-p)
+               (invocation nil invocation-supplied-p))
   "Return the effective permission mode for SESSION and DATA-BUFFER.
-SURFACE-BUFFER is the UI buffer whose local mode may override the data
-buffer's fallback mode.  When omitted, DATA-BUFFER is used; without a
-DATA-BUFFER, the current buffer is used."
-  (let* ((surface-buffer (or surface-buffer
+REQUEST and INVOCATION identify captured asynchronous authority.  When either
+is supplied (including nil), never consult a newer request in the buffer.
+Otherwise resolve
+the buffer's request, invocation, and pending submission, in that order.
+An override does not change SESSION's live baseline.  SURFACE-BUFFER supplies
+only the UI-local fallback when no session mode exists."
+  (let* ((data-buffer (or data-buffer
+                          (and (not session)
+                               (mevedel-permission-mode-data-buffer))
+                          (and session
+                               (eq session (bound-and-true-p mevedel--session))
+                               (current-buffer))))
+         (explicit-identity (or request-supplied-p invocation-supplied-p))
+         (request (or request
+                      (and (not explicit-identity)
+                           (buffer-live-p data-buffer)
+                           (buffer-local-value 'mevedel--current-request data-buffer))))
+         (invocation (or invocation
+                         (and (not explicit-identity)
+                              (buffer-live-p data-buffer)
+                              (buffer-local-value 'mevedel--agent-invocation data-buffer))))
+         (session (or session
+                      (and request (mevedel-request-session request))
+                      (and invocation (mevedel-agent-invocation-parent-session invocation))))
+         (scoped-mode
+          (cond
+           (request
+            (and (or (not session)
+                     (eq session (mevedel-request-session request)))
+                 (mevedel-request-permission-mode-override request)))
+           (invocation
+            (and (or (not session)
+                     (eq session (mevedel-agent-invocation-parent-session invocation)))
+                 (mevedel-agent-invocation-permission-mode-override invocation)))
+           ((and (not explicit-identity)
+                 (buffer-live-p data-buffer)
+                 (or (not session)
+                     (eq session (buffer-local-value 'mevedel--session data-buffer))))
+            (or (buffer-local-value 'mevedel--pending-permission-mode data-buffer)
+                (plist-get (buffer-local-value
+                            'mevedel--pending-implementation-policy data-buffer)
+                           :permission-mode)
+                (plist-get (mevedel-implementation-policy-current session data-buffer)
+                           :permission-mode)))))
+         (surface-buffer (or surface-buffer
                              (and (buffer-live-p data-buffer) data-buffer)
                              (current-buffer)))
          (surface-mode
@@ -126,11 +183,12 @@ DATA-BUFFER, the current buffer is used."
           (and (buffer-live-p surface-buffer)
                (local-variable-p 'mevedel-permission-mode surface-buffer)))
          (global-mode (and (boundp 'mevedel-permission-mode)
-                           (default-toplevel-value
-                            'mevedel-permission-mode))))
-    ;; Read bindings without switching buffers: status lines call this on
-    ;; every redisplay.
-    (or (and session (mevedel-session-permission-mode session))
+                           (if (local-variable-p 'mevedel-permission-mode)
+                               (default-toplevel-value 'mevedel-permission-mode)
+                             mevedel-permission-mode))))
+    ;; Read buffer bindings without switching on the status redisplay path.
+    (or scoped-mode
+        (and session (mevedel-session-permission-mode session))
         (and (buffer-live-p data-buffer)
              (boundp 'mevedel--session)
              (when-let* ((data-session
@@ -146,6 +204,14 @@ DATA-BUFFER, the current buffer is used."
 (defun mevedel-permission-mode-label (&optional mode)
   "Return the compact user-facing label for permission MODE."
   (symbol-name (if (memq mode '(ask edits full-auto)) mode 'ask)))
+
+(defun mevedel-permission-mode-for-context (context)
+  "Resolve effective authority for captured permission CONTEXT.
+Tool contexts use `:buffer'; queue entries use `:data-buffer'."
+  (mevedel-permission-mode-effective
+   (plist-get context :session)
+   (or (plist-get context :buffer) (plist-get context :data-buffer))
+   nil (plist-get context :request) (plist-get context :invocation)))
 
 (defun mevedel-permission-mode--apply-full-auto-lifecycle
     (previous-mode target-mode &optional session)
@@ -347,40 +413,6 @@ old value.  See `mevedel-permission-mode--set' and
   :get #'mevedel-permission-mode--get
   :local 'permanent
   :group 'mevedel)
-
-
-;;
-;;; Goal implementation override
-
-(defvar-local mevedel--implementation-permission-mode-saved nil
-  "Wrapped permission mode to restore after Goal implementation.")
-
-(defun mevedel--implementation-permission-mode-apply (mode)
-  "Temporarily apply implementation permission MODE for this request."
-  (when (and (memq mode '(ask edits full-auto))
-             (bound-and-true-p mevedel--session))
-    (setq mevedel--implementation-permission-mode-saved
-          (list (mevedel-session-permission-mode mevedel--session)))
-    (mevedel-permission-mode-set-raw mode)
-    (mevedel-view-refresh-associated-input-prompt)))
-
-(defun mevedel--implementation-permission-mode-restore ()
-  "Restore permission mode after a temporary Goal implementation override."
-  (when (and mevedel--implementation-permission-mode-saved
-             (bound-and-true-p mevedel--session))
-    (let ((restore (car mevedel--implementation-permission-mode-saved)))
-      (setq mevedel--implementation-permission-mode-saved nil)
-      (setf (mevedel-session-permission-mode mevedel--session) restore)
-      (if restore
-          (setq-local mevedel-permission-mode restore)
-        (kill-local-variable 'mevedel-permission-mode))
-      (when (and (boundp 'mevedel--view-buffer)
-                 (buffer-live-p mevedel--view-buffer))
-        (with-current-buffer mevedel--view-buffer
-          (if restore
-              (setq-local mevedel-permission-mode restore)
-            (kill-local-variable 'mevedel-permission-mode))))
-      (mevedel-view-refresh-associated-input-prompt))))
 
 
 ;;

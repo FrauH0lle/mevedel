@@ -708,6 +708,25 @@
                              (mevedel-view--input-text))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
+  :doc "cycles only baseline during implementation and preserves multiline draft"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create
+                     :authority-mode 'pid-lock :permission-mode 'ask))
+           (request (mevedel-request--create
+                     :session session :permission-mode-override 'full-auto)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session mevedel--view-buffer view-buf
+                    mevedel--current-request request))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "> first editable\nsecond line")
+        (should (eq 'edits (mevedel-view-cycle-permission-mode)))
+        (should (eq 'edits (mevedel-session-permission-mode session)))
+        (should (eq 'full-auto (mevedel-view--effective-permission-mode)))
+        (mevedel-view-refresh-associated-input-prompt)
+        (should (equal "> first editable\nsecond line" (mevedel-view--input-text))))))
+
   :doc "keeps the committed mode when an incomplete view cannot repaint"
   (let ((data-buffer (generate-new-buffer " *mev-cycle-data*"))
         (view-buffer (generate-new-buffer " *mev-cycle-view*")))

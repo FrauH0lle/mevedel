@@ -296,7 +296,8 @@ it enters the shared queue."
         one-shot-mutations-p
         (mevedel-permission--one-shot-mutations-p
          request one-shot-mutations-p)
-        mode (or mode (and session (mevedel-session-permission-mode session))))
+        mode (or mode (mevedel-permission-mode-effective
+                       session buffer nil request invocation)))
   (when (and warn-no-session-p (not session))
     (mevedel--warn-once
      (list 'permission-no-session tool-name)
@@ -406,7 +407,9 @@ PATCH-SESSION-ONLY-P is true only for a prepared ApplyPatch proposal containing
 session-owned work descendants; workspace-owned shared files are excluded."
   (if normalized-context
       normalized-context
-    (setq mode (or mode mevedel-permission-mode))
+    (setq mode (or mode (if request
+                           (mevedel-permission-mode-effective session nil nil request)
+                         (mevedel-permission-mode-effective session))))
     (when (and tool-struct content)
       (cl-flet ((extract (getter current)
                   (or current

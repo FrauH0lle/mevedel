@@ -47,12 +47,14 @@ CALLBACK receives a plist containing placement, text and media sources."
       (mevedel-agent-invocation-parent-session owner)
     (mevedel-request-session owner)))
 
-(defun mevedel-claude-code-context--images (contexts)
-  "Return ACP image parts for media CONTEXTS of (PATH MIME [BYTES])."
+(defun mevedel-claude-code-context--images (contexts &optional model)
+  "Return ACP image parts for media CONTEXTS of (PATH MIME [BYTES]).
+MODEL supplies the captured native request's MIME capabilities."
   (mapcar
    (lambda (context)
      (pcase-let ((`(,path ,mime . ,rest) context))
-       (unless (and (string-prefix-p "image/" mime) (gptel--model-mime-capable-p mime))
+       (unless (and (string-prefix-p "image/" mime)
+                    (gptel--model-mime-capable-p mime model))
          (user-error "Claude ACP input does not support %s; use Read for this resource" mime))
        `((type . "image") (mimeType . ,mime)
          (data . ,(if (car rest) (base64-encode-string (car rest) t)
@@ -65,10 +67,12 @@ Reuse mention resolution and permission checks.  Keep media in this request,
 without adding it to another conversation's persistent gptel context."
   (let* ((child (mevedel-agent-invocation-p owner))
          (session (mevedel-claude-code-context--session owner))
+         (model (plist-get (mevedel-engine-info owner) :model))
          (fresh (or child (mevedel-request-directive-uuid owner)
                     (plist-get (mevedel-engine-info owner) :mevedel-native-isolated)))
-         (expansion (mevedel-mentions-expand-user-input text session fresh))
-         (images (mevedel-claude-code-context--images (plist-get expansion :media-contexts))))
+         (expansion (mevedel-mentions-expand-user-input text session fresh model))
+         (images (mevedel-claude-code-context--images
+                  (plist-get expansion :media-contexts) model)))
     (dolist (item (plist-get expansion :reminder-items))
       (mevedel-reminders-queue-turn-event
        (current-buffer) (cons 'mention (plist-get item :key)) (plist-get item :body)))
@@ -297,12 +301,14 @@ each entry."
            body images transcript reminders commits)
       (dolist (entry entries)
         (let ((expansion (with-current-buffer (plist-get info :buffer)
-                           (mevedel-tools-steering-expand session entry fresh))))
+                           (mevedel-tools-steering-expand
+                            session entry fresh (plist-get info :model)))))
           (setq body (concat body mevedel-claude-code-context--steering-header "\n\n"
                              (plist-get expansion :text) "\n")
                 images (append images
                                (mevedel-claude-code-context--images
-                                (plist-get expansion :media-contexts)))
+                                (plist-get expansion :media-contexts)
+                                (plist-get info :model)))
                 transcript (concat transcript
                                    (or (plist-get entry :transcript-payload) (plist-get entry :input))
                                    "\n"
@@ -450,7 +456,8 @@ The native user-message echo, not submission, confirms delivery."
                           (list `((type . "text") (text . ,text))))
                         (mevedel-claude-code-context--images
                          (mapcar (lambda (part) (list (plist-get part :media) (plist-get part :mime)))
-                                 (plist-get selected :media)))))
+                                 (plist-get selected :media))
+                         (plist-get (mevedel-engine-info owner) :model))))
          (hash (and parts (secure-hash 'sha256 (prin1-to-string parts))))
          (shown (mevedel-session-mentions-shown session))
          (extra (mevedel-claude-code-context--workspace-context owner t)))

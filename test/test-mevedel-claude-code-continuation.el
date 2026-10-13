@@ -19,7 +19,7 @@
                            (changed (concat "FULL-UPDATE-" (make-string 5100 ?😀) "-END"))
                            (file (file-name-concat root "evidence.txt"))
                            (mevedel-goal-token-budget 48)
-                           (goal (mevedel-goal-create "Finish this bounded native turn" session))
+                           (goal (mevedel-goal-create "Finish this bounded native turn" :session session))
                            (calls 0) prompts decisions readings
                            (mevedel-post-tool-use-functions
                             (list (lambda (_event)
