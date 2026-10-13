@@ -1163,7 +1163,14 @@ this runs after the task mutation it accompanies."
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
                   "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (canonical agent path or bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), metadata (object, optional)."
-                  :items (:type object)
+                  :items (:type object
+                          :properties (:subject (:type string)
+                                       :description (:type string)
+                                       :status (:type string)
+                                       :owner (:type string)
+                                       :blockedBy (:type array :items (:type integer))
+                                       :metadata (:type object))
+                          :required ["subject"])
                   :minItems 1)
            (note string :optional
                  "Optional owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")

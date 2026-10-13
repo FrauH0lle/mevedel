@@ -17,6 +17,7 @@
 (require 'mevedel-telemetry)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-render-data)
+(require 'mevedel-tool-task)
 (require 'mevedel-pipeline)
 (require 'mevedel-turn)
 (require 'mevedel-tools)
@@ -294,6 +295,30 @@ With RAW-P, retain the full pipeline result including hidden render data."
      (when (file-directory-p save-path) (delete-directory save-path t))))
   ,test
   (test)
+
+  :doc "TaskCreate accepts task plists in vectors and quoted lists through ToolCall"
+  (progn
+    (mevedel-tool-task--register)
+    (with-current-buffer buffer
+      (setq-local gptel-tools
+                  (test-mevedel-ptc-driver--gptel-tools "TaskCreate")))
+    (dolist (form '("[(:subject \"First\") (:subject \"Second\" :description \"Details\" :status \"in_progress\" :owner \"Review\" :blockedBy [1] :metadata nil) (:subject \"Third\" :status \"completed\")]"
+                    "'((:subject \"First\") (:subject \"Second\" :description \"Details\" :status \"in_progress\" :owner \"Review\" :blockedBy (1) :metadata nil) (:subject \"Third\" :status \"completed\"))"))
+      (setf (mevedel-session-tasks session) nil)
+      (should (string-prefix-p
+               "Created 3 tasks:"
+               (test-mevedel-ptc-driver--run
+                buffer (format "(TaskCreate :tasks %s)" form))))
+      (let ((tasks (mevedel-session-tasks session)))
+        (should (equal '(1 2 3) (mapcar #'mevedel-task-id tasks)))
+        (should (equal '("First" "Second" "Third")
+                       (mapcar #'mevedel-task-subject tasks)))
+        (should (equal '(pending in-progress completed)
+                       (mapcar #'mevedel-task-status tasks)))
+        (should (equal "Details" (mevedel-task-description (cadr tasks))))
+        (should (equal "Review" (mevedel-task-owner (cadr tasks))))
+        (should (equal '(1) (mevedel-task-blocked-by (cadr tasks))))
+        (should (hash-table-p (mevedel-task-metadata (cadr tasks)))))))
 
   :doc "SharedEdit accepts nested list and vector arrays through the real ToolCall pipeline"
   (unwind-protect
