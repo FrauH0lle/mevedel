@@ -181,7 +181,7 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid))
+                  "mevedel-turn" (session &optional directive-uuid options))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
 (autoload 'mevedel-request-begin "mevedel-turn")

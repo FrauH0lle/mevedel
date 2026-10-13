@@ -424,30 +424,36 @@ reservation while its prepared kickoff has not started."
          (prepared (copy-tree record)))
     (unless existing
       (setf (mevedel-session-preset-name target-session)
-            (mevedel-session-preset-name session)
-            (mevedel-session-plan-metadata target-session)
+            (mevedel-session-preset-name session))
+      ;; Preset hooks may fail or quit.  Only mark the target prepared after
+      ;; restoration returns, so a retry cannot skip unfinished setup.
+      (with-current-buffer target-buffer
+        (mevedel-preset-restore-session target-session target-buffer))
+      (setf (mevedel-session-plan-metadata target-session)
             (append
              (list :status 'accepted
                    :accepted-path (plist-get accepted :path)
                    :accepted-hash (plist-get accepted :hash))
              (and (eq (plist-get selection :execution) 'goal)
                   (list :implementation-goal-id
-                        (plist-get record :goal-id)))))
-      (with-current-buffer target-buffer
-        (mevedel-preset-restore-session target-session target-buffer)
-        (when-let* (((eq (plist-get selection :context) 'summary))
-                    (summary (plist-get record :summary)))
-          (let ((current (mevedel-compact-evidence-previous-summary)))
-            (cond
-             ((equal current summary))
-             (current (error "Prepared Worktree summary does not match target"))
-             (t
-              (let ((inhibit-read-only t))
-                (goto-char (point-max))
-                (unless (bolp) (insert "\n"))
-                (insert
-                 (mevedel-session-artifacts-summary-block summary)))))))
-        (mevedel-session-artifacts-save target-session target-buffer)))
+                        (plist-get record :goal-id))))))
+    ;; Live accepted metadata proves artifact ownership, not that summary
+    ;; preparation or target publication completed before a previous failure.
+    ;; Reconcile both before advancing the source's durable retry step.
+    (with-current-buffer target-buffer
+      (when-let* (((eq (plist-get selection :context) 'summary))
+                  (summary (plist-get record :summary)))
+        (let ((current (mevedel-compact-evidence-previous-summary)))
+          (cond
+           ((equal current summary))
+           (current (error "Prepared Worktree summary does not match target"))
+           (t
+            (let ((inhibit-read-only t))
+              (goto-char (point-max))
+              (unless (bolp) (insert "\n"))
+              (insert
+               (mevedel-session-artifacts-summary-block summary)))))))
+      (mevedel-session-artifacts-save target-session target-buffer))
     (setq prepared (plist-put prepared :step 'submit))
     (setq prepared (plist-put prepared :target-accepted accepted))
     (mevedel-plan--metadata-put session :implementation-retry prepared)

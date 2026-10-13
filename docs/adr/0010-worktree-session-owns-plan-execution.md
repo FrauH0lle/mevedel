@@ -20,6 +20,13 @@ Fresh targets retain the ordinary worktree setup context. Summary targets are
 clean sessions: the source transcript is summarized without mutation, source
 checkout paths become repository-relative, and the target stores the summary
 before its accepted artifact path, full plan, and implementation instruction.
+Each preparation attempt reconciles the target summary and saves the target
+before advancing the source's durable retry record. The target receives accepted
+metadata only after inherited preset restoration returns; interrupted preset
+hooks therefore leave setup retryable rather than falsely prepared. Accepted metadata can
+survive a failed save in the live target, so its presence alone cannot prove
+durable preparation. Retrying this publication does not reinstall the preset
+or duplicate a matching summary.
 
 Direct retries reuse the accepted policy. Goal construction persists it before
 clearing source recovery, so active Goal turns and resume retain the selection.

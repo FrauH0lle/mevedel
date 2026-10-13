@@ -23,6 +23,8 @@ the serial chain when its sentinel interrupts remote I/O. Pending completion
 remains request-cancellable; it does not change hook ordering or authority.
 Remote exit handling runs after TRAMP's stderr-draining sentinel, so final
 diagnostics remain available for capped previews and block reasons.
+Local exit handling drains its separate stderr pipe before settlement, stopping
+at the output cap or a 50 ms drain budget rather than waiting for surviving writers.
 Command startup checks cancellation before preparation and after yielding work,
 and releases child handles returned after teardown. Terminal `Stop` and
 `StopFailure` handlers run independently under their own timeout.
@@ -55,6 +57,12 @@ a supported event can block an operation. Structured decisions make consequentia
 changes auditable without injecting arbitrary stdout or stderr into model context.
 
 ## Decision history
+
+A review probe delivered a local command's exit sentinel while its separate
+stderr pipe still had unread output. The runner destroyed that pipe before
+reading the block reason, returning the generic fallback instead. Local exit
+handling now drains available stderr under the existing output cap; timeout and
+cancellation retain their existing settlement ownership.
 
 CI intermittently lost a remote command's stderr preview. TRAMP drains its
 stderr pipe after invoking the sentinel supplied to `make-process`; the hook

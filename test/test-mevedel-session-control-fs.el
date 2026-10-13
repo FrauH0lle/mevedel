@@ -244,9 +244,12 @@
                 ;; before the write, as it can on a slow runner.
                 ((symbol-function 'process-send-region)
                  (lambda (process start end)
-                   (let ((process-id (process-id process)))
-                     (with-timeout (5 (ert-fail "Program never exited"))
-                       (while (file-exists-p (format "/proc/%d" process-id)))))
+                   (let ((path (format "/proc/%d" (process-id process)))
+                         (deadline (+ (float-time) 5)))
+                     ;; Timers cannot enforce a timeout in this deliberate
+                     ;; no-event wait: bound it by the clock instead.
+                     (while (and (file-exists-p path) (< (float-time) deadline)))
+                     (when (file-exists-p path) (ert-fail "Program never exited")))
                    (funcall send process start end))))
         (mevedel-session-control-fs-run-program-async
          (list (list :op 'path-exists-p :path "/tmp"))

@@ -192,8 +192,10 @@ advancing the handler chain when its sentinel interrupts remote I/O. The first t
 retained, the child is released immediately, and request cancellation remains
 effective while that continuation is queued. This applies to local predecessors
 too, because a later handler may be remote. Remote command exit handling runs
-after TRAMP drains stderr, preserving final diagnostics before logging or
-building a block reason. Each
+after TRAMP drains stderr; local command exit handling drains its separate
+stderr pipe up to the output cap or a 50 ms drain budget, so a surviving writer
+cannot monopolize exit handling even with truncation disabled. Both preserve final diagnostics before logging
+or building a block reason. Each
 stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.

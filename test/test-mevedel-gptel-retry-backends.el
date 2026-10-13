@@ -295,11 +295,17 @@
   (mevedel-test--with-captured-diagnostics nil
     (let ((openai
            "data: {\"choices\":[{\"delta\":{\"content\":\"Recovered answer\"}}]}\n\ndata: [DONE]\n\n")
+          ;; Some compatible servers close after the finishing chunk (and an
+          ;; optional usage-only chunk) without the [DONE] sentinel.
+          (openai-finish
+           "data: {\"choices\":[{\"delta\":{\"content\":\"Recovered answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}\n\n")
           (messages '(:messages [(:role "user" :content "question")]))
           (anthropic
            "event: content_block_delta\ndata: {\"delta\":{\"text\":\"Recovered answer\"}}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"))
       (dolist (spec
                `((gptel--make-openai ,openai ,messages)
+                 (gptel--make-openai ,openai-finish ,messages)
+                 (gptel--make-deepseek ,openai-finish ,messages)
                  (gptel--make-deepseek ,openai ,messages)
                  (gptel--make-privategpt ,openai ,messages)
                  (gptel--make-perplexity ,openai ,messages)
@@ -360,6 +366,50 @@
         (with-current-buffer data-buf
           (should (string-match-p "Recovered answer" (buffer-string)))
           (should-not (string-match-p "Abandoned output" (buffer-string))))))))
+
+(ert-deftest mevedel-gptel-retry-dispatch/abort-with-pending-async-tool-settles ()
+  "Aborting during an async tool lets its aborted result reach a terminal state.
+As in `mevedel-abort', the request's cancellers run in registration order, so
+the sample's canceller runs before the later tool canceller delivers its
+aborted result.  Any follow-up transport is then torn down."
+  (mevedel-test--with-captured-diagnostics nil
+    (dolist (limit '(0 10))
+      (ert-info ((format "retry limit %s" limit))
+        (let ((mevedel-gptel-retry-max-retries limit)
+              (tool-callback nil)
+              (spec (car mevedel-retry-backends-test--wire-cases))
+              (tool-response
+               "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"abort-async-1\",\"type\":\"function\",\"function\":{\"name\":\"Deferred\",\"arguments\":\"{}\"}}]}}]}\n\ndata: [DONE]\n\n"))
+          (mevedel-retry-test--with-http
+              (list tool-response (plist-get spec :stream-success))
+            (mevedel-retry-backends-test--configure
+             (plist-get spec :constructor) (plist-get spec :data) t)
+            (plist-put (gptel-fsm-info fsm) :tools
+                       (list (gptel-make-tool
+                              :name "Deferred" :description "Pending when aborted"
+                              :args nil :async t
+                              :function (lambda (callback)
+                                          (setq tool-callback callback)
+                                          (mevedel-request-push-canceller
+                                           request (lambda () (funcall callback "Error: aborted")))))))
+            (gptel--fsm-transition fsm)
+            (let ((deadline (+ (float-time) 10)))
+              (while (and (< (float-time) deadline)
+                          (or (not tool-callback) gptel--request-alist))
+                (accept-process-output nil 0.01))
+              (should (< (float-time) deadline)))
+            (should (eq 'TOOL (gptel-fsm-state fsm)))
+            (mevedel-request-cancel request)
+            (while gptel--request-alist (gptel-abort data-buf))
+            (should (eq 'ABRT (gptel-fsm-state fsm)))
+            (should (= 1 aborted))
+            (should (= 0 finished))
+            (should-not scheduled)
+            (should-not gptel--request-alist)
+            (should-not mevedel-gptel-retry--states)
+            (when (> limit 0)
+              ;; Recovery does not spend a provider call on a cancelled request.
+              (should (= 1 (length requests))))))))))
 
 (defmacro mevedel-retry-backends-test--with-http-status (responses &rest body)
   "Run BODY using the shared fixture with HTTP status/header RESPONSES.

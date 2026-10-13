@@ -320,6 +320,31 @@ With RAW-P, retain the full pipeline result including hidden render data."
         (should (equal '(1) (mevedel-task-blocked-by (cadr tasks))))
         (should (hash-table-p (mevedel-task-metadata (cadr tasks)))))))
 
+  :doc "TaskCreate and TaskUpdate metadata activity reaches the rendered task row"
+  (progn
+    (mevedel-tool-task--register)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/reviewer"
+                      (mevedel-agent-record--create :path "/root/reviewer"))))
+    (with-current-buffer buffer
+      (setq-local gptel-tools
+                  (test-mevedel-ptc-driver--gptel-tools "TaskCreate" "TaskUpdate")))
+    (should (string-prefix-p
+             "Created 1 task"
+             (test-mevedel-ptc-driver--run
+              buffer
+              "(TaskCreate :tasks [(:subject \"Review\" :status \"in_progress\" :owner \"/root/reviewer\" :metadata (:activity \"Checking callbacks\"))])")))
+    (should (string-match-p
+             "Checking callbacks"
+             (mevedel-tool-task--format-one (car (mevedel-session-tasks session)))))
+    (should (string-prefix-p
+             "Updated task"
+             (test-mevedel-ptc-driver--run
+              buffer "(TaskUpdate :id 1 :metadata '(:activeForm \"Testing cleanup\"))")))
+    (should (string-match-p
+             "Testing cleanup"
+             (mevedel-tool-task--format-one (car (mevedel-session-tasks session))))))
+
   :doc "SharedEdit accepts nested list and vector arrays through the real ToolCall pipeline"
   (unwind-protect
       (progn

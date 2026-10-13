@@ -12,6 +12,14 @@ compaction. The gptel engine retains its real state machine, while external
 turns carry workflow context on the admitted request rather than manufacturing
 a gptel state machine.
 
+Directive admission precedes yielding file preparation and save prompts. Its
+permission mode and Plan read-only stamp are explicit request inputs, so nested
+readiness work cannot consume another directive's authority. Provisional startup
+cleanup belongs to the reserved request and runs on cancellation before its
+ownership is cleared; stale startup continuations and rollback cannot mutate a
+replacement. This closes the observed save-prompt admission race without adding
+a second admission state machine or changing provider settlement.
+
 The bridge resolves every call against current mevedel authority. Discovery is
 not permission, and a request's cancellation revokes pending interactions and
 effects. The native conversation identity is persisted before its prompt is

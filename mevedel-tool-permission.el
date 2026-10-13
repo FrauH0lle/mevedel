@@ -29,11 +29,11 @@
 (autoload 'mevedel-bash-policy-decision-specifier-value "mevedel-bash-policy")
 
 ;; `mevedel-permission-mode'
-(declare-function mevedel-permission-mode-for-context
-                  "mevedel-permission-mode" (context))
 (declare-function mevedel-permission-mode-effective
                   "mevedel-permission-mode"
-                  (&optional session data-buffer surface-buffer))
+                  (&optional session data-buffer surface-buffer request invocation))
+(declare-function mevedel-permission-mode-for-context
+                  "mevedel-permission-mode" (context))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-permission-persistence'

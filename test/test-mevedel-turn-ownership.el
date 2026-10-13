@@ -93,6 +93,65 @@
       (mevedel-request-end)
       (should (eq 'full-auto (mevedel-session-permission-mode session)))))
 
+  :doc "explicit directive authority leaves pending root authority and records its own mode"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (let ((policy (list :model-provider "Provider:model" :reasoning-effort nil
+                        :permission-mode 'ask))
+          events)
+      (setq mevedel--pending-permission-mode 'edits
+            mevedel--pending-implementation-policy policy)
+      (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                 (lambda (_session event &rest fields)
+                   (push (cons event fields) events))))
+        (let ((admitted (mevedel-request-begin
+                         session "directive"
+                         '(:permission-mode full-auto :plan-read-only t))))
+          (should (eq 'full-auto (mevedel-request-permission-mode-override admitted)))
+          (should (mevedel-request-plan-read-only admitted))
+          (should-not (mevedel-request-implementation-policy admitted))
+          (should (eq 'edits mevedel--pending-permission-mode))
+          (should (eq policy mevedel--pending-implementation-policy))
+          (dolist (event '(request-queued request-start))
+            (should (eq 'full-auto
+                        (plist-get (alist-get event events) :permission-mode))))))))
+
+  :doc "explicit nil directive authority does not inherit shared preparation state"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (setq mevedel--pending-permission-mode 'full-auto)
+    (setf (mevedel-session-directive-planning session) '(:phase planning))
+    (let ((admitted (mevedel-request-begin
+                     session "directive"
+                     '(:permission-mode nil :plan-read-only nil))))
+      (should-not (mevedel-request-permission-mode-override admitted))
+      (should-not (mevedel-request-plan-read-only admitted))
+      (should (eq 'full-auto mevedel--pending-permission-mode))))
+
+  :doc "nested readiness admission cannot consume an outer directive's explicit authority"
+  (mevedel-turn-ownership-test--with-session
+    (mevedel-request-end)
+    (let ((original (symbol-function 'mevedel-request-assert-target-ready))
+          (options '(:permission-mode full-auto :plan-read-only t))
+          entered replacement)
+      (setq mevedel--pending-permission-mode 'edits)
+      (cl-letf (((symbol-function 'mevedel-request-assert-target-ready)
+                 (lambda (&rest args)
+                   (prog1 (apply original args)
+                     (unless entered
+                       (setq entered t
+                             replacement (mevedel-request-begin session)))))))
+        (should-error (mevedel-request-begin session "directive" options)
+                      :type 'user-error))
+      (should (eq replacement mevedel--current-request))
+      (should-not (mevedel-request-cancelled-p replacement))
+      (should (eq 'edits (mevedel-request-permission-mode-override replacement)))
+      (should-not (mevedel-request-plan-read-only replacement))
+      (mevedel-request-end)
+      (let ((retry (mevedel-request-begin session "directive" options)))
+        (should (eq 'full-auto (mevedel-request-permission-mode-override retry)))
+        (should (mevedel-request-plan-read-only retry)))))
+
   :doc "child admission captures inherited permission but no full model policy"
   (mevedel-turn-ownership-test--with-session
     (mevedel-request-end)

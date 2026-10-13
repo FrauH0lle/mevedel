@@ -412,13 +412,16 @@ caller for telemetry.  Return non-nil when this call made the request."
   t)
 
 
-(defun mevedel-request-begin (session &optional directive-uuid)
+(defun mevedel-request-begin (session &optional directive-uuid options)
   "Create a new request for SESSION, guarding against stale requests.
 
 If `mevedel--current-request' is already set, log a warning and replace
 it.  Signal instead if yielding checks or cancellation callbacks transfer
 ownership or start deferred settlement.  Optional DIRECTIVE-UUID sets the
 directive being processed.  Return the new request struct.
+OPTIONS may explicitly supply `:permission-mode' and `:plan-read-only',
+including nil, instead of shared pending/session defaults.  Explicit mode
+does not consume pending mode, and directives do not consume root policy.
 
 A root request is the user's retry: blocking recovery issues refuse it, and
 it clears the previous attempt's informational issues and a failure pause no
@@ -460,16 +463,18 @@ recovery state alone."
     (mevedel-implementation-policy-assert-preparation
      mevedel-implementation-policy--admission-preparation))
   (let* ((implementation-policy
-          (let ((mevedel--current-directive-uuid
-                 (or directive-uuid mevedel--current-directive-uuid)))
+          (unless directive-uuid
             (copy-tree (mevedel-implementation-policy-validate
                         (mevedel-implementation-policy-current session)))))
          (permission-mode-override
-          (when-let* ((mode (or mevedel--pending-permission-mode
-                               (plist-get implementation-policy :permission-mode)
-                               (and mevedel--agent-invocation
-                                    (mevedel-agent-invocation-permission-mode-override
-                                     mevedel--agent-invocation)))))
+          (when-let* ((mode
+                       (if (plist-member options :permission-mode)
+                           (plist-get options :permission-mode)
+                         (or mevedel--pending-permission-mode
+                             (plist-get implementation-policy :permission-mode)
+                             (and mevedel--agent-invocation
+                                  (mevedel-agent-invocation-permission-mode-override
+                                   mevedel--agent-invocation))))))
             (mevedel-permission-mode-normalize mode)))
          (origin (mevedel-current-origin))
          (id (format "request-%s-%s"
@@ -489,21 +494,25 @@ recovery state alone."
                    :untracked-effects nil
                    :directive-uuid directive-uuid
                    :plan-read-only
-                   (or (eq (plist-get
-                            (mevedel-session-directive-planning session)
-                            :phase)
-                           'planning)
-                       (and mevedel--agent-invocation
-                            (mevedel-agent-invocation-plan-read-only
-                             mevedel--agent-invocation)))
+                   (if (plist-member options :plan-read-only)
+                       (plist-get options :plan-read-only)
+                     (or (eq (plist-get
+                              (mevedel-session-directive-planning session)
+                              :phase)
+                             'planning)
+                         (and mevedel--agent-invocation
+                              (mevedel-agent-invocation-plan-read-only
+                               mevedel--agent-invocation))))
                    :started-at (current-time)
                    :origin origin)))
     (setf (mevedel-request-context request)
           (list :buffer (current-buffer) :mevedel-request-id id
                 :mevedel-request request))
-    (setq mevedel--current-request request
-          mevedel--pending-implementation-policy nil
-          mevedel--pending-permission-mode nil)
+    (setq mevedel--current-request request)
+    (unless directive-uuid
+      (setq mevedel--pending-implementation-policy nil))
+    (unless (plist-member options :permission-mode)
+      (setq mevedel--pending-permission-mode nil))
     ;; Emacs auto-saves only after input; an unattended turn needs its own
     ;; mid-turn checkpoints.
     (mevedel-session-persistence-start-checkpoints)
@@ -710,13 +719,16 @@ Run `mevedel-turn-settled-functions' with OUTCOME in the chat buffer."
              mevedel--session "request" category
              (concat (mevedel-recovery-message category) "; see the transcript")
              nil)
-            ;; Ordinary root model recovery may move the session.  Accepted
-            ;; implementation choices fail strictly without changing defaults,
-            ;; even if their Goal has stopped since this request was admitted.
+            ;; Recover only the ordinary root selection that is still current.
+            ;; Directive/accepted implementation choices are request-local, and
+            ;; an old failure must not overwrite a newer user selection.
             (when-let* (((eq category 'model))
                          ((not (and request
-                                    (mevedel-request-implementation-policy request))))
+                                    (or (mevedel-request-directive-uuid request)
+                                        (mevedel-request-implementation-policy request)))))
                          ((eq chat-buffer (mevedel-session-root-buffer mevedel--session)))
+                         ((eq backend gptel-backend))
+                         ((eq (or (plist-get info :model) gptel-model) gptel-model))
                          (selector (format "%s:%s" backend-name
                                            (gptel--model-name
                                             (or (plist-get info :model) gptel-model))))

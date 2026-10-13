@@ -155,7 +155,7 @@
 (declare-function mevedel--turn-hold "mevedel-turn" (fsm))
 (declare-function mevedel--turn-release "mevedel-turn" (fsm))
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid))
+                  "mevedel-turn" (session &optional directive-uuid options))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-ensure-progress-for-fsm

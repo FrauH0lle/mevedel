@@ -1469,7 +1469,9 @@ retain their domain text and actions.
 
 Separator rules use a common width, four columns less than the widest window
 displaying the view, with a ten-column minimum. Labels are truncated when
-necessary to leave room for the rule, including in narrow windows.
+necessary to leave room for the rule, including in narrow windows. If truncation
+would hide the agent panel's `[+]`/`[-]` control, it replaces the rule's leading
+three dashes so the control remains clickable without changing the width.
 
 A fragment is keyed by managed region identity, namespace, and id. It may
 also carry priority, label/body text, keymap/help text, activation metadata,

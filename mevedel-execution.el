@@ -176,7 +176,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-cancelled-p "mevedel-structs" (cl-x) t)
-(defvar mevedel--current-request)
 (declare-function mevedel-session--set-execution-state
                   "mevedel-structs" (session state))
 (declare-function mevedel-session-audit-target "mevedel-structs" (session))
@@ -188,6 +187,7 @@
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 
 ;; `mevedel-system'
 (defvar mevedel-memory-dirs)

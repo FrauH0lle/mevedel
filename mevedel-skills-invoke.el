@@ -159,7 +159,7 @@
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-begin "mevedel-turn"
-                  (session &optional directive-uuid))
+                  (session &optional directive-uuid options))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once

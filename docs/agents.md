@@ -43,8 +43,10 @@ the role workload, and finally applies explicit `model` and `effort` values.
 `model` accepts either a configured tier or `BACKEND:MODEL`; gptel validates
 the selected model's effort support. Follow-ups reuse this frozen
 configuration even if presets, role definitions, or parent settings change.
-Root-session permission decisions and confinement remain live shared policy,
-not part of the frozen request configuration.
+Root-session permission rules and confinement preference remain live shared
+policy, not part of the frozen role configuration. An accepted implementation
+permission-mode override is inherited by the invocation that it starts, not
+saved as the retained agent's default; see permission propagation below.
 
 Children on every mevedel-admitted native gptel backend use the
 [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery)
@@ -552,11 +554,14 @@ zone.
 
 ## Permission and confinement propagation
 
-Every nested agent shares the root session's permission mode, direct rules,
-explicit denies, protected resources, resource grants, and confinement policy
-by
-reference. Its Bash and Eval calls therefore follow the same authority state as
-the root. Required decisions and direct interactions are attributed with the
+Every nested agent shares the root session's direct rules, explicit denies,
+protected resources, resource grants, and confinement preference by reference.
+Its permission mode follows the live root baseline unless its spawning request
+or parent invocation carries an accepted implementation override. That override
+stays with the invocation and its descendants even after the root turn settles;
+an idle follow-up inherits the caller's current override rather than the previous
+invocation's. Explicit denies and immutable Plan restrictions still apply.
+Required decisions and direct interactions are attributed with the
 requester's canonical path and rendered in the root view's shared queues; child
 transcript views remain inspection-only. A turn blocked on either queue remains
 active and consumes tree capacity. Interrupting that turn cancels only its own

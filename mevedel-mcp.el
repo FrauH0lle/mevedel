@@ -84,7 +84,8 @@ is unexpected and still signals."
     (dolist (id (hash-table-keys calls))
       (condition-case nil
           (mevedel-mcp--cancel client id)
-        (error nil))))
+        ;; A canceller must not strand this client, its siblings or the socket.
+        ((error quit) nil))))
   (when (process-live-p client) (delete-process client)))
 
 (defun mevedel-mcp--pending (client id kind start)

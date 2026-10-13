@@ -594,21 +594,24 @@
       (delete-directory source-save t)
       (delete-directory (mevedel-session-save-path target-session) t)))
 
-  :doc "reuses durable target preparation when source step persistence fails"
-  (let* ((source-save (make-temp-file "mevedel-plan-target-source-" t))
+  :doc "retries interrupted preset, summary and publication before advancing the source"
+  (dolist (failure '(preset target source summary))
+   (let* ((source-save (make-temp-file "mevedel-plan-target-source-" t))
          (target-save (make-temp-file "mevedel-plan-target-" t))
          (source-path (file-name-concat source-save "local" "plans" "source.md"))
          (target-path (file-name-concat target-save "local" "plans" "accepted.md"))
          (body "# Accepted")
          (source-session (mevedel-session--create
-                          :name "source" :save-path source-save))
+                          :name "source" :save-path source-save
+                          :preset-name 'handoff-retry-preset))
          (target-session (mevedel-session--create
                           :name "target" :save-path target-save))
          (source-buffer (generate-new-buffer " *mevedel-plan-target-retry-source*"))
          (target-buffer (generate-new-buffer " *mevedel-plan-target-retry-data*"))
          (record
           (list :step 'prepare-target
-                :selection '(:location worktree :context fresh
+                :summary "Retained implementation background"
+                :selection '(:location worktree :context summary
                               :execution goal :mode full-auto
                               :goal-token-budget 4321)
                 :goal-id "reserved"
@@ -618,6 +621,12 @@
                       :hash (mevedel-plan-hash body))))
          (archives 0)
          (settings 0)
+         (mevedel-preset--registry (copy-tree mevedel-preset--registry))
+         (gptel--known-presets (copy-tree gptel--known-presets))
+         (summary-reader (symbol-function 'mevedel-compact-evidence-previous-summary))
+         (summary-reads 0)
+         (target-saves 0)
+         target-published
          (source-saves 0))
     (unwind-protect
         (progn
@@ -625,8 +634,17 @@
           (make-directory (file-name-directory target-path) t)
           (write-region body nil source-path nil 'silent)
           (write-region body nil target-path nil 'silent)
+          (mevedel-tools-register)
+          (mevedel-preset--define
+           'handoff-retry-preset
+           (list :system "Required inherited system"
+                 :pre (lambda ()
+                        (cl-incf settings)
+                        (when (and (eq failure 'preset) (= settings 1))
+                          (error "Preset preparation interrupted")))))
           (with-current-buffer target-buffer
-            (setq-local mevedel--session target-session))
+            (setq-local mevedel--session target-session
+                        gptel-system-prompt "Unconfigured"))
           (setf (mevedel-session-plan-metadata source-session)
                 (list :implementation-retry record))
           (cl-letf (((symbol-function
@@ -640,19 +658,31 @@
                        (list :path "local/plans/accepted.md"
                              :absolute-path target-path
                              :hash (mevedel-plan-hash body))))
-                    ((symbol-function 'mevedel-preset-restore-session)
-                     (lambda (&rest _) (cl-incf settings)))
                     ((symbol-function 'mevedel-permission-mode-transition)
                      #'ignore)
+                    ((symbol-function 'mevedel-compact-evidence-previous-summary)
+                     (lambda ()
+                       (cl-incf summary-reads)
+                       (when (and (eq failure 'summary) (= summary-reads 1))
+                         (error "Summary preparation interrupted"))
+                       (funcall summary-reader)))
                     ((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (saved-session _buffer)
+                       (when (eq saved-session target-session)
+                         (cl-incf target-saves)
+                         (when (and (eq failure 'target) (= target-saves 1))
+                           (error "Target sidecar unavailable"))
+                         (setq target-published t))
                        (when (eq saved-session source-session)
+                         (should target-published)
                          (cl-incf source-saves)
-                         (when (= source-saves 1)
+                         (when (and (eq failure 'source) (= source-saves 1))
                            (error "Source sidecar unavailable"))))))
             (should-error
              (mevedel-plan-handoff--prepare-worktree-target
               source-session source-buffer record))
+            (when (eq failure 'preset)
+              (should-not (mevedel-session-plan-metadata target-session)))
             ;; Simulate restoring the source sidecar that still points at the
             ;; last durable step while retaining the durable target session.
             (setf (mevedel-session-plan-metadata source-session)
@@ -661,12 +691,19 @@
                    (mevedel-plan-handoff--prepare-worktree-target
                     source-session source-buffer record)))
               (should (eq 'submit (plist-get prepared :step)))))
-          (should (= 1 archives))
-          (should (= 1 settings)))
+          (should (= (if (eq failure 'preset) 2 1) archives))
+          (should (= (if (eq failure 'preset) 2 1) settings))
+          (should (= (if (memq failure '(preset summary)) 1 2) target-saves))
+          (with-current-buffer target-buffer
+            (should (equal "Required inherited system" gptel-system-prompt))
+            (should (equal (plist-get record :summary)
+                           (mevedel-compact-evidence-previous-summary)))
+            (should (= 1 (how-many "Retained implementation background"
+                                   (point-min) (point-max))))))
       (kill-buffer target-buffer)
       (kill-buffer source-buffer)
       (delete-directory target-save t)
-      (delete-directory source-save t))))
+      (delete-directory source-save t)))))
 
 (mevedel-deftest mevedel-plan-handoff--portable-paths ()
   ,test

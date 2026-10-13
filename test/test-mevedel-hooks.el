@@ -2413,6 +2413,62 @@
 					'(:continue nil :stop-reason "blocked"))))
 		     (delete-directory root t))))
 
+(mevedel-deftest mevedel-hooks-run-event/local-stderr-settlement
+  (:quiet t :doc "drains local stderr before settling a fast hook")
+  (dolist (case '((nil nil) (8 nil) (nil t)))
+    (let* ((cap (car case))
+           (surviving-writer-p (cadr case))
+           (root (make-temp-file "mevedel-hooks-stderr" t))
+           (session (mevedel-hooks-test--session root))
+           (spawn (symbol-function 'make-process))
+           (accept (symbol-function 'accept-process-output))
+           (stderr-polls 0)
+           (mevedel-hooks-command-output-max-chars cap)
+           (expected (if cap
+                         "local-bl\n... Hook output truncated at 8 character limit."
+                       "local-block-reason"))
+           (mevedel-hook-rules
+            '((UserPromptSubmit
+               ((:hooks ((:type command
+                          :command "cat >/dev/null; printf local-block-reason >&2; exit 2"
+                          :timeout 5)))))))
+           child done decision)
+      (unwind-protect
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq child (apply spawn args))))
+                    ((symbol-function 'accept-process-output)
+                     (lambda (&optional proc seconds millisec just-this-one)
+                       (let ((result (funcall accept proc seconds millisec just-this-one)))
+                         (if (and surviving-writer-p (processp proc)
+                                  (equal (process-name proc) "mevedel-hook-stderr"))
+                             (progn
+                               ;; Preserve the real first read, then model a
+                               ;; pipe continuously replenished by a descendant.
+                               (cl-incf stderr-polls)
+                               (should (< stderr-polls 25))
+                               (sleep-for 0.01)
+                               t)
+                           result)))))
+            (mevedel-hooks-run-event
+             'UserPromptSubmit '(:prompt "hi")
+             (lambda (result) (setq decision result done t)) session)
+            ;; Keep stderr pending, then deliver the real exit sentinel before
+            ;; servicing its separate pipe, regardless of event-loop ordering.
+            (with-timeout (5 (ert-fail "Timed out waiting for hook"))
+              (while (process-live-p child)
+                (accept-process-output child 0.05 nil t)))
+            (unless done
+              (funcall (process-sentinel child) child "finished\n"))
+            (should done)
+            (when surviving-writer-p
+              (should (> stderr-polls 0)))
+            (should (equal decision (list :continue nil :stop-reason expected)))
+            (should (equal expected
+                           (plist-get (car (mevedel-session-hook-log session))
+                                      :stderr-preview))))
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-hooks-run-event/unannotated-command-origin
   (:quiet t :doc "fails closed instead of inferring where an unannotated command runs")
   (let* ((root (make-temp-file "mevedel-hooks-unannotated" t))

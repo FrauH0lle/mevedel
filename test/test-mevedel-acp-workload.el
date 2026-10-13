@@ -145,6 +145,53 @@ Return its events, oldest first, once it has completed."
                              (plist-get (cadar terminal) :error))))
           (when cancel-tool-timer (cancel-timer cancel-tool-timer))))))
 
+  :doc "a quitting tool canceller still releases the real MCP socket and client"
+  (with-temp-buffer
+    (let* ((start (symbol-function 'mevedel-mcp-start))
+           server client cancel started terminal (cancelled 0)
+           (tool (gptel--make-tool-internal
+                  :name "Wait" :description "Wait" :args nil :async t
+                  :function
+                  (lambda (_callback)
+                    (setq started t)
+                    (lambda ()
+                      (cl-incf cancelled)
+                      (signal 'quit '(tool-cleanup)))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-mcp-start)
+                     (lambda (&rest args)
+                       (setq server (apply start args)))))
+            (setq cancel
+                  (mevedel-acp-workload-request
+                   (lambda (mcp hook)
+                     (list :command (executable-find "python3")
+                           :args (list mevedel-test--acp-peer)
+                           :cwd temporary-file-directory :mcp mcp
+                           :tool-id-field :claudecode/toolUseId
+                           :meta `((hookCommand . ,hook)
+                                   (toolBatches . [[((name . "Wait") (id . "wait-1")
+                                                     (args . ()))]]))))
+                   "batch" (list tool)
+                   (lambda (response _info)
+                     (when (memq response '(nil t abort))
+                       (push response terminal)))
+                   nil nil))
+            (mevedel-test--await 3 "Tool did not start" started)
+            (setq client (car (mevedel-mcp-clients server)))
+            (should (process-live-p client))
+            (funcall cancel)
+            (should (equal terminal '(abort)))
+            (should (= cancelled 1))
+            (should-not (process-live-p client))
+            (should-not (file-exists-p (mevedel-mcp-directory server)))
+            (funcall cancel)
+            (should (= cancelled 1)))
+        (when cancel (funcall cancel))
+        ;; Also release evidence left by the negative control.
+        (when (and client (process-live-p client)) (delete-process client))
+        (when (and server (file-exists-p (mevedel-mcp-directory server)))
+          (delete-directory (mevedel-mcp-directory server) t)))))
+
   :doc "nonlocal exits retire their workload once without masking the original exit"
   (dolist (stage '(launch before-tool tool sync-result async-result stream control))
     (dolist (exit-kind '(quit throw))

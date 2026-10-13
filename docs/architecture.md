@@ -214,6 +214,15 @@ turn identity before tools run; snapshots, transcript metadata, prompt/Rewind
 indexing, and directive checkpoint links use that same identity, which terminal
 settlement commits without recomputing it.
 
+Directive startup reserves its request before yielding file preparation or the
+save prompt. Request-local permission mode and Plan read-only authority are
+explicit admission inputs, not shared pending state that another request can
+consume during readiness checks. A busy session refuses a nested submission.
+Cancellation retires provisional startup state while the request still owns it;
+resumed startup and error rollback cannot alter a replacement's transcript,
+directive status, or workflow context, even if the replacement has already
+settled. Once dispatched, ordinary terminal settlement owns that state.
+
 When Plan before implementation is enabled, every implementation-starting
 action first records a read-only planning turn in that same bound session. The
 directive record owns the proposal and approval selection; the session keeps
@@ -464,6 +473,11 @@ through post-response hooks. Failed send startup and directive rollback end only
 their own request; nested replacement requests remain active. Interrupted agent
 startup uses the same rollback as provider errors.
 
+Structured model-not-found recovery may replace only the ordinary root model
+that is still selected. Directive and accepted-implementation failures do not
+change the session baseline; a failure from a superseded model likewise leaves
+the user's newer selection intact.
+
 ### Bounded native gptel sample recovery
 
 `mevedel-gptel-retry.el` adds request-local recovery only to mevedel-admitted
@@ -512,14 +526,20 @@ rolled back without removing earlier successful work or unrelated transcript
 and composer content. Backoff grows approximately 1, 2, 4, 8, 16, then 30
 seconds with jitter and honors valid server retry deadlines. Request abort,
 agent interruption/deadline, buffer death, and teardown cancel backoff even
-without a registered transport. An independently retained child is not
-interrupted merely because its root is aborted.
+without a registered transport. Once a response hands the machine to tools,
+cancellation leaves it to their aborted results, and the machine then aborts
+instead of sampling again. Likewise, with or without recovery, a tool that
+finishes after its agent invocation settled aborts the machine at the shared
+dispatch seam instead of spending another provider request. An independently
+retained child is not interrupted merely because its root is aborted.
 
 Intermediate failures update live status but do not enter terminal settlement
-or publish error blocks. Exhaustion settles once with one expandable ignored
-request summary: the existing provider error payload plus `:retry-errors`
-(chronological, bounded sanitized attempt diagnostics, at most 11) and
-`:retry-exhausted`. The live FSM flag `:mevedel-retry-exhausted` makes the
+or publish error blocks. Recovered output returns root progress to the status
+the retry wait replaced, unless another owner has claimed it since. Exhaustion
+settles once with one expandable ignored request summary: the existing
+provider error payload plus `:retry-errors` (chronological, bounded sanitized
+attempt diagnostics, at most 11) and `:retry-exhausted`. The live FSM flag
+`:mevedel-retry-exhausted` makes the
 affected Goal pause instead of multiplying the bound with settled-turn retries.
 An owned nonretryable error carries `:mevedel-retry-permanent` and likewise
 pauses the affected Goal rather than retrying a permanent refusal as a new turn.

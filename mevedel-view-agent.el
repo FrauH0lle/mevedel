@@ -1079,6 +1079,10 @@ collapsed marker; expanded row content is rendered from Agent handles."
                           (if (= 1 (length rows)) "agent" "agents")
                           summary
                           (concat " " suffix)))))
+    ;; A narrow rule may clip the label's toggle.  Reuse its three leading
+    ;; dashes for the control rather than widening the rule or losing it.
+    (unless (string-search suffix header)
+      (setq header (concat (substring header 0 1) suffix (substring header 4))))
     (setq header (mevedel-view--agent-status-buttonize-toggle
                   header suffix))
     (if expanded-p header (concat header "\n"))))

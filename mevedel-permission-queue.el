@@ -32,12 +32,12 @@
 
 
 ;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer request invocation))
 (declare-function mevedel-permission-mode-for-context
                   "mevedel-permission-mode" (context))
 (autoload 'mevedel-permission-mode-for-context "mevedel-permission-mode")
-(declare-function mevedel-permission-mode-effective
-                  "mevedel-permission-mode"
-                  (&optional session data-buffer surface-buffer))
 (autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
 
 ;; `mevedel-permission-prompt'

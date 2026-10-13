@@ -1172,7 +1172,12 @@ this runs after the task mutation it accompanies."
                                        :status (:type string)
                                        :owner (:type string)
                                        :blockedBy (:type array :items (:type integer))
-                                       :metadata (:type object))
+                                       :metadata
+                                       (:type object
+                                        :properties (:activity (:type string)
+                                                     :activeForm (:type string)
+                                                     :active-form (:type string)
+                                                     :active_form (:type string))))
                           :required ["subject"])
                   :minItems 1)
            (note string :optional
@@ -1203,7 +1208,11 @@ this runs after the task mutation it accompanies."
                       "Array of task IDs blocking this task."
                       :items (:type integer))
            (metadata object :optional
-                     "Free-form metadata object.")
+                     "Free-form metadata object. Activity fields supply the running task's display text."
+                     :properties (:activity (:type string)
+                                  :activeForm (:type string)
+                                  :active-form (:type string)
+                                  :active_form (:type string)))
            (note string :optional
                  "Optional owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
            (noteOwner string :optional

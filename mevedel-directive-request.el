@@ -125,11 +125,6 @@
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
 
-;; `mevedel-permission-mode'
-(declare-function mevedel-permission-mode-normalize
-                  "mevedel-permission-mode" (mode))
-(autoload 'mevedel-permission-mode-normalize "mevedel-permission-mode")
-
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-append-implementation-input
                   "mevedel-plan-handoff" (prompt selection))
@@ -206,9 +201,11 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid))
+                  "mevedel-turn" (session &optional directive-uuid options))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 (autoload 'mevedel-request-begin "mevedel-turn")
 (autoload 'mevedel-request-end "mevedel-turn")
@@ -718,42 +715,52 @@ settling."
           (or (plist-get error :message)
               (format "%s: %s" (plist-get error :type) (plist-get info :status)))))))))
 
+(defun mevedel--assert-directive-request-current (request buffer)
+  "Refuse startup if REQUEST no longer owns BUFFER."
+  (unless (and request (buffer-live-p buffer)
+               (eq request (buffer-local-value 'mevedel--current-request buffer))
+               (not (mevedel-request-cancelled-p request)))
+    (user-error "Directive request ownership changed during startup")))
+
 (defun mevedel--send-directive-request
     (prompt chat-buffer response-start preset model-policy callback)
   "Send directive PROMPT and invoke CALLBACK with terminal error and owner."
-  (mevedel-with-preset preset
-    (let ((request-callback
-           (lambda (exit-code owner)
-             (funcall callback (mevedel--directive-request-error exit-code owner) owner)))
-          (backend (or (plist-get model-policy :backend) gptel-backend)))
-      (if (mevedel-engine-external-p backend)
-          (let ((gptel-backend backend)
-                (gptel-model (or (plist-get model-policy :model) gptel-model))
-                (gptel-reasoning-effort (if model-policy (plist-get model-policy :effort)
-                                         gptel-reasoning-effort)))
-            (setf (mevedel-engine-info mevedel--current-request)
-                  (plist-put (mevedel-engine-info mevedel--current-request)
-                             :mevedel-request-callback request-callback))
-            (mevedel-claude-code-send prompt))
-        (let ((fsm
-	       (progn (mevedel-auth-assert-ready backend)
-		      (gptel-request
-                       prompt :buffer chat-buffer :position response-start :stream gptel-stream
-                       :transforms
-                       (append gptel-prompt-transform-functions
-                               (and model-policy
-				    (list (lambda (_fsm)
-					    (setq-local
-					     gptel-backend (plist-get model-policy :backend)
-					     gptel-model (plist-get model-policy :model)
-					     gptel-reasoning-effort (plist-get model-policy :effort))))))
-                       :fsm (gptel-make-fsm
-			     :table (mevedel-preset--build-transitions
-				     (copy-tree gptel-request--transitions))
-			     :handlers gptel-send--handlers)))))
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm) :mevedel-request-callback request-callback))
-          fsm)))))
+  (let ((request mevedel--current-request))
+    (mevedel-with-preset preset
+      (mevedel--assert-directive-request-current request chat-buffer)
+      (let ((request-callback
+             (lambda (exit-code owner)
+               (funcall callback (mevedel--directive-request-error exit-code owner) owner)))
+            (backend (or (plist-get model-policy :backend) gptel-backend)))
+        (if (mevedel-engine-external-p backend)
+            (let ((gptel-backend backend)
+                  (gptel-model (or (plist-get model-policy :model) gptel-model))
+                  (gptel-reasoning-effort (if model-policy (plist-get model-policy :effort)
+                                           gptel-reasoning-effort)))
+              (setf (mevedel-engine-info request)
+                    (plist-put (mevedel-engine-info request)
+                               :mevedel-request-callback request-callback))
+              (mevedel-claude-code-send prompt))
+          (mevedel-auth-assert-ready backend)
+          (mevedel--assert-directive-request-current request chat-buffer)
+          (let ((fsm
+                 (gptel-request
+                  prompt :buffer chat-buffer :position response-start :stream gptel-stream
+                  :transforms
+                  (append gptel-prompt-transform-functions
+                          (and model-policy
+                               (list (lambda (_fsm)
+                                       (setq-local
+                                        gptel-backend (plist-get model-policy :backend)
+                                        gptel-model (plist-get model-policy :model)
+                                        gptel-reasoning-effort (plist-get model-policy :effort))))))
+                  :fsm (gptel-make-fsm
+                        :table (mevedel-preset--build-transitions
+                                (copy-tree gptel-request--transitions))
+                        :handlers gptel-send--handlers))))
+            (setf (gptel-fsm-info fsm)
+                  (plist-put (gptel-fsm-info fsm) :mevedel-request-callback request-callback))
+            fsm))))))
 
 (defun mevedel--process-directive
     (directive preset prompt-fn callback &optional options)
@@ -772,13 +779,51 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
   (setq directive
         (or (mevedel--topmost-instruction directive 'directive)
             directive))
-  (let ((transient-buffer
-         (and (overlay-get directive 'mevedel-transient-source-missing)
-              (overlay-buffer directive)))
+  (let* ((transient-buffer
+          (and (overlay-get directive 'mevedel-transient-source-missing)
+               (overlay-buffer directive)))
         cleanup-chat-buffer cleanup-record cleanup-prior-state
-        cleanup-request-context-set-p cleanup-request-reserved-p
-        cleanup-turn-start cleanup-mode-applied-p cleanup-planning-session
-        reserved-request)
+        cleanup-request-context-set-p cleanup-status-set-p
+        cleanup-turn-start cleanup-planning-session
+        reserved-request settled-p
+        (startup-p t)
+        (cleanup-owned
+         (lambda ()
+           (when (and startup-p (not settled-p) reserved-request
+                      (buffer-live-p cleanup-chat-buffer)
+                      (eq reserved-request
+                          (buffer-local-value 'mevedel--current-request
+                                              cleanup-chat-buffer)))
+             ;; A canceller retires startup state before request-end clears
+             ;; ownership.  This also handles abort without a replacement.
+             (setq startup-p nil)
+             (with-current-buffer cleanup-chat-buffer
+               (when cleanup-status-set-p
+                 (setf (mevedel-directive-state cleanup-record) cleanup-prior-state)
+                 (when (overlay-buffer directive)
+                   (mevedel--set-directive-status directive cleanup-prior-state)
+                   (mevedel--update-instruction-overlay directive t)))
+               ;; Redraw and modification hooks can admit a replacement.
+               (when (eq reserved-request mevedel--current-request)
+                 (when (and (markerp cleanup-turn-start)
+                            (marker-position cleanup-turn-start))
+                   (let ((inhibit-read-only t))
+                     (delete-region cleanup-turn-start (point-max)))))
+               (when (eq reserved-request mevedel--current-request)
+                 (when cleanup-planning-session
+                   (setf (mevedel-session-directive-planning cleanup-planning-session)
+                         nil))
+                 (when cleanup-request-context-set-p
+                   (setq mevedel--current-directive-uuid nil
+                         mevedel--directive-read-only-request-p nil)
+                   (when-let* ((view-buffer mevedel--view-buffer)
+                               ((buffer-live-p view-buffer)))
+                     (mevedel-view-rerender view-buffer))))
+               (when (and (eq reserved-request mevedel--current-request)
+                          (buffer-live-p transient-buffer))
+                 (when (overlay-buffer directive)
+                   (mevedel--remove-directive-presentation directive))
+                 (kill-buffer transient-buffer)))))))
     (condition-case err
         (let* ((model-policy (or (plist-get options :model-policy)
                                  (mevedel--directive-model-policy directive)))
@@ -818,7 +863,6 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                execution-session-id
                reserved-turn
                response-start
-               settled-p
                (callback-fn
 		(lambda (err fsm)
 		  (unless settled-p
@@ -900,38 +944,51 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                              (equal (plist-get active :directive-id)
                                     directive-uuid))
                   (user-error
-                   "A directive workflow already occupies this session")))
+                   "A directive workflow already occupies this session"))))
+            ;; Reserve before file saves, display, or preset work can yield.
+            ;; Keep request-local authority out of shared pending/session state
+            ;; while admission's own readiness checks run.
+            (setq reserved-request
+                  (mevedel-request-begin
+                   mevedel--session directive-uuid
+                   (list :permission-mode
+                         (and implementation-p (plist-get options :permission-mode))
+                         :plan-read-only planning-p)))
+            (mevedel--assert-directive-request-current reserved-request chat-buffer)
+            (mevedel-request-push-canceller reserved-request cleanup-owned)
+            (setq reserved-turn (mevedel-request-turn reserved-request))
+            (when planning-p
               (setf (mevedel-session-directive-planning mevedel--session)
                     (list :directive-id directive-uuid
                           :action (plist-get options :planned-action)
                           :phase 'planning))
               (setq cleanup-planning-session mevedel--session))
-            (when-let* ((mode (and implementation-p
-                                    (plist-get options :permission-mode))))
-              (setq mevedel--pending-permission-mode
-                    (mevedel-permission-mode-normalize mode))
-              (setq cleanup-mode-applied-p t))
             (setq cleanup-request-context-set-p t)
 	    (setq mevedel--current-directive-uuid
 		  (overlay-get directive 'mevedel-uuid)
                   mevedel--directive-read-only-request-p discussion-p)
             (mevedel-session-artifacts-ensure-files mevedel--session chat-buffer)
+            (mevedel--assert-directive-request-current reserved-request chat-buffer)
             (when (mevedel-engine-external-p
                    (or (plist-get model-policy :backend) gptel-backend))
               ;; Commit a complete transcript before its next directive frame
               ;; opens.
               (mevedel-session-artifacts-save mevedel--session chat-buffer))
+	    (mevedel--assert-directive-request-current reserved-request chat-buffer)
 	    (setq execution-session-id
 		  (mevedel-session-session-id mevedel--session)))
 
           (mevedel--directive-offer-save)
+          (mevedel--assert-directive-request-current reserved-request chat-buffer)
 
           (when (or discussion-p planning-p implementation-p)
+            (setq cleanup-status-set-p t)
             (mevedel--set-directive-status
              directive (cond (discussion-p 'discussing)
                              (planning-p 'planning)
                              (t 'implementing)))
 	    (mevedel--update-instruction-overlay directive t)
+		(mevedel--assert-directive-request-current reserved-request chat-buffer)
 	    (pulse-momentary-highlight-region
 	     (overlay-start directive) (overlay-end directive)))
 
@@ -947,19 +1004,19 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 	       (display-buffer view gptel-display-buffer-action))))
 
 	(with-current-buffer chat-buffer
+          (mevedel--assert-directive-request-current reserved-request chat-buffer)
           (mevedel-session-artifacts-assert-new-mutation-authority
 	   mevedel--session)
+	    (mevedel--assert-directive-request-current reserved-request chat-buffer)
 	    (mevedel--ensure-chat-preset chat-buffer)
-	    (mevedel-request-begin mevedel--session directive-uuid)
-	    (setq cleanup-request-reserved-p t)
-		    (setq reserved-request mevedel--current-request)
-	    (setq reserved-turn (mevedel-request-turn mevedel--current-request))
+	    (mevedel--assert-directive-request-current reserved-request chat-buffer)
 	    (setq cleanup-turn-start (copy-marker (point-max) nil))
 	    (setq response-start
 		  (mevedel--insert-directive-turn
 		   directive-uuid reserved-turn
 		   directive-text prompt
 		   (overlay-get directive 'mevedel-directive-action)))
+	    (mevedel--assert-directive-request-current reserved-request chat-buffer)
 	    (when-let* ((view-buf mevedel--view-buffer)
 			(_ (buffer-live-p view-buf)))
               (with-current-buffer view-buf
@@ -971,55 +1028,44 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 		 'directive)))
 
 	    (mevedel-session-naming-consider mevedel--session directive-text)
+	    (mevedel--assert-directive-request-current reserved-request chat-buffer)
 	    (let ((fsm
 		   (mevedel--send-directive-request
 		    prompt chat-buffer response-start preset model-policy callback-fn)))
-              (when (or (not bound-session-id) rebind-p)
+	              (unless settled-p
+                        (mevedel--assert-directive-request-current reserved-request chat-buffer))
+                      (setq startup-p nil)
+                      (when (markerp cleanup-turn-start)
+                        (set-marker cleanup-turn-start nil))
+	              (when (and (eq reserved-request mevedel--current-request)
+                                 (or (not bound-session-id) rebind-p))
 		(setf (mevedel-directive-session-id record)
                       execution-session-id))
               fsm)))
       (t
-       ;; Restore authoritative directive state before a view redraw can
-       ;; replace its source presentation.
-       (when cleanup-record
-         (setf (mevedel-directive-state cleanup-record)
-               cleanup-prior-state))
-       (when (overlay-buffer directive)
-         (mevedel--set-directive-status directive cleanup-prior-state)
-         (mevedel--update-instruction-overlay directive t))
+       (funcall cleanup-owned)
        (when (buffer-live-p cleanup-chat-buffer)
          (with-current-buffer cleanup-chat-buffer
-           (when (and (markerp cleanup-turn-start)
-                      (marker-position cleanup-turn-start))
-             (let ((inhibit-read-only t))
-               (delete-region cleanup-turn-start (point-max))))
-           (when (and cleanup-request-reserved-p
+           (when (and reserved-request
                       (eq reserved-request mevedel--current-request))
+             ;; Clear owned context before cancellation invokes user callbacks.
              (condition-case cleanup-error
-                 (mevedel-request-end)
-               (error
-                (setq mevedel--current-request nil)
-                (display-warning
-                 'mevedel
-                 (format "Directive request cleanup failed: %s"
-                         (error-message-string cleanup-error))
-                 :warning))))
-           (when cleanup-request-context-set-p
-             (setq mevedel--current-directive-uuid nil
-                   mevedel--directive-read-only-request-p nil)
-             (when-let* ((view-buffer mevedel--view-buffer)
-                         ((buffer-live-p view-buffer)))
-               (mevedel-view-rerender view-buffer)))))
-       (when (and cleanup-mode-applied-p
-                  (buffer-live-p cleanup-chat-buffer))
-         (with-current-buffer cleanup-chat-buffer
-           (setq mevedel--pending-permission-mode nil)))
-       (when cleanup-planning-session
-         (setf (mevedel-session-directive-planning cleanup-planning-session)
-               nil))
+                   (mevedel-request-end)
+                 ((error quit)
+                  (when (eq reserved-request mevedel--current-request)
+                    (setq mevedel--current-request nil))
+                  (display-warning
+                   'mevedel
+                   (format "Directive request cleanup failed: %s"
+                           (error-message-string cleanup-error))
+                   :warning))))))
        (when (markerp cleanup-turn-start)
          (set-marker cleanup-turn-start nil))
-       (when (buffer-live-p transient-buffer)
+       (when (and (buffer-live-p transient-buffer)
+                  ;; Another invocation may be using this synthetic source.
+                  (not (and (buffer-live-p cleanup-chat-buffer)
+                            (buffer-local-value 'mevedel--current-request
+                                                cleanup-chat-buffer))))
          (when (overlay-buffer directive)
            (mevedel--remove-directive-presentation directive))
          (kill-buffer transient-buffer))

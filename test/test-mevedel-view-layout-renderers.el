@@ -50,7 +50,7 @@
 ;;; Zone separator
 
 (mevedel-deftest mevedel-view--zone-separator
-  (:doc "renders ` ─── LABEL ─── ─── ' with width clamp")
+  (:doc "renders equal-width window-based rules with bounded labels")
   ,test
   (test)
 
@@ -66,13 +66,32 @@
       (should (stringp sep))
       (should (string-match-p "─── x ───" sep))))
 
-  :doc "wide window clamps tail length to <= 60 chars"
-  (cl-letf (((symbol-function 'window-width) (lambda (&rest _) 200))
-            ((symbol-function 'get-buffer-window-list)
-             (lambda (&rest _) nil)))
-    (let ((sep (mevedel-view--zone-separator "tasks")))
-      ;; The composed string should not stretch indefinitely.
-      (should (< (length sep) 80)))))
+  :doc "task and agent rules occupy the same columns in wide and narrow windows"
+  (with-temp-buffer
+    (dolist (width '(10 20 80 120 200))
+      (cl-letf (((symbol-function 'get-buffer-window-list)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'window-width)
+                 (lambda (&optional _) width)))
+        (dolist (label '("tasks · 1 running · 1 blocked · 1 done · RET to collapse"
+                         "1 agent: 1 running [-]"
+                         "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"))
+          (let ((rule (mevedel-view--zone-separator label)))
+            (should (= (max 10 (- width 4))
+                       (string-width (string-trim-right rule))))
+            (should (string-suffix-p "\n" rule))
+            (when (>= width 120)
+              (should (string-search label rule))))))))
+
+  :doc "multiple displayed windows use the widest window's rule width"
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'get-buffer-window-list)
+               (lambda (&rest _) '(narrow wide)))
+              ((symbol-function 'window-width)
+               (lambda (window) (if (eq window 'wide) 120 40))))
+      (should (= 116 (string-width
+                      (string-trim-right
+                       (mevedel-view--zone-separator "tasks"))))))))
 
 
 (provide 'test-mevedel-view-layout-renderers)

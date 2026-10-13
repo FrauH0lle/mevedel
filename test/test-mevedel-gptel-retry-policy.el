@@ -299,7 +299,61 @@ Bind request, backend, fsm, state and info for assertions."
           (should-not (mevedel-view--request-progress-visible-p))
           (should-not mevedel-view--spinner-timer)
           (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
-          (should (= 4 (- (point) (mevedel-view--input-start)))))))))
+          (should (= 4 (- (point) (mevedel-view--input-start))))))))
+
+  :doc "status: recovered output restores the progress status the retry replaced"
+  (test-mevedel-retry-policy--with-view
+    (with-current-buffer view-buf
+      (mevedel-view--update-spinner "Thinking..."))
+    (mevedel-gptel-retry--status state "Provider temporarily unavailable · retry 1/10 in 1s")
+    (mevedel-gptel-retry--status state "Retrying provider request…")
+    (with-current-buffer view-buf
+      (should (eq 'provider-retry mevedel-view--spinner-owner)))
+    (let (seen)
+      (mevedel-gptel-retry--callback
+       state info (lambda (response &rest _) (push response seen)) "Recovered" info)
+      (should (equal '("Recovered") seen)))
+    (with-current-buffer view-buf
+      (should (equal "Thinking..." mevedel-view--spinner-status))
+      (should (eq 'request mevedel-view--spinner-owner))
+      (should (mevedel-view--request-progress-visible-p))
+      (should-not (string-match-p "Retrying provider request" (buffer-string)))
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      (should (= 4 (- (point) (mevedel-view--input-start))))))
+
+  :doc "status: recovered tool-only sample restores progress on entering TOOL"
+  (test-mevedel-retry-policy--with-view
+    (with-current-buffer view-buf
+      (mevedel-view--update-spinner "Thinking..."))
+    (mevedel-gptel-retry--status state "Retrying provider request…")
+    (mevedel-gptel-retry--transition #'ignore fsm 'TOOL)
+    (with-current-buffer view-buf
+      (should (equal "Thinking..." mevedel-view--spinner-status))
+      (should (eq 'request mevedel-view--spinner-owner))))
+
+  :doc "status: a newer progress owner is not overwritten by retry recovery"
+  (test-mevedel-retry-policy--with-view
+    (with-current-buffer view-buf
+      (mevedel-view--update-spinner "Thinking..."))
+    (mevedel-gptel-retry--status state "Retrying provider request…")
+    (with-current-buffer view-buf
+      (mevedel-view--update-spinner "Hook running" 'hook))
+    (mevedel-gptel-retry--callback state info #'ignore "Recovered" info)
+    (with-current-buffer view-buf
+      (should (equal "Hook running" mevedel-view--spinner-status))
+      (should (eq 'hook mevedel-view--spinner-owner))))
+
+  :doc "status: recovery from an empty status releases rather than restores retry text"
+  (test-mevedel-retry-policy--with-view
+    (with-current-buffer view-buf (mevedel-view--stop-spinner))
+    (mevedel-gptel-retry--status state "Provider temporarily unavailable")
+    (mevedel-gptel-retry--status state "Retrying provider request")
+    (mevedel-gptel-retry--callback state info #'ignore "Recovered" info)
+    (with-current-buffer view-buf
+      (should-not (eq 'provider-retry mevedel-view--spinner-owner))
+      (should-not (string-match-p "Retrying provider request" (buffer-string)))
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      (should (= 4 (- (point) (mevedel-view--input-start)))))))
 
 (mevedel-deftest mevedel-gptel-retry--parse-stream ()
   ,test

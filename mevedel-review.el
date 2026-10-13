@@ -134,7 +134,7 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid))
+                  "mevedel-turn" (session &optional directive-uuid options))
 (declare-function mevedel-request-call-owned
                   "mevedel-turn" (request buffer function &rest args))
 (declare-function mevedel-request-end

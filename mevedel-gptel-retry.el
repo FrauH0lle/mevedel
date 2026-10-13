@@ -22,6 +22,7 @@
 
 ;; `gptel'
 (declare-function gptel--insert-response "ext:gptel" (response info &optional raw))
+(declare-function gptel--openai-responses-update-tokens "ext:gptel-openai-responses" (usage info))
 (declare-function gptel--stream-convert-markdown->org "ext:gptel-org" (start-marker))
 (declare-function gptel-curl--stream-insert-response "ext:gptel" (response info &optional raw))
 (defvar gptel-post-response-functions)
@@ -43,7 +44,11 @@
 (declare-function mevedel-view-render-invalidate-live-tail "mevedel-view-render" ())
 
 ;; `mevedel-view-stream'
+(declare-function mevedel-view--restore-spinner-status "mevedel-view-stream" (owner snapshot))
+(declare-function mevedel-view--spinner-status-snapshot "mevedel-view-stream" ())
+(declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
 (declare-function mevedel-view--update-spinner "mevedel-view-stream" (status &optional owner))
+(defvar mevedel-view--spinner-owner)
 
 (defcustom mevedel-gptel-retry-max-retries 10
   "Maximum retries after the first attempt of an admitted native gptel sample.
@@ -151,11 +156,40 @@ Responses events carry an explicit `\"error\": null' on success."
           (mevedel-agent-conversation-record-activity invocation (list :type 'status :summary text))
         (when (buffer-live-p view)
           (with-current-buffer view
+            ;; Remember what the wait replaced, even no status, so recovery
+            ;; can hand it back.
+            (unless (plist-get state :progress)
+              (plist-put state :progress (list (mevedel-view--spinner-status-snapshot))))
             (mevedel-view--update-spinner text 'provider-retry)))))))
 
+(defun mevedel-gptel-retry--restore-status (state)
+  "Return root progress claimed by STATE's retry wait to its prior status.
+A status claimed since by another owner is left alone."
+  (when-let* ((captured (plist-get state :progress)))
+    (plist-put state :progress nil)
+    (let* ((buffer (plist-get (gptel-fsm-info (plist-get state :fsm)) :buffer))
+           (view (and (buffer-live-p buffer)
+                      (buffer-local-value 'mevedel--view-buffer buffer))))
+      (when (buffer-live-p view)
+        (with-current-buffer view
+          (if (car captured)
+              (mevedel-view--restore-spinner-status 'provider-retry (car captured))
+            (when (eq mevedel-view--spinner-owner 'provider-retry)
+              (mevedel-view--stop-spinner))))))))
+
 (defun mevedel-gptel-retry--cancel (state)
-  "Cancel STATE's timer and request once, including a transport-free wait."
-  (unless (or (plist-get state :cancelled) (plist-get state :closed))
+  "Cancel STATE's timer and request once, including a transport-free wait.
+Once a response has handed the machine to tools, STATE has no provider work
+left; release it so their aborted results still advance the machine, and mark
+the machine so its next dispatch aborts instead of sampling again."
+  (cond
+   ((or (plist-get state :cancelled) (plist-get state :closed)))
+   ((plist-get state :tools)
+    (let ((info (gptel-fsm-info (plist-get state :fsm))))
+      (when (eq state (plist-get info :mevedel-retry-state))
+        (plist-put info :mevedel-retry-cancelled t)))
+    (mevedel-gptel-retry--close state))
+   (t
     (let* ((fsm (plist-get state :fsm))
            (current (eq state (plist-get (gptel-fsm-info fsm) :mevedel-retry-state))))
       (plist-put state :cancelled t)
@@ -166,7 +200,7 @@ Responses events carry an explicit `\"error\": null' on success."
       (when (and current (memq (gptel-fsm-state fsm) '(WAIT TYPE MRETRY MRESEND)))
         (mevedel-gptel-stream-bridge-discard-batch (gptel-fsm-info fsm))
         ;; Buffer-scoped gptel-abort could kill a replacement request.
-        (mevedel-gptel-retry--abort-transports fsm)))))
+        (mevedel-gptel-retry--abort-transports fsm))))))
 
 (defun mevedel-gptel-retry--abort-transports (fsm)
   "Retire exactly FSM's native transports, including late registrations."
@@ -276,6 +310,8 @@ STATE owns the logical sample; CALLBACK-INFO is gptel's callback context."
         (when (mevedel-gptel-retry--live-p state info)
           (unwind-protect
               (progn
+                (unless (plist-get callback-info :error)
+                  (mevedel-gptel-retry--restore-status state))
                 (when (and terminal
                            (or (plist-get callback-info :error)
                                (not (plist-get callback-info :tool-use))))
@@ -435,89 +471,97 @@ STATE owns the logical sample; CALLBACK-INFO is gptel's callback context."
     (when (plist-get state :cancelled) (mevedel-gptel-retry--abort-transports fsm)))))
 
 (defun mevedel-gptel-retry-dispatch (fsm)
-  "Send FSM's logical sample, enabling bounded recovery for admitted requests."
+  "Send FSM's logical sample, enabling bounded recovery for admitted requests.
+A machine whose sample was cancelled in its tool phase, or whose agent
+invocation has settled, aborts instead: its owner no longer accepts output."
   (unless mevedel-gptel-retry--installed (mevedel-gptel-retry-install))
   (let* ((info (gptel-fsm-info fsm))
          (buffer (plist-get info :buffer))
          (request (and (buffer-live-p buffer)
                        (buffer-local-value 'mevedel--current-request buffer))))
-    (if (not (and request (> mevedel-gptel-retry-max-retries 0)
-                  (not (mevedel-engine-external-p (plist-get info :backend)))))
-        (progn
-          (when-let* ((previous (plist-get info :mevedel-retry-state)))
-            (setq info (copy-sequence info))
-            (setf (gptel-fsm-info fsm) info)
-            (mevedel-gptel-retry--close previous)
-            (plist-put info :callback (plist-get previous :callback))
-            (plist-put info :mevedel-retry-state nil))
-          (gptel--handle-wait fsm))
-      (let* ((callback (if (eq (plist-get info :callback) (plist-get info :mevedel-usage-wrapper))
-                           (plist-get info :mevedel-usage-original)
-                         (plist-get info :callback)))
-             (previous (plist-get info :mevedel-retry-state))
-             (state (list :fsm fsm :request request :retries 0
-                          :limit mevedel-gptel-retry-max-retries
-                          :data (copy-tree (plist-get info :data) t)
-                          :callback (if previous (plist-get previous :callback)
-                                      (or callback (if (and gptel-use-curl (plist-get info :stream))
-                                                       #'gptel-curl--stream-insert-response
-                                                     #'gptel--insert-response)))
-                          :invocation (buffer-local-value 'mevedel--agent-invocation buffer))))
-        (when previous
-          (plist-put previous :closed t)
-          (plist-put previous :data nil)
-          (setq mevedel-gptel-retry--states (delq previous mevedel-gptel-retry--states)))
-        (dolist (key '(:position :tracking-marker :reasoning-marker))
-          (when-let* ((marker (plist-get info key)))
-            (plist-put state key (copy-marker marker (marker-insertion-type marker)))))
-        (plist-put info :mevedel-retry-state state)
-        (plist-put info :mevedel-retry-exhausted nil)
-        (plist-put info :mevedel-retry-errors nil)
-        (plist-put info :mevedel-retry-terminal nil)
-        (plist-put info :mevedel-retry-check-completion nil)
-        (plist-put info :mevedel-retry-advice nil)
-        (plist-put info :mevedel-retry-provider-error nil)
-        (plist-put info :mevedel-retry-permanent nil)
-        (plist-put info :mevedel-retry-usage-totalized nil)
-        (plist-put info :mevedel-retry-usage-incomplete nil)
-        (plist-put info :mevedel-retry-recorded nil)
-        (plist-put info :mevedel-retry-reset-output nil)
-        (dolist (key '(:stop-reason :reasoning-block :partial_text :partial_reasoning :reasoning-chunks :signature))
-          (plist-put info key nil))
-        (let ((table (copy-tree (gptel-fsm-table fsm)))
-              (handlers (copy-tree (gptel-fsm-handlers fsm))))
-          (unless (assq 'MRETRY table)
-            (push (cons #'mevedel-gptel-retry--pending-p 'MRETRY) (cdr (assq 'TYPE table)))
-            (push '(MRETRY . ((t . MRETRY))) table)
-            (push '(MRESEND . ((t . TYPE))) table)
-            (push '(MRETRY mevedel-gptel-retry--park) handlers)
-            (push '(MRESEND mevedel-gptel-retry--send) handlers))
-          (setf (gptel-fsm-table fsm) table (gptel-fsm-handlers fsm) handlers))
-        (push state mevedel-gptel-retry--states)
-        (with-current-buffer buffer
-          (setq mevedel-gptel-retry--fsm fsm)
-          (add-hook 'kill-buffer-hook #'mevedel-gptel-retry--buffer-killed nil t))
-        (when-let* ((invocation (plist-get state :invocation)))
-          (setf (mevedel-agent-invocation-runtime-cancel invocation)
-                (lambda ()
-                  (when-let* ((current (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)))
-                    (mevedel-gptel-retry--cancel current))
-                  (unless (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)
-                    (mevedel-gptel-retry--abort-transports fsm))
-                  nil)))
-        (unless (plist-get info :mevedel-retry-canceller)
-          (plist-put info :mevedel-retry-canceller t)
-          (mevedel-request-push-canceller
-           request (lambda ()
-                     (when-let* ((current (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)))
-                       ;; Result publication ends its request inside an
-                       ;; accepted callback, ahead of native DONE/ERRS.
-                       ;; Explicit runtime interruption calls --cancel directly.
-                       (if (and (plist-get current :terminal-callback)
-                                (not (plist-get current :cancelled)))
-                           (mevedel-gptel-retry--close current)
-                         (mevedel-gptel-retry--cancel current))))))
-        (mevedel-gptel-retry--send fsm)))))
+    (if (or (plist-get info :mevedel-retry-cancelled)
+            ;; Tools can finish after interruption settled the invocation.
+            (let ((invocation (plist-get info :mevedel-agent-invocation)))
+              (and (mevedel-agent-invocation-p invocation)
+                   (mevedel-agent-invocation-runtime-settled-p invocation))))
+        (gptel--fsm-transition fsm 'ABRT)
+      (if (not (and request (> mevedel-gptel-retry-max-retries 0)
+                    (not (mevedel-engine-external-p (plist-get info :backend)))))
+          (progn
+            (when-let* ((previous (plist-get info :mevedel-retry-state)))
+              (setq info (copy-sequence info))
+              (setf (gptel-fsm-info fsm) info)
+              (mevedel-gptel-retry--close previous)
+              (plist-put info :callback (plist-get previous :callback))
+              (plist-put info :mevedel-retry-state nil))
+            (gptel--handle-wait fsm))
+        (let* ((callback (if (eq (plist-get info :callback) (plist-get info :mevedel-usage-wrapper))
+                             (plist-get info :mevedel-usage-original)
+                           (plist-get info :callback)))
+               (previous (plist-get info :mevedel-retry-state))
+               (state (list :fsm fsm :request request :retries 0
+                            :limit mevedel-gptel-retry-max-retries
+                            :data (copy-tree (plist-get info :data) t)
+                            :callback (if previous (plist-get previous :callback)
+                                        (or callback (if (and gptel-use-curl (plist-get info :stream))
+                                                         #'gptel-curl--stream-insert-response
+                                                       #'gptel--insert-response)))
+                            :invocation (buffer-local-value 'mevedel--agent-invocation buffer))))
+          (when previous
+            (plist-put previous :closed t)
+            (plist-put previous :data nil)
+            (setq mevedel-gptel-retry--states (delq previous mevedel-gptel-retry--states)))
+          (dolist (key '(:position :tracking-marker :reasoning-marker))
+            (when-let* ((marker (plist-get info key)))
+              (plist-put state key (copy-marker marker (marker-insertion-type marker)))))
+          (plist-put info :mevedel-retry-state state)
+          (plist-put info :mevedel-retry-exhausted nil)
+          (plist-put info :mevedel-retry-errors nil)
+          (plist-put info :mevedel-retry-terminal nil)
+          (plist-put info :mevedel-retry-check-completion nil)
+          (plist-put info :mevedel-retry-advice nil)
+          (plist-put info :mevedel-retry-provider-error nil)
+          (plist-put info :mevedel-retry-permanent nil)
+          (plist-put info :mevedel-retry-usage-totalized nil)
+          (plist-put info :mevedel-retry-usage-incomplete nil)
+          (plist-put info :mevedel-retry-recorded nil)
+          (plist-put info :mevedel-retry-reset-output nil)
+          (dolist (key '(:stop-reason :reasoning-block :partial_text :partial_reasoning :reasoning-chunks :signature))
+            (plist-put info key nil))
+          (let ((table (copy-tree (gptel-fsm-table fsm)))
+                (handlers (copy-tree (gptel-fsm-handlers fsm))))
+            (unless (assq 'MRETRY table)
+              (push (cons #'mevedel-gptel-retry--pending-p 'MRETRY) (cdr (assq 'TYPE table)))
+              (push '(MRETRY . ((t . MRETRY))) table)
+              (push '(MRESEND . ((t . TYPE))) table)
+              (push '(MRETRY mevedel-gptel-retry--park) handlers)
+              (push '(MRESEND mevedel-gptel-retry--send) handlers))
+            (setf (gptel-fsm-table fsm) table (gptel-fsm-handlers fsm) handlers))
+          (push state mevedel-gptel-retry--states)
+          (with-current-buffer buffer
+            (setq mevedel-gptel-retry--fsm fsm)
+            (add-hook 'kill-buffer-hook #'mevedel-gptel-retry--buffer-killed nil t))
+          (when-let* ((invocation (plist-get state :invocation)))
+            (setf (mevedel-agent-invocation-runtime-cancel invocation)
+                  (lambda ()
+                    (when-let* ((current (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)))
+                      (mevedel-gptel-retry--cancel current))
+                    (unless (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)
+                      (mevedel-gptel-retry--abort-transports fsm))
+                    nil)))
+          (unless (plist-get info :mevedel-retry-canceller)
+            (plist-put info :mevedel-retry-canceller t)
+            (mevedel-request-push-canceller
+             request (lambda ()
+                       (when-let* ((current (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)))
+                         ;; Result publication ends its request inside an
+                         ;; accepted callback, ahead of native DONE/ERRS.
+                         ;; Explicit runtime interruption calls --cancel directly.
+                         (if (and (plist-get current :terminal-callback)
+                                  (not (plist-get current :cancelled)))
+                             (mevedel-gptel-retry--close current)
+                           (mevedel-gptel-retry--cancel current))))))
+          (mevedel-gptel-retry--send fsm))))))
 
 (defun mevedel-gptel-retry--parse-stream (original backend info)
   "Use ORIGINAL's native parsing, retaining stream errors and completion.
@@ -549,6 +593,7 @@ Inspect complete SSE or JSON-line envelopes, not provider text or tool data."
                                      (and (listp parsed) parsed))
                                  (error nil)))
                          (response (plist-get data :response))
+                         (choices (plist-get data :choices))
                          (error-data (or (mevedel-gptel-retry--json-error (plist-get data :error))
                                          (mevedel-gptel-retry--json-error (plist-get response :error))
                                          (and (equal event "error")
@@ -564,6 +609,14 @@ Inspect complete SSE or JSON-line envelopes, not provider text or tool data."
                     (when (and complete
                                (or error-data
                                    (eq (plist-get data :done) t)
+                                   ;; Compatible servers may close after this
+                                   ;; chunk without the [DONE] sentinel.
+                                   (and (vectorp choices)
+                                        (seq-some (lambda (choice)
+                                                    (and (listp choice)
+                                                         (mevedel-gptel-retry--json-error
+                                                          (plist-get choice :finish_reason))))
+                                                  choices))
                                    (member event '("message_stop" "response.failed" "response.incomplete" "response.completed"))))
                       (plist-put info :mevedel-retry-terminal t)
                       ;; Native Responses parsing omits usage on these failures.
@@ -653,6 +706,11 @@ ORIGINAL still owns native transitions and all their handlers."
       (when (or (not (plist-get state :cancelled)) (eq new-state 'ABRT))
         (let* ((next (or new-state (gptel--fsm-next fsm)))
                (terminal (memq next '(DONE ERRS ABRT))))
+          (when (eq next 'TOOL)
+            ;; Tools now own the machine; a recovered tool-only response may
+            ;; deliver no callback to end the retry status.
+            (plist-put state :tools t)
+            (mevedel-gptel-retry--restore-status state))
           ;; Empty successful responses need no text callback.  Native terminal
           ;; handlers can still end the request without turning DONE into ABRT.
           (when terminal

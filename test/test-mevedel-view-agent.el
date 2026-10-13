@@ -973,6 +973,26 @@
           (should (string-suffix-p
                    "> first line\nsecond line" text)))))))
 
+(mevedel-deftest mevedel-view--agent-status-string
+  (:doc "narrow rules retain the clickable toggle even when their label is clipped")
+  (with-temp-buffer
+    (dolist (width '(10 20 30 80))
+      (cl-letf (((symbol-function 'get-buffer-window-list)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'window-width)
+                 (lambda (&optional _) width)))
+        (dolist (expanded '(nil t))
+          (let* ((toggle (if expanded "[-]" "[+]"))
+                 (header (mevedel-view--agent-status-string
+                          '((:status running) (:status blocked)) expanded))
+                 (position (string-search toggle header)))
+            (should position)
+            (should (= (max 10 (- width 4))
+                       (string-width (string-trim-right header))))
+            (should (eq #'mevedel-view-activate-at-point
+                        (lookup-key (get-text-property position 'keymap header)
+                                    [mouse-1])))))))))
+
 (mevedel-deftest mevedel-view--insert-attribution
   (:doc "uses canonical paths as transcript click targets")
   ,test

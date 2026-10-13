@@ -2002,6 +2002,15 @@ record only that context was added, without duplicating the body."
              (throw 'hook-startup-done nil)))
          (process-exited (proc _event)
            (when (memq (process-status proc) '(exit signal))
+             ;; A local stderr pipe is independent of the main process.  Its
+             ;; final bytes may still be pending when this sentinel runs.
+             ;; A surviving writer must not monopolize this sentinel, even
+             ;; when the user disabled output truncation.
+             (let ((deadline (+ (float-time) 0.05)))
+               (while (and stderr-process (not stderr-truncated)
+                           (not settled) (not completion-requested)
+                           (< (float-time) deadline)
+                           (accept-process-output stderr-process 0 nil t))))
              (let ((code (process-exit-status proc)))
                (cond
                 ((= code 0) (finish 'ok nil))

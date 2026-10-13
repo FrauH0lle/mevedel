@@ -336,5 +336,38 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
   (mevedel-retry-runtime-test--with-active-transport
     (mevedel-gptel-retry-uninstall)))
 
+(ert-deftest mevedel-gptel-retry-runtime/interrupt-with-pending-async-tool ()
+  "A tool finishing after interruption advances the machine without sampling.
+This holds with and without bounded recovery: a settled invocation spends no
+further provider request and settles once."
+  (dolist (limit '(0 10))
+    (ert-info ((format "retry limit %s" limit))
+      (let ((mevedel-gptel-retry-max-retries limit)
+            (tool-callback nil)
+            (tool-response
+             (concat "event: response.output_item.done\n"
+                     "data: {\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"Deferred\",\"arguments\":\"{}\"}}\n\n"
+                     "event: response.completed\ndata: {\"response\":{\"status\":\"completed\"}}\n\n")))
+        (mevedel-retry-runtime-test--with-agent (list tool-response mevedel-retry-test--success)
+          (plist-put (gptel-fsm-info fsm) :tools
+                     (list (gptel-make-tool :name "Deferred" :description "Pending when interrupted"
+                                            :args nil :async t
+                                            :function (lambda (callback) (setq tool-callback callback)))))
+          (gptel--fsm-transition fsm)
+          (let ((deadline (+ (float-time) 10)))
+            (while (and (< (float-time) deadline)
+                        (or (not tool-callback) gptel--request-alist))
+              (accept-process-output nil 0.01))
+            (should (< (float-time) deadline)))
+          (should (eq 'TOOL (gptel-fsm-state fsm)))
+          (mevedel-agent-runtime-interrupt invocation "Interrupted with a pending tool")
+          (should (= 1 (length results)))
+          (funcall tool-callback "Late tool output")
+          (should (eq 'ABRT (gptel-fsm-state fsm)))
+          (should (= 1 (length requests)))
+          (should (= 1 (length results)))
+          (should-not gptel--request-alist)
+          (should-not mevedel-gptel-retry--states))))))
+
 (provide 'test-mevedel-gptel-retry-runtime)
 ;;; test-mevedel-gptel-retry-runtime.el ends here

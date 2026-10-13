@@ -20,7 +20,7 @@
 (defvar gptel-reasoning-effort)
 
 ;; `mevedel-turn'
-(declare-function mevedel-request-begin "mevedel-turn" (session &optional directive-uuid))
+(declare-function mevedel-request-begin "mevedel-turn" (session &optional directive-uuid options))
 
 (defun mevedel-claude-code-agent-next-sample (invocation &optional boundary)
   "Prepare INVOCATION's next sample, or stop at BOUNDARY when its cap is spent.

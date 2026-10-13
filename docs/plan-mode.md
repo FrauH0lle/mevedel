@@ -292,7 +292,10 @@ generate the shared eight-section handoff background. The accepted proposal is
 replaced in that evidence by an omission marker; the exact immutable plan and
 implementation-only instructions are supplied separately as relevance focus
 and remain authoritative. Worktree variants create a clean target session and
-install the accepted artifact there.
+install the accepted artifact there. Target acceptance metadata is installed
+only after inherited preset restoration returns, so interrupted preset setup
+is retried; later publication failures do not reapply a successfully installed
+preset in the live target.
 
 Here/Summary applies that background through aggressive root compaction, with
 no verbatim tail, and therefore retains `PreCompact`/`PostCompact`, bounded
@@ -361,6 +364,12 @@ session, and does not issue a second `git worktree add`. A directory registered
 to another branch, or multiple saved sessions rooted there, is a recovery
 conflict rather than authority to guess. Later Goal turns derive exact read
 authority only for the validated target-local artifact.
+
+Retry revalidates the target summary and republishes the target session before
+advancing the source retry to submission. Live accepted-artifact metadata alone
+does not prove that an interrupted target preparation was durably saved. A
+matching summary is reused rather than appended again; a conflicting summary
+stops the handoff.
 
 Acceptance is final even if preparation fails. The source session persists a
 bounded retry record, and `mevedel-retry-plan-implementation` resumes from the

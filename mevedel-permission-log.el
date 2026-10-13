@@ -22,17 +22,17 @@
                   "mevedel-execution-target" (target))
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
-;; `mevedel-session-publication'
-(declare-function mevedel-session-publication-append-diagnostic
-                  "mevedel-session-publication" (session path content))
-(autoload 'mevedel-session-publication-append-diagnostic
-  "mevedel-session-publication")
-
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
                   "mevedel-permission-mode"
                   (&optional session data-buffer surface-buffer request invocation))
 (autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-append-diagnostic
+                  "mevedel-session-publication" (session path content))
+(autoload 'mevedel-session-publication-append-diagnostic
+  "mevedel-session-publication")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target

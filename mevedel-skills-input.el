@@ -153,7 +153,7 @@
 ;; `mevedel-turn'
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))
 (declare-function mevedel-request-begin
-                  "mevedel-turn" (session &optional directive-uuid))
+                  "mevedel-turn" (session &optional directive-uuid options))
 (autoload 'mevedel--complete-turn "mevedel-turn")
 (autoload 'mevedel-request-begin "mevedel-turn")
 
