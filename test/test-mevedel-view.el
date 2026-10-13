@@ -636,8 +636,8 @@
   ,test
   (test)
   :doc "graphical redisplay measures archived prompt visibility without recursion"
-  (skip-unless (mevedel-test--wayland-available-p))
   (let ((process-environment (copy-sequence process-environment)))
+    (skip-unless (mevedel-test--wayland-available-p))
     (setenv "MEVEDEL_TEST_LOAD_PATH" (prin1-to-string load-path))
     (pcase-let ((`(,observed ,status . ,_trace)
                  (mevedel-test--run-wayland-fixture "view-header-wayland.el" 20)))

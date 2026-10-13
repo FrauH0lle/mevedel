@@ -51,6 +51,8 @@ A child that outlives two minutes is killed and fails the test."
                           `(progn
                              (setq load-path ',(cons compiled load-path))
                              (require 'bytecomp)
+                             ;; Terminal-only Emacs builds lack this primitive.
+                             (fmakunbound 'font-info)
                              (let ((byte-compile-error-on-warn t)
                                    (byte-compile-verbose nil))
                                (dolist (file (directory-files ,compiled t "\\.el\\'"))

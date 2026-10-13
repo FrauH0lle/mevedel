@@ -31,6 +31,8 @@ fixture; a survivor would fire inside a later test."
   (mevedel-test--with-captured-diagnostics nil
     (let ((mevedel-execution-process--child-kill-delay 0.05))
       (mevedel-execution-teardown-session session)))
+  ;; ACP can leave its final queued response on a zero-delay drain at shutdown.
+  (accept-process-output nil 0)
   (dolist (timer (append timer-list timer-idle-list nil))
     (unless (memq timer timers)
       (when (or (memq (timer--function timer) mevedel-engine-test--owned-timer-functions)

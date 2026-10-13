@@ -187,6 +187,37 @@
 	    (should (equal result '(nil 0)))
 	    (should-not (memq timer timer-list)))
 	(when timer (cancel-timer timer)))))
+  :doc "cancelling a resolving connection collects it only after setup settles"
+  (let ((response (generate-new-buffer " *auth-http-resolving*"))
+        process cancel results (state 'connect))
+    (unwind-protect
+        (progn
+          (setq process (make-pipe-process :name "auth-http-resolving"
+                                           :buffer response :noquery t))
+          (cl-letf* ((status (symbol-function 'process-status))
+                     (delete (symbol-function 'delete-process))
+                     ((symbol-function 'process-status)
+                      (lambda (value) (if (eq value process) state (funcall status value))))
+                     ((symbol-function 'delete-process)
+                      (lambda (value)
+                        (when (and (eq value process) (eq state 'connect))
+                          (ert-fail "Deleted a resolving connection"))
+                        (funcall delete value)))
+                     ((symbol-function 'url-retrieve) (lambda (&rest _) response)))
+            (setq cancel (mevedel-auth--http "https://example.invalid" nil nil
+                                           (lambda (&rest result) (push result results))))
+            (funcall cancel)
+            (should-not (buffer-live-p response))
+            (should-not (process-buffer process))
+            (should (process-live-p process))
+            (setq state 'open)
+            (funcall (process-sentinel process) process "open")
+            (should (eq 'closed (funcall status process)))
+            (should-not results)))
+      (setq state 'closed)
+      (when cancel (funcall cancel))
+      (when (and process (process-live-p process)) (delete-process process))
+      (when (buffer-live-p response) (kill-buffer response))))
   :doc "a late cancelled HTTP callback cleans its response without publishing"
   (let (callback cancel results response)
     (unwind-protect

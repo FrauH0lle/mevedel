@@ -292,14 +292,18 @@ configuration."
 (defun mevedel-skills-test--shell-injections-sync (text)
   "Drive `mevedel-skills-preparation-expand-body' with TEXT synchronously.
 Return the outcome plist produced by the async helper."
-  (let ((mevedel--session
-         (mevedel-skills-test--make-session "injection"))
-        outcome)
-    (mevedel-skills-preparation-expand-body
-     text (lambda (o) (setq outcome o)))
-    (while (null outcome)
-      (accept-process-output nil 0.01))
-    outcome))
+  (let* ((root (make-temp-file "mevedel-skill-injection-" t))
+         (mevedel--session
+          (mevedel-skills-test--make-session "injection" root))
+         outcome)
+    (unwind-protect
+        (progn
+          (mevedel-skills-preparation-expand-body
+           text (lambda (o) (setq outcome o)))
+          (while (null outcome)
+            (accept-process-output nil 0.01))
+          outcome)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills-preparation-expand-body ()
   ,test
@@ -313,17 +317,21 @@ Return the outcome plist produced by the async helper."
 
   :doc "stops before a command once its turn has ended"
   (mevedel-skills-test--with-bash-allowed
-    (let ((mevedel--session (mevedel-skills-test--make-session "injection"))
-          (checks 0)
-          outcome)
-      (mevedel-skills-preparation-expand-body
-       "a=!`echo 1` b=!`echo 2`" (lambda (o) (setq outcome o)) nil nil
-       ;; The turn ends while the first command runs.
-       (lambda () (= 1 (cl-incf checks))))
-      (while (null outcome)
-        (accept-process-output nil 0.01))
-      (should (= 2 checks))
-      (should (eq 'aborted (plist-get outcome :reason)))))
+    (let* ((root (make-temp-file "mevedel-skill-injection-" t))
+           (mevedel--session (mevedel-skills-test--make-session "injection" root))
+           (checks 0)
+           outcome)
+      (unwind-protect
+          (progn
+            (mevedel-skills-preparation-expand-body
+             "a=!`echo 1` b=!`echo 2`" (lambda (o) (setq outcome o)) nil nil
+             ;; The turn ends while the first command runs.
+             (lambda () (= 1 (cl-incf checks))))
+            (while (null outcome)
+              (accept-process-output nil 0.01))
+            (should (= 2 checks))
+            (should (eq 'aborted (plist-get outcome :reason))))
+        (delete-directory root t))))
 
   :doc "multiple inline injections in the same line"
   (mevedel-skills-test--with-bash-allowed

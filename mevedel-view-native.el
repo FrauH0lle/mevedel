@@ -19,6 +19,9 @@
 (require 'mevedel-native)
 (require 'mevedel-view-animation)
 
+;; `font.c' (graphical builds only)
+(declare-function font-info "font.c" (name &optional frame))
+
 ;; `mevedel-view'
 (declare-function mevedel-view--set-spinner-option "mevedel-view" (symbol value))
 (autoload 'mevedel-view--set-spinner-option "mevedel-view")

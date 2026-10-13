@@ -63,8 +63,11 @@
           ;; A trusted Git spy checks the actual launched environment. Real
           ;; Git and repository-preservation coverage remain separate below.
           (with-temp-file git
-            (insert "#!/bin/sh\nprintf ran > " (shell-quote-argument marker)
-                    "\nexec env -0\n"))
+            ;; Dash drops invalid variable names before a shell spy can see them.
+            (insert "#!/usr/bin/env python3\nimport os\n"
+                    "with open(" (prin1-to-string marker) ", 'w') as marker:\n"
+                    "    marker.write('ran')\n"
+                    "os.execvp('env', ['env', '-0'])\n"))
           (set-file-modes git #o700)
           (let ((original (mevedel-bash-git-test--run '("git"))))
             (should (string-search "GIT_TEST_TARGET_ONLY=" original))
