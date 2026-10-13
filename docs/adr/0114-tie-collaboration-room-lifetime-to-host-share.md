@@ -13,6 +13,11 @@ end the share; the host transport reconnects and guests may rejoin with the
 same bearer link. Starting a later share after teardown generates fresh
 credentials.
 
+Stopping or replacing a pending dial detaches its callbacks immediately and
+retires its socket once network setup settles. Logical share teardown never
+waits for asynchronous DNS cancellation; authentication reuses the same socket
+cleanup helper.
+
 The relay likewise imposes no absolute room age. It retains a room only while
 its host connection is live, garbage-collects it immediately on disconnect,
 and uses WebSocket keepalive to detect dead peers. The host sends its own
@@ -59,6 +64,14 @@ drafts retain a recovery download but do not authorize writes into a later
 share. See [ADR 0120](0120-edit-shared-content-through-the-session-host.md).
 
 ## Decision history
+
+Immediate dial cancellation froze a CI worker. A local stress loop stalled at
+iteration 413 with a native stack in `gai_suspend`, the same Emacs DNS wait
+already observed in authentication. Direct socket deletion was replaced with
+shared nonblocking retirement: buffers and callbacks detach immediately, and
+the socket is deleted after setup settles. Two thousand repeated dial/cancel
+iterations pass after the change; deterministic regressions cover delayed setup
+and setup settling while cleanup installs its sentinel.
 
 The lobby exception was added when a phone needed one stable entry point to
 a host's sessions. Every session room got a fresh link per share, and the

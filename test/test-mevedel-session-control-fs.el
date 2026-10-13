@@ -13,6 +13,13 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-sigpipe-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-sigpipe-test-support"))
+
+(defconst mevedel-session-control-fs-test--file (or load-file-name buffer-file-name)
+  "This file, which the SIGPIPE-ignoring child loads.")
 
 (mevedel-deftest mevedel-session-control-fs--send-request-buffer
   (:doc "sync and async carriers send bounded pieces without losing binary bytes or authority fencing")
@@ -162,41 +169,10 @@
           (should (equal 'ok (plist-get (car (car settled)) :status))))
       (delete-directory root t)))
 
-  :doc "reports a program that failed as a whole"
-  (let ((mevedel-session-control-fs--pipe-local t)
-        settled)
-    (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
-               (lambda (_) (cons "false" "stat"))))
-      (mevedel-session-control-fs-run-program-async
-       (list (list :op 'path-exists-p :path "/tmp"))
-       (lambda (results error) (setq settled (list results error)))))
-    (with-timeout (10 (ert-fail "Failed program never settled"))
-      (while (not settled) (accept-process-output nil 0.02)))
-    (should-not (car settled))
-    (should (eq 'file-error (car (nth 1 settled)))))
-
-  :doc "reports a program that exits before its request is written as failed"
-  (let ((mevedel-session-control-fs--pipe-local t)
-        (send (symbol-function 'process-send-region))
-        settled)
-    (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
-               (lambda (_) (cons "false" "stat")))
-              ;; Busy-wait without servicing events so the program exits
-              ;; before the write, as it can on a slow runner.
-              ((symbol-function 'process-send-region)
-               (lambda (process start end)
-                 (let ((process-id (process-id process)))
-                   (with-timeout (5 (ert-fail "Program never exited"))
-                     (while (file-exists-p (format "/proc/%d" process-id)))))
-                 (funcall send process start end))))
-      (mevedel-session-control-fs-run-program-async
-       (list (list :op 'path-exists-p :path "/tmp"))
-       (lambda (results error) (setq settled (list results error)))))
-    (with-timeout (10 (ert-fail "Failed program never settled"))
-      (while (not settled) (accept-process-output nil 0.02)))
-    (should-not (car settled))
-    (should (eq 'file-error (car (nth 1 settled))))
-    (should (equal "Portable control program failed" (nth 1 (nth 1 settled)))))
+  :doc "failed children report errors where SIGPIPE is ignored"
+  (mevedel-test-run-sigpipe-tests
+   mevedel-session-control-fs-test--file
+   "\\`mevedel-session-control-fs-run-program-async/closed-input")
 
   :doc "quitting during a streamed request releases the child and buffers before propagating quit"
   (let ((mevedel-session-control-fs--pipe-local t)
@@ -239,6 +215,47 @@
     (should-not (mevedel-transport-busy-p))
     (with-timeout (10 (ert-fail "Program never settled"))
       (while (not settled) (accept-process-output nil 0.02)))))
+
+;; Closed-input writes must run with the interactive editor's SIGPIPE policy.
+(when (mevedel-test-sigpipe-child-p)
+  (mevedel-deftest mevedel-session-control-fs-run-program-async/closed-input ()
+    ,test
+    (test)
+    :doc "reports a program that failed as a whole"
+    (let ((mevedel-session-control-fs--pipe-local t)
+          settled)
+      (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
+                 (lambda (_) (cons "false" "stat"))))
+        (mevedel-session-control-fs-run-program-async
+         (list (list :op 'path-exists-p :path "/tmp"))
+         (lambda (results error) (setq settled (list results error)))))
+      (with-timeout (10 (ert-fail "Failed program never settled"))
+        (while (not settled) (accept-process-output nil 0.02)))
+      (should-not (car settled))
+      (should (eq 'file-error (car (nth 1 settled)))))
+
+    :doc "reports a program that exits before its request is written as failed"
+    (let ((mevedel-session-control-fs--pipe-local t)
+          (send (symbol-function 'process-send-region))
+          settled)
+      (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
+                 (lambda (_) (cons "false" "stat")))
+                ;; Busy-wait without servicing events so the program exits
+                ;; before the write, as it can on a slow runner.
+                ((symbol-function 'process-send-region)
+                 (lambda (process start end)
+                   (let ((process-id (process-id process)))
+                     (with-timeout (5 (ert-fail "Program never exited"))
+                       (while (file-exists-p (format "/proc/%d" process-id)))))
+                   (funcall send process start end))))
+        (mevedel-session-control-fs-run-program-async
+         (list (list :op 'path-exists-p :path "/tmp"))
+         (lambda (results error) (setq settled (list results error)))))
+      (with-timeout (10 (ert-fail "Failed program never settled"))
+        (while (not settled) (accept-process-output nil 0.02)))
+      (should-not (car settled))
+      (should (eq 'file-error (car (nth 1 settled))))
+      (should (equal "Portable control program failed" (nth 1 (nth 1 settled)))))))
 
 (mevedel-deftest mevedel-session-control-fs--program-arguments/large-field ()
   (let* ((field (make-string (1+ mevedel-session-control-fs--argument-field-budget) ?x))

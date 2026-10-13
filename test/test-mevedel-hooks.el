@@ -2509,6 +2509,7 @@
          (mevedel-hooks-command-output-max-chars 16)
          (mevedel-hooks-require-project-trust nil)
          (process-environment (copy-sequence process-environment))
+         (spawn (symbol-function 'make-process))
          workspace session)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
@@ -2564,15 +2565,36 @@
             (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
               (mevedel-plugins-enable "demo" workspace)
               (mevedel-plugins-enable "target-demo" workspace)))
-          (mevedel-hooks-test--await
-           (lambda (cb)
-             (mevedel-hooks-run-event
-              'PreToolUse
-              (mevedel-hooks-event-plist
-               'PreToolUse session workspace
-               :tool-name "Bash"
-               :tool-input '(:command "echo hi"))
-              cb session workspace)))
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (let ((child (apply spawn args))
+                             (stderr (plist-get args :stderr)))
+                         (when (and (equal "mevedel-hook" (plist-get args :name))
+                                    (bufferp stderr)
+                                    (string-match-p
+                                     "remote-stderr-with-extra-output"
+                                     (car (last (plist-get args :command)))))
+                           ;; TRAMP drains stderr after the supplied sentinel.
+                           ;; Force that ordering even if the pipe read was early.
+                           (add-function
+                            :around (process-sentinel child)
+                            (lambda (sentinel proc event)
+                              (when (buffer-live-p stderr)
+                                (with-current-buffer stderr (erase-buffer)))
+                              (funcall sentinel proc event)
+                              (when (buffer-live-p stderr)
+                                (with-current-buffer stderr
+                                  (insert "remote-stderr-with-extra-output"))))))
+                         child))))
+            (mevedel-hooks-test--await
+             (lambda (cb)
+               (mevedel-hooks-run-event
+                'PreToolUse
+                (mevedel-hooks-event-plist
+                 'PreToolUse session workspace
+                 :tool-name "Bash"
+                 :tool-input '(:command "echo hi"))
+                cb session workspace))))
           (cl-labels
               ((file-text (file)
                  (string-trim

@@ -9,6 +9,7 @@
 
 ;;; Code:
 
+(require 'gnutls)
 (require 'json)
 (require 'helpers
          (file-name-concat
@@ -22,6 +23,14 @@
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-transport)
+(require 'mevedel-sigpipe-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-sigpipe-test-support"))
+
+(defconst mevedel-collaboration-transport-test--file
+  (or load-file-name buffer-file-name)
+  "This file, which the SIGPIPE-ignoring child loads.")
 
 
 ;;
@@ -160,6 +169,18 @@ Return the predicate's final value."
     (delete-process server)
     port))
 
+(defun mevedel-test--stub-relay-stop (server)
+  "Release SERVER and its accepted sockets without sending close frames."
+  (dolist (ws (copy-sequence websocket-server-websockets))
+    (when (eq server (websocket-server-conn ws))
+      (let ((client (websocket-conn ws)))
+        (set-process-filter client #'ignore)
+        (set-process-sentinel client #'ignore)
+        (delete-process client))
+      (setq websocket-server-websockets
+            (delq ws websocket-server-websockets))))
+  (delete-process server))
+
 (defmacro mevedel-test--with-stub-relay (bindings &rest body)
   "Run BODY with a live stub relay bound per BINDINGS (STATE PORT SERVER).
 STATE is bound to the one-element mutable list whose car holds the
@@ -173,8 +194,40 @@ relay's room plist."
         (ignore ,state)
         (unwind-protect
             (progn ,@body)
-          (websocket-server-close ,server))))))
+          (mevedel-test--stub-relay-stop ,server))))))
 
+
+(mevedel-deftest mevedel-test--stub-relay-stop
+  (:doc "teardown releases accepted sockets without writing to cancelled peers")
+  (let ((send (symbol-function 'websocket-send))
+        transport client tearing-down cleanup-writes)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'websocket-send)
+                     (lambda (&rest args)
+                       (if tearing-down
+                           (push args cleanup-writes)
+                         (apply send args)))))
+            (mevedel-test--with-stub-relay (state port server)
+              (setq transport
+                    (mevedel-collaboration--transport-open
+                     (format "ws://127.0.0.1:%d/r/cleanup?role=host" port)
+                     (make-string 32 5)))
+              (should (mevedel-test--pump
+                       (lambda () (eq 'open (plist-get transport :state))) 3))
+              (setq client
+                    (cl-find-if (lambda (ws) (eq server (websocket-server-conn ws)))
+                                websocket-server-websockets))
+              (should client)
+              (mevedel-collaboration--transport-stop transport)
+              (setq tearing-down t)))
+          (should-not cleanup-writes)
+          (should-not (memq client websocket-server-websockets))
+          (should-not (process-live-p (websocket-conn client))))
+      (when transport (mevedel-collaboration--transport-stop transport))
+      (when client
+        (setq websocket-server-websockets
+              (delq client websocket-server-websockets))))))
 
 ;;
 ;;; Sealing
@@ -333,40 +386,81 @@ relay's room plist."
           (mevedel-collaboration--transport-stop transport)))))
 
   :doc "TLS returns before handshake and preserves certificate verification"
-  (let* ((server (make-network-process :name "mevedel-test-tls-pending"
-                                       :server t :host 'local :service t
-                                       :noquery t))
-         (port (process-contact server :service))
-         (original (symbol-function 'make-network-process))
-         (gnutls-verify-error t)
-         (open (symbol-function 'websocket-open))
-         options transport open-error)
+  (mevedel-test-run-sigpipe-tests
+   mevedel-collaboration-transport-test--file
+   "\\`mevedel-collaboration--transport-dial/tls/")
+
+  :doc "cancellation retires a resolving socket after setup without late callbacks"
+  (let* ((buffer (generate-new-buffer " *collaboration-resolving*"))
+         (process (make-pipe-process :name "collaboration-resolving"
+                                     :buffer buffer :noquery t))
+         (ws (websocket-inner-create :conn process :url "ws://fixture"
+                                     :on-close #'ignore))
+         (state 'connect) states deleted-pending
+         (transport (list :state 'connecting :ws ws
+                          :on-state (lambda (value) (push value states)))))
     (unwind-protect
-        (progn
-          (cl-letf (((symbol-function 'websocket-open)
-                     (lambda (&rest args)
-                       (condition-case err (apply open args)
-                         (error (setq open-error err)
-                                (signal (car err) (cdr err))))))
-                    ((symbol-function 'make-network-process)
-                     (lambda (&rest args)
-                       (setq options args)
-                       (apply original args))))
-            (setq transport
-                  (mevedel-collaboration--transport-open
-                   (format "wss://127.0.0.1:%d/r/async?role=host" port)
-                   (make-string 32 5))))
-          (should-not open-error)
-          ;; This listener deliberately has no TLS responder.  No handshake
-          ;; can have completed when dialing returns to the caller.
-          (should (eq 'connecting (plist-get transport :state)))
-          (should (timerp (plist-get transport :connect-timer)))
-          (should (plist-get options :nowait))
-          (should (eq t (plist-get (cdr (plist-get options :tls-parameters))
-                                   :verify-error)))
-          (should gnutls-verify-error))
-      (when transport (mevedel-collaboration--transport-stop transport))
-      (delete-process server))))
+        (cl-letf* ((status (symbol-function 'process-status))
+                   (delete (symbol-function 'delete-process))
+                   ((symbol-function 'process-status)
+                    (lambda (value)
+                      (if (eq value process) state (funcall status value))))
+                   ((symbol-function 'delete-process)
+                    (lambda (value)
+                      (if (and (eq value process) (eq state 'connect))
+                          (setq deleted-pending t)
+                        (funcall delete value)))))
+          (mevedel-collaboration--transport-stop transport)
+          (should-not deleted-pending)
+          (should (equal '(stopped) states))
+          (should-not (plist-get transport :ws))
+          (should-not (process-buffer process))
+          (should (process-live-p process))
+          (setq state 'open)
+          (funcall (process-sentinel process) process "open")
+          (should (eq 'closed (funcall status process)))
+          (should (equal '(stopped) states)))
+      (when (process-live-p process) (delete-process process))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+;; The deliberately unanswered TLS handshake can write after its peer closes.
+(when (mevedel-test-sigpipe-child-p)
+  (mevedel-deftest mevedel-collaboration--transport-dial/tls
+    (:doc "TLS returns before handshake and preserves certificate verification")
+    (let* ((server (make-network-process :name "mevedel-test-tls-pending"
+                                         :server t :host 'local :service t
+                                         :noquery t))
+           (port (process-contact server :service))
+           (original (symbol-function 'make-network-process))
+           (gnutls-verify-error t)
+           (open (symbol-function 'websocket-open))
+           options transport open-error)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'websocket-open)
+                       (lambda (&rest args)
+                         (condition-case err (apply open args)
+                           (error (setq open-error err)
+                                  (signal (car err) (cdr err))))))
+                      ((symbol-function 'make-network-process)
+                       (lambda (&rest args)
+                         (setq options args)
+                         (apply original args))))
+              (setq transport
+                    (mevedel-collaboration--transport-open
+                     (format "wss://127.0.0.1:%d/r/async?role=host" port)
+                     (make-string 32 5))))
+            (should-not open-error)
+            ;; This listener deliberately has no TLS responder.  No handshake
+            ;; can have completed when dialing returns to the caller.
+            (should (eq 'connecting (plist-get transport :state)))
+            (should (timerp (plist-get transport :connect-timer)))
+            (should (plist-get options :nowait))
+            (should (eq t (plist-get (cdr (plist-get options :tls-parameters))
+                                     :verify-error)))
+            (should gnutls-verify-error))
+        (when transport (mevedel-collaboration--transport-stop transport))
+        (delete-process server)))))
 
 (mevedel-deftest mevedel-collaboration--transport-connect-timeout
   ()
@@ -743,7 +837,7 @@ relay's room plist."
                     10))
            (should (equal 'open (car states))))
        (mevedel-collaboration--transport-stop transport)
-       (ignore-errors (websocket-server-close server))
+       (ignore-errors (mevedel-test--stub-relay-stop server))
        ;; Stopping cancels any retry so no timer leaks.
        (should-not (plist-get transport :reconnect-timer))))))
 

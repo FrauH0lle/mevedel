@@ -20,6 +20,68 @@
           "helpers"))
 (eval-when-compile (require 'tramp))
 
+(mevedel-deftest mevedel--delete-process ()
+  ,test
+  (test)
+  :doc "deletes an established process immediately"
+  (let ((process (make-pipe-process :name "delete-established" :noquery t)))
+    (unwind-protect
+        (progn
+          (mevedel--delete-process process)
+          (should (eq 'closed (process-status process))))
+      (when (process-live-p process) (delete-process process))))
+
+  :doc "detaches pending setup and collects every terminal outcome without old callbacks"
+  (dolist (terminal '(open failed closed))
+    (let* ((buffer (generate-new-buffer " *delete-pending*"))
+           (process (make-pipe-process :name "delete-pending"
+                                       :buffer buffer :noquery t))
+           (state 'connect) callbacks deleted-pending)
+      (unwind-protect
+          (cl-letf* ((status (symbol-function 'process-status))
+                     (delete (symbol-function 'delete-process))
+                     ((symbol-function 'process-status)
+                      (lambda (value)
+                        (if (eq value process) state (funcall status value))))
+                     ((symbol-function 'delete-process)
+                      (lambda (value)
+                        (if (and (eq value process) (eq state 'connect))
+                            (setq deleted-pending t)
+                          (funcall delete value)))))
+            (set-process-filter process (lambda (&rest _) (push 'filter callbacks)))
+            (set-process-sentinel process (lambda (&rest _) (push 'sentinel callbacks)))
+            (mevedel--delete-process process)
+            (should-not deleted-pending)
+            (should (buffer-live-p buffer))
+            (should-not (process-buffer process))
+            (should (process-live-p process))
+            (funcall (process-filter process) process "late data")
+            (funcall (process-sentinel process) process "still connecting")
+            (should (process-live-p process))
+            (setq state terminal)
+            (funcall (process-sentinel process) process "setup settled")
+            (should (eq 'closed (funcall status process)))
+            (should-not callbacks))
+        (when (process-live-p process) (delete-process process))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+  :doc "collects setup that settles while the new sentinel is installed"
+  (let ((process (make-pipe-process :name "delete-settled" :noquery t))
+        (state 'connect))
+    (unwind-protect
+        (cl-letf* ((status (symbol-function 'process-status))
+                   (sentinel (symbol-function 'set-process-sentinel))
+                   ((symbol-function 'process-status)
+                    (lambda (value)
+                      (if (eq value process) state (funcall status value))))
+                   ((symbol-function 'set-process-sentinel)
+                    (lambda (value function)
+                      (prog1 (funcall sentinel value function)
+                        (when (eq value process) (setq state 'open))))))
+          (mevedel--delete-process process)
+          (should (eq 'closed (funcall status process))))
+      (when (process-live-p process) (delete-process process)))))
+
 (mevedel-deftest mevedel--run-periodic-timer
   (:doc "shares one host wakeup and dispatches all due callbacks once")
   (let ((mevedel--coalesced-timers nil)

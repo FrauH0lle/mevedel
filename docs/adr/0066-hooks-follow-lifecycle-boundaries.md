@@ -21,6 +21,8 @@ configuration, trust, and failure contracts.
 Command completion uses the shared transport-idle boundary before advancing
 the serial chain when its sentinel interrupts remote I/O. Pending completion
 remains request-cancellable; it does not change hook ordering or authority.
+Remote exit handling runs after TRAMP's stderr-draining sentinel, so final
+diagnostics remain available for capped previews and block reasons.
 Command startup checks cancellation before preparation and after yielding work,
 and releases child handles returned after teardown. Terminal `Stop` and
 `StopFailure` handlers run independently under their own timeout.
@@ -53,6 +55,13 @@ a supported event can block an operation. Structured decisions make consequentia
 changes auditable without injecting arbitrary stdout or stderr into model context.
 
 ## Decision history
+
+CI intermittently lost a remote command's stderr preview. TRAMP drains its
+stderr pipe after invoking the sentinel supplied to `make-process`; the hook
+runner completed and killed the buffer inside that supplied sentinel. A
+regression forcing late stderr delivery reproduced the empty preview. Remote
+completion now attaches after TRAMP installs its drain, preserving its cleanup
+and the runner's existing cancellation and transport-idle boundaries.
 
 ADR 0066 established lifecycle boundaries and observational Stop semantics.
 The original hook design notes compared declarative command hooks, trusted
