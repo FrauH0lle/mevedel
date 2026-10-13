@@ -510,5 +510,19 @@ Bind request, backend, fsm, state and info for assertions."
       (should (equal "500" (plist-get diagnostic :code)))
       (should (equal "500" (plist-get diagnostic :message))))))
 
+(ert-deftest mevedel-gptel-retry--json-error/native-null-and-false ()
+  (dolist (empty '(nil :null :json-false))
+    (should-not (mevedel-gptel-retry--json-error empty)))
+  (let ((error '(:code "server_error")))
+    (should (eq error (mevedel-gptel-retry--json-error error)))))
+
+(ert-deftest mevedel-gptel-retry--pending-p/null-codes-are-absent ()
+  (test-mevedel-retry-policy--with-live
+    (plist-put info :error '(:type :null :code :null :message "Model at capacity"))
+    (should (mevedel-gptel-retry--pending-p info))
+    (let ((diagnostic (car (plist-get info :mevedel-retry-errors))))
+      (should-not (plist-get diagnostic :type))
+      (should-not (plist-get diagnostic :code)))))
+
 (provide 'test-mevedel-gptel-retry-policy)
 ;;; test-mevedel-gptel-retry-policy.el ends here

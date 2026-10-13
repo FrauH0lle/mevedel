@@ -18,7 +18,7 @@
   (concat "event: response.output_text.delta\n"
           "data: {\"delta\":\"Recovered answer\"}\n\n"
           "event: response.completed\n"
-          "data: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}}\n\n"))
+          "data: {\"response\":{\"status\":\"completed\",\"error\":null,\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}}\n\n"))
 
 (defconst mevedel-retry-test--failure
   (concat "event: response.output_text.delta\n"

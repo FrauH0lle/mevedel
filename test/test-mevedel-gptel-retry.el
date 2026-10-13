@@ -165,6 +165,34 @@
         (should (string-match-p "Concurrent notice" (buffer-string)))
         (should-not (string-match-p "Abandoned output" (buffer-string)))))))
 
+(ert-deftest mevedel-gptel-retry-dispatch/null-error-completes-successfully ()
+  "Codex marks success with an explicit `\"error\": null'; that is no failure."
+  (mevedel-retry-test--with-http
+      (list (concat "event: response.output_text.delta\n"
+                    "data: {\"delta\":\"Fine answer\"}\n\n"
+                    "event: response.completed\n"
+                    "data: {\"response\":{\"status\":\"completed\",\"error\":null,"
+                    "\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}}\n\n"))
+    (gptel--fsm-transition fsm)
+    (mevedel-retry-test--drain-native)
+    (should (= 1 (length requests)))
+    (should (= 1 finished))
+    (should (= 0 failed))
+    (should-not (plist-get (gptel-fsm-info fsm) :error))
+    (with-current-buffer data-buf
+      (should (string-match-p "Fine answer" (buffer-string))))))
+
+(ert-deftest mevedel-gptel-retry--parse-response/ignores-null-error ()
+  (let ((info (list :mevedel-retry-state (list :retries 0)))
+        (backend (gptel--make-openai-oauth :name "Codex test" :models '(test-model))))
+    (should (equal "parsed"
+                   (mevedel-gptel-retry--parse-response
+                    (lambda (_backend _response _info) "parsed") backend '(:error :null) info)))
+    (should-not (plist-get info :error))
+    (mevedel-gptel-retry--parse-response
+     #'ignore backend '(:error (:code "server_error")) info)
+    (should (equal '(:code "server_error") (plist-get info :error)))))
+
 (ert-deftest mevedel-gptel-retry-dispatch/completed-tools-are-not-replayed ()
   (let ((tool-runs 0)
         (tool-response

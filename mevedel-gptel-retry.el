@@ -62,8 +62,8 @@ a fresh allowance.  Claude Code and background requests are unaffected."
   "Classify ERROR-DATA and HTTP STATUS conservatively.
 Permanent structured errors take precedence over transport status and text."
   (let* ((data (and (proper-list-p error-data) error-data))
-         (code (plist-get data :code))
-         (type (plist-get data :type))
+         (code (mevedel-gptel-retry--json-error (plist-get data :code)))
+         (type (mevedel-gptel-retry--json-error (plist-get data :type)))
          (message (format "%s" (if (stringp error-data) error-data
                                  (or (plist-get data :message) ""))))
          (codes (delete "error" (mapcar (lambda (value) (downcase (format "%s" value)))
@@ -108,6 +108,11 @@ Permanent structured errors take precedence over transport status and text."
                   (error nil))))))
     (or server (* (min 30 (expt 2 (1- attempt)))
                   (+ 0.9 (/ (random 201) 1000.0))))))
+
+(defun mevedel-gptel-retry--json-error (value)
+  "Return VALUE unless it is JSON null or false.
+Responses events carry an explicit `\"error\": null' on success."
+  (unless (memq value '(nil :null :json-false)) value))
 
 (defun mevedel-gptel-retry--live-p (state &optional info)
   "Return non-nil while STATE and optional attempt INFO own their request."
@@ -218,9 +223,9 @@ Permanent structured errors take precedence over transport status and text."
             (let ((diagnostic
                    (list :attempt (1+ (plist-get state :retries))
                          :http-status (plist-get info :http-status)
-                         :type (when-let* ((type (and (listp error-data) (plist-get error-data :type))))
+                         :type (when-let* ((type (and (listp error-data) (mevedel-gptel-retry--json-error (plist-get error-data :type)))))
                                  (truncate-string-to-width (format "%s" type) 128))
-                         :code (when-let* ((code (and (listp error-data) (plist-get error-data :code))))
+                         :code (when-let* ((code (and (listp error-data) (mevedel-gptel-retry--json-error (plist-get error-data :code)))))
                                  (truncate-string-to-width (format "%s" code) 128))
                          :message (truncate-string-to-width
                                    (format "%s" (if (stringp error-data) error-data
@@ -510,8 +515,8 @@ STATE owns the logical sample; CALLBACK-INFO is gptel's callback context."
                   (forward-char 5)
                   (let* ((data (condition-case nil (gptel--json-read) (error nil)))
                          (response (plist-get data :response))
-                         (error-data (or (plist-get data :error)
-                                         (plist-get response :error)
+                         (error-data (or (mevedel-gptel-retry--json-error (plist-get data :error))
+                                         (mevedel-gptel-retry--json-error (plist-get response :error))
                                          (and (equal event "error") data))))
                     (when (member event '("error" "response.failed" "response.incomplete" "response.completed"))
                       (plist-put info :mevedel-retry-terminal t)
@@ -555,7 +560,7 @@ STATE owns the logical sample; CALLBACK-INFO is gptel's callback context."
   "Normalize in-band errors from non-streaming RESPONSE before ORIGINAL."
   (when (and (plist-get info :mevedel-retry-state)
              (gptel-openai-oauth-p backend))
-    (when-let* ((error-data (plist-get response :error)))
+    (when-let* ((error-data (mevedel-gptel-retry--json-error (plist-get response :error))))
       (plist-put info :error error-data)))
   (funcall original backend response info))
 
