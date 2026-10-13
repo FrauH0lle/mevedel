@@ -23,6 +23,20 @@
    :file-system
    ((:path "~/Projekte/mevedel/.scratch/upstream/gptel" :access write :recursive
            t))
+   :action allow)
+  ("Bash" :pattern "git -C .scratch/upstream/gptel pull --ff-only" :network t
+   :file-system
+   ((:path "~/Projekte/mevedel/.scratch/upstream/gptel/.git" :access write
+     :recursive t)
+    (:path "~/Projekte/mevedel/.scratch/upstream/gptel" :access write :recursive
+           t))
+   :action allow)
+  ("Bash" :pattern "git fetch:*" :network t :file-system
+   ((:path "~/.ssh" :access read :recursive t)) :action allow)
+  ("Bash" :pattern "git fetch:*" :network t :file-system
+   ((:path "~/.ssh" :access read :recursive t)
+    (:path "~/Projekte/mevedel/.git" :access write :recursive t)
+    (:path "~/.ssh" :access read :recursive t))
    :action allow))
  :resource-grants
  ((:path "~/.mevedel/skills" :access read)
