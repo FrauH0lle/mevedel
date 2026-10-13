@@ -10,6 +10,8 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "gptel-retry-helpers"))
+(require 'mevedel-view)
+(require 'mevedel-view-render)
 
 (mevedel-deftest mevedel-gptel-retry-dispatch ()
   ,test
@@ -216,6 +218,73 @@
         (should (eq (cdr entry)
                     (plist-get (process-get (car entry) 'mevedel-retry-info) :mevedel-retry-attempt))))
       (should (string-match-p "function_call_output" (car requests))))))
+
+(ert-deftest mevedel-gptel-retry-dispatch/async-tool-results-remain-visible ()
+  "HTTP cleanup must not discard tools that settle after the stream ends."
+  (dolist (agent-p '(nil t))
+    (let ((tool-callback nil)
+          (agent-results nil)
+          (gptel-include-tool-results t)
+          (tool-response
+           (concat "event: response.output_item.done\n"
+                   "data: {\"item\":{\"type\":\"function_call\",\"call_id\":\"async-1\",\"name\":\"Deferred\",\"arguments\":\"{}\"}}\n\n"
+                   "event: response.completed\n"
+                   "data: {\"response\":{\"status\":\"completed\",\"error\":null}}\n\n")))
+      (mevedel-retry-test--with-http
+          (list tool-response mevedel-retry-test--failure mevedel-retry-test--success)
+        (when agent-p
+          (let ((invocation (mevedel-agent-invocation--create
+                             :path "/root/test" :buffer data-buf
+                             :agent (mevedel-agent--create :name "explorer"))))
+            (with-current-buffer data-buf
+              (setq-local mevedel--agent-invocation invocation))
+            (plist-put (gptel-fsm-info fsm) :mevedel-agent-invocation invocation)
+            (plist-put (gptel-fsm-info fsm) :callback
+                       (mevedel-agent-exec--wrap-callback
+                        (mevedel-agent-exec--make-callback
+                         (lambda (result) (push result agent-results))
+                         "explorer" "Async tool test"
+                         (plist-get (gptel-fsm-info fsm) :position) (list ""))))))
+        (plist-put (gptel-fsm-info fsm) :tools
+                   (list (gptel-make-tool
+                          :name "Deferred" :description "Return after HTTP cleanup"
+                          :args nil :async t
+                          :function (lambda (callback) (setq tool-callback callback)))))
+        (gptel--fsm-transition fsm)
+        (let ((deadline (+ (float-time) 10)))
+          (while (and (< (float-time) deadline)
+                      (or (not tool-callback) gptel--request-alist))
+            (accept-process-output nil 0.01))
+          (should (< (float-time) deadline)))
+        (should (eq (gptel-fsm-state fsm) 'TOOL))
+        (should (= 1 (length requests)))
+        (should-not agent-results)
+        ;; Deliver only after the physical transport's sentinel has returned.
+        (let* ((old-info (gptel-fsm-info fsm))
+               (old-callback (plist-get old-info :callback)))
+          (funcall tool-callback "Deferred output")
+          (mevedel-retry-test--drain-native)
+          (let ((text (with-current-buffer data-buf (buffer-string))))
+            (funcall old-callback "Retired sample output" old-info)
+            (should (equal text (with-current-buffer data-buf (buffer-string))))))
+        (should (= 3 (length requests)))
+        (should (= 1 finished))
+        (when agent-p (should (equal '("Recovered answer") agent-results)))
+        (with-current-buffer data-buf
+          (goto-char (point-min))
+          (should (search-forward "Deferred output" nil t))
+          (should (equal (get-text-property (1- (point)) 'gptel)
+                         '(tool . "async-1"))))
+        (let ((segments (with-current-buffer data-buf
+                          (cl-remove-if-not
+                           (lambda (segment) (eq (car segment) 'tool))
+                           (mevedel-transcript-segments (point-min) (point-max))))))
+          (should (= 1 (length segments)))
+          (with-temp-buffer
+            (setq-local mevedel--data-buffer data-buf)
+            (mevedel-view-render-initialize)
+            (mevedel-view--render-tool-group segments data-buf)
+            (should (string-match-p "Deferred" (buffer-string)))))))))
 
 (ert-deftest mevedel-gptel-retry-dispatch/agent-result-and-accumulator ()
   (let* ((split (string-match "event: response.failed" mevedel-retry-test--failure))

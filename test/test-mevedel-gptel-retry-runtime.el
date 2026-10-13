@@ -133,6 +133,59 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
     (should-not (string-search "Late abandoned text"
                                (with-current-buffer data-buf (buffer-string))))))
 
+(ert-deftest mevedel-gptel-retry-runtime/nonstreaming-success-keeps-native-done ()
+  "A native final string must settle the retained request without aborting it."
+  (mevedel-retry-runtime-test--with-agent
+      (list (concat "{\"status\":\"completed\",\"error\":null,"
+                    "\"output\":[{\"type\":\"message\",\"content\":["
+                    "{\"type\":\"output_text\",\"text\":\"Recovered answer\"}]}],"
+                    "\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}"))
+    (plist-put (gptel-fsm-info fsm) :stream nil)
+    (plist-put (plist-get (gptel-fsm-info fsm) :data) :stream :json-false)
+    (gptel--fsm-transition fsm)
+    (mevedel-retry-test--drain-native)
+    (should (= 1 (length requests)))
+    (should (equal '(DONE) terminal-events))
+    (should (eq 'DONE (gptel-fsm-state fsm)))
+    (should (equal '(completed) stop-statuses))
+    (should (= 1 post-responses))
+    (should (equal '((:fsm-state TYPE :completing t :terminal-callback t))
+                   settlement-contexts))
+    (should (mevedel-agent-invocation-runtime-settled-p invocation))
+    (should (= 1 (length results)))
+    (should (equal "Recovered answer" (plist-get (car results) :visible)))
+    (should-not gptel--request-alist)
+    (should-not mevedel-gptel-retry--states)))
+
+(ert-deftest mevedel-gptel-retry-runtime/nonstreaming-retry-accounts-for-attempts ()
+  "A final string totals failed-attempt usage without aborting settlement."
+  (mevedel-retry-runtime-test--with-agent
+      (list (concat "{\"status\":\"failed\",\"error\":{\"code\":\"server_error\"},"
+                    "\"output\":[{\"type\":\"message\",\"content\":["
+                    "{\"type\":\"output_text\",\"text\":\"Abandoned output\"}]}],"
+                    "\"usage\":{\"input_tokens\":7,\"output_tokens\":2}}")
+            (concat "{\"status\":\"completed\",\"error\":null,"
+                    "\"output\":[{\"type\":\"message\",\"content\":["
+                    "{\"type\":\"output_text\",\"text\":\"Recovered answer\"}]}],"
+                    "\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}"))
+    (plist-put (gptel-fsm-info fsm) :stream nil)
+    (plist-put (plist-get (gptel-fsm-info fsm) :data) :stream :json-false)
+    (gptel--fsm-transition fsm)
+    (mevedel-retry-test--drain-native)
+    (should (= 2 (length requests)))
+    (should (= 1 waits))
+    (should (equal '(DONE) terminal-events))
+    (should (equal '(completed) stop-statuses))
+    (should (= 1 (length results)))
+    (should (equal "Recovered answer" (plist-get (car results) :visible)))
+    (should (equal "Agent prefix: Recovered answer" (car partial)))
+    (should (equal '(:input 19 :output 5 :cached 0)
+                   (plist-get (gptel-fsm-info fsm) :tokens)))
+    (should (equal '(:input 19 :output 5 :cached 0)
+                   (plist-get (gptel-fsm-info fsm) :tokens-full)))
+    (should-not gptel--request-alist)
+    (should-not mevedel-gptel-retry--states)))
+
 (ert-deftest mevedel-gptel-retry-runtime/exhaustion-keeps-native-error ()
   (mevedel-retry-runtime-test--with-agent (make-list 11 mevedel-retry-test--failure)
     (let (messages)

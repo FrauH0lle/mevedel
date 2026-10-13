@@ -70,7 +70,9 @@
                   (let ((response (or (pop remaining) mevedel-retry-test--success)))
                     (let ((body (if (consp response) (apply #'concat response) response)))
                       (process-send-string
-                       client (format "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+                       client (format "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+                                      (if (string-prefix-p "{" body)
+                                          "application/json" "text/event-stream")
                                       (string-bytes body)
                                       (if (consp response) (car response) body)))
                       (when (consp response)

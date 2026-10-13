@@ -242,31 +242,34 @@ Responses events carry an explicit `\"error\": null' on success."
   "Gate attempt INFO's RESPONSE before CALLBACK can settle or insert it.
 STATE owns the logical sample; CALLBACK-INFO is gptel's callback context."
   (when (mevedel-gptel-retry--live-p state info)
-    (when-let* ((provider-error (plist-get callback-info :mevedel-retry-provider-error)))
-      (plist-put callback-info :error provider-error))
-    (unless (and (not (eq response 'abort))
-                 (if (plist-get callback-info :error)
-                     (mevedel-gptel-retry--pending-p callback-info)
-                   (plist-get state :pending)))
-      (when (and (memq response '(t nil)) (plist-get callback-info :error))
-        (mevedel-gptel-retry--rollback state t))
-      (when (and (memq response '(t nil))
-                 (not (plist-get callback-info :mevedel-retry-usage-totalized)))
-        (plist-put callback-info :mevedel-retry-usage-totalized t)
-        (plist-put callback-info :mevedel-retry-usage-incomplete
-                   (or (plist-get state :usage-incomplete) (null (plist-get callback-info :tokens))))
-        (plist-put callback-info :tokens
-                   (mevedel-gptel-retry--sum-tokens
-                    (plist-get state :reported-tokens) (plist-get callback-info :tokens))))
-      (when (mevedel-gptel-retry--live-p state info)
-       (unwind-protect
-          (progn
-            (when (and (memq response '(t nil))
-                       (or (plist-get callback-info :error)
-                           (not (plist-get callback-info :tool-use))))
-              (plist-put state :terminal-callback t))
-            (apply callback response callback-info args))
-        (plist-put state :terminal-callback nil))))))
+    (let ((terminal (or (memq response '(t nil))
+                       (and (stringp response)
+                            (not (plist-get callback-info :stream))))))
+      (when-let* ((provider-error (plist-get callback-info :mevedel-retry-provider-error)))
+        (plist-put callback-info :error provider-error))
+      (unless (and (not (eq response 'abort))
+                   (if (plist-get callback-info :error)
+                       (mevedel-gptel-retry--pending-p callback-info)
+                     (plist-get state :pending)))
+        (when (and terminal (plist-get callback-info :error))
+          (mevedel-gptel-retry--rollback state t))
+        (when (and terminal
+                   (not (plist-get callback-info :mevedel-retry-usage-totalized)))
+          (plist-put callback-info :mevedel-retry-usage-totalized t)
+          (plist-put callback-info :mevedel-retry-usage-incomplete
+                     (or (plist-get state :usage-incomplete) (null (plist-get callback-info :tokens))))
+          (plist-put callback-info :tokens
+                     (mevedel-gptel-retry--sum-tokens
+                      (plist-get state :reported-tokens) (plist-get callback-info :tokens))))
+        (when (mevedel-gptel-retry--live-p state info)
+          (unwind-protect
+              (progn
+                (when (and terminal
+                           (or (plist-get callback-info :error)
+                               (not (plist-get callback-info :tool-use))))
+                  (plist-put state :terminal-callback t))
+                (apply callback response callback-info args))
+            (plist-put state :terminal-callback nil)))))))
 
 (defun mevedel-gptel-retry--insert (original response info &optional raw)
   "Tag ORIGINAL's inserted RESPONSE as provisional output of attempt INFO."
@@ -606,7 +609,10 @@ STATE owns the logical sample; CALLBACK-INFO is gptel's callback context."
                       (plist-put info :mevedel-retry-advice (string-trim (match-string 1)))))))
               (funcall original process status))
           (plist-put state :completing nil)
-          (unless (plist-get state :pending)
+          ;; HTTP completion can precede asynchronous tool settlement.  Their
+          ;; confirmation and result callbacks still belong to this sample;
+          ;; the next WAIT dispatch retires it after those callbacks finish.
+          (unless (or (plist-get state :pending) (plist-get info :tool-use))
             (mevedel-gptel-retry--close state)))))))
 
 (defun mevedel-gptel-retry-install ()
