@@ -3741,14 +3741,19 @@ portable first frame."
                           'display frame)))))
 
 (defun mevedel-view--pending-label (text id)
-  "Return TEXT, shimmering under animation ID when shimmer is the style."
+  "Return TEXT, shimmering under animation ID when shimmer is the style.
+The sweep uses TEXT's own face, so the label keeps the color it has
+once its call settles."
   (if (eq mevedel-view-tool-spinner-style 'shimmer)
-      (propertize text
-                  'mevedel-view-inline-spinner-frame t
-                  'mevedel-view-tool-animation-id id
-                  'display (mevedel-view-animation-frame
-                            'shimmer text 0 'mevedel-view-ephemeral
-                            (selected-frame)))
+      (let ((face (or (get-text-property 0 'font-lock-face text)
+                      'mevedel-view-ephemeral)))
+        (propertize text
+                    'mevedel-view-inline-spinner-frame t
+                    'mevedel-view-tool-animation-id id
+                    'mevedel-view-tool-animation-face face
+                    'display (mevedel-view-animation-frame
+                              'shimmer (substring-no-properties text) 0 face
+                              (selected-frame))))
     text))
 
 (defun mevedel-view--running-header (line count &optional virtual failed)

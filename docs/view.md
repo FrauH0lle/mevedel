@@ -412,7 +412,9 @@ second. Text outside the band and between sweeps keeps its normal foreground;
 between sweeps the view schedules no frames. Tool rows
 shimmer their tool name ("Bash", not its arguments), and a running group its
 `N running` count, in the same frames as the label, so they add no wakeups of
-their own. Glyph styles animate the row's marker instead, and `static` keeps
+their own. The sweep fades the span's own face (the tool-name or metadata
+face, recorded as `mevedel-view-tool-animation-face`), so a name keeps the
+color it has once settled; banks stay one per label. Glyph styles animate the row's marker instead, and `static` keeps
 the running `●`. Color styles use 64 theme-derived shades;
 breathe and bounce use a continuous 3.6-second cycle sampled at at most 8 fps.
 Breathe starts at normal foreground, fades toward the background, and returns;

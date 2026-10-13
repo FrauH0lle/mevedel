@@ -8695,7 +8695,16 @@
       (should (equal "Read" (substring-no-properties label)))
       (should (get-text-property 0 'mevedel-view-inline-spinner-frame label))
       (should (eq 'k (get-text-property 0 'mevedel-view-tool-animation-id
-                                        label)))))
+                                        label))))
+    ;; The sweep uses the label's own face, defaulting to the ephemeral one.
+    (should (eq 'mevedel-view-tool-name
+                (get-text-property
+                 0 'mevedel-view-tool-animation-face
+                 (mevedel-view--pending-label
+                  (propertize "Read" 'font-lock-face 'mevedel-view-tool-name) 'k))))
+    (should (eq 'mevedel-view-ephemeral
+                (get-text-property 0 'mevedel-view-tool-animation-face
+                                   (mevedel-view--pending-label "Read" 'k)))))
   (let ((mevedel-view-tool-spinner-style 'braille))
     (should-not (get-text-property
                  0 'mevedel-view-inline-spinner-frame

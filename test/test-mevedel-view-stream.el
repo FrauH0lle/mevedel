@@ -3618,6 +3618,10 @@ turn's later text, live and after reconstruction."
                      start 'mevedel-view-inline-spinner-frame)))
           (should (equal "Read" (buffer-substring-no-properties start end)))
           (should (string-search "Read" (get-text-property start 'display)))
+          ;; The sweep keeps the name's settled color.
+          (should (eq 'mevedel-view-tool-name
+                      (mevedel-view--tool-animation-face
+                       (car mevedel-view--spinner-tool-targets))))
           (should (equal ": notes.org"
                          (buffer-substring-no-properties
                           end (save-excursion (goto-char end)
@@ -6892,7 +6896,8 @@ turn's later text, live and after reconstruction."
               (dolist (target mevedel-view--spinner-tool-targets)
                 (should (mevedel-view-animation-color-ready-p
                          'shimmer (mevedel-view--tool-animation-label target)
-                         'mevedel-view-ephemeral :multiple))))))))))
+                         (mevedel-view--tool-animation-face target)
+                         :multiple))))))))))
 
 (mevedel-deftest mevedel-view--arm-spinner-timer
   (:doc "coalesces metadata while retaining the ordinary animation cadence")

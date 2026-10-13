@@ -376,7 +376,7 @@ The underlying phase continues to advance and resumes without restarting."
                 (setcdr sample
                         (mevedel-view--animation-rest-seconds
                          mevedel-view-tool-spinner-style (cdr sample)
-                         target 'mevedel-view-ephemeral))))
+                         target (mevedel-view--tool-animation-face target)))))
             (setq mevedel-view--spinner-theme-stale-p t)
             (setq mevedel-view--spinner-frozen-seconds
                   (mevedel-view--animation-rest-seconds
@@ -724,7 +724,7 @@ Newly inserted tool rows begin at phase zero."
                               (if (memq target mevedel-view--native-animation-targets)
                                   (mevedel-view-animation-frame
                                    mevedel-view-tool-spinner-style label seconds
-                                   'mevedel-view-ephemeral
+                                   (mevedel-view--tool-animation-face target)
                                    (mevedel-view--animation-target-frame target))
                                 (get-text-property start 'display))))
                         (list id display seconds label))))
@@ -749,7 +749,7 @@ Newly inserted tool rows begin at phase zero."
                                   (cadr entry)
                                 (mevedel-view-animation-frame
                                  mevedel-view-tool-spinner-style label
-                                 (caddr entry) 'mevedel-view-ephemeral
+                                 (caddr entry) (mevedel-view--tool-animation-face target)
                                  (mevedel-view--animation-buffer-frame)))))
                 (unless (equal-including-properties
                          display (get-text-property start 'display))
@@ -877,6 +877,14 @@ and tool name."
                                       (marker-position (cdr target)))
     ""))
 
+(defun mevedel-view--tool-animation-face (target)
+  "Return the face a running-tool indicator TARGET animates in.
+A span names its own face, so a shimmering tool name keeps the color it
+has once settled; spans without one use `mevedel-view-ephemeral'."
+  (or (get-text-property (marker-position (car target))
+                         'mevedel-view-tool-animation-face)
+      'mevedel-view-ephemeral))
+
 (defun mevedel-view--animation-wants-power-p (visible)
   "Return non-nil when VISIBLE animation needs automatic power status."
   (and visible mevedel-view-spinner-animate
@@ -952,7 +960,7 @@ neither the status row nor the composer is rebuilt."
                              (if frozen
                                  (mevedel-view--tool-sample-seconds start)
                                seconds)
-                             'mevedel-view-ephemeral display-frame)))
+                             (mevedel-view--tool-animation-face target) display-frame)))
                 (unless (equal-including-properties
                          frame (get-text-property start 'display))
                   (let ((inhibit-read-only t)
@@ -1022,7 +1030,7 @@ a window resize."
         (when-let* ((period (mevedel-view--spinner-visual-period mevedel-view-tool-spinner-style)))
           (push (list target mevedel-view-tool-spinner-style
                       (mevedel-view--tool-animation-label target)
-                      'mevedel-view-ephemeral period) specs))))
+                      (mevedel-view--tool-animation-face target) period) specs))))
     (setq mevedel-view--native-animation-targets
           (when (or (not noninteractive) (featurep 'mevedel-view-native))
             (mevedel-view-native-sync specs seconds #'mevedel-view--start-spinner-timer)))
@@ -1136,7 +1144,7 @@ rechecked without changing the displayed animation phase."
                (if (and (eq mevedel-view-tool-spinner-style 'shimmer)
                         (mevedel-view-animation-color-available-p
                          'shimmer (mevedel-view--tool-animation-label target)
-                         'mevedel-view-ephemeral
+                         (mevedel-view--tool-animation-face target)
                          (mevedel-view--animation-target-frame target)))
                    'shimmer 'glyph)
                kinds))
@@ -1357,10 +1365,10 @@ animation or elapsed timer remains to notice the new colors."
                   ;; cadence, never inside a frame callback.
                   (when (or (not (eq style 'shimmer))
                             (mevedel-view-animation-color-ready-p
-                             style label 'mevedel-view-ephemeral display-frame))
+                             style label (mevedel-view--tool-animation-face target) display-frame))
                     (let ((frame (mevedel-view-animation-frame
                                   style label seconds
-                                  'mevedel-view-ephemeral display-frame)))
+                                  (mevedel-view--tool-animation-face target) display-frame)))
                       (mevedel-view--record-tool-sample start seconds)
                       (unless (equal-including-properties
                                frame (get-text-property start 'display))

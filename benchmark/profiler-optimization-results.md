@@ -138,6 +138,24 @@ burst does 39% less work at an unchanged number of renders.  It falls short
 of the 10 ms materiality gate in absolute terms, but it was made for
 presentation and had to show no regression, which all three scenarios meet.
 
+## Running tool names keep their color
+
+Workload: a graphical PGTK frame in a nested KWin, 20,000 lines of history,
+three running shimmer rows.  Measured: color-bank preparation from a cold
+cache, and 100 frame ticks across one full sweep.  Base (grey `ephemeral`
+face) and the change (each span's own face) ran alternately, six runs each.
+
+| Revision | Bank preparation | 100-tick sweep |
+| --- | ---: | ---: |
+| `9f3d28c` baseline | 2.54–2.90 ms | 21.6–30.4 ms |
+| Span-owned face | 2.54–2.85 ms | 28.7–29.4 ms |
+
+Banks were already keyed per label and face, so the change alters which face
+a label's single bank uses, not how many exist.  Batch `spinner-ticks`
+(1.35 ms) and `tool-burst` (11.9 ms) were unchanged.
+
+Decision: ship; parity on every measure.
+
 ## Interactive rerun
 
 The supplied real-session diagnostics close the interactive rerun:
