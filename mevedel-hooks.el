@@ -2000,6 +2000,14 @@ record only that context was added, without duplicating the body."
          (continue-startup ()
            (when (or settled completion-requested)
              (throw 'hook-startup-done nil)))
+         (process-exited (proc _event)
+           (when (memq (process-status proc) '(exit signal))
+             (let ((code (process-exit-status proc)))
+               (cond
+                ((= code 0) (finish 'ok nil))
+                ((= code 2) (finish 'block nil))
+                (t (finish 'error
+                           (format "Hook exited with status %s" code)))))))
          (finish (status reason)
            (unless (or settled completion-requested)
              ;; Keep the first terminal result, including while deferred.
@@ -2055,16 +2063,13 @@ record only that context was added, without duplicating the body."
                          :connection-type 'pipe
                          :file-handler t
                          :noquery t
-                         :sentinel
-                         (lambda (proc _event)
-                           (when (memq (process-status proc) '(exit signal))
-                             (let ((code (process-exit-status proc)))
-                               (cond
-                                ((= code 0) (finish 'ok nil))
-                                ((= code 2) (finish 'block nil))
-                                (t (finish 'error
-                                           (format "Hook exited with status %s"
-                                                   code)))))))))
+                         :sentinel (if remote #'ignore #'process-exited)))
+                  (when remote
+                    ;; TRAMP drains stderr after the supplied sentinel.
+                    (add-function :after (process-sentinel process)
+                                  #'process-exited)
+                    (when (memq (process-status process) '(exit signal))
+                      (funcall (process-sentinel process) process "")))
                   (continue-startup)
                   ;; Bound stdin writes once the child is running.
                   (when timeout
