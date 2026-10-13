@@ -26,6 +26,7 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - A guest prompt waits ~120 ms on the deployed host for the synchronous
   session-transfer control programs in prompt admission before it is
   inserted. Same evidence.
+- Check if memory and journal processing could be async
 
 ## Request lifecycle
 
