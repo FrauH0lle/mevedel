@@ -1081,7 +1081,7 @@ collapsed marker; expanded row content is rendered from Agent handles."
                           (concat " " suffix)))))
     (setq header (mevedel-view--agent-status-buttonize-toggle
                   header suffix))
-    (concat header "\n")))
+    (if expanded-p header (concat header "\n"))))
 
 (defun mevedel-view--agent-status-row-rendering (row)
   "Return an Agent-handle rendering plist for aggregate status ROW."

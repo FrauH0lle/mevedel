@@ -1989,9 +1989,9 @@ Foreground commands already show as the pending call they belong to."
 (defun mevedel-view--zone-separator (label)
   "Return a propertized zone separator line for LABEL.
 Format: ` ─── LABEL ─── ' followed by enough box-drawing dashes
-to reach `(max 4 (min 60 (- (window-width) 4)))' total length,
-then a trailing newline.  Width is clamped so very narrow windows
-don't produce zero-length rules.
+to reach four columns less than the widest window displaying this
+buffer, then a trailing newline.  The minimum width is ten columns;
+labels are truncated when necessary so all rules use the same width.
 
 LABEL is a single string like \"tasks\", \"1 permission pending\",
 \"2 previews · 1 plan pending\".  Caller is responsible for
@@ -2010,12 +2010,17 @@ tweaks via `customize-face' apply uniformly."
           (or (mapcar #'window-width
                       (get-buffer-window-list (current-buffer) nil t))
               (list (window-width))))
-         (target-width (max 4 (min 60 (- (apply #'max win-widths) 4))))
+         (target-width (max 10 (- (apply #'max win-widths) 4)))
          (pre " ─── ")
          (post " ")
-         (decorated-label (or label ""))
-         (used (+ (length pre) (length decorated-label) (length post)))
-         (tail-len (max 3 (- target-width used)))
+         (label-budget (- target-width (string-width pre) (string-width post) 3))
+         (decorated-label
+          (if (> (string-width (or label "")) label-budget)
+              (truncate-string-to-width label label-budget nil nil "…")
+            (or label "")))
+         (used (+ (string-width pre) (string-width decorated-label)
+                  (string-width post)))
+         (tail-len (- target-width used))
          (tail (concat (make-string tail-len ?─))))
     (concat
      (propertize (concat pre decorated-label post tail "\n")

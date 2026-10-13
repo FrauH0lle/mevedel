@@ -748,8 +748,11 @@ and reveal no completed row at all."
     "<tab>" #'mevedel-toggle-tasks
     "TAB"   #'mevedel-toggle-tasks
     "<return>" #'mevedel-toggle-tasks
-    "RET"   #'mevedel-toggle-tasks)
+    "RET"   #'mevedel-toggle-tasks
+    "<mouse-1>" #'mouse-set-point
+    "<mouse-2>" #'mouse-set-point)
   "Keymap installed on the task status fragment.
+Mouse clicks place point without toggling task visibility.
 Shared with the fragment's header label via `where-is-internal' so the
 displayed key matches the actual binding -- see
 `mevedel-tool-task--toggle-key-label'.")

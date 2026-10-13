@@ -1467,6 +1467,10 @@ choreography during mutation, uniform composer/point/window preservation,
 reconciliation, stale-region recovery, collapse, and navigation. Producers
 retain their domain text and actions.
 
+Separator rules use a common width, four columns less than the widest window
+displaying the view, with a ten-column minimum. Labels are truncated when
+necessary to leave room for the rule, including in narrow windows.
+
 A fragment is keyed by managed region identity, namespace, and id. It may
 also carry priority, label/body text, keymap/help text, activation metadata,
 navigation metadata, and a collapse key. Whole-zone reconciliation sorts by
@@ -1496,7 +1500,11 @@ Current fragment namespaces:
 
 - `status`: `tasks`, live `executions`, and `agents` status-zone blocks.
   Task and aggregate-agent disclosure state is backed by fragment collapse
-  state.
+  state. Task panels toggle with `TAB` or `RET`; mouse clicks only place
+  point. Expanded task and agent panels start their rows immediately below
+  the separator, without an intervening blank line. Long task titles are
+  truncated in the compact rows; the truncation marker is not a disclosure
+  control.
 - `interaction`: pending-input summaries and user controls plus a
   non-navigatable `:separator` fragment. Ask, permission, plan, preview, and
   pending-input

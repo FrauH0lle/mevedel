@@ -12,6 +12,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-disclosure)
 (require 'mevedel-view-render)
 (require 'helpers
          (file-name-concat
@@ -1330,6 +1331,39 @@
       (mevedel-toggle-tasks)
       (should (string-match-p "active body" (buffer-string)))
       (should-not (string-match-p "done body" (buffer-string)))))
+
+  :doc "task fragment keyboard bindings toggle but mouse clicks only place point"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer data
+      (mevedel-tool-task--handle-create
+       (list :tasks (vector (list :subject "active body")
+                            (list :subject "done body" :status "completed")))))
+    (save-window-excursion
+      (set-window-buffer (selected-window) view)
+      (with-current-buffer view
+        (goto-char (point-min))
+        (search-forward "active body")
+        (let* ((pos (match-beginning 0))
+               (map (get-text-property pos 'keymap)))
+          (dolist (kind '(mouse-1 mouse-2))
+            (goto-char (point-min))
+            (funcall (lookup-key map (vector kind))
+                     (list kind (list (selected-window) pos '(0 . 0) 0)))
+            (should (= pos (point)))
+            (should-not (string-match-p "done body" (buffer-string))))
+          (dolist (key '("TAB" "RET"))
+            (goto-char (point-min))
+            (search-forward "active body")
+            (goto-char (match-beginning 0))
+            (call-interactively
+             (lookup-key (get-text-property (point) 'keymap) (kbd key)))
+            (should (string-match-p "done body" (buffer-string)))
+            (goto-char (point-min))
+            (search-forward "active body")
+            (goto-char (match-beginning 0))
+            (call-interactively
+             (lookup-key (get-text-property (point) 'keymap) (kbd key)))
+            (should-not (string-match-p "done body" (buffer-string))))))))
 
   :doc "shared fragment activation toggles completed task detail"
   (test-mevedel-tool-task--with-view session data view

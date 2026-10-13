@@ -20,6 +20,26 @@
 (defvar-local mevedel-view--interaction-marker nil)
 (defvar-local mevedel-view--status-marker nil)
 
+(mevedel-deftest mevedel-view--zone-separator ()
+  ,test
+  (test)
+  :doc "task and agent rules occupy the same columns in wide and narrow windows"
+  (with-temp-buffer
+    (dolist (width '(10 20 80 120))
+      (cl-letf (((symbol-function 'get-buffer-window-list)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'window-width)
+                 (lambda (&optional _) width)))
+        (dolist (label '("tasks · 1 running · 1 blocked · 1 done · RET to collapse"
+                         "1 agent: 1 running [-]"
+                         "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"))
+          (let ((rule (mevedel-view--zone-separator label)))
+            (should (= (max 10 (- width 4))
+                       (string-width (string-trim-right rule))))
+            (should (string-suffix-p "\n" rule))
+            (when (= width 120)
+              (should (string-search label rule)))))))))
+
 (defun mevedel-view-zone-test--setup-markers ()
   "Set all view zone markers at point-min in the current buffer."
   (setq-local mevedel-view--status-marker (copy-marker (point-min) t))

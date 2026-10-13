@@ -950,6 +950,7 @@
                      (point-min) (point-max))))
           (should (string-match-p
                    (regexp-quote "1 agent: 1 running [-]") text))
+          (should (string-match-p "\u2500\n  \u25cf Running /root/spec_review" text))
           (should (string-suffix-p "> first line\nsecond line" text)))
         (goto-char (point-min))
         (search-forward "Running /root/spec_review")
