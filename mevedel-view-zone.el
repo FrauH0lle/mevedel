@@ -7,8 +7,8 @@
 
 ;;; Commentary:
 
-;; Owns the fixed fragment-backed regions of view chrome: history-live,
-;; status, interaction, progress, and directive activity.  Producers supply
+;; Owns the fixed fragment-backed regions of view chrome: status,
+;; interaction, progress, and directive activity.  Producers supply
 ;; complete fragment sets; this module owns region identity, overlay lifetime,
 ;; marker behavior,
 ;; preservation, reconciliation, recovery, collapse, and navigation.
@@ -45,7 +45,7 @@
   "Managed region overlays keyed by fixed zone name.")
 
 (defconst mevedel-view-zone--names
-  '(history-live status interaction progress directive-inspector)
+  '(status interaction progress directive-inspector)
   "Fixed names of fragment-backed view zones.")
 
 
@@ -498,7 +498,6 @@ priorities."
 (defun mevedel-view-zone--marker-types (zone)
   "Return insertion types for status, interaction, and input in ZONE."
   (pcase zone
-    ('history-live '(t t t))
     ('status '(nil t t))
     ((or 'interaction 'progress) '(nil nil t))))
 

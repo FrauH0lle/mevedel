@@ -1236,7 +1236,57 @@
               (with-current-buffer child-data
                 (should (eq mevedel--view-buffer parent-view))))
             (with-current-buffer child-view
-              (should (string-search "CHILD response belongs only here." (buffer-string))))))))))
+              (should (string-search "CHILD response belongs only here." (buffer-string)))))))))
+
+  :doc "a child's running call is a running row in its transcript only"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let ((parent-view view-buf))
+        (mevedel-view-test--with-buffers
+          (let ((child-data data-buf) (child-view view-buf)
+                (mevedel-view-tool-boundary-render-delay 60)
+                (call '(:name "Read" :args (:file_path "child.txt"))))
+            (with-current-buffer child-data
+              (setq-local mevedel--view-buffer parent-view)
+              (setq-local mevedel--agent-invocation
+                          (mevedel-agent-invocation--create
+                           :buffer child-data :path "/root/child"
+                           :transcript-status 'running)))
+            (with-current-buffer child-view
+              (mevedel-view-agent-initialize
+               (list :agent-transcript-p t :agent-path "/root/child"
+                     :parent-view parent-view :preserve-data-view-buffer t
+                     :transcript-info '(:live-buffer t :status running))
+               child-data)
+              (mevedel-view-stream-begin-turn
+               mevedel-view--status-marker
+               (with-current-buffer child-data (copy-marker (point-max)))))
+            (switch-to-buffer parent-view)
+            (select-window (split-window-right))
+            (switch-to-buffer child-view)
+            (cl-flet ((flush ()
+                        (dolist (view (list child-view parent-view))
+                          (with-current-buffer view
+                            (when mevedel-view--render-timer
+                              (cancel-timer mevedel-view--render-timer))
+                            (mevedel-view--flush-scheduled-render view t)))))
+              (with-current-buffer child-data
+                (mevedel-view-agent-live-transcript-pre-tool call))
+              (flush)
+              (with-current-buffer child-view
+                (should (string-search "● Read: child.txt" (buffer-string))))
+              (with-current-buffer parent-view
+                (should-not (string-search "Read: child.txt" (buffer-string))))
+              (mevedel-view-test--insert-data
+               child-data
+               "(:name \"Read\" :args (:file_path \"child.txt\"))\n\nresult\n"
+               '(tool . "child-read"))
+              (with-current-buffer child-data
+                (mevedel-view-agent-live-transcript-post-tool call))
+              (flush)
+              (with-current-buffer child-view
+                (should (string-search "✓ Read: child.txt" (buffer-string)))
+                (should-not (string-search "● Read" (buffer-string)))))))))))
 
 (provide 'test-mevedel-view-agent)
 ;;; test-mevedel-view-agent.el ends here

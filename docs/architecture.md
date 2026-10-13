@@ -561,7 +561,8 @@ transcript authority; view redraw scheduling remains separate.
 composer submission path and refuses native agent/confirmation steering;
 there is no second request-local steering queue in managed sessions.
 `mevedel-view-stream.el` owns live-tail render scheduling,
-pending-tool live rows, and foreground request-progress state, while
+the in-flight tool calls the live render draws as running rows, and
+foreground request-progress state, while
 `mevedel-execution-transcript.el` owns durable execution render data and
 compaction archive reconciliation. View Stream delegates transcript projection
 to `mevedel-view-render.el`; `mevedel-view-disclosure.el` owns source-backed

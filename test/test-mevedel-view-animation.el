@@ -159,17 +159,6 @@
         (should (equal (car (last middle)) (aref palette 63)))
         (should-not (equal (nth 5 middle) (aref palette 63)))))))
 
-(mevedel-deftest mevedel-view-animation-prefixes
-  (:doc "All non-static tool prefixes are discoverable without matching all rows.")
-  (progn
-  (dolist (style '(braille ascii dots))
-    (dotimes (step (pcase style ('braille 10) ('ascii 4) ('dots 4)))
-      (should (member (mevedel-view-animation-frame
-                       style "" (* step (mevedel-view-animation-period style))
-                       'default)
-                      mevedel-view-animation-prefixes))))
-  (should-not (member "" mevedel-view-animation-prefixes))))
-
 (mevedel-deftest mevedel-view-animation-frame
   (:doc "Styles retain geometry; color motion fades from normal foreground.")
   (progn
@@ -436,8 +425,7 @@
                    (lambda (&rest _) nil)))
           (should (equal (mevedel-view-animation-frame
                           'dots "Working" 0 'default :multiple)
-                         "*... Working")))))
-    (should (member "*... " mevedel-view-animation-prefixes))))
+                         "*... Working")))))))
 
 (mevedel-deftest mevedel-view-animation-dots-target-cache
   (:doc "Dots probe only their displayed frames and refresh at semantic cadence.")

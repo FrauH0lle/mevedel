@@ -63,7 +63,7 @@ An open running-agent transcript view follows the main view's update cadence:
 streamed text uses `mevedel-view-stream-render-delay` (a batch flushed by the
 stream bridge renders in the flush's own wakeup), tool boundaries use
 `mevedel-view-tool-boundary-render-delay`, and terminal settlement renders
-immediately. It shows the same transient pending-tool rows as the main view,
+immediately. It shows running tool calls the same way as the main view,
 but not the main foreground-request spinner; the transcript header already
 shows that the agent is running. Live updates keep the window at the bottom
 only when it was already there. If the reader has scrolled upward, rendering
@@ -122,9 +122,9 @@ endpoints. Missing or stale source anchors use the same full-rerender
 correctness path rather than introducing a second recovery strategy.
 
 Opening a view while a tool is already in flight does not reconstruct a
-transient pending-tool row from activity history. The full render shows the
-authoritative live transcript as it stands; subsequent tool events populate
-pending rows normally, and terminal settlement renders the final state.
+running row from activity history. The full render shows the authoritative
+live transcript as it stands; subsequent tool events draw running calls
+normally, and terminal settlement renders the final state.
 
 Live updates preserve the main view's source-backed disclosure state. An
 incremental update or full-rerender fallback must not collapse response,
@@ -393,8 +393,9 @@ sample, except that a color shimmer frozen mid-sweep moves to the end of its
 sweep and a color breathe frozen mid-fade to its normal foreground, so a pause
 never holds a faded band. Their glyph fallbacks retain the displayed phase,
 including after the window disappears. The kept sample includes an existing tool row's glyph across option changes and
-pending-tool row rebuilds, incremental projection, and full rerenders of the
-same transcript; a scheduling-only rearm does not sample the next
+running-row redraws, incremental projection, and full rerenders of the
+same transcript (the projection carries the displayed samples to the live
+render that redraws the running rows); a scheduling-only rearm does not sample the next
 clock phase. A subsequent resume clears the old freeze latch without
 restarting the underlying phase. Waiting for input freezes active
 elapsed time and holds every indicator still; answering resumes motion. Progress/status
@@ -402,15 +403,17 @@ ownership, the stream-render delay, and the authoritative data buffer do not
 change with animation settings.
 
 The foreground request label supports `shimmer`, `breathe`, `bounce`, `dots`,
-`ellipsis`, `braille`, `ascii`, and `static` (`shimmer` by default). Pending-tool
-rows use `shimmer`, `braille`, `ascii`, `dots`, or `static` (`shimmer` by
+`ellipsis`, `braille`, `ascii`, and `static` (`shimmer` by default). Running
+tool rows use `shimmer`, `braille`, `ascii`, `dots`, or `static` (`shimmer` by
 default), independently of the request label. Shimmer is cadenced: 0.6 seconds
 after a request starts, and then every four seconds, a cosine band at least
 six columns wide (a tenth of the label each side, minimum three) fades toward the background as it sweeps the label in one
 second. Text outside the band and between sweeps keeps its normal foreground;
 between sweeps the view schedules no frames. Tool rows
-shimmer their verb and tool name ("Calling Bash", not its arguments), in the
-same frames as the label, so they add no wakeups of their own. Color styles use 64 theme-derived shades;
+shimmer their tool name ("Bash", not its arguments), and a running group its
+`N running` count, in the same frames as the label, so they add no wakeups of
+their own. Glyph styles animate the row's marker instead, and `static` keeps
+the running `●`. Color styles use 64 theme-derived shades;
 breathe and bounce use a continuous 3.6-second cycle sampled at at most 8 fps.
 Breathe starts at normal foreground, fades toward the background, and returns;
 bounce moves a faded band over otherwise normal text. Prepared frames are
@@ -422,12 +425,13 @@ redisplay draws at the label's start: overlay faces for every window or for
 that window (such as `hl-line`), then text faces, then the remapped default.
 Translucent frames (`alpha` or `alpha-background` below opaque) keep ordinary
 text animation, since an opaque box would show there. Prepared banks distinguish each view's remapping specs. A live view reserves a prepared bank for every registered tool label, including
-the overflow row, plus the main label (with a four-bank minimum). This working
-set is bounded by the visible-tool row cap and retained independently of the
+a running group's count, plus the main label (with a four-bank minimum). This working
+set is bounded by the grouping threshold, beyond which running calls share one
+group row, and retained independently of the
 shared six-bank reuse cache, so other views cannot evict active frames. The
 scheduler prepares every eligible label at semantic boundaries. Color and
 portable glyph rows may coexist and each keeps its own cadence. Frozen rows
-adopt their destination display on visibility changes; a changed overflow count
+adopt their destination display on visibility changes; a changed running count
 updates its text while retaining its displayed phase. Theme changes clear both caches. If colors
 cannot be resolved on a display, color styles fall back to a glyph indicator;
 when Braille is unavailable on its target display, the indicator uses ASCII.
@@ -436,7 +440,7 @@ with fewer than 256 colors use the glyph fallback even when their face colors
 resolve: their coarse shade mapping cannot support a smooth color animation,
 so the view also uses glyph rather than color-rate timer wakeups. When either dots
 glyph is unavailable, `dots` uses a same-width ASCII pattern at the same speed.
-An undisplayed status or a new pending-tool row starts with a portable frame
+An undisplayed status or a new running row starts with a portable frame
 until its display is known. If the same indicator is visible in multiple display
 frames, color styles use a portable glyph rather than a palette prepared for
 only one frame; configured glyph styles retain their cadence (with ASCII
@@ -448,9 +452,9 @@ Changes to styles, colors, and labels invalidate affected prepared frames;
 theme changes and edits to the spinner, its inherited faces, or the default
 face (including Customize) clear the color cache and repaint visible labels
 at their current or frozen phase without a periodic timer. Theme changes also
-recheck the Braille and dots fallbacks of frozen main and pending-tool glyphs;
+recheck the Braille and dots fallbacks of frozen main and running-tool glyphs;
 a visibility resume retries dots support if the display font changed without
-a theme event. Each pending tool retains its own last displayed phase while
+a theme event. Each running call retains its own last displayed phase while
 motion is disabled, including when the main label is absent or static. Hidden
 labels repaint when they become visible again. Applying animation settings
 through Customize refreshes live views without restarting a request. Moving a
@@ -688,7 +692,44 @@ handles, compound tools, rows carrying hook audits, rows their renderer wants ex
 compact, and coalesced rows — never fold into a group; they split the run
 around themselves, including runs interleaved with reasoning. An unfinished
 activity run remains mutable across streaming events so later calls can join
-its group. Failed calls split that run around their standalone rows and use
+its group.
+
+Tool calls the model started but whose results have not reached the
+transcript are drawn in the same grammar, as running calls of the turn's
+trailing activity run. They count toward the run's grouping threshold
+together with its settled calls, so a parallel batch has the shape it will
+keep: above the threshold one group row such as
+`● Read 9 files, searched 1 pattern · 2 running`, otherwise one
+`● Read: path` row per call. When the batch settles, the next render draws
+`✓` in place of `●` and drops the running count; nothing else moves. Calls
+after assistant prose, a reminder, or a row that cannot fold start their own
+run rather than joining the earlier one, inside the turn where they will
+settle. A call the pipeline reports finished keeps its place until its
+result reaches the transcript (for a gptel batch, after the whole batch):
+its row shows `✓`, or `×` for a failure, and it leaves the running count,
+so one early finisher never reshapes the run. The ID-less post-tool hook
+that precedes the result retires such a finished call first and never a
+bound sibling still running. A response that opens with tool
+calls has no turn in the transcript until the first result lands, so the
+live render draws its `Assistant` heading with the running calls; the row
+therefore does not move down when the heading would otherwise appear.
+Directive requests keep their own heading instead. An expanded running group lists its
+running calls after its settled children; they are not expandable, have no
+transcript source, and key no disclosure state. A fold or expansion of a
+running group survives its growth like any group's. Folding or unfolding a
+section of the live turn while calls run redraws the live turn after the
+toggle, because a toggle rebuilds its section from the transcript alone.
+While the view shows an archived segment, the live turn is not on display:
+toggles there never redraw it, and a live update does nothing.
+Running calls are drawn
+only by the live render: a gptel batch runs every pre-tool hook and later
+every post-tool hook at once, and each batch shares one boundary render. A
+full projection draws settled history and leaves running calls to the live
+turn's next boundary render. Stopping a turn without settling it removes
+running rows and an interim heading, and returns a running group's settled
+marker in place.
+
+Failed calls split that run around their standalone rows and use
 a red `×` in the `error` face. Warning rows stay groupable; a group containing
 a warning carries `!`, and the warning stays visible on its nested row.
 Failed tool rows, including nested calls inside compound tools, start collapsed.
@@ -785,11 +826,11 @@ interaction chrome around that transcript.
 Terminology:
 
 - **History region**: rendered transcript above `mevedel-view--status-marker`.
-  Pending tool rows like `Calling Read...` are fragment-backed live-tail
-  history content, not status-zone content. Empty-input `WriteStdin` polls with
-  a nonempty execution ID do not add pending rows or a separate pre-tool
+  Running tool calls such as `● Read: path` are part of the in-flight turn's
+  history, not status-zone content. Empty-input `WriteStdin` polls with
+  a nonempty execution ID do not add running rows or a separate pre-tool
   spinner, including a ToolCall consisting solely of one literal poll. Invalid
-  arguments and compound or ambiguous ToolCall scripts keep their pending row.
+  arguments and compound or ambiguous ToolCall scripts keep their running row.
   The request progress row remains visible, and a failed poll control appears
   in the settled transcript.
 - **Status zone**: session status chrome between `mevedel-view--status-marker`
@@ -1440,13 +1481,6 @@ multiline drafts; new prompts leave readers in history and other windows alone.
 
 Current fragment namespaces:
 
-- `history-live`: pending tool live-tail rows in the history region, built
-  from `mevedel-view--pending-tool-calls`. They are removed and recreated
-  from pending state; they must not be preserved as source-backed transcript
-  text or deleted by heuristic `Calling ...` line matching. There is one row
-  per call, not per distinct tool: gptel's tool-call hooks carry no call id,
-  so identical parallel calls are told apart by a serial paired with their
-  name/argument fingerprint, and that pair is the fragment's identity.
 - `status`: `tasks`, live `executions`, and `agents` status-zone blocks.
   Task and aggregate-agent disclosure state is backed by fragment collapse
   state.
@@ -1470,9 +1504,19 @@ prose advances at the last blank-line boundary outside fenced code. Terminal
 settlement calls `mevedel-view-render-settle` for one exact whole-turn
 reconciliation. A full rerender, a new turn, or stream cancellation invalidates
 the retained tail. `mevedel-view-stream.el` schedules live updates and owns
-request-progress state and pending-tool rows;
+request-progress state and the in-flight tool calls the live render draws;
 `mevedel-gptel-stream-bridge.el` confines the private upstream advice. Fragment
 updates should not bypass the data-buffer transcript.
+
+Running tool calls are no fragment. The live render draws them from
+`mevedel-view--pending-tool-calls` inside the mutable tail it re-renders
+anyway, so they cost no separate reconciliation. They carry
+`mevedel-view-pending-tool-live` and no transcript source: they are never
+retained as a settled unit, preserved as transcript text, or matched by
+heuristic line text. There is one entry per call, not per distinct tool:
+gptel's tool-call hooks carry no call id, so identical parallel calls are told
+apart by a serial paired with their name/argument fingerprint, which also
+keys each row's animation phase across redraws.
 
 When an owning tool or agent turn used materially non-default child access,
 its source-backed row includes a durable `Sandbox:` line directly below the
@@ -1504,8 +1548,8 @@ marker insertion choreography.
 ## Redraw invariants
 
 Redraw paths must treat the composer as user-owned text. Full rerenders,
-interaction rebuilds, status/task rows, spinner ticks, pending-tool live
-lines, and targeted agent refreshes should preserve both composer text
+interaction rebuilds, status/task rows, spinner ticks, running tool rows,
+and targeted agent refreshes should preserve both composer text
 and point while suppressing modification hooks for view-owned changes.
 Attention gating is a redraw path like any other: a skipped tick or flush
 leaves buffer text, properties, and the composer byte-identical, and the
@@ -1584,7 +1628,7 @@ committed user turn, records a retryable failure summary while the request
 still carries its elapsed time, stops the turn UI, and ends the request. A
 later render therefore never continues a dead turn.
 
-The terminal response boundary releases the turn -- pending tool rows, spinner
+The terminal response boundary releases the turn -- running tool rows, spinner
 timer, and both in-flight markers -- whether or not the work it guards
 succeeds. Everything fallible runs inside that guard: stopping the progress
 row, the zone mutations, the request summary, and the projection. A failure
@@ -1953,7 +1997,7 @@ main  ~/project/                                      ask · idle · gpt-5.5 · 
 > draft starts here
 ```
 
-Active request with a pending tool live-tail row and pending input:
+Active request with a running tool call and pending input:
 
 ```text
 main  ~/project/                                   ask · running · gpt-5.5 · 20 tools
@@ -1964,7 +2008,7 @@ Please inspect the view layout.
 Assistant
 I'll inspect the associated files.
 
-Calling Read: mevedel-view.el...
+  ● Read: mevedel-view.el
 
 -- 1 pending input --------------------------------------------
 
@@ -2001,7 +2045,8 @@ Allow Bash?
 
 Waiting for input · 1m 08s · 1 agent running
 
-[plan]  >
+[Plan · ask]
+>
 ```
 
 Busy session showing every view-owned zone at once:
@@ -2015,8 +2060,8 @@ Update the view docs and verify the spinner layout.
 Assistant
 I'll update the docs, run the focused checks, and ask before any risky action.
 
-Calling Read: docs/view.md...
-Calling Grep: status zone...
+  ● Read: docs/view.md
+  ● Grep: status zone
 
 -- tasks -------------------------------------------------------
   Main 2 open

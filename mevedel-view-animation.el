@@ -51,16 +51,6 @@ in four lets each sweep run smoothly at a fraction of that.")
   "Maximum prepared banks retained by this view.
 The scheduler sizes this to cover the bounded set of registered labels.")
 
-(defconst mevedel-view-animation-prefixes
-  (append (mapcar (lambda (char) (concat (string char) " "))
-                  (string-to-list "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏-\\|/"))
-          (mapcar (lambda (dots) (concat dots " "))
-                  '("●···" "·●··" "··●·" "···●"
-                    "*..." ".*.." "..*." "...*")))
-  "Visible compact indicator prefixes, for identifying live tool rows.
-Static mode has no prefix and is deliberately absent: an empty prefix
-would match every row.")
-
 (defvar mevedel-view-animation--cache nil
   "Recent banks or fallback markers (KEY . DATA), newest first.")
 

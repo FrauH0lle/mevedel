@@ -12,6 +12,9 @@
 (eval-when-compile
   (require 'cl-lib))
 
+;; `mevedel-structs'
+(defvar mevedel--data-buffer)
+
 ;; `mevedel-tool-task'
 (declare-function mevedel-toggle-tasks "mevedel-tool-task" ())
 (autoload 'mevedel-toggle-tasks "mevedel-tool-task")
@@ -52,6 +55,8 @@
                   "mevedel-view-render" (data-buf source vtype header))
 (declare-function mevedel-view-render-invalidate-live-tail
                   "mevedel-view-render" ())
+(declare-function mevedel-view-render-live-update
+                  "mevedel-view-render" (data-buf))
 (declare-function mevedel-view-render-section-body-end
                   "mevedel-view-render" (start limit))
 (declare-function mevedel-view-render-toggle-child-call
@@ -68,6 +73,7 @@
 (autoload 'mevedel-view-render-insert-expanded-disclosure
   "mevedel-view-render")
 (autoload 'mevedel-view-render-invalidate-live-tail "mevedel-view-render")
+(autoload 'mevedel-view-render-live-update "mevedel-view-render")
 (autoload 'mevedel-view-render-section-body-end "mevedel-view-render")
 (autoload 'mevedel-view-render-toggle-child-call "mevedel-view-render")
 (autoload 'mevedel-view-render-toggle-hook-context "mevedel-view-render")
@@ -89,6 +95,7 @@
 (autoload 'mevedel-view-stream-set-in-flight-turn-start
   "mevedel-view-stream")
 (defvar mevedel-view--data-turn-start)
+(defvar mevedel-view--pending-tool-calls)
 
 
 ;;
@@ -615,7 +622,16 @@ section only."
   (interactive)
   (let ((collapsed (get-text-property (point) 'mevedel-view-collapsed))
         (source (get-text-property (point) 'mevedel-view-source))
-        (vtype (get-text-property (point) 'mevedel-view-type)))
+        (vtype (get-text-property (point) 'mevedel-view-type))
+        ;; Calls in flight are drawn only by the live render, into the
+        ;; turn's trailing run.  A toggle there rebuilds the section from
+        ;; the transcript alone, so the live turn must be drawn again.
+        (live-running
+         (and (bound-and-true-p mevedel-view--pending-tool-calls)
+              ;; An archived segment shares the view but not the live turn.
+              (eq mevedel--data-buffer (mevedel-view-segments-display-buffer))
+              (when-let* ((start (mevedel-view-stream-in-flight-turn-start-position)))
+                (>= (point) start)))))
     (if (mevedel-view-disclosure--toggle-fragment)
         t
       (prog1
@@ -647,7 +663,11 @@ section only."
         ;; until a later full render.  Dropping the retained pair
         ;; sends the next update down the non-retained path, whose
         ;; capture/restore preserves this toggle.
-        (mevedel-view-render-invalidate-live-tail)))))
+        (mevedel-view-render-invalidate-live-tail)
+        ;; Queued behind this toggle, so the reader never sees the
+        ;; transcript-only section.
+        (when (and live-running (buffer-live-p mevedel--data-buffer))
+          (mevedel-view-render-live-update mevedel--data-buffer))))))
 
 (defun mevedel-view-disclosure--mailbox-bounds ()
   "Return bounds of the mailbox card at point, or nil."

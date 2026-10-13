@@ -291,9 +291,9 @@
   (with-temp-buffer
     (mevedel-view-zone-test--setup-markers)
     (mevedel-view-zone-reconcile
-     'history-live (point-min) (point-min)
-     '((:namespace history-live :id call :body "Calling")))
-    (should (= (point-min) (mevedel-view-zone-start 'history-live)))))
+     'status (point-min) (point-min)
+     '((:namespace status :id tasks :body "Tasks")))
+    (should (= (point-min) (mevedel-view-zone-start 'status)))))
 
 (mevedel-deftest mevedel-view-zone-fragment-bounds
   (:doc "finds a fragment through the managed-zone interface")

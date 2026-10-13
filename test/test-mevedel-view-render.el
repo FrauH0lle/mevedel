@@ -1096,9 +1096,29 @@
                    (lambda (_buffer) (push 'progress calls))))
           (mevedel-view--full-rerender-finish
            data-buf data-buf (list :view-buffer view-buf) nil
-           (float-time) nil)))
+           (float-time))))
       (should (equal (nreverse calls)
-                     '(input status interaction progress))))))
+                     '(input status interaction progress)))))
+
+  :doc "in-flight calls return with a boundary render of the live turn"
+  (mevedel-view-test--with-buffers
+    (let (scheduled)
+      (with-current-buffer view-buf
+        (setq mevedel-view--pending-tool-calls
+              (list (list (mevedel-view--pending-tool-claim-key
+                           '(:name "Read" :args (:file_path "a")))
+                          "Read" "a")))
+        (cl-letf (((symbol-function 'mevedel-view--schedule-tool-boundary-render)
+                   (lambda (buffer) (push buffer scheduled))))
+          (mevedel-view--full-rerender-finish
+           data-buf data-buf (list :view-buffer view-buf) nil (float-time))
+          (should (equal (list data-buf) scheduled))
+          (setq scheduled nil)
+          ;; A historical projection draws no live turn.
+          (mevedel-view--full-rerender-finish
+           data-buf data-buf (list :view-buffer view-buf) t (float-time))
+          (should-not scheduled))
+        (setq mevedel-view--pending-tool-calls nil)))))
 
 (mevedel-deftest mevedel-view--strip-render-data-display-text ()
   ,test
@@ -1374,17 +1394,21 @@
                      (funcall original buffer))))
           (mevedel-view--full-rerender))
         (should redisplay-inhibited))))
-  :doc "suppresses hooks while cleaning stale pending lines"
+  :doc "suppresses hooks while replacing stale running tool rows"
   (mevedel-view-test--with-buffers
     (let ((changes 0))
       (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
       (mevedel-view-test--insert-data data-buf "Response\n" 'response)
       (with-current-buffer view-buf
-        (let ((mevedel-view--pending-tool-calls
-               (list (list 'read "Read" nil nil))))
-          (mevedel-view--insert-pending-tool-lines
-           mevedel-view--pending-tool-calls))
-        (setq mevedel-view--pending-tool-calls nil)
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char (mevedel-view--history-insertion-marker))
+            (mevedel-view--with-render-boundaries-advancing
+              (mevedel-view--insert-pending-tool-row
+               (list 'read "Read" "a.el")))))
+        (should (text-property-any
+                 (point-min) mevedel-view--input-marker
+                 'mevedel-view-pending-tool-live t))
         (add-hook 'after-change-functions
                   (lambda (&rest _ignore)
                     (cl-incf changes))
@@ -6591,32 +6615,6 @@
    (mevedel-view-audit-mailbox-breadcrumb
     "<bash-execution execution_id=\"not-trailing\"/> suffix" "/root")))
 
-(mevedel-deftest mevedel-view--pending-tool-label
-  (:doc "tuple labels retain the Calling grammar and WaitAgent special case")
-  (dolist (case '(((key "Read" "notes.org" nil) "Calling Read: notes.org...")
-                  ((key "Probe" nil nil) "Calling Probe...")
-                  ((key "WaitAgent" "worker" nil) "Waiting for agents")))
-    (should (equal (cadr case) (mevedel-view--pending-tool-label (car case))))))
-
-(mevedel-deftest mevedel-view--pending-tool-line-body
-  (:doc "approved fragments remain volatile with a nonanimated row-local hint")
-  (let* ((mevedel-view--pending-tool-calls
-          '((key "Read" "notes.org"
-                 (:permission-approvals
-                  ((:source reviewer :outcome allow-once :reason "Read only"))))))
-         (entry (car mevedel-view--pending-tool-calls)))
-    (dolist (mevedel-view-tool-spinner-style '(ascii shimmer))
-      (let* ((body (mevedel-view--pending-tool-line-body
-                    (mevedel-view--pending-tool-label entry) "Read only"))
-             (hint (string-search "Auto-approved · once" body)))
-        (should hint)
-        (should (equal "Read only" (get-text-property hint 'help-echo body)))
-        (should-not (get-text-property hint 'mevedel-view-inline-spinner-frame body))
-        (should-not (get-text-property hint 'display body))
-        (should (get-text-property hint 'mevedel-view-pending-tool-live body))
-        (should (mevedel-view--volatile-live-tail-line-p
-                 (substring-no-properties body)))))))
-
 (mevedel-deftest mevedel-view--permission-approval-reason ()
   ,test
   (test)
@@ -8644,6 +8642,242 @@
     (cl-letf (((symbol-function 'mevedel-view--strip-render-data-display-text)
                (lambda (_) (error "Stripped text without render data"))))
       (should-not (mevedel-view--render-data-only-text-p "plain answer")))))
+
+
+;;
+;;; In-flight tool calls
+
+(defun mevedel-view-render-test--insert-at-history-end (thunk)
+  "Call THUNK at the current view's history boundary as a render would."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (mevedel-view--history-insertion-marker))
+      (mevedel-view--with-render-boundaries-advancing
+        (funcall thunk)))))
+
+(mevedel-deftest mevedel-view--take-render-pending ()
+  ,test
+  (test)
+  :doc "hands the in-flight entries to exactly one claimant"
+  (let ((cell (list '(("k" "Read" "a")))))
+    (let ((mevedel-view--render-pending cell))
+      (should (equal '(("k" "Read" "a")) (mevedel-view--take-render-pending)))
+      (should-not (mevedel-view--take-render-pending)))
+    (should-not (car cell)))
+  :doc "claims nothing outside a live render"
+  (let ((mevedel-view--render-pending nil))
+    (should-not (mevedel-view--take-render-pending))))
+
+(mevedel-deftest mevedel-view--pending-marker ()
+  ,test
+  (test)
+  :doc "glyph styles animate the marker; shimmer and static keep the dot"
+  (let ((mevedel-view-tool-spinner-style 'ascii))
+    (let ((marker (mevedel-view--pending-marker 'k)))
+      (should (= 4 (length marker)))
+      (should (eq 'k (get-text-property 2 'mevedel-view-tool-animation-id
+                                        marker)))
+      (should (get-text-property 2 'mevedel-view-inline-spinner-frame marker))))
+  (dolist (style '(shimmer static))
+    (let* ((mevedel-view-tool-spinner-style style)
+           (marker (mevedel-view--pending-marker 'k)))
+      (should (equal "  ● " (substring-no-properties marker)))
+      (should-not (text-property-any 0 (length marker)
+                                     'mevedel-view-inline-spinner-frame t
+                                     marker)))))
+
+(mevedel-deftest mevedel-view--pending-label ()
+  ,test
+  (test)
+  :doc "only shimmer animates the label"
+  (let ((mevedel-view-tool-spinner-style 'shimmer))
+    (let ((label (mevedel-view--pending-label "Read" 'k)))
+      (should (equal "Read" (substring-no-properties label)))
+      (should (get-text-property 0 'mevedel-view-inline-spinner-frame label))
+      (should (eq 'k (get-text-property 0 'mevedel-view-tool-animation-id
+                                        label)))))
+  (let ((mevedel-view-tool-spinner-style 'braille))
+    (should-not (get-text-property
+                 0 'mevedel-view-inline-spinner-frame
+                 (mevedel-view--pending-label "Read" 'k)))))
+
+(mevedel-deftest mevedel-view--running-header ()
+  ,test
+  (test)
+  :doc "replaces the settled marker and appends the running count"
+  (let* ((mevedel-view-tool-spinner-style 'shimmer)
+         (line (concat (propertize "  ✓ " 'font-lock-face 'mevedel-view-tool-marker)
+                       "Read 4 files"))
+         (running (mevedel-view--running-header line 2)))
+    (should (equal "  ● Read 4 files · 2 running"
+                   (substring-no-properties running)))
+    (should (equal "  ✓ " (substring-no-properties
+                           (get-text-property
+                            0 'mevedel-view-settled-marker running))))
+    (should (get-text-property 0 'mevedel-view-pending-tool-live running))
+    (should-not (get-text-property 5 'mevedel-view-pending-tool-live running))
+    (should (get-text-property (1- (length running))
+                               'mevedel-view-pending-tool-live running)))
+  :doc "a virtual group has no settled marker to restore"
+  (let ((running (mevedel-view--running-header "  ✓ Read 4 files" 4 t)))
+    (should-not (get-text-property 0 'mevedel-view-settled-marker running))))
+
+(mevedel-deftest mevedel-view--pending-children ()
+  ,test
+  (test)
+  :doc "counts running calls by tool name like settled children"
+  (let ((children (mevedel-view--pending-children
+                   '(("a" "Read" "x") ("b" "Grep" nil)))))
+    (should (equal '(pending pending)
+                   (mapcar (lambda (child) (plist-get child :kind)) children)))
+    (should (equal "Read 1 file, searched 1 pattern"
+                   (mevedel-view--tool-group-header children)))))
+
+(mevedel-deftest mevedel-view--insert-pending-tool-row ()
+  ,test
+  (test)
+  :doc "draws a sourceless running row in the settled row grammar"
+  (with-temp-buffer
+    (let ((mevedel-view-tool-spinner-style 'shimmer))
+      (mevedel-view--insert-pending-tool-row '("k" "Read" "a.el"))
+      (mevedel-view--insert-pending-tool-row '("j" "Grep" nil))
+      (should (equal "  ● Read: a.el\n  ● Grep\n" (buffer-string)))
+      (should-not (text-property-not-all (point-min) (point-max)
+                                         'mevedel-view-pending-tool-live t))
+      (should-not (text-property-not-all (point-min) (point-max)
+                                         'mevedel-view-source nil)))))
+
+(mevedel-deftest mevedel-view--insert-pending-run ()
+  ,test
+  (test)
+  :doc "groups running calls above the threshold, as they will settle"
+  (with-temp-buffer
+    (let ((mevedel-view-tool-spinner-style 'shimmer)
+          (mevedel-view-tool-group-collapse-threshold 2))
+      (mevedel-view--insert-pending-run
+       '(("a" "Read" "x") ("b" "Read" "y") ("c" "Grep" "z")))
+      (should (equal "  ● Read 2 files, searched 1 pattern · 3 running\n"
+                     (buffer-string)))
+      (should-not (text-property-not-all (point-min) (point-max)
+                                         'mevedel-view-pending-tool-live t))))
+  :doc "keeps separate rows at or below the threshold"
+  (with-temp-buffer
+    (let ((mevedel-view-tool-spinner-style 'shimmer)
+          (mevedel-view-tool-group-collapse-threshold 2))
+      (mevedel-view--insert-pending-run '(("a" "Read" "x") ("b" "Grep" "z")))
+      (should (equal "  ● Read: x\n  ● Grep: z\n" (buffer-string))))))
+
+(mevedel-deftest mevedel-view--retire-pending-decorations ()
+  ,test
+  (test)
+  :doc "deletes virtual rows and restores a running group's settled marker"
+  (with-temp-buffer
+    (let ((mevedel-view-tool-spinner-style 'braille)
+          (source (cons (copy-marker 1) (copy-marker 2))))
+      (insert "before\n")
+      (let ((start (point)))
+        (insert (mevedel-view--running-header
+                 (concat (propertize "  ✓ " 'font-lock-face 'mevedel-view-tool-marker)
+                         "Read 4 files")
+                 1)
+                "\n")
+        (add-text-properties start (point)
+                             `(mevedel-view-source ,source
+                               mevedel-view-type tool-group)))
+      (mevedel-view--insert-pending-tool-row '("k" "Grep" "x"))
+      (insert "after\n")
+      (should (mevedel-view--retire-pending-decorations (point-min) (point-max)))
+      (should (equal "before\n  ✓ Read 4 files\nafter\n" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "✓")
+      (let ((pos (match-beginning 0)))
+        (should (eq 'mevedel-view-tool-marker
+                    (get-text-property pos 'font-lock-face)))
+        (should (eq source (get-text-property pos 'mevedel-view-source)))
+        (should (eq 'tool-group (get-text-property pos 'mevedel-view-type)))
+        (should-not (get-text-property pos 'display)))
+      (should-not (mevedel-view--retire-pending-decorations
+                   (point-min) (point-max))))))
+
+(mevedel-deftest mevedel-view--strip-pending-decorations-from-string ()
+  ,test
+  (test)
+  :doc "keeps ordinary text and drops running rows from a preserved tail"
+  (let ((text (with-temp-buffer
+                (insert "Assistant\n")
+                (mevedel-view--insert-pending-tool-row '("k" "Read" "a"))
+                (buffer-string))))
+    (should (equal "Assistant\n"
+                   (mevedel-view--strip-pending-decorations-from-string text))))
+  :doc "an only-running tail leaves nothing"
+  (should-not (mevedel-view--strip-pending-decorations-from-string
+               (with-temp-buffer
+                 (mevedel-view--insert-pending-tool-row '("k" "Read" "a"))
+                 (buffer-string))))
+  (should-not (mevedel-view--strip-pending-decorations-from-string nil)))
+
+(mevedel-deftest mevedel-view--insert-assistant-header ()
+  ,test
+  (test)
+  :doc "inserts the heading with its turn properties and extra properties"
+  (with-temp-buffer
+    (mevedel-view--insert-assistant-header nil '(mevedel-view-pending-tool-live t))
+    (should (equal "Assistant\n" (buffer-string)))
+    (should (eq 'turn-header (get-text-property 1 'mevedel-view-type)))
+    (should (eq 'assistant (get-text-property 1 'mevedel-view-turn-role)))
+    (should (get-text-property 1 'mevedel-view-pending-tool-live)))
+  :doc "places a variant button beside the label"
+  (with-temp-buffer
+    (mevedel-view--insert-assistant-header "[2/3]")
+    (should (equal "Assistant  [2/3]\n" (buffer-string)))))
+
+(mevedel-deftest mevedel-view--live-turn-needs-header-p ()
+  ,test
+  (test)
+  :doc "needs a heading unless the assistant's heading ends the turn"
+  (cl-flet ((header (role label)
+              (propertize label 'mevedel-view-type 'turn-header
+                          'mevedel-view-turn-role role)))
+    (let ((data (generate-new-buffer " *needs-header-data*")))
+      (unwind-protect
+          (with-temp-buffer
+            (with-current-buffer data
+              (setq-local mevedel--current-request nil))
+            ;; an empty turn needs a heading
+            (should (mevedel-view--live-turn-needs-header-p
+                     (point-min) (point-max) data))
+            ;; a turn whose last heading is the assistant's needs none
+            (insert (header 'assistant "Assistant\n") "text\n")
+            (should-not (mevedel-view--live-turn-needs-header-p
+                         (point-min) (point-max) data))
+            ;; a delivery after the assistant's heading needs a new one
+            (insert (header 'user "You\n") "delivered\n")
+            (should (mevedel-view--live-turn-needs-header-p
+                     (point-min) (point-max) data))
+            ;; a directive request never needs one
+            (with-current-buffer data
+              (setq-local mevedel--current-request
+                          (mevedel-request--create :directive-uuid "d")))
+            (should-not (mevedel-view--live-turn-needs-header-p
+                         (point-min) (point-max) data)))
+        (kill-buffer data)))))
+
+(mevedel-deftest mevedel-view--history-boundary-target ()
+  ,test
+  (test)
+  :doc "uses the live status boundary when it ends history"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (should (eq mevedel-view--status-marker
+                  (mevedel-view--history-boundary-target)))))
+  :doc "recovers the history tail when the status marker detached"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-render-test--insert-at-history-end
+       (lambda () (insert (propertize "Answer\n" 'mevedel-view-type 'response))))
+      (let ((tail (marker-position mevedel-view--status-marker)))
+        (set-marker mevedel-view--status-marker nil)
+        (should (= tail (mevedel-view--history-boundary-target)))))))
 
 
 (provide 'test-mevedel-view-render)

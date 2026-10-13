@@ -522,7 +522,7 @@ on the same row."
 
 (defface mevedel-view-ephemeral
   '((t :inherit shadow))
-  "Face for ephemeral live-tail lines (spinner, \"Calling X…\")."
+  "Face for ephemeral progress, such as spinners and running tool markers."
   :group 'mevedel)
 
 (defface mevedel-view-attribution
@@ -572,13 +572,6 @@ permission prompts.  A muted underline rather than a full link: in
 (defface mevedel-view-handle-error
   '((t :inherit error))
   "Face for the `✗ error · …' / `✗ aborted' handle badges."
-  :group 'mevedel)
-
-(defcustom mevedel-view-pending-tools-visible-max 5
-  "Maximum number of `Calling X…' lines shown in the live tail.
-When more tools are in flight than this cap, the visible lines are
-the most recent and the rest are summarised in a single tail line."
-  :type 'integer
   :group 'mevedel)
 
 (defvar-local mevedel-view--status-marker nil
@@ -636,10 +629,11 @@ preview overlays render against this marker.")
   :group 'mevedel)
 
 (defcustom mevedel-view-tool-spinner-style 'shimmer
-  "Animation style for pending-tool rows.
-Shimmer sweeps a row's verb and tool name, such as \"Calling Bash\", in
-step with the request label's shimmer, so both move in the same frames;
-the arguments stay still.  The glyph styles draw a compact prefix."
+  "Animation style for running tool rows.
+Shimmer sweeps a running call's tool name, or a running group's
+`N running' count, in step with the request label's shimmer, so both
+move in the same frames; the arguments stay still.  The glyph styles
+animate the row's marker instead."
   :type '(choice (const shimmer) (const braille) (const ascii) (const dots)
                  (const static))
   :set #'mevedel-view--set-spinner-option

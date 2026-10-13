@@ -88,6 +88,51 @@
        rear-nonsticky nil))
     (goto-char (+ start (or point-offset (length draft))))))
 
+(defun mevedel-view-stream-test--draw-running-rows ()
+  "Draw `mevedel-view--pending-tool-calls' as a live render draws them.
+Earlier running rows are replaced; their displayed samples carry over."
+  (let ((previous (mevedel-view--snapshot-tool-animation-targets))
+        (inhibit-read-only t)
+        (boundary (mevedel-view--history-insertion-marker)))
+    (mevedel-view--retire-pending-decorations (point-min) boundary)
+    (let ((start (marker-position boundary)))
+      (when mevedel-view--pending-tool-calls
+        (save-excursion
+          (goto-char boundary)
+          (mevedel-view--with-render-boundaries-advancing
+            (mevedel-view--insert-pending-run
+             mevedel-view--pending-tool-calls))))
+      (mevedel-view--adopt-tool-animation-targets
+       start (marker-position boundary) previous))))
+
+(defun mevedel-view-stream-test--batch (data-buf calls &optional settle)
+  "Start the parallel tool CALLS in DATA-BUF, and with SETTLE finish them.
+Each call is a gptel hook plist.  Settling writes every result before the
+post-tool hooks run, so a zero boundary delay renders what a debounced
+render would see once gptel has written the batch."
+  (with-current-buffer data-buf
+    (if (not settle)
+        (mapc #'mevedel-view-stream-pre-tool calls)
+      (dolist (call calls)
+        (mevedel-view-stream-test--insert-data
+         data-buf (format "%S\n\nresult\n" (list :name (plist-get call :name)
+                                                 :args (plist-get call :args)))
+         (cons 'tool (format "%S" (plist-get call :args)))))
+      (mapc #'mevedel-view-stream-post-tool calls))))
+
+(defun mevedel-view-stream-test--begin-live-turn (view-buf data-buf)
+  "Anchor an in-flight turn in VIEW-BUF at the end of DATA-BUF."
+  (with-current-buffer view-buf
+    (setq mevedel-view--in-flight-turn-start
+          (copy-marker mevedel-view--input-marker))
+    (setq mevedel-view--data-turn-start
+          (with-current-buffer data-buf (copy-marker (point-max))))))
+
+(defun mevedel-view-stream-test--history (view-buf)
+  "Return VIEW-BUF's text above the composer."
+  (with-current-buffer view-buf
+    (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
+
 (defun mevedel-view-stream-test--insert-repair-audited-tool (data-buf)
   "Insert one completed repair-audited tool call into DATA-BUF."
   (with-current-buffer data-buf
@@ -119,34 +164,6 @@
      (switch-to-buffer view-buf)
      (redisplay t)
      (with-current-buffer view-buf ,@body)))
-
-(defun mevedel-view-stream-test--batch (data-buf calls &optional settle)
-  "Start the parallel tool CALLS in DATA-BUF, and with SETTLE finish them.
-Each call is a gptel hook plist.  Settling writes every result before the
-post-tool hooks run, so a zero boundary delay renders what a debounced
-render would see once gptel has written the batch."
-  (with-current-buffer data-buf
-    (if (not settle)
-        (mapc #'mevedel-view-stream-pre-tool calls)
-      (dolist (call calls)
-        (mevedel-view-stream-test--insert-data
-         data-buf (format "%S\n\nresult\n" (list :name (plist-get call :name)
-                                                 :args (plist-get call :args)))
-         (cons 'tool (format "%S" (plist-get call :args)))))
-      (mapc #'mevedel-view-stream-post-tool calls))))
-
-(defun mevedel-view-stream-test--begin-live-turn (view-buf data-buf)
-  "Anchor an in-flight turn in VIEW-BUF at the end of DATA-BUF."
-  (with-current-buffer view-buf
-    (setq mevedel-view--in-flight-turn-start
-          (copy-marker mevedel-view--input-marker))
-    (setq mevedel-view--data-turn-start
-          (with-current-buffer data-buf (copy-marker (point-max))))))
-
-(defun mevedel-view-stream-test--history (view-buf)
-  "Return VIEW-BUF's text above the composer."
-  (with-current-buffer view-buf
-    (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
 
 (ert-deftest mevedel-view-stream-approval-invocation-identity ()
   "Out-of-order approvals and settlements never decorate an identical sibling."
@@ -201,7 +218,18 @@ render would see once gptel has written the batch."
           (should-not (string-match-p "Auto-approved"
                                       (mevedel-view-stream-test--history view-buf)))
           (event 'settled "first")
-          (should-not (with-current-buffer view-buf mevedel-view--pending-tool-calls)))))))
+          ;; Settlement marks the call finished; its result is still due,
+          ;; so it keeps its place in the run until the post-tool hook.
+          (with-current-buffer view-buf
+            (should (= 1 (length mevedel-view--pending-tool-calls)))
+            (should (plist-get (nth 3 (car mevedel-view--pending-tool-calls))
+                               :settled)))
+          (let ((text (mevedel-view-stream-test--history view-buf)))
+            (should (string-match-p "✓ Read: same" text))
+            (should-not (string-match-p "●" text)))
+          (with-current-buffer data-buf (mevedel-view-stream-post-tool call))
+          (should-not (with-current-buffer view-buf
+                        mevedel-view--pending-tool-calls)))))))
 
 (mevedel-deftest mevedel-view-stream-handle-pipeline-event (:quiet t)
   ,test
@@ -257,11 +285,23 @@ render would see once gptel has written the batch."
             (should (equal "Second only"
                            (plist-get (plist-get (cadr records) :presentation) :approval))))
           (with-current-buffer view-buf
-            (should (= 1 (length mevedel-view--pending-tool-calls)))
-            (should-not (string-search "Auto-approved · once" (buffer-string))))
+            ;; The failed call keeps its place, marked failed, until its
+            ;; result reaches the transcript; its approval stays factual.
+            (should (= 2 (length mevedel-view--pending-tool-calls)))
+            (should (eq 'error (plist-get (nth 3 (cadr mevedel-view--pending-tool-calls))
+                                          :settled)))
+            (should (string-search "× ApprovalProbe  Auto-approved · once"
+                                   (buffer-string)))
+            (should (string-search "● ApprovalProbe" (buffer-string))))
           (funcall (cadr replies) "{\"decision\":\"allow-once\",\"reason\":\"First only\"}")
           (funcall (cdr (assoc "first" handlers)) '(:result "done"))))
       (should (= 2 (length outcomes)))
+      ;; Both calls are finished; gptel's post-tool hooks retire them.
+      (with-current-buffer view-buf
+        (should (cl-every (lambda (entry) (plist-get (nth 3 entry) :settled))
+                          mevedel-view--pending-tool-calls)))
+      (with-current-buffer data-buf
+        (dotimes (_ 2) (mevedel-view-stream-post-tool '(:name "ApprovalProbe"))))
       (with-current-buffer view-buf
         (should-not mevedel-view--pending-tool-calls)
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
@@ -385,8 +425,8 @@ render would see once gptel has written the batch."
                              :output-lines 1 :omitted-output-bytes 0)))))
           (with-current-buffer view-buf
             (should (equal 1 (length mevedel-view--pending-tool-calls)))
-            (let ((label (mevedel-view--pending-tool-label (car mevedel-view--pending-tool-calls))))
-              (should (equal "Calling Bash..." label))
+            (let ((label (format "%S" (cdar mevedel-view--pending-tool-calls))))
+              (should (equal '("Bash" nil) (cdar mevedel-view--pending-tool-calls)))
               (should-not (string-match-p "exec-000001" label))
               (should-not (string-match-p "line 7" label)))
             ;; The tail did reach the execution cache the row renders from.
@@ -1232,9 +1272,9 @@ turn's later text, live and after reconstruction."
             (mevedel-view-tool-spinner-style 'ascii)
             (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" nil nil))))
+             '(("call-1" "Read" nil))))
         (mevedel-view--start-spinner "Working...")
-        (mevedel-view--refresh-pending-tool-lines)
+        (mevedel-view-stream-test--draw-running-rows)
         (mevedel-view-stream-test--insert-composer-draft
          "> quoted\nsecond line" 3)
         (let* ((main (text-property-any (point-min) (point-max)
@@ -1262,8 +1302,10 @@ turn's later text, live and after reconstruction."
                      (lambda (&rest _) (ert-fail "tick reconciled a zone")))
                     ((symbol-function 'mevedel-view--spinner-display-status)
                      (lambda (&rest _) (ert-fail "tick rebuilt metadata")))
-                    ((symbol-function 'mevedel-view--pending-tool-fragments)
+                    ((symbol-function 'mevedel-view--insert-pending-run)
                      (lambda (&rest _) (ert-fail "tick rebuilt tool rows")))
+                    ((symbol-function 'mevedel-view-render-live-update)
+                     (lambda (&rest _) (ert-fail "tick rendered the live turn")))
                     ((symbol-function 'mevedel-view-animation--colors)
                      (lambda (&rest _) (ert-fail "tick resolved colors")))
                     ((symbol-function 'mevedel-view-power--current-state)
@@ -1411,7 +1453,7 @@ turn's later text, live and after reconstruction."
               (copy-marker mevedel-view--input-marker))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min)))))
-      (cl-letf (((symbol-function 'mevedel-view-render-live-update) #'ignore))
+      (progn
         (with-current-buffer data-buf
           (dolist (poll '((:name "WriteStdin"
                           :args (:execution_id "exec-1" :chars ""))
@@ -1423,8 +1465,8 @@ turn's later text, live and after reconstruction."
             (mevedel-view-stream-pre-tool poll))
           (with-current-buffer view-buf
             (should-not mevedel-view--pending-tool-calls)
-            (should-not (string-match-p "Calling WriteStdin" (buffer-string)))
-            (should-not (string-match-p "Calling ToolCall" (buffer-string)))
+            (should-not (string-match-p "● WriteStdin" (buffer-string)))
+            (should-not (string-match-p "● ToolCall" (buffer-string)))
             (should (mevedel-view--request-progress-visible-p)))
           (mevedel-view-stream-pre-tool
            '(:name "WriteStdin" :args (:execution_id "exec-1"
@@ -1433,8 +1475,8 @@ turn's later text, live and after reconstruction."
            '(:name "StopExecution" :args (:execution_id "exec-2")))
           (with-current-buffer view-buf
             (should (= 2 (length mevedel-view--pending-tool-calls)))
-            (should (string-match-p "Calling WriteStdin" (buffer-string)))
-            (should (string-match-p "Calling StopExecution" (buffer-string))))
+            (should (string-match-p "● WriteStdin" (buffer-string)))
+            (should (string-match-p "● StopExecution" (buffer-string))))
           (mevedel-view-stream-post-tool
            '(:name "WriteStdin" :args (:execution_id "exec-1" :chars "")))
           (with-current-buffer view-buf
@@ -1447,7 +1489,8 @@ turn's later text, live and after reconstruction."
             (copy-marker mevedel-view--input-marker))
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-min)))))
-    (with-current-buffer data-buf
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+     (with-current-buffer data-buf
       (mevedel-view-stream-pre-tool
        '(:name "WriteStdin" :args (:execution_id "" :chars "")))
       (mevedel-view-stream-pre-tool
@@ -1460,10 +1503,12 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-pre-tool
        '(:name "ToolCall"
          :args (:expression "(WriteStdin :execution_id \"exec-1\" :chars \"\")"
-                :bogus 1))))
+                :bogus 1)))))
     (with-current-buffer view-buf
       (should (= 4 (length mevedel-view--pending-tool-calls)))
-      (should (string-match-p "Calling WriteStdin" (buffer-string)))))
+      ;; Four running calls exceed the grouping threshold: one row.
+      (should (string-match-p "WriteStdin ×3, ToolCall · 4 running"
+                              (buffer-string)))))
 
   :doc "pre/post hooks add and remove entries for the arguments gptel sends"
   ;; gptel builds its tool-hook arguments from the name, the arguments,
@@ -1486,14 +1531,14 @@ turn's later text, live and after reconstruction."
            (mevedel-view-stream-pre-tool
             '(:name "Grep" :args (:pattern "x"))))
           (with-current-buffer view-buf
-            (should (equal '(((("Read" . "(:file_path \"a\")") . 1) "Read" "a" nil)
-                             ((("Grep" . "(:pattern \"x\")") . 2) "Grep" "x" nil))
+            (should (equal '(((("Read" . "(:file_path \"a\")") . 1) "Read" "a")
+                             ((("Grep" . "(:pattern \"x\")") . 2) "Grep" "x"))
                            mevedel-view--pending-tool-calls)))
           (should-not
            (mevedel-view-stream-post-tool
             '(:name "Read" :args (:file_path "a"))))))
       (with-current-buffer view-buf
-        (should (equal '(((("Grep" . "(:pattern \"x\")") . 2) "Grep" "x" nil))
+        (should (equal '(((("Grep" . "(:pattern \"x\")") . 2) "Grep" "x"))
                        mevedel-view--pending-tool-calls)))
       (should (= 3 render-count))))
 
@@ -1551,8 +1596,7 @@ turn's later text, live and after reconstruction."
 
   :doc "immediate pending live tail inserts above status-zone content"
   (mevedel-view-stream-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               (status-start (marker-position mevedel-view--status-marker)))
@@ -1567,8 +1611,7 @@ turn's later text, live and after reconstruction."
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
-                     (lambda (&rest _) (cl-incf render-count))))
+          (progn
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
@@ -1576,19 +1619,18 @@ turn's later text, live and after reconstruction."
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "TASK STATUS" text)))
                 (should (numberp calling))
                 (should (numberp status))
                 (should (< calling status))
-                (should (= 0 render-count)))))
+                (should-not (string-match-p "Calling" text)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail recovers above status-zone content when status marker detaches"
   (mevedel-view-stream-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               (status-start (marker-position mevedel-view--status-marker)))
@@ -1603,8 +1645,7 @@ turn's later text, live and after reconstruction."
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
-                     (lambda (&rest _) (cl-incf render-count))))
+          (progn
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
@@ -1612,12 +1653,12 @@ turn's later text, live and after reconstruction."
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "TASK STATUS" text)))
                 (should (numberp calling))
                 (should (numberp status))
                 (should (< calling status))
-                (should (= 0 render-count)))))
+                (should-not (string-match-p "Calling" text)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
@@ -1646,13 +1687,13 @@ turn's later text, live and after reconstruction."
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "TASK STATUS" text)))
                 (should (numberp calling))
                 (should (numberp status))
                 (should (< calling status))
                 (should (= 1 (cl-loop with start = 0
-                                      while (string-match "Calling Read: a"
+                                      while (string-match "● Read: a"
                                                           text start)
                                       count t
                                       do (setq start (match-end 0))))))))
@@ -1661,8 +1702,7 @@ turn's later text, live and after reconstruction."
 
   :doc "pending live tail recovers after existing history when status marker detaches"
   (mevedel-view-stream-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
           (mevedel-view--insert-user-message "Previous turn")
@@ -1677,8 +1717,7 @@ turn's later text, live and after reconstruction."
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
-                     (lambda (&rest _) (cl-incf render-count))))
+          (progn
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
@@ -1687,32 +1726,29 @@ turn's later text, live and after reconstruction."
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
                      (previous (string-match-p "Previous turn" text))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "TASK STATUS" text)))
                 (should (numberp previous))
                 (should (numberp calling))
                 (should (numberp status))
                 (should (< previous calling))
                 (should (< calling status))
-                (should (= 0 render-count)))))
+                (should-not (string-match-p "Calling" text)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
-  :doc "pending live tail stays after existing live assistant text"
+  :doc "a running row follows the live assistant text it answers"
   (mevedel-view-stream-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
+    ;; The live render owns the in-flight turn, so its text comes from the
+    ;; transcript, not from text placed in the view.
+    (mevedel-view-stream-test--insert-data
+     data-buf "Existing response\n" 'response)
+    (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               (status-start (marker-position mevedel-view--status-marker)))
           (goto-char status-start)
           (setq mevedel-view--in-flight-turn-start (copy-marker (point)))
-          (insert (propertize "Assistant\n"
-                              'mevedel-view-type 'turn-header
-                              'mevedel-view-turn-role 'assistant))
-          (insert (propertize "Existing response\n"
-                              'mevedel-view-type 'response
-                              'mevedel-view-source '(1 . 2)))
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--interaction-marker (point))
@@ -1721,8 +1757,7 @@ turn's later text, live and after reconstruction."
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
-                     (lambda (&rest _) (cl-incf render-count))))
+          (progn
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
@@ -1731,21 +1766,20 @@ turn's later text, live and after reconstruction."
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
                      (existing (string-match-p "Existing response" text))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "TASK STATUS" text)))
                 (should (numberp existing))
                 (should (numberp calling))
                 (should (numberp status))
                 (should (< existing calling))
                 (should (< calling status))
-                (should (= 0 render-count)))))
+                (should-not (string-match-p "Calling" text)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail stays above propertized status rows"
   (mevedel-view-stream-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
           (mevedel-view--insert-user-message "Previous turn")
@@ -1762,8 +1796,7 @@ turn's later text, live and after reconstruction."
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
-                     (lambda (&rest _) (cl-incf render-count))))
+          (progn
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
@@ -1772,21 +1805,20 @@ turn's later text, live and after reconstruction."
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
                      (previous (string-match-p "Previous turn" text))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "AGENT STATUS" text)))
                 (should (numberp previous))
                 (should (numberp calling))
                 (should (numberp status))
                 (should (< previous calling))
                 (should (< calling status))
-                (should (= 0 render-count)))))
+                (should-not (string-match-p "Calling" text)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail ignores stale attached status marker"
   (mevedel-view-stream-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
           (mevedel-view--insert-user-message "Previous turn")
@@ -1801,8 +1833,7 @@ turn's later text, live and after reconstruction."
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
-                     (lambda (&rest _) (cl-incf render-count))))
+          (progn
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
@@ -1812,7 +1843,7 @@ turn's later text, live and after reconstruction."
                             (point-min) (point-max)))
                      (header (string-match-p "mevedel" text))
                      (previous (string-match-p "Previous turn" text))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "TASK STATUS" text)))
                 (should (numberp header))
                 (should (numberp previous))
@@ -1821,14 +1852,13 @@ turn's later text, live and after reconstruction."
                 (should (< header previous))
                 (should (< previous calling))
                 (should (< calling status))
-                (should (= 0 render-count)))))
+                (should-not (string-match-p "Calling" text)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail recovers after collapsed turn summaries"
   (mevedel-view-stream-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
               (status-start (marker-position mevedel-view--status-marker)))
@@ -1845,8 +1875,7 @@ turn's later text, live and after reconstruction."
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
-                     (lambda (&rest _) (cl-incf render-count))))
+          (progn
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
@@ -1855,14 +1884,14 @@ turn's later text, live and after reconstruction."
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
                      (previous (string-match-p "Previous turn" text))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "TASK STATUS" text)))
                 (should (numberp previous))
                 (should (numberp calling))
                 (should (numberp status))
                 (should (< previous calling))
                 (should (< calling status))
-                (should (= 0 render-count)))))
+                (should-not (string-match-p "Calling" text)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
@@ -1888,11 +1917,11 @@ turn's later text, live and after reconstruction."
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
         (setq mevedel-view--pending-tool-calls
-              (list (list "call-1" "Read" "a" nil)))
+              (list (list "call-1" "Read" "a")))
         (should (progn (mevedel-view-render-live-update data-buf) t))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (response (string-match-p "assistant text" text))
-               (calling (string-match-p "Calling Read: a" text))
+               (calling (string-match-p "● Read: a" text))
                (status (string-match-p "TASK STATUS" text)))
           (should (numberp response))
           (should (numberp calling))
@@ -1922,12 +1951,12 @@ turn's later text, live and after reconstruction."
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
         (setq mevedel-view--pending-tool-calls
-              (list (list "call-1" "Read" "a" nil)))
+              (list (list "call-1" "Read" "a")))
         (should (progn (mevedel-view-render-live-update data-buf) t))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (old (string-match-p "old text" text))
                (response (string-match-p "assistant text" text))
-               (calling (string-match-p "Calling Read: a" text))
+               (calling (string-match-p "● Read: a" text))
                (status (string-match-p "TASK STATUS" text)))
           (should-not old)
           (should (numberp response))
@@ -1998,13 +2027,13 @@ turn's later text, live and after reconstruction."
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
         (setq mevedel-view--pending-tool-calls
-              (list (list "call-1" "Read" "a" nil)))
+              (list (list "call-1" "Read" "a")))
         (should (progn (mevedel-view-render-live-update data-buf) t))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (header (string-match-p "mevedel" text))
                (old (string-match-p "old text" text))
                (response (string-match-p "assistant text" text))
-               (calling (string-match-p "Calling Read: a" text))
+               (calling (string-match-p "● Read: a" text))
                (status (string-match-p "TASK STATUS" text)))
           (should (numberp header))
           (should-not old)
@@ -2152,12 +2181,12 @@ turn's later text, live and after reconstruction."
                   (with-current-buffer data-buf
                     (copy-marker (point-min))))
             (setq mevedel-view--pending-tool-calls
-                  (list (list "call-1" "Read" "a" nil))))
+                  (list (list "call-1" "Read" "a"))))
           (should (progn (mevedel-view-render-live-update data-buf) t))
           (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
-                 (calling (string-match-p "Calling Read: a" text))
+                 (calling (string-match-p "● Read: a" text))
                  (status (string-match-p "Running /root/verifier" text)))
             (should-not old)
             (should (numberp response))
@@ -2204,8 +2233,7 @@ turn's later text, live and after reconstruction."
 
   :doc "pending live tail ignores stale input marker"
   (mevedel-view-stream-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
           (mevedel-view--insert-user-message "Previous turn")
@@ -2218,8 +2246,7 @@ turn's later text, live and after reconstruction."
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
-                     (lambda (&rest _) (cl-incf render-count))))
+          (progn
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
@@ -2228,14 +2255,14 @@ turn's later text, live and after reconstruction."
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
                      (previous (string-match-p "Previous turn" text))
-                     (calling (string-match-p "Calling Read: a" text))
+                     (calling (string-match-p "● Read: a" text))
                      (status (string-match-p "TASK STATUS" text)))
                 (should (numberp previous))
                 (should (numberp calling))
                 (should (numberp status))
                 (should (< previous calling))
                 (should (< calling status))
-                (should (= 0 render-count)))))
+                (should-not (string-match-p "Calling" text)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
@@ -2280,63 +2307,73 @@ turn's later text, live and after reconstruction."
         (should-not mevedel-view--pending-tool-calls)
         (should (= 1 render-count)))))
 
-  :doc "rendering caps visible calls and adds a truncation tail"
+  :doc "a parallel batch above the threshold runs and settles as one row"
   (mevedel-view-stream-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((mevedel-view-pending-tools-visible-max 2))
-        (setq mevedel-view--pending-tool-calls
-              '(("1" "Read" nil nil)
-                ("2" "Grep" nil nil)
-                ("3" "Bash" nil nil)))
-        (mevedel-view--insert-pending-tool-lines
-         (cl-subseq mevedel-view--pending-tool-calls 0 2))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "Calling Read" text))
-          (should (string-match-p "Calling Grep" text))
-          (should-not (string-match-p "Calling Bash" text))
-          (should (string-match-p "1 more tools running" text))))))
-
-  :doc "post-tool hook removes only the completed pending fragment"
-  (mevedel-view-stream-test--with-buffers
-    (let ((mevedel-view-tool-boundary-render-delay 60))
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (calls '((:name "Read" :args (:file_path "a"))
+                   (:name "Read" :args (:file_path "b"))
+                   (:name "Read" :args (:file_path "c"))
+                   (:name "Grep" :args (:pattern "x"))
+                   (:name "Grep" :args (:pattern "y")))))
       (with-current-buffer view-buf
         (setq mevedel-view--in-flight-turn-start
               (copy-marker mevedel-view--input-marker))
         (setq mevedel-view--data-turn-start
-              (with-current-buffer data-buf (copy-marker (point-max))))
-        (setq mevedel-view--pending-tool-calls
-              (list (list (mevedel-view--pending-tool-claim-key
-                           '(:name "Read" :args (:file_path "a"))) "Read" nil nil)
-                    (list (mevedel-view--pending-tool-claim-key
-                           '(:name "Grep" :args (:pattern "x"))) "Grep" nil nil)))
-        (mevedel-view--refresh-pending-tool-lines))
-      (unwind-protect
-          (progn
-            (with-current-buffer data-buf
-              (mevedel-view-stream-post-tool
-               '(:name "Read" :args (:file_path "a"))))
-            (with-current-buffer view-buf
-              (let ((text (buffer-substring-no-properties
-                           (point-min) (point-max))))
-                (should-not (string-match-p "Calling Read" text))
-                (should (string-match-p "Calling Grep" text))
-                (goto-char (point-min))
-                (should (search-forward "Calling Grep" nil t))
-                (let ((grep-pos (match-beginning 0)))
-                  (should (eq 'history-live
-                              (get-text-property
-                               grep-pos 'mevedel-view-zone-namespace)))
-                  ;; The fragment is identified by the pending key,
-                  ;; which stays put when an earlier call finishes.
-                  (should (equal (car (car mevedel-view--pending-tool-calls))
-                                 (get-text-property
-                                  grep-pos 'mevedel-view-zone-id))))
-                (should (= 1 (length mevedel-view--pending-tool-calls)))
-                (should (equal "Calling Grep..."
-                               (mevedel-view--pending-tool-label (car mevedel-view--pending-tool-calls)))))))
-        (with-current-buffer view-buf
-          (mevedel-view--cancel-scheduled-render)))))
+              (with-current-buffer data-buf (copy-marker (point-min))))
+        (mevedel-view-stream-test--insert-composer-draft "> keep\nthis" 3))
+      (with-current-buffer data-buf
+        (mapc #'mevedel-view-stream-pre-tool calls))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (= 1 (mevedel-view-stream-test--count-substring
+                        "Read 3 files, searched 2 patterns · 5 running" text)))
+          (should-not (string-match-p "Read: a" text))))
+      ;; gptel writes every result after the batch's post-tool hooks.
+      (with-current-buffer data-buf
+        (dolist (call calls)
+          (mevedel-view-stream-test--insert-data
+           data-buf (format "%S\n\nresult\n" call)
+           (cons 'tool (format "%s" (plist-get call :args)))))
+        (mapc #'mevedel-view-stream-post-tool calls))
+      (with-current-buffer view-buf
+        (let ((settled (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "✓ Read 3 files, searched 2 patterns" settled))
+          (should-not (string-match-p "running" settled))
+          (should-not (text-property-any (point-min) mevedel-view--input-marker
+                                         'mevedel-view-pending-tool-live t))
+          (should (equal "> keep\nthis" (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 3)))
+          ;; The settled live row is what a cold projection draws.
+          (mevedel-view--full-rerender)
+          (should (equal settled
+                         (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker)))))))
+
+  :doc "a finished call leaves the other parallel call running"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-max)))))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-pre-tool '(:name "Read" :args (:file_path "a")))
+        (mevedel-view-stream-pre-tool '(:name "Grep" :args (:pattern "x"))))
+      (with-current-buffer view-buf
+        (let ((text (buffer-string)))
+          (should (string-match-p "● Read: a" text))
+          (should (string-match-p "● Grep: x" text))))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-post-tool '(:name "Read" :args (:file_path "a"))))
+      (with-current-buffer view-buf
+        (let ((text (buffer-string)))
+          (should-not (string-match-p "Read: a" text))
+          (should (= 1 (mevedel-view-stream-test--count-substring
+                        "● Grep: x" text))))
+        (should (equal '("Grep" "x") (cdar mevedel-view--pending-tool-calls))))))
 
   :doc "repair audit redraw preserves a single-line composer and point"
   (mevedel-view-stream-test--with-buffers
@@ -2383,7 +2420,7 @@ turn's later text, live and after reconstruction."
                  (buffer-substring-no-properties
                   (point-min) mevedel-view--input-marker))))))
 
-  :doc "post-tool hook deletes the live tail when no replacement text is ready"
+  :doc "post-tool hook retires a running row when no replacement text is ready"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (setq mevedel-view--in-flight-turn-start
@@ -2394,23 +2431,24 @@ turn's later text, live and after reconstruction."
             (list (list (mevedel-view--pending-tool-claim-key
                          '(:name "Agent"
                            :args (:task_name "explore"
-                                  :message "Inspect."))) "Agent" "explorer" nil)))
-      (mevedel-view--insert-pending-tool-lines
-       mevedel-view--pending-tool-calls)
-      (should (string-match-p "Calling Agent"
+                                  :message "Inspect.")))
+                        "Agent" "explorer")))
+      (mevedel-view-stream-test--draw-running-rows)
+      (should (string-match-p "● Agent: explorer"
                               (buffer-substring-no-properties
                                (point-min) (point-max)))))
-    (with-current-buffer data-buf
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+     (with-current-buffer data-buf
       (mevedel-view-stream-post-tool
        '(:name "Agent"
-         :args (:task_name "explore" :message "Inspect."))))
+         :args (:task_name "explore" :message "Inspect.")))))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
-        (should-not (string-match-p "Calling Agent" text))
+        (should-not (string-match-p "Agent: explorer" text))
         (should-not mevedel-view--pending-tool-calls))))
 
-  :doc "final response render clears pending live tail before rendering"
+  :doc "final response render settles without running rows"
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--insert-data data-buf "final answer\n" 'response)
     (with-current-buffer view-buf
@@ -2419,23 +2457,24 @@ turn's later text, live and after reconstruction."
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-min))))
       (setq mevedel-view--pending-tool-calls
-            '(("call-1" "Agent" "explorer" nil)))
-      (mevedel-view--insert-pending-tool-lines
-       mevedel-view--pending-tool-calls))
+            '(("call-1" "Agent" "explorer")))
+      (mevedel-view-stream-test--draw-running-rows))
     (with-current-buffer data-buf
       (mevedel-view-stream-render-response (point-min) (point-max)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
         (should (string-match-p "final answer" text))
-        (should-not (string-match-p "Calling Agent" text))
+        (should-not (string-match-p "Agent: explorer" text))
+        (should-not (text-property-any (point-min) (point-max)
+                                       'mevedel-view-pending-tool-live t))
         (should-not mevedel-view--pending-tool-calls))))
 
-  :doc "full rerender preserves ordinary calling text and recreates pending fragments"
+  :doc "full rerender keeps ordinary text and leaves running rows to the live turn"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (setq mevedel-view--pending-tool-calls
-            '(("call-1" "Read" nil nil)))
+            '(("call-1" "Read" nil)))
       (let ((inhibit-read-only t)
             (tail-start (marker-position mevedel-view--input-marker)))
         (goto-char mevedel-view--input-marker)
@@ -2447,47 +2486,24 @@ turn's later text, live and after reconstruction."
         (set-marker mevedel-view--interaction-marker (point))
         (set-marker mevedel-view--input-marker (point))
         (set-marker-insertion-type mevedel-view--input-marker nil))
+      (mevedel-view-stream-test--draw-running-rows)
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-max))))
-      (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) (point-max))))
-        (should (= 2 (mevedel-view-stream-test--count-substring
-                      "Calling Read" text))))
-      (let (plain-seen fragment-pos)
-        (goto-char (point-min))
-        (while (search-forward "Calling Read" nil t)
-          (let ((pos (match-beginning 0)))
-            (if (eq 'history-live
-                    (get-text-property pos 'mevedel-view-zone-namespace))
-                (setq fragment-pos pos)
-              (setq plain-seen t))))
-        (should plain-seen)
-        (should fragment-pos)
-        (should (equal "call-1"
-                       (get-text-property
-                        fragment-pos 'mevedel-view-zone-id)))
-        (should (eq (mevedel-view-zone-region 'history-live)
-                    (get-text-property
-                     fragment-pos 'mevedel-view-zone-region))))))
-
-  :doc "cleanup ignores stale pending regions without live fragments"
-  (mevedel-view-stream-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((inhibit-read-only t)
-            start
-            stale-region)
-        (goto-char mevedel-view--input-marker)
-        (setq start (point))
-        (insert "Calling Read...\n")
-        (setq stale-region
-              (make-overlay start (point) (current-buffer) nil nil))
-        (overlay-put stale-region 'mevedel-view-zone 'history-live))
-      (mevedel-view--delete-pending-tool-live-lines)
-      (should (string-match-p "Calling Read"
-                              (buffer-substring-no-properties
-                               (point-min) (point-max))))
-      (should-not (mevedel-view-zone-region 'history-live))))
+      (should (string-match-p "● Read" (buffer-string)))
+      (let ((mevedel-view-tool-boundary-render-delay 60))
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          ;; The preserved tail keeps its own text, not the running row.
+          (should (= 1 (mevedel-view-stream-test--count-substring
+                        "Calling Read" text)))
+          (should-not (string-match-p "● Read" text))
+          (should-not (text-property-any (point-min) (point-max)
+                                         'mevedel-view-pending-tool-live t)))
+        (should (eq 'incremental mevedel-view--pending-render-kind)))
+      (mevedel-view--flush-scheduled-render view-buf t)
+      (should (= 1 (mevedel-view-stream-test--count-substring
+                    "● Read" (buffer-string))))))
 
   :doc "incremental render preserves live tail when no replacement content is ready"
   (mevedel-view-stream-test--with-buffers
@@ -2539,7 +2555,7 @@ turn's later text, live and after reconstruction."
           (should (string-match-p "Assistant" text))
           (should (string-match-p "Calling Read" text))))))
 
-  :doc "incremental render keeps progress row beside pending tool details"
+  :doc "incremental render keeps the progress row beside running calls"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (setq mevedel-view--in-flight-turn-start
@@ -2548,13 +2564,383 @@ turn's later text, live and after reconstruction."
             (with-current-buffer data-buf (copy-marker (point-max))))
       (mevedel-view--start-spinner "Thinking...")
       (setq mevedel-view--pending-tool-calls
-            '(("call-1" "Read" nil nil)))
+            '(("call-1" "Read" nil)))
       (mevedel-view-render-live-update data-buf)
       (should (mevedel-view--request-progress-visible-p))
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
         (should (string-match-p "Working" text))
-        (should (string-match-p "Calling Read" text))))))
+        (should (string-match-p "● Read" text)))))
+
+  :doc "running calls are separate rows until the run outgrows the threshold"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (first '((:name "Read" :args (:file_path "a"))
+                   (:name "Grep" :args (:pattern "x"))))
+          (second '((:name "Read" :args (:file_path "b"))
+                    (:name "Read" :args (:file_path "c")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch data-buf first)
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "● Read: a" text))
+        (should (string-match-p "● Grep: x" text)))
+      (mevedel-view-stream-test--batch data-buf first t)
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "✓ Read: a" text))
+        (should (string-match-p "✓ Grep: x" text))
+        (should-not (string-match-p "●" text)))
+      ;; Two settled and two running calls: four rows become one group.
+      (mevedel-view-stream-test--batch data-buf second)
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (= 1 (mevedel-view-stream-test--count-substring
+                      "● Read 3 files, searched 1 pattern · 2 running" text)))
+        (should-not (string-match-p "Read: a" text)))
+      (mevedel-view-stream-test--batch data-buf second t)
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (= 1 (mevedel-view-stream-test--count-substring
+                      "✓ Read 3 files, searched 1 pattern" text)))
+        (should-not (string-match-p "running" text)))))
+
+  :doc "identical parallel calls each count as running"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (call '(:name "Read" :args (:file_path "a"))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch data-buf (list call call))
+      (should (= 2 (mevedel-view-stream-test--count-substring
+                    "● Read: a" (mevedel-view-stream-test--history view-buf))))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-post-tool call))
+      (should (= 1 (mevedel-view-stream-test--count-substring
+                    "● Read: a" (mevedel-view-stream-test--history view-buf))))))
+
+  :doc "calls after assistant text start their own run"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Read" :args (:file_path "a"))
+                      '(:name "Read" :args (:file_path "b"))
+                      '(:name "Read" :args (:file_path "c")))
+       t)
+      (mevedel-view-stream-test--insert-data
+       data-buf "Now the tests.\n" 'response)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Grep" :args (:pattern "x"))))
+      (let* ((text (mevedel-view-stream-test--history view-buf))
+             (prose (string-match-p "Now the tests" text))
+             (running (string-match-p "● Grep: x" text)))
+        (should prose)
+        (should running)
+        (should (< prose running))
+        ;; The earlier run keeps its own rows; nothing crosses the prose.
+        (should (string-match-p "✓ Read: a" text))
+        (should-not (string-match-p "running" text)))))
+
+  :doc "stopping a turn retires running rows and restores the settled marker"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (settled '((:name "Read" :args (:file_path "a"))
+                     (:name "Read" :args (:file_path "b"))
+                     (:name "Read" :args (:file_path "c"))
+                     (:name "Read" :args (:file_path "d")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch data-buf settled t)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Grep" :args (:pattern "x"))))
+      (should (string-match-p "● Read 4 files, searched 1 pattern · 1 running"
+                              (mevedel-view-stream-test--history view-buf)))
+      (with-current-buffer view-buf
+        (mevedel-view-stream-stop)
+        (let ((text (mevedel-view-stream-test--history view-buf)))
+          ;; The header keeps the counts it had; only the running look goes.
+          (should (string-match-p "✓ Read 4 files, searched 1 pattern\n" text))
+          (should-not (string-match-p "running" text))
+          (should-not (text-property-any (point-min) (point-max)
+                                         'mevedel-view-pending-tool-live t))
+          (goto-char (point-min))
+          (search-forward "✓ Read 4 files")
+          ;; The restored marker still belongs to the group's section.
+          (should (eq 'tool-group
+                      (get-text-property (match-beginning 0)
+                                         'mevedel-view-type)))
+          (should-not mevedel-view--spinner-tool-targets)))))
+
+  :doc "an expanded running group lists its running calls and stays open"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (running '((:name "Grep" :args (:pattern "x"))
+                     (:name "Grep" :args (:pattern "y")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Read" :args (:file_path "a"))
+                      '(:name "Read" :args (:file_path "b"))
+                      '(:name "Read" :args (:file_path "c"))
+                      '(:name "Read" :args (:file_path "d")))
+       t)
+      (with-current-buffer view-buf
+        (goto-char (point-min))
+        (search-forward "Read 4 files")
+        (mevedel-view-toggle-section))
+      (mevedel-view-stream-test--batch data-buf running)
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "Read 4 files, searched 2 patterns · 2 running"
+                                text))
+        ;; Settled children and the running calls are all listed.
+        (should (string-match-p "Read: a" text))
+        (should (string-match-p "● Grep: x" text))
+        (should (string-match-p "● Grep: y" text)))
+      (mevedel-view-stream-test--batch data-buf running t)
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "✓ Read 4 files, searched 2 patterns" text))
+        (should-not (string-match-p "running" text))
+        ;; Still expanded: the settled calls are listed as children.
+        (should (string-match-p "Grep: y" text))
+        (should (string-match-p "Read: a" text)))))
+
+  :doc "a folded running group stays folded while it grows"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Read" :args (:file_path "a"))
+                      '(:name "Read" :args (:file_path "b"))
+                      '(:name "Read" :args (:file_path "c"))
+                      '(:name "Read" :args (:file_path "d")))
+       t)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Grep" :args (:pattern "x"))))
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "· 1 running" text))
+        (should-not (string-match-p "Read: a" text))
+        (should-not (string-match-p "Grep: x" text)))))
+
+  :doc "calls opening a response or following its prose keep their layout"
+  (dolist (case (list (list nil '((:name "Read" :args (:file_path "a"))
+                                  (:name "Grep" :args (:pattern "x"))))
+                      (list nil '((:name "Read" :args (:file_path "a"))
+                                  (:name "Read" :args (:file_path "b"))
+                                  (:name "Read" :args (:file_path "c"))
+                                  (:name "Grep" :args (:pattern "x"))))
+                      (list "Let me look.\n"
+                            '((:name "Read" :args (:file_path "a"))
+                              (:name "Grep" :args (:pattern "x"))))))
+    (mevedel-view-stream-test--with-buffers
+      (let ((prose (car case))
+            (calls (cadr case))
+            (mevedel-view-tool-boundary-render-delay 0)
+            (mevedel-view-tool-group-collapse-threshold 3))
+        (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
+        (with-current-buffer view-buf
+          (mevedel-view--insert-user-message "Prompt"))
+        (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+        (when prose
+          (mevedel-view-stream-test--insert-data data-buf prose 'response))
+        (mevedel-view-stream-test--batch data-buf calls)
+        (let ((running (mevedel-view-stream-test--history view-buf)))
+          (should (= 1 (mevedel-view-stream-test--count-substring
+                        "Assistant\n" running)))
+          (should (string-match-p (if prose "Let me look." "Assistant\n  ● ")
+                                  running))
+          (mevedel-view-stream-test--batch data-buf calls t)
+          ;; Settling flips the marker and drops the count; the heading and
+          ;; rows keep their lines.  Settled rows may gain result metadata.
+          (cl-flet ((layout (text)
+                      (let ((text (replace-regexp-in-string
+                                   " · [0-9]+ running\\| ([^()\n]*)$" ""
+                                   (string-replace "●" "✓" text))))
+                        (substring text 0 (string-match "\n\n*Working" text)))))
+            (should (equal (layout running)
+                           (layout (mevedel-view-stream-test--history
+                                    view-buf)))))))))
+
+  :doc "a turn stopped before any result removes its interim heading"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (mevedel-view-stream-test--insert-data data-buf "Prompt\n" nil)
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message "Prompt"))
+      (let ((before (mevedel-view-stream-test--history view-buf)))
+        (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+        (mevedel-view-stream-test--batch
+         data-buf (list '(:name "Read" :args (:file_path "a"))))
+        (should (string-match-p "Assistant\n  ● Read: a"
+                                (mevedel-view-stream-test--history view-buf)))
+        (with-current-buffer view-buf
+          (mevedel-view-stream-stop))
+        (should (equal before (mevedel-view-stream-test--history view-buf))))))
+
+  :doc "calls after the turn's prose share its single heading"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--insert-data
+       data-buf "Let me look.\n" 'response)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Read" :args (:file_path "a"))))
+      (should (= 1 (mevedel-view-stream-test--count-substring
+                    "Assistant\n"
+                    (mevedel-view-stream-test--history view-buf))))))
+
+  :doc "a call reported finished before its batch keeps the run's shape"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (calls (mapcar (lambda (file) (list :name "Read" :args (list :file_path file)))
+                         '("a" "b" "c" "d"))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch data-buf calls)
+      (cl-flet ((event (type call id)
+                  (run-hook-with-args
+                   'mevedel-pipeline-tool-event-hook
+                   (append (list :type type :tool-use-id id :data-buffer data-buf)
+                           call))))
+        (cl-loop for call in calls for i from 1
+                 do (event 'started call (format "id-%d" i)))
+        (should (string-match-p "● Read 4 files · 4 running"
+                                (mevedel-view-stream-test--history view-buf)))
+        ;; The pipeline reports one call finished; gptel writes the
+        ;; batch's results only once all four are done.
+        (event 'settled (car calls) "id-1")
+        (let ((text (mevedel-view-stream-test--history view-buf)))
+          (should (string-match-p "● Read 4 files · 3 running" text))
+          (should-not (string-match-p "Read: b" text)))
+        (dolist (call (cdr calls))
+          (event 'settled call (format "id-%d" (1+ (cl-position call calls)))))
+        ;; Every call finished, results still due: a finished group row.
+        (let ((text (mevedel-view-stream-test--history view-buf)))
+          (should (string-match-p "✓ Read 4 files\n" text))
+          (should-not (string-match-p "running\\|●" text)))
+        (mevedel-view-stream-test--batch data-buf calls t)
+        (with-current-buffer view-buf
+          (should-not mevedel-view--pending-tool-calls))
+        (should (= 1 (mevedel-view-stream-test--count-substring
+                      "✓ Read 4 files" (mevedel-view-stream-test--history
+                                        view-buf)))))))
+
+  :doc "a call reported finished draws a still finished row below the threshold"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (calls '((:name "Read" :args (:file_path "a"))
+                   (:name "Grep" :args (:pattern "x")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch data-buf calls)
+      (run-hook-with-args 'mevedel-pipeline-tool-event-hook
+                          (append (list :type 'started :tool-use-id "r"
+                                        :data-buffer data-buf)
+                                  (car calls)))
+      (run-hook-with-args 'mevedel-pipeline-tool-event-hook
+                          (append (list :type 'settled :tool-use-id "r"
+                                        :data-buffer data-buf)
+                                  (car calls)))
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "  ✓ Read: a\n  ● Grep: x" text)))
+      (with-current-buffer view-buf
+        ;; Only the running call is animated.
+        (should (= 1 (length mevedel-view--spinner-tool-targets))))))
+
+  :doc "folding and unfolding a running group keeps its running calls"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (header "● Read 4 files, searched 2 patterns · 2 running"))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (with-current-buffer view-buf
+        (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4))
+      (mevedel-view-stream-test--batch
+       data-buf (mapcar (lambda (file) (list :name "Read" :args (list :file_path file)))
+                        '("a" "b" "c" "d"))
+       t)
+      (with-current-buffer view-buf
+        (goto-char (point-min))
+        (search-forward "Read 4 files")
+        (mevedel-view-toggle-section))
+      (mevedel-view-stream-test--batch
+       data-buf '((:name "Grep" :args (:pattern "x"))
+                  (:name "Grep" :args (:pattern "y"))))
+      (cl-flet ((toggle ()
+                  (with-current-buffer view-buf
+                    (goto-char (point-min))
+                    (search-forward "Read 4 files")
+                    (mevedel-view-toggle-section)
+                    (mevedel-view-stream-test--history view-buf))))
+        ;; Fold: one running header, no running rows left behind.
+        (let ((text (toggle)))
+          (should (= 1 (mevedel-view-stream-test--count-substring header text)))
+          (should-not (string-match-p "Grep: x\\|Read: a" text)))
+        ;; Unfold: settled children and running calls are listed again.
+        (let ((text (toggle)))
+          (should (= 1 (mevedel-view-stream-test--count-substring header text)))
+          (should (string-match-p "Read: a" text))
+          (should (= 1 (mevedel-view-stream-test--count-substring "● Grep: x" text)))
+          (should (= 1 (mevedel-view-stream-test--count-substring "● Grep: y" text)))))
+      (with-current-buffer view-buf
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (= 2 (length mevedel-view--pending-tool-calls))))))
+
+  :doc "an archived segment on display never receives the live turn"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (archive (generate-new-buffer " *archived-segment*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer archive
+              (mevedel--transcript-org-mode)
+              (setq-local gptel-response-separator "\n\n")
+              (setq-local mevedel--view-buffer view-buf))
+            (mevedel-view-stream-test--insert-data archive "Old prompt\n" nil)
+            (dolist (file '("a" "b" "c" "d"))
+              (mevedel-view-stream-test--insert-data
+               archive (format "%S\n\nresult\n"
+                               (list :name "Read" :args (list :file_path file)))
+               (cons 'tool (concat "old-" file))))
+            (mevedel-view-stream-test--insert-data archive "Old answer.\n" 'response)
+            (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+            (mevedel-view-stream-test--batch
+             data-buf '((:name "Grep" :args (:pattern "x"))))
+            (with-current-buffer view-buf
+              (setq mevedel-view-segments--number 1
+                    mevedel-view-segments--buffer archive)
+              (cl-letf (((symbol-function 'mevedel-view-segments-banner)
+                         (lambda () "Viewing archived segment\n\n")))
+                (mevedel-view-render--full-now)
+                (let ((before (mevedel-view-stream-test--history view-buf)))
+                  (should (string-match-p "Read 4 files" before))
+                  ;; Toggle a section of the archive while calls still run.
+                  (goto-char (point-min))
+                  (search-forward "Read 4 files")
+                  (mevedel-view-toggle-section)
+                  (mevedel-view-toggle-section)
+                  ;; A live update arriving now leaves the archive alone too.
+                  (mevedel-view-render-live-update data-buf)
+                  (let ((after (mevedel-view-stream-test--history view-buf)))
+                    (should (equal before after))
+                    (should-not (string-match-p "Grep: x" after)))))))
+        (with-current-buffer view-buf
+          (setq mevedel-view-segments--number nil
+                mevedel-view-segments--buffer nil))
+        (kill-buffer archive))))
+
+  :doc "a directive request's running calls get no Assistant heading"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :directive-uuid "directive-1")))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch
+       data-buf (list '(:name "Read" :args (:file_path "a"))))
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "● Read: a" text))
+        (should-not (string-match-p "Assistant" text)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request nil)))))
 
 
 ;;
@@ -2689,14 +3075,15 @@ turn's later text, live and after reconstruction."
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--start-spinner "Working...")
-        (mevedel-view--insert-pending-tool-lines
-         (list (list "call-1" "Read" "a" nil)))
+        (setq mevedel-view--pending-tool-calls
+              (list (list "call-1" "Read" "a")))
+        (mevedel-view-stream-test--draw-running-rows)
         (setf (mevedel-session-pending-follow-ups session)
               (list (list :input "queued while busy"
                           :display-text "queued while busy")))
         (mevedel-view--interaction-rebuild)
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
-               (calling (string-match-p "Calling Read: a" text))
+               (calling (string-match-p "● Read: a" text))
                (queued (string-match-p "queued while busy" text))
                (working (string-match-p "Working" text))
                (prompt (string-match-p "\n> " text working)))
@@ -2709,31 +3096,28 @@ turn's later text, live and after reconstruction."
           (should (< working prompt)))
         (mevedel-view--stop-spinner))))
 
-  :doc "pending tool refresh suppresses modification hooks"
+  :doc "a live render of running calls suppresses modification hooks"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (let ((changes 0))
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-max))))
         (setq mevedel-view--pending-tool-calls
-              (list (list "call-1" "Read" nil nil)))
+              (list (list "call-1" "Read" nil)))
         (add-hook 'after-change-functions
                   (lambda (&rest _ignore)
                     (cl-incf changes))
                   nil t)
-        (mevedel-view--refresh-pending-tool-lines)
+        (mevedel-view-render-live-update data-buf)
         (should (= 0 changes))
         (let ((pos (text-property-any
                     (point-min) mevedel-view--input-marker
                     'mevedel-view-pending-tool-live t)))
           (should pos)
-          (should (eq 'history-live
-                      (get-text-property
-                       pos 'mevedel-view-zone-namespace)))
-          (should (equal "call-1"
-                         (get-text-property
-                          pos 'mevedel-view-zone-id)))
-          (should (eq (mevedel-view-zone-region 'history-live)
-                      (get-text-property
-                       pos 'mevedel-view-zone-region)))
+          ;; A running call has no transcript source to disclose.
+          (should-not (get-text-property pos 'mevedel-view-source))
           (should (< pos (marker-position mevedel-view--status-marker)))))))
 
   :doc "pending tool refresh preserves composer text and point"
@@ -2742,8 +3126,8 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-test--insert-composer-draft "draft\n> keep typing" 8)
       (let ((input-offset (- (point) (mevedel-view--input-start))))
         (setq mevedel-view--pending-tool-calls
-              (list (list "call-1" "Read" nil nil)))
-        (mevedel-view--refresh-pending-tool-lines)
+              (list (list "call-1" "Read" nil)))
+        (mevedel-view-stream-test--draw-running-rows)
         (should (equal "draft\n> keep typing"
                        (mevedel-view--input-text)))
         (should (= (- (point) (mevedel-view--input-start))
@@ -2817,15 +3201,17 @@ turn's later text, live and after reconstruction."
       (mevedel-view-stream-test--insert-composer-draft
        "> quoted\nsecond line" 4))
     (with-current-buffer data-buf
-      (mevedel-view-stream-pre-tool
-       '(:id "wait-1" :name "WaitAgent" :args (:timeout_ms 10000))))
+      (let ((mevedel-view-tool-boundary-render-delay 0))
+        (mevedel-view-stream-pre-tool
+         '(:id "wait-1" :name "WaitAgent" :args (:timeout_ms 10000)))))
     (with-current-buffer view-buf
       (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      ;; The running row reads like the settled `WaitAgent: agents' row.
       (should (string-match-p
-               "Waiting for agents"
+               "● WaitAgent: agents"
                (buffer-substring-no-properties (point-min) (point-max))))))
 
-  :doc "pending tool refresh keeps ordinary calling rows and adds a fragment"
+  :doc "a running row joins ordinary text that merely reads like one"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (let ((inhibit-read-only t))
@@ -2842,30 +3228,20 @@ turn's later text, live and after reconstruction."
         (set-marker mevedel-view--input-marker (point))
         (set-marker-insertion-type mevedel-view--input-marker nil))
       (setq mevedel-view--pending-tool-calls
-            (list (list "call-1" "Read" nil nil)))
-      (mevedel-view--refresh-pending-tool-lines)
+            (list (list "call-1" "Read" nil)))
+      (mevedel-view-stream-test--draw-running-rows)
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
-        (should (= 3 (mevedel-view-stream-test--count-substring
-                      "Calling Read" text))))
-      (let (occurrences)
-        (goto-char (point-min))
-        (while (search-forward "Calling Read" nil t)
-          (push (list :source (get-text-property
-                               (match-beginning 0) 'mevedel-view-source)
-                      :namespace (get-text-property
-                                  (match-beginning 0)
-                                  'mevedel-view-zone-namespace))
-                occurrences))
-        (should (cl-some (lambda (entry) (plist-get entry :source))
-                         occurrences))
-        (should (cl-some (lambda (entry)
-                           (eq 'history-live (plist-get entry :namespace)))
-                         occurrences))
-        (should (cl-some (lambda (entry)
-                           (and (not (plist-get entry :source))
-                                (not (plist-get entry :namespace))))
-                         occurrences)))))
+        (should (= 2 (mevedel-view-stream-test--count-substring
+                      "Calling Read" text)))
+        (should (= 1 (mevedel-view-stream-test--count-substring
+                      "● Read" text))))
+      ;; Retiring the running row leaves the look-alike text alone.
+      (mevedel-view--retire-pending-tool-rows)
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (= 2 (mevedel-view-stream-test--count-substring
+                      "Calling Read" text)))
+        (should-not (string-match-p "● Read" text)))))
 
   :doc "update replaces spinner text"
   (mevedel-view-stream-test--with-buffers
@@ -2987,11 +3363,10 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (let ((mevedel-view-spinner-style 'ascii)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" nil nil)))
+             '(("call-1" "Read" nil)))
             (changes 0))
         (mevedel-view--start-spinner "Thinking...")
-        (mevedel-view--insert-pending-tool-lines
-         mevedel-view--pending-tool-calls)
+        (mevedel-view-stream-test--draw-running-rows)
         (add-hook 'after-change-functions
                   (lambda (&rest _ignore)
                     (cl-incf changes))
@@ -3117,8 +3492,8 @@ turn's later text, live and after reconstruction."
       (let ((mevedel-view-tool-spinner-style 'ascii)
             (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" nil nil))))
-        (mevedel-view--refresh-pending-tool-lines)
+             '(("call-1" "Read" nil))))
+        (mevedel-view-stream-test--draw-running-rows)
         (let ((frame-pos (text-property-any
                           (point-min) (point-max)
                           'mevedel-view-inline-spinner-frame t)))
@@ -3200,21 +3575,21 @@ turn's later text, live and after reconstruction."
                 (should (mevedel--ui-timer-pending-p timer))))
           (mevedel-view--stop-spinner)))))
 
-  :doc "shimmer tool rows animate their verb and tool name"
+  :doc "shimmer running rows animate their tool name, not its argument"
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--with-visible-view
       (let ((mevedel-view-tool-spinner-style 'shimmer)
             (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" "notes.org" nil))))
-        (mevedel-view--refresh-pending-tool-lines)
+             '(("call-1" "Read" "notes.org"))))
+        (mevedel-view-stream-test--draw-running-rows)
         (let* ((start (text-property-any (point-min) (point-max)
                                          'mevedel-view-inline-spinner-frame t))
                (end (next-single-property-change
                      start 'mevedel-view-inline-spinner-frame)))
-          (should (equal "Calling Read" (buffer-substring-no-properties start end)))
-          (should (string-search "Calling Read" (get-text-property start 'display)))
-          (should (equal ": notes.org..."
+          (should (equal "Read" (buffer-substring-no-properties start end)))
+          (should (string-search "Read" (get-text-property start 'display)))
+          (should (equal ": notes.org"
                          (buffer-substring-no-properties
                           end (save-excursion (goto-char end)
                                               (line-end-position)))))))))
@@ -3267,8 +3642,8 @@ turn's later text, live and after reconstruction."
       (let ((mevedel-view-tool-spinner-style 'ascii)
             (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" nil nil))))
-        (mevedel-view--refresh-pending-tool-lines)
+             '(("call-1" "Read" nil))))
+        (mevedel-view-stream-test--draw-running-rows)
         (goto-char (text-property-any
                     (point-min) (point-max)
                     'mevedel-view-inline-spinner-frame t))
@@ -3278,14 +3653,14 @@ turn's later text, live and after reconstruction."
             (mevedel-view--spinner-tick))
           (should (= (point) point-before))))))
 
-  :doc "spinner tick updates only history-live and preserves the composer"
+  :doc "spinner tick updates only running rows and preserves the composer"
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--with-visible-view
       (let ((mevedel-view-tool-spinner-style 'ascii)
             (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" nil nil))))
-        (mevedel-view--refresh-pending-tool-lines)
+             '(("call-1" "Read" nil))))
+        (mevedel-view-stream-test--draw-running-rows)
         (let ((real-pos
                (text-property-any
                 (point-min) (point-max)
@@ -3360,9 +3735,10 @@ turn's later text, live and after reconstruction."
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Working" text))))))
 
-  :doc "pre-tool render keeps request progress and adds pending line"
+  :doc "pre-tool render keeps request progress and adds a running row"
   (mevedel-view-stream-test--with-buffers
-    (let ((mevedel-view-spinner-style 'ascii))
+    (let ((mevedel-view-spinner-style 'ascii)
+          (mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (setq mevedel-view--in-flight-turn-start
               (copy-marker mevedel-view--input-marker))
@@ -3387,11 +3763,8 @@ turn's later text, live and after reconstruction."
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p "Working" text))
-          (should (string-match-p "Calling Read: foo.el" text))
-          (should (= 1 (cl-loop with start = 0
-                                while (string-match "Calling Read" text start)
-                                count t
-                                do (setq start (match-end 0)))))))))
+          (should (= 1 (mevedel-view-stream-test--count-substring
+                        "● Read: foo.el" text)))))))
 
   :doc "disabled motion keeps a visible one-second metadata timer and live status"
   (mevedel-view-stream-test--with-buffers
@@ -3401,9 +3774,9 @@ turn's later text, live and after reconstruction."
             (mevedel-view-spinner-power-policy 'full)
             (mevedel-view-spinner-animate nil)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" nil nil))))
+             '(("call-1" "Read" nil))))
         (mevedel-view--start-spinner "Working...")
-        (mevedel-view--refresh-pending-tool-lines)
+        (mevedel-view-stream-test--draw-running-rows)
         (let* ((main (text-property-any (point-min) (point-max)
                                         'mevedel-view-spinner-frame t))
                (tool (text-property-any (point-min) (point-max)
@@ -3427,7 +3800,7 @@ turn's later text, live and after reconstruction."
     (let ((mevedel-view-spinner-style 'ascii)
           (mevedel-view-tool-spinner-style 'ascii)
           (mevedel-view-spinner-power-policy 'full)
-          (mevedel-view-tool-boundary-render-delay 60))
+          (mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (should-not (get-buffer-window view-buf t))
         (mevedel-view-stream-begin-turn
@@ -3453,9 +3826,9 @@ turn's later text, live and after reconstruction."
               (let ((text (buffer-substring-no-properties
                            (point-min) (point-max))))
                 (should (string-match-p "Checking completed work" text))
-                (should (string-match-p "Calling Read: a" text))
-                (should (string-match-p "Calling Grep: x" text))
-                (should (< (string-match-p "Calling Grep: x" text)
+                (should (string-match-p "- Read: a" text))
+                (should (string-match-p "- Grep: x" text))
+                (should (< (string-match-p "- Grep: x" text)
                            (string-match-p "Checking completed work" text)))))
             (mevedel-view-stream-test--with-visible-view
               (mevedel-view--start-spinner-timer)
@@ -3473,10 +3846,10 @@ turn's later text, live and after reconstruction."
             (with-current-buffer view-buf
               (should (equal "Checking completed work..."
                              mevedel-view--spinner-status))
-              (should (equal "Calling Grep: x..."
-                             (mevedel-view--pending-tool-label (car mevedel-view--pending-tool-calls))))
+              (should (equal '("Grep" "x")
+                             (cdar mevedel-view--pending-tool-calls)))
               (should (= 1 (length mevedel-view--spinner-tool-targets)))
-              (should-not (string-match-p "Calling Read: a"
+              (should-not (string-match-p "- Read: a"
                                           (buffer-string)))
               (should (equal "> quoted\nsecond line"
                              (mevedel-view--input-text)))
@@ -4331,19 +4704,20 @@ turn's later text, live and after reconstruction."
         (setq mevedel-view--in-flight-turn-start
               (copy-marker mevedel-view--input-marker nil))
         (setq mevedel-view--pending-tool-calls
-              (list (list 'read "Read" nil nil)))
-        (mevedel-view--insert-pending-tool-lines
-         mevedel-view--pending-tool-calls)
+              (list (list 'read "Read" nil)))
+        (mevedel-view-stream-test--draw-running-rows)
         (add-hook 'after-change-functions
                   (lambda (&rest _ignore)
                     (cl-incf changes))
                   nil t)
         (mevedel-view-render-live-update data-buf)
         (should (= 0 changes))
-        (should (string-match-p
-                 "Partial response"
-                 (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker))))))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Partial response" text))
+          ;; The redraw replaced the running row instead of adding one.
+          (should (= 1 (mevedel-view-stream-test--count-substring
+                        "● Read" text)))))))
 
   :doc "does not duplicate the original user turn after mailbox insertion"
   (mevedel-view-stream-test--with-buffers
@@ -4928,13 +5302,13 @@ turn's later text, live and after reconstruction."
                   (mevedel-view-spinner-power-policy 'full)
                   (mevedel-view-spinner-battery-framerate 0)
                   (mevedel-view--pending-tool-calls
-                   '(("call-1" "Read" nil nil)))
+                   '(("call-1" "Read" nil)))
                   ;; Inside the first shimmer sweep and the breathe fade.
                   (seconds 1.0))
               (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
                          (lambda () seconds)))
                 (mevedel-view--start-spinner "Working...")
-                (mevedel-view--refresh-pending-tool-lines)
+                (mevedel-view-stream-test--draw-running-rows)
                 (mevedel-view--spinner-tick)
                 (let* ((label (marker-position
                                (car mevedel-view--spinner-label-target)))
@@ -5018,13 +5392,13 @@ turn's later text, live and after reconstruction."
                   (mevedel-view-spinner-power-policy 'full)
                   (mevedel-view-spinner-battery-framerate 0)
                   (mevedel-view--pending-tool-calls
-                   '(("call-1" "Read" nil nil))))
+                   '(("call-1" "Read" nil))))
               (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
                          (lambda () 1.0)))
                 (mevedel-view-stream-test--insert-composer-draft
                  "> first line\nsecond line" 4)
                 (mevedel-view--start-spinner "Working...")
-                (mevedel-view--refresh-pending-tool-lines)
+                (mevedel-view-stream-test--draw-running-rows)
                 (mevedel-view--spinner-tick)
                 (let* ((label (marker-position
                                (car mevedel-view--spinner-label-target)))
@@ -5049,12 +5423,12 @@ turn's later text, live and after reconstruction."
             (mevedel-view-spinner-power-policy 'full)
             (mevedel-view-spinner-battery-framerate 0)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" nil nil)))
+             '(("call-1" "Read" nil)))
             (seconds 0.72))
         (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
                    (lambda () seconds)))
           (mevedel-view--start-spinner "Working...")
-          (mevedel-view--refresh-pending-tool-lines)
+          (mevedel-view-stream-test--draw-running-rows)
           (mevedel-view--spinner-tick)
           (let* ((target (car mevedel-view--spinner-tool-targets))
                  (display (get-text-property
@@ -5073,9 +5447,9 @@ turn's later text, live and after reconstruction."
             (should (equal display (get-text-property
                                     (marker-position (car target)) 'display)))
             (setq mevedel-view--pending-tool-calls
-                  '(("call-1" "Read" nil nil)
-                    ("call-2" "Grep" nil nil)))
-            (mevedel-view--refresh-pending-tool-lines)
+                  '(("call-1" "Read" nil)
+                    ("call-2" "Grep" nil)))
+            (mevedel-view-stream-test--draw-running-rows)
             (should (equal display
                            (get-text-property
                             (marker-position
@@ -5087,15 +5461,22 @@ turn's later text, live and after reconstruction."
                      (car (cadr mevedel-view--spinner-tool-targets)))
                     'display)))
               (setq mevedel-view--pending-tool-calls
-                    '(("call-2" "Grep" nil nil)))
-              (mevedel-view--refresh-pending-tool-lines)
+                    '(("call-2" "Grep" nil)))
+              (mevedel-view-stream-test--draw-running-rows)
               (should (equal second-display
                              (get-text-property
                               (marker-position
                                (caar mevedel-view--spinner-tool-targets))
                               'display))))
+            ;; A new style redraws the live turn's running rows.
+            (setq mevedel-view--in-flight-turn-start
+                  (copy-marker mevedel-view--input-marker)
+                  mevedel-view--data-turn-start
+                  (with-current-buffer data-buf (copy-marker (point-max))))
             (setq mevedel-view-tool-spinner-style 'dots)
             (mevedel-view--refresh-animation-options)
+            (should (eq 'incremental mevedel-view--pending-render-kind))
+            (mevedel-view--flush-scheduled-render view-buf t)
             (should (equal "*... "
                            (get-text-property
                             (marker-position
@@ -5123,10 +5504,10 @@ turn's later text, live and after reconstruction."
                       (mevedel-view-spinner-battery-framerate 0)
                       (mevedel-view-spinner-animate t)
                       (mevedel-view--pending-tool-calls
-                       '(("call-1" "Read" nil nil))))
+                       '(("call-1" "Read" nil))))
                   (when (eq main 'static)
                     (mevedel-view--start-spinner "Working..."))
-                  (mevedel-view--refresh-pending-tool-lines)
+                  (mevedel-view-stream-test--draw-running-rows)
                   (mevedel-view--spinner-tick)
                   (let* ((target (car mevedel-view--spinner-tool-targets))
                          (position (marker-position (car target)))
@@ -5161,9 +5542,9 @@ turn's later text, live and after reconstruction."
                     (should (equal-including-properties
                              display (get-text-property position 'display)))
                     (setq mevedel-view--pending-tool-calls
-                          '(("call-1" "Read" nil nil)
-                            ("call-2" "Grep" nil nil)))
-                    (mevedel-view--refresh-pending-tool-lines)
+                          '(("call-1" "Read" nil)
+                            ("call-2" "Grep" nil)))
+                    (mevedel-view-stream-test--draw-running-rows)
                     (let* ((first (car mevedel-view--spinner-tool-targets))
                            (second (cadr mevedel-view--spinner-tool-targets)))
                       (should (equal-including-properties
@@ -5195,7 +5576,7 @@ turn's later text, live and after reconstruction."
               (mevedel-view-spinner-power-policy 'full)
               (mevedel-view-spinner-battery-framerate 0)
               (mevedel-view--pending-tool-calls
-               '(("call-1" "Read" nil nil))))
+               '(("call-1" "Read" nil))))
           (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
                      (lambda () seconds)))
             (setq mevedel-view--in-flight-turn-start
@@ -5203,7 +5584,7 @@ turn's later text, live and after reconstruction."
                   mevedel-view--data-turn-start
                   (with-current-buffer data-buf (copy-marker (point-max))))
             (mevedel-view--start-spinner "Working...")
-            (mevedel-view--refresh-pending-tool-lines)
+            (mevedel-view-stream-test--draw-running-rows)
             (mevedel-view--spinner-tick)
             (let ((display
                    (get-text-property
@@ -5236,7 +5617,7 @@ turn's later text, live and after reconstruction."
                 (mevedel-view-spinner-battery-framerate 0)
                 (mevedel-view-spinner-animate t)
                 (mevedel-view--pending-tool-calls
-                 '(("call-1" "Read" nil nil))))
+                 '(("call-1" "Read" nil))))
             (cl-letf (((symbol-function 'mevedel-view--animation-seconds)
                        (lambda () seconds)))
               (setq mevedel-view--in-flight-turn-start
@@ -5244,7 +5625,7 @@ turn's later text, live and after reconstruction."
                     mevedel-view--data-turn-start
                     (with-current-buffer data-buf (copy-marker (point-max))))
               (mevedel-view--start-spinner "Working...")
-              (mevedel-view--refresh-pending-tool-lines)
+              (mevedel-view-stream-test--draw-running-rows)
               (mevedel-view--spinner-tick)
               (let ((display
                      (get-text-property
@@ -5256,6 +5637,12 @@ turn's later text, live and after reconstruction."
                   (setq mevedel-view-spinner-power-policy 'save))
                 (mevedel-view--start-spinner-timer)
                 (mevedel-view--full-rerender)
+                ;; The projection leaves running rows to the live turn's
+                ;; next boundary render, which restores their phase.
+                (should-not (text-property-any
+                             (point-min) (point-max)
+                             'mevedel-view-pending-tool-live t))
+                (mevedel-view--flush-scheduled-render view-buf t)
                 (let ((position
                        (marker-position
                         (caar mevedel-view--spinner-tool-targets))))
@@ -5279,7 +5666,9 @@ turn's later text, live and after reconstruction."
         (let ((timer mevedel-view--spinner-timer))
           (cl-letf (((symbol-function 'mevedel-view--render-request-progress)
                      (lambda (&rest _) (cl-incf reconciles)))
-                    ((symbol-function 'mevedel-view--refresh-pending-tool-lines)
+                    ((symbol-function 'mevedel-view--schedule-tool-boundary-render)
+                     (lambda (&rest _) (cl-incf reconciles)))
+                    ((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf reconciles))))
             (mevedel-view--resume-on-window-layout (selected-window) (point-min))
             (mevedel-view--resume-render-if-attended view-buf)
@@ -5332,8 +5721,8 @@ turn's later text, live and after reconstruction."
             (redisplay t)
             (with-current-buffer view-buf
               (setq mevedel-view--pending-tool-calls
-                    '(("call-1" "Read" nil nil)))
-              (mevedel-view--refresh-pending-tool-lines)
+                    '(("call-1" "Read" nil)))
+              (mevedel-view-stream-test--draw-running-rows)
               (should (gethash view-buf mevedel-view-power--watchers))
               (should (timerp mevedel-view-power--timer))
               (should-not mevedel-view--spinner-timer))
@@ -5374,7 +5763,7 @@ turn's later text, live and after reconstruction."
               (should (gethash view-buf mevedel-view-power--watchers))
               (should (equal (with-current-buffer view-buf
                                mevedel-view--pending-tool-calls)
-                             '(("call-1" "Read" nil nil))))
+                             '(("call-1" "Read" nil))))
               ;; Deleting the last view window has no departing buffer-local
               ;; callback.  A shared window-state observer must do the cleanup.
               (delete-window other)
@@ -5707,7 +6096,7 @@ turn's later text, live and after reconstruction."
       (let ((mevedel-view-tool-spinner-style 'braille)
             (mevedel-view-spinner-power-policy 'full)
             (mevedel-view--pending-tool-calls
-             '(("call-1" "Read" nil nil)))
+             '(("call-1" "Read" nil)))
             (original (symbol-function 'mevedel-view-animation-frame))
             frames)
         (cl-letf (((symbol-function 'char-displayable-p)
@@ -5717,7 +6106,7 @@ turn's later text, live and after reconstruction."
                      (when (eq face 'mevedel-view-ephemeral)
                        (push frame frames))
                      (funcall original style label seconds face frame))))
-          (mevedel-view--refresh-pending-tool-lines)
+          (mevedel-view-stream-test--draw-running-rows)
           (should (eq (car frames) :multiple))
           (let ((pos (text-property-any
                       (point-min) (point-max)
@@ -6164,9 +6553,9 @@ turn's later text, live and after reconstruction."
                     (mevedel-view-spinner-battery-framerate 30)
                     (mevedel-view-spinner-animate t)
                     (mevedel-view--pending-tool-calls
-                     '(("call-1" "Read" nil nil))))
+                     '(("call-1" "Read" nil))))
                 (mevedel-view--start-spinner "Working...")
-                (mevedel-view--refresh-pending-tool-lines)
+                (mevedel-view-stream-test--draw-running-rows)
                 (mevedel-view--spinner-tick)
                 (mevedel-view--interaction-register
                  '(:kind ask :id ask :origin "/root" :body "Question"))
@@ -6421,22 +6810,24 @@ turn's later text, live and after reconstruction."
                        #'mevedel-view--refresh-animation-on-face))))))
 
 (mevedel-deftest mevedel-view-animation-shimmer-overflow
-  (:doc "Frozen shimmer retains phase but displays the current overflow count.")
+  (:doc "Frozen shimmer retains phase but displays the current running count.")
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (let ((mevedel-view-spinner-animate nil)
             (mevedel-view-tool-spinner-style 'shimmer)
-            (mevedel-view-pending-tools-visible-max 1))
+            (mevedel-view-tool-group-collapse-threshold 3))
         (mevedel-view-stream-test--insert-composer-draft "> draft\nsecond line")
         (setq mevedel-view--pending-tool-calls
-              '(("1" "Read" "a" nil) ("2" "Bash" "sleep" nil)))
-        (mevedel-view--refresh-pending-tool-lines)
-        (push '("3" "Grep" "x" nil) mevedel-view--pending-tool-calls)
-        (mevedel-view--refresh-pending-tool-lines)
+              '(("1" "Read" "a") ("2" "Bash" "sleep") ("3" "Grep" "x")
+                ("4" "Read" "b")))
+        (mevedel-view-stream-test--draw-running-rows)
+        (should (= 1 (length mevedel-view--spinner-tool-targets)))
+        (push '("5" "Grep" "y") mevedel-view--pending-tool-calls)
+        (mevedel-view-stream-test--draw-running-rows)
         (let* ((target (car (last mevedel-view--spinner-tool-targets)))
                (start (marker-position (car target))))
           (should (string-match-p
-                   "2 more tools running"
+                   "5 running"
                    (get-text-property start 'display))))
         (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
 
@@ -6448,7 +6839,7 @@ turn's later text, live and after reconstruction."
         (let ((mevedel-view-spinner-style 'static)
               (mevedel-view-tool-spinner-style 'shimmer)
               (mevedel-view-spinner-power-policy 'full)
-              (mevedel-view-pending-tools-visible-max 8))
+              (mevedel-view-tool-group-collapse-threshold 3))
           (cl-letf (((symbol-function 'mevedel-view-animation--colors)
                      (lambda (_face frame)
                        (unless (eq frame :multiple)
@@ -6456,10 +6847,12 @@ turn's later text, live and after reconstruction."
                     ((symbol-function 'mevedel-view--animation-span-in-window-p)
                      (lambda (&rest _) t)))
             (setq mevedel-view--pending-tool-calls
-                  (cl-loop for i below 9
+                  ;; The most separate rows a batch draws before it groups.
+                  (cl-loop for i below 3
                            collect (list (number-to-string i)
-                                         (format "Tool%d" i) "argument" nil)))
-            (mevedel-view--refresh-pending-tool-lines)
+                                         (format "Tool%d" i) "argument")))
+            (mevedel-view-stream-test--draw-running-rows)
+            (should (= 3 (length mevedel-view--spinner-tool-targets)))
             ;; A new display needs different banks.  The semantic scheduler
             ;; must prepare every row, even with no main color indicator.
             (cl-letf (((symbol-function 'mevedel-view--animation-target-frame)
@@ -6539,8 +6932,8 @@ turn's later text, live and after reconstruction."
                     ((symbol-function 'mevedel-view--animation-span-in-window-p)
                      (lambda (&rest _) t)))
             (setq mevedel-view--pending-tool-calls
-                  '(("1" "Read" "a" nil) ("2" "Bash" "sleep" nil)))
-            (mevedel-view--refresh-pending-tool-lines)
+                  '(("1" "Read" "a") ("2" "Bash" "sleep")))
+            (mevedel-view-stream-test--draw-running-rows)
             (cl-letf (((symbol-function 'mevedel-view--animation-target-frame)
                        (lambda (target &optional _all)
                          (if (eq target (car mevedel-view--spinner-tool-targets))
@@ -6566,15 +6959,15 @@ turn's later text, live and after reconstruction."
                          '("#ffffff" . "#000000"))))
                     ((symbol-function 'mevedel-view--animation-span-in-window-p)
                      (lambda (&rest _) t)))
-            (setq mevedel-view--pending-tool-calls '(("1" "Read" "a" nil)))
-            (mevedel-view--refresh-pending-tool-lines)
+            (setq mevedel-view--pending-tool-calls '(("1" "Read" "a")))
+            (mevedel-view-stream-test--draw-running-rows)
             (let ((start (marker-position
                           (caar mevedel-view--spinner-tool-targets))))
-              (should (equal "Calling Read" (get-text-property start 'display)))
+              (should (equal "Read" (get-text-property start 'display)))
               (cl-letf (((symbol-function 'mevedel-view--animation-target-frame)
                          (lambda (&rest _) :multiple)))
                 (mevedel-view--start-spinner-timer t)
-                (should (equal "- Calling Read"
+                (should (equal "- Read"
                                (get-text-property start 'display)))
                 (should-not mevedel-view--spinner-timer)))))))))
 
@@ -6618,8 +7011,8 @@ turn's later text, live and after reconstruction."
                     ((symbol-function 'mevedel-view--animation-seconds)
                      (lambda () seconds)))
             (mevedel-view--start-spinner "Working...")
-            (setq mevedel-view--pending-tool-calls '(("1" "Read" "a" nil)))
-            (mevedel-view--refresh-pending-tool-lines)
+            (setq mevedel-view--pending-tool-calls '(("1" "Read" "a")))
+            (mevedel-view-stream-test--draw-running-rows)
             (mevedel-view--spinner-tick)
             (mevedel-view--interaction-register
              '(:kind ask :id ask :origin "/root" :body "Question"))
@@ -6691,6 +7084,59 @@ second line")
               (mevedel-view--spinner-tick)
               (should (equal-including-properties sample (get-text-property start 'display))))
             (should (equal draft (mevedel-view--input-text)))))))))
+
+(mevedel-deftest mevedel-view--adopt-tool-animation-targets ()
+  ,test
+  (test)
+  :doc "animates only the running spans a render drew in its range"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-tool-spinner-style 'ascii)
+            (inhibit-read-only t)
+            outside)
+        (mevedel-view-stream-test--insert-composer-draft "> draft\nline" 3)
+        (save-excursion
+          (goto-char (mevedel-view--history-insertion-marker))
+          (mevedel-view--with-render-boundaries-advancing
+            (setq outside (point))
+            (mevedel-view--insert-pending-tool-row '("old" "Read" "a"))))
+        (let ((start (marker-position (mevedel-view--history-insertion-marker))))
+          (save-excursion
+            (goto-char start)
+            (mevedel-view--with-render-boundaries-advancing
+              (mevedel-view--insert-pending-run
+               '(("k" "Grep" "x") ("j" "Grep" "y")))))
+          (mevedel-view--adopt-tool-animation-targets
+           start (marker-position (mevedel-view--history-insertion-marker))
+           '(("k" "* " 0.48 ""))))
+        (should (= 2 (length mevedel-view--spinner-tool-targets)))
+        (should (cl-every (lambda (target) (> (car target) outside))
+                          mevedel-view--spinner-tool-targets))
+        ;; A row that survives a redraw keeps the frame it displayed.
+        (should (equal "* " (get-text-property
+                             (car (car mevedel-view--spinner-tool-targets))
+                             'display)))
+        (should (eq 'ascii mevedel-view--spinner-rendered-tool-style))
+        (should (equal "> draft\nline" (mevedel-view--input-text)))
+        (mevedel-view--stop-spinner)))))
+
+(mevedel-deftest mevedel-view--retire-pending-tool-rows ()
+  ,test
+  (test)
+  :doc "removes running rows and their animation without touching the draft"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-tool-spinner-style 'ascii))
+        (mevedel-view-stream-test--insert-composer-draft "> draft\nline" 3)
+        (setq mevedel-view--pending-tool-calls '(("k" "Read" "a")))
+        (mevedel-view-stream-test--draw-running-rows)
+        (should mevedel-view--spinner-tool-targets)
+        (mevedel-view--retire-pending-tool-rows)
+        (should-not mevedel-view--spinner-tool-targets)
+        (should-not (string-search "Read: a" (buffer-string)))
+        (should (equal "> draft\nline" (mevedel-view--input-text)))
+        (should (= (point) (+ 3 (mevedel-view--input-start))))
+        (mevedel-view--stop-spinner)))))
 
 (provide 'test-mevedel-view-stream)
 ;;; test-mevedel-view-stream.el ends here

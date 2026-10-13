@@ -437,7 +437,7 @@ returns additional counters from one unprofiled workload run."
            (list :status status :history history)))))))
 
 (defun mevedel-benchmark--spinner-ticks (directory)
-  "Measure pending-tool spinner ticks over a large view below DIRECTORY."
+  "Measure running-tool spinner ticks over a large view below DIRECTORY."
   (let ((transcript-bytes (* 1024 1024))
         (iterations 100))
     (mevedel-benchmark--with-view
@@ -450,11 +450,15 @@ returns additional counters from one unprofiled workload run."
               (let ((start (point)))
                 (insert (make-string transcript-bytes ?x))
                 (put-text-property start (point)
-                                   'mevedel-view-type 'response)))))
-         (setq mevedel-view--pending-tool-calls
-               '(("benchmark-call" "Read" "benchmark.el" nil)))
-         (mevedel-view--insert-pending-tool-lines
-          mevedel-view--pending-tool-calls)
+                                   'mevedel-view-type 'response))
+               ;; Draw the running row as the live render does.
+               (setq mevedel-view--pending-tool-calls
+                     '(("benchmark-call" "Read" "benchmark.el")))
+               (let ((start (point)))
+                 (mevedel-view--insert-pending-run
+                  mevedel-view--pending-tool-calls)
+                 (mevedel-view--adopt-tool-animation-targets
+                  start (point) nil)))))
          (goto-char (mevedel-view--input-start))
          (insert "> benchmark draft\nsecond line")
          (goto-char (+ (mevedel-view--input-start) 4))
@@ -494,6 +498,128 @@ returns additional counters from one unprofiled workload run."
              (error "Spinner benchmark moved the composer"))
            metrics))))))
 
+(defun mevedel-benchmark--tool-burst-round (data-buf view-buf batches width)
+  "Run one in-flight turn of BATCHES parallel tool batches of WIDTH calls.
+Each batch runs gptel's hook order: every pre-tool hook, a boundary render,
+the results reaching DATA-BUF, every post-tool hook, and a boundary render.
+The turn is then stopped and its VIEW-BUF and DATA-BUF text removed, so
+every round starts from the same state."
+  (let ((data-start (with-current-buffer data-buf (copy-marker (point-max))))
+        (view-start (with-current-buffer view-buf
+                      (copy-marker (mevedel-view--history-insertion-marker))))
+        (serial 0))
+    (cl-flet ((flush ()
+                (with-current-buffer view-buf
+                  (when mevedel-view--pending-render-kind
+                    (when (timerp mevedel-view--render-timer)
+                      (cancel-timer mevedel-view--render-timer))
+                    (mevedel-view--flush-scheduled-render view-buf t)))))
+      (unwind-protect
+          (progn
+            (with-current-buffer view-buf
+              (mevedel-view-stream-begin-turn view-start data-start))
+            (dotimes (_ batches)
+              (let (calls)
+                (dotimes (index width)
+                  (cl-incf serial)
+                  (push (list :name (if (cl-evenp index) "Read" "Grep")
+                              :args (if (cl-evenp index)
+                                        (list :file_path
+                                              (format "src/file-%d.el" serial))
+                                      (list :pattern
+                                            (format "pattern-%d" serial)))
+                              :id (format "burst-%d" serial))
+                        calls))
+                (setq calls (nreverse calls))
+                (with-current-buffer data-buf
+                  (dolist (call calls)
+                    (mevedel-view-stream-pre-tool call)))
+                (flush)
+                (with-current-buffer data-buf
+                  (dolist (call calls)
+                    (let ((start (point-max)))
+                      (goto-char start)
+                      (insert (format "(:name %S :args %S)\n\nresult %s\n"
+                                      (plist-get call :name)
+                                      (plist-get call :args)
+                                      (plist-get call :id)))
+                      (put-text-property start (point) 'gptel
+                                         (cons 'tool (plist-get call :id)))))
+                  (dolist (call calls)
+                    (mevedel-view-stream-post-tool call)))
+                (flush))))
+        (with-current-buffer view-buf
+          (mevedel-view-stream-stop)
+          (when (timerp mevedel-view--render-timer)
+            (cancel-timer mevedel-view--render-timer))
+          (setq mevedel-view--pending-render-kind nil)
+          (let ((inhibit-read-only t))
+            (delete-region view-start (mevedel-view--history-insertion-marker))))
+        (with-current-buffer data-buf
+          (delete-region data-start (point-max)))
+        (set-marker view-start nil)
+        (set-marker data-start nil)))))
+
+(defun mevedel-benchmark--tool-burst (directory)
+  "Measure parallel tool batches in an in-flight turn below DIRECTORY.
+A 1 MiB transcript precedes the turn and the composer holds a draft."
+  (let ((transcript-bytes (* 1024 1024))
+        (batches 3)
+        (width 4))
+    (mevedel-benchmark--with-view
+     (lambda (data-buf view-buf)
+       (with-current-buffer view-buf
+         (let ((inhibit-read-only t))
+           (mevedel-view--call-with-render-boundaries-advancing
+            (lambda ()
+              (goto-char (mevedel-view--history-insertion-marker))
+              (let ((start (point)))
+                (insert (make-string transcript-bytes ?x) "\n")
+                (put-text-property start (point)
+                                   'mevedel-view-type 'response)))))
+         (goto-char (mevedel-view--input-start))
+         (insert "> benchmark draft\nsecond line")
+         (goto-char (+ (mevedel-view--input-start) 4))
+         (set-window-point (selected-window) (point)))
+       (let* ((workload
+               (lambda ()
+                 (mevedel-benchmark--tool-burst-round
+                  data-buf view-buf batches width)))
+              (metrics
+               (mevedel-benchmark--measure
+                'tool-burst
+                (list :transcript-bytes transcript-bytes
+                      :batches batches :width width)
+                workload directory
+                (lambda ()
+                  (let ((reconcile (symbol-function 'mevedel-view-zone-reconcile))
+                        (live (symbol-function 'mevedel-view--render-live-region))
+                        (reconciles 0)
+                        (live-renders 0)
+                        (tick (with-current-buffer view-buf
+                                (buffer-modified-tick))))
+                    (cl-letf (((symbol-function 'mevedel-view-zone-reconcile)
+                               (lambda (&rest args)
+                                 (cl-incf reconciles)
+                                 (apply reconcile args)))
+                              ((symbol-function 'mevedel-view--render-live-region)
+                               (lambda (&rest args)
+                                 (cl-incf live-renders)
+                                 (apply live args))))
+                      (funcall workload))
+                    (list :zone-reconciles reconciles
+                          :live-renders live-renders
+                          :view-modified-ticks
+                          (- (with-current-buffer view-buf
+                               (buffer-modified-tick))
+                             tick)))))))
+         (with-current-buffer view-buf
+           (unless (and (= (point) (+ (mevedel-view--input-start) 4))
+                        (equal (mevedel-view--input-text)
+                               "> benchmark draft\nsecond line"))
+             (error "Tool burst benchmark moved the composer")))
+         metrics)))))
+
 (defun mevedel-benchmark-run (scenario directory)
   "Run named SCENARIO and write its artifacts below DIRECTORY."
   (pcase scenario
@@ -504,6 +630,7 @@ returns additional counters from one unprofiled workload run."
     ("telemetry-perturbation"
      (mevedel-benchmark--telemetry-perturbation directory))
     ("tool-segments" (mevedel-benchmark--tool-segments directory))
+    ("tool-burst" (mevedel-benchmark--tool-burst directory))
     (_ (error "Unknown benchmark scenario: %s" scenario))))
 
 (when noninteractive

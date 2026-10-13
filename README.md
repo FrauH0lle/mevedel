@@ -424,15 +424,14 @@ the next send.
 | Custom Variable                                | Variable Description                                               |
 |------------------------------------------------|--------------------------------------------------------------------|
 | `mevedel-view-fontify-responses`               | Fontify assistant response bodies using Org-style faces.           |
-| `mevedel-view-pending-tools-visible-max`       | Maximum live `Calling X…` rows shown before summarizing the rest.  |
 | `mevedel-view-stream-render-delay`             | Debounce delay for incremental streaming view refreshes.           |
 | `mevedel-view-rerender-debounce`               | Debounce delay for explicit full view rerenders.                   |
 | `mevedel-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |
-| `mevedel-view-spinner-animate`                 | Global reduced-motion switch for request and pending-tool indicators. |
+| `mevedel-view-spinner-animate`                 | Global reduced-motion switch for request and running-tool indicators. |
 | `mevedel-present-enabled`                      | Make PGTK/Wayland frames present only what changed, through GL (default t; affects all of Emacs). |
 | `mevedel-view-native-enabled`                  | Use low-CPU native animation on PGTK/Wayland when available (default t). |
 | `mevedel-view-spinner-style`                   | Request label: `shimmer` (default), `breathe`, `bounce`, `dots`, `ellipsis`, `braille`, `ascii`, or `static`. |
-| `mevedel-view-tool-spinner-style`              | Pending-tool indicator: `shimmer` (default; sweeps "Calling TOOL" with the label), `braille`, `ascii`, `dots`, or `static`. |
+| `mevedel-view-tool-spinner-style`              | Running-tool indicator: `shimmer` (default; sweeps the tool name or a group's running count with the label), `braille`, `ascii`, `dots`, or `static`. |
 | `mevedel-view-spinner-framerate`               | Normal animation ceiling, 1–60 frames/second (default 30).          |
 | `mevedel-view-spinner-battery-framerate`       | Energy-saving ceiling, 0–60 frames/second (default 15); 0 freezes decorative motion. |
 | `mevedel-view-spinner-power-policy`            | `auto` (default), `full`, or `save`; see below.                      |

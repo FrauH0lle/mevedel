@@ -77,7 +77,7 @@
 (defvar mevedel-view--display-map)
 (defvar mevedel-view--pending-render-kind)
 (defvar mevedel-view--pending-tool-rows)
-(defvar mevedel-view-pending-tools-visible-max)
+(defvar mevedel-view--status-marker)
 (defvar mevedel-view-rerender-debounce)
 (defvar mevedel-view-spinner-animate)
 (defvar mevedel-view-spinner-style)
@@ -133,14 +133,12 @@
                   "mevedel-view-render" (&optional data-buf start end))
 (declare-function mevedel-view--history-insertion-marker
                   "mevedel-view-render" ())
-(declare-function mevedel-view--pending-tool-fragments
-                  "mevedel-view-render" (entries))
-(declare-function mevedel-view--pending-tool-insertion-target
-                  "mevedel-view-render" ())
 (declare-function mevedel-view--refresh-tool-row
                   "mevedel-view-render" (data-buffer tool-use-id))
 (declare-function mevedel-view--request-progress-anchor
                   "mevedel-view-render" ())
+(declare-function mevedel-view--retire-pending-decorations
+                  "mevedel-view-render" (start end))
 (declare-function mevedel-view-render-invalidate-live-tail
                   "mevedel-view-render" ())
 (declare-function mevedel-view-render-live-update
@@ -217,10 +215,10 @@ timer and its closure on every tick, even with an unchanged plan.")
   "Markers for the foreground label's separate elapsed metadata span.")
 
 (defvar-local mevedel-view--spinner-tool-targets nil
-  "Markers for the visible pending-tool indicator properties.")
+  "Markers for the animated spans of running tool rows.")
 
 (defvar-local mevedel-view--spinner-tool-samples nil
-  "Tool phases to display, keyed by pending-tool zone id.
+  "Tool phases to display, keyed by `mevedel-view-tool-animation-id'.
 A freeze replaces them with resting phases before they are drawn.")
 
 (defvar-local mevedel-view--spinner-last-second nil
@@ -239,7 +237,11 @@ moves spans drawn mid-sweep to their resting phase.")
 The value `:multiple' means the portable multi-frame fallback was used.")
 
 (defvar-local mevedel-view--spinner-rendered-tool-style nil
-  "Style of the current pending-tool indicator fragments.")
+  "Style the current running tool rows were drawn with.")
+
+(defvar-local mevedel-view--carried-tool-samples nil
+  "Running-row samples displayed before a full projection removed the rows.
+The live render that redraws the rows restores their displayed phase.")
 
 (defvar-local mevedel-view--spinner-rendered-state nil
   "Last (STATUS PREFIX) rendered in the request-progress fragment.")
@@ -270,19 +272,19 @@ rebuilding the view.  Nil outside an active exchange.")
   "Counter distinguishing pending tool calls that share a fingerprint.")
 
 (defvar-local mevedel-view--pending-tool-calls nil
-  "List of in-flight tool calls, one entry per call.
-Each entry is (KEY NAME DETAIL METADATA), where KEY is
-`((NAME . ARGS-PRINT) . SERIAL)'.  NAME and DETAIL identify the displayed
-tool.  METADATA holds the durable `:tool-use-id' and accepted
-`:permission-approvals', when known.  Identical parallel calls share the
-fingerprint half and are told apart by the serial.
+  "In-flight tool calls in arrival order, one entry per call.
+Each entry is (KEY NAME DETAIL METADATA) where KEY is
+`((NAME . ARGS-PRINT) . SERIAL)', NAME is the tool name, and DETAIL is
+its displayed argument or nil.  Identical parallel calls share the
+fingerprint half and are told apart by the serial, which also keys the
+row's animation phase across redraws.  METADATA holds the pipeline's
+durable `:tool-use-id' and accepted `:permission-approvals', when known.
 
-Pre-tool hooks add entries; pipeline admission binds their IDs.
-Settlement removes the exact bound entry.  ID-less post-tool hooks
-remove only unbound entries.  The render path emits one `Calling X…' line per
-entry in arrival order, respecting
-`mevedel-view-pending-tools-visible-max' for truncation when many
-tools are in flight in parallel.")
+Pre-tool hooks add entries; pipeline admission binds their identities.
+Pipeline settlement marks a bound entry `:settled'; post-tool hooks, which
+precede the result reaching the transcript, remove settled or unbound
+entries.  The live render draws the entries as calls of the turn's
+trailing activity run: running, or finished while their result is due.")
 
 (defvar-local mevedel-view--execution-event-entries 0
   "Number of entries retained in `mevedel-view--execution-events'.")
@@ -304,8 +306,9 @@ Tool boundaries use a shorter delay but join the same pending render."
 
 (defcustom mevedel-view-tool-boundary-render-delay 0.05
   "Seconds to coalesce incremental renders around tool boundaries.
-Pre/post tool hooks update their lightweight pending-tool status lines
-immediately, then use this delay for the heavier transcript render."
+A batch of parallel tool calls fires all its pre-tool hooks, and later
+all its post-tool hooks, at once; each batch then shares the one
+transcript render that draws its calls running or settled."
   :type 'number
   :group 'mevedel)
 
@@ -368,7 +371,7 @@ The underlying phase continues to advance and resumes without restarting."
             ;; repaint spans already drawn mid-sweep at the next rearm.
             (dolist (target mevedel-view--spinner-tool-targets)
               (when-let* ((start (marker-position (car target)))
-                          (sample (assoc (get-text-property start 'mevedel-view-zone-id)
+                          (sample (assoc (get-text-property start 'mevedel-view-tool-animation-id)
                                          mevedel-view--spinner-tool-samples)))
                 (setcdr sample
                         (mevedel-view--animation-rest-seconds
@@ -659,26 +662,24 @@ collection, which mevedel defers while busy, and slows every edit there."
               (cons (copy-marker label-end)
                     (copy-marker metadata-end t)))))))
 
-(defun mevedel-view--capture-tool-animation-targets ()
-  "Remember the bounded pending-tool spans after live-tail reconciliation."
+(defun mevedel-view--capture-tool-animation-targets (start end)
+  "Remember the running tool spans the live render drew in START..END."
   (apply #'mevedel-view--release-animation-targets
          mevedel-view--spinner-tool-targets)
   (setq mevedel-view--spinner-tool-targets nil)
-  (when-let* ((region (mevedel-view-zone-region 'history-live)))
-    (let ((pos (overlay-start region))
-          (end (overlay-end region)))
-      (while (and pos (< pos end)
-                  (setq pos (text-property-any
-                             pos end 'mevedel-view-inline-spinner-frame t)))
-        (let ((span-end (or (next-single-property-change
-                             pos 'mevedel-view-inline-spinner-frame nil end)
-                            end)))
-          ;; As for the label: text inserted at a row's start precedes it.
-          (push (cons (copy-marker pos t) (copy-marker span-end t))
-                mevedel-view--spinner-tool-targets)
-          (setq pos span-end))))
-    (setq mevedel-view--spinner-tool-targets
-          (nreverse mevedel-view--spinner-tool-targets)))
+  (let ((pos start))
+    (while (and pos (< pos end)
+                (setq pos (text-property-any
+                           pos end 'mevedel-view-inline-spinner-frame t)))
+      (let ((span-end (or (next-single-property-change
+                           pos 'mevedel-view-inline-spinner-frame nil end)
+                          end)))
+        ;; As for the label: text inserted at a row's start precedes it.
+        (push (cons (copy-marker pos t) (copy-marker span-end t))
+              mevedel-view--spinner-tool-targets)
+        (setq pos span-end))))
+  (setq mevedel-view--spinner-tool-targets
+        (nreverse mevedel-view--spinner-tool-targets))
   (setq mevedel-view--spinner-tool-samples
         (cl-remove-if-not
          (lambda (sample)
@@ -686,20 +687,20 @@ collection, which mevedel defers while busy, and slows every edit there."
             (lambda (target)
               (equal (car sample)
                      (get-text-property (marker-position (car target))
-                                        'mevedel-view-zone-id)))
+                                        'mevedel-view-tool-animation-id)))
             mevedel-view--spinner-tool-targets))
          mevedel-view--spinner-tool-samples)))
 
 (defun mevedel-view--tool-sample-seconds (start)
   "Return the displayed phase for the pending tool indicator at START.
 Newly inserted tool rows begin at phase zero."
-  (or (cdr (assoc (get-text-property start 'mevedel-view-zone-id)
+  (or (cdr (assoc (get-text-property start 'mevedel-view-tool-animation-id)
                   mevedel-view--spinner-tool-samples))
       0.0))
 
 (defun mevedel-view--record-tool-sample (start seconds)
   "Record the displayed phase SECONDS for the tool indicator at START."
-  (let* ((id (get-text-property start 'mevedel-view-zone-id))
+  (let* ((id (get-text-property start 'mevedel-view-tool-animation-id))
          (sample (assoc id mevedel-view--spinner-tool-samples)))
     (if sample
         (setcdr sample seconds)
@@ -716,7 +717,7 @@ Newly inserted tool rows begin at phase zero."
                                 ((eq (marker-buffer (car target))
                                      (current-buffer)))
                                 (id (get-text-property
-                                     start 'mevedel-view-zone-id)))
+                                     start 'mevedel-view-tool-animation-id)))
                       (let* ((seconds (mevedel-view--tool-sample-seconds start))
                              (label (mevedel-view--tool-animation-label target))
                              (display
@@ -738,7 +739,7 @@ Newly inserted tool rows begin at phase zero."
     (unwind-protect
         (dolist (target mevedel-view--spinner-tool-targets)
           (let* ((start (marker-position (car target)))
-                 (entry (assoc (get-text-property start 'mevedel-view-zone-id)
+                 (entry (assoc (get-text-property start 'mevedel-view-tool-animation-id)
                                previous)))
             (when entry
               (let* ((label (mevedel-view--tool-animation-label target))
@@ -1218,9 +1219,13 @@ rechecked without changing the displayed animation phase."
       (mevedel-view--render-request-progress)
       ;; A policy/rate change does not change an existing tool row's shape.
       ;; Keep its last displayed glyph, including target-frame fallbacks.
-      (unless (eq mevedel-view--spinner-rendered-tool-style
-                  mevedel-view-tool-spinner-style)
-        (mevedel-view--refresh-pending-tool-lines))
+      ;; A new style changes the running marker, so redraw the live turn.
+      (when (and mevedel-view--pending-tool-calls
+                 (not (eq mevedel-view--spinner-rendered-tool-style
+                          mevedel-view-tool-spinner-style))
+                 (boundp 'mevedel--data-buffer)
+                 (buffer-live-p mevedel--data-buffer))
+        (mevedel-view--schedule-tool-boundary-render mevedel--data-buffer))
       (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--refresh-animation-on-theme (&rest _)
@@ -1503,9 +1508,8 @@ INFO is a plist with at least :name and :args."
               (tool-name (plist-get info :name))
               (args (plist-get info :args)))
     (with-current-buffer view-buf
-      ;; `mevedel-view-stream-pre-tool' owns in-flight tool status lines.
-      ;; Avoid creating a second "Calling ..." line before that hook renders
-      ;; the animated pending-tool live tail.
+      ;; In a live turn `mevedel-view-stream-pre-tool' draws the call as a
+      ;; running row; the progress label would only repeat it.
       (unless (or (mevedel-view--routine-pending-poll-p info)
                   (and (mevedel-view-stream-in-flight-turn-start-position)
                        (markerp mevedel-view--data-turn-start)
@@ -1525,25 +1529,6 @@ INFO is a plist with at least :name and :args."
 POSITION may be an integer or marker."
   (setq mevedel-view--in-flight-turn-start
         (copy-marker position nil)))
-
-(defun mevedel-view--refresh-pending-tool-lines (&optional previous)
-  "Refresh pending-tool live-tail lines, restoring surviving PREVIOUS samples.
-Without PREVIOUS, capture displayed samples before replacing the live rows."
-  (let ((previous (or previous (mevedel-view--snapshot-tool-animation-targets))))
-    (mevedel-view--delete-pending-tool-live-lines)
-    (when mevedel-view--pending-tool-calls
-      (let* ((cap mevedel-view-pending-tools-visible-max)
-             (visible (cl-subseq mevedel-view--pending-tool-calls
-                                 0
-                                 (min cap
-                                      (length
-                                       mevedel-view--pending-tool-calls)))))
-        (mevedel-view--insert-pending-tool-lines visible previous)))
-    (unless mevedel-view--pending-tool-calls
-      (mevedel-view--capture-tool-animation-targets)
-      (setq mevedel-view--spinner-rendered-tool-style
-            mevedel-view-tool-spinner-style)
-      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view-stream--execution-view-buffer (data-buffer)
   "Return the visible view backed by DATA-BUFFER, or nil."
@@ -1849,6 +1834,18 @@ an out-of-order completion must not consume a bound identical sibling."
            (and (null bound-id) (equal (car (car entry)) fingerprint)))))
      mevedel-view--pending-tool-calls)))
 
+(defun mevedel-view--pending-tool-finished-entry (info)
+  "Return the pending entry an ID-less post-tool hook for INFO completes.
+A call the pipeline already reported finished goes first; otherwise an
+unbound call with INFO's fingerprint.  A bound sibling still running is
+never taken: its completion arrives out of order."
+  (let ((fingerprint (mevedel-view--pending-tool-fingerprint info)))
+    (or (cl-find-if (lambda (entry)
+                      (and (plist-get (nth 3 entry) :settled)
+                           (equal (car (car entry)) fingerprint)))
+                    mevedel-view--pending-tool-calls)
+        (mevedel-view--pending-tool-entry info))))
+
 (defun mevedel-view-stream-handle-pipeline-event (event)
   "Bind pending rows and display accepted approval provenance from EVENT.
 Only top-level invocations own pending rows.  PTC publishes nested progress
@@ -1889,15 +1886,19 @@ on its canonical child records; it must not decorate the whole envelope."
                                     (copy-tree (plist-get event :permission-approvals))))
                    (setq changed t)))
                 ('settled
+                 ;; The result reaches the transcript only after gptel's
+                 ;; post-tool hook (for a parallel batch, after the whole
+                 ;; batch), which removes the entry.  Until then the call
+                 ;; keeps its place in the run, shown finished.
                  (when entry
-                   (setq mevedel-view--pending-tool-calls
-                         (delq entry mevedel-view--pending-tool-calls)
-                         changed t))))
+                   (setf (nth 3 entry)
+                         (plist-put (nth 3 entry) :settled
+                                    (or (plist-get event :status) t)))
+                   (setq changed t))))
               (when (and changed
                          (eq data (mevedel-view-segments-display-buffer))
                          (mevedel-view-stream-in-flight-turn-start-position)
                          (markerp mevedel-view--data-turn-start))
-                (mevedel-view--refresh-pending-tool-lines)
                 (mevedel-view--schedule-tool-boundary-render data))))))))
   nil)
 
@@ -1909,9 +1910,9 @@ on its canonical child records; it must not decorate the whole envelope."
 
 Runs as a `gptel-pre-tool-call-functions' hook in the data buffer.
 Adds an entry to `mevedel-view--pending-tool-calls' on the
-associated view buffer.  The lightweight pending-tool live line is
-refreshed immediately, while the heavier incremental render is
-debounced so bursts of tool boundary hooks coalesce."
+associated view buffer.  gptel runs the hook for every call of a batch
+at once, and the batch shares one debounced render that draws its calls
+running in the turn's trailing activity run."
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
@@ -1927,21 +1928,23 @@ debounced so bursts of tool boundary hooks coalesce."
       (unless (or (equal name "Agent")
                   (mevedel-view--routine-pending-poll-p args))
         (let ((key (mevedel-view--pending-tool-claim-key args))
-              (detail (mevedel-tool-display-string name (plist-get args :args))))
+              ;; WaitAgent settles as `WaitAgent: agents (...)'.
+              (detail (if (equal name "WaitAgent")
+                          "agents"
+                        (mevedel-tool-display-string
+                         name (plist-get args :args)))))
           ;; One entry per call, not per key: identical parallel calls
           ;; share a fingerprint, and collapsing them would drop the
-          ;; live line while the other call is still running.
+          ;; running row while the other call is still running.
           (setq mevedel-view--pending-tool-calls
                 (append mevedel-view--pending-tool-calls
-                        (list (list key name detail nil))))))
-      ;; Keep the request-level progress row visible; pending-tool lines
-      ;; are detail rows below it, not a replacement for elapsed request
-      ;; progress.
+                        (list (list key name detail))))))
+      ;; Keep the request-level progress row visible; running tool rows
+      ;; do not replace elapsed request progress.
       (mevedel-view--ensure-request-progress data-buf)
       (mevedel-view--start-spinner-timer)
       (when (and (mevedel-view-stream-in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
-        (mevedel-view--refresh-pending-tool-lines)
         (mevedel-view--schedule-tool-boundary-render data-buf)
         (mevedel-view--debug-log
          'pre-tool-hook-after-schedule
@@ -1954,9 +1957,9 @@ debounced so bursts of tool boundary hooks coalesce."
   "Clear the in-flight tool marker and schedule a view render.
 
 Runs as a `gptel-post-tool-call-functions' hook in the data buffer.
-ARGS is the tool-call plist.  The lightweight pending-tool live line is
-refreshed immediately, while the heavier incremental render is
-debounced so bursts of completed tool calls coalesce."
+ARGS is the tool-call plist.  gptel runs the hook for every call of a
+finished batch and then writes their results, so the batch's shared
+render draws the calls settled; until then their rows keep running."
   (mevedel-execution-transcript-retry-pending-terminals (current-buffer))
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
@@ -1972,17 +1975,14 @@ debounced so bursts of completed tool calls coalesce."
        :state (mevedel-view--debug-state data-buf))
       ;; Remove the one call that finished, not every call sharing its
       ;; fingerprint.
-      (when-let* ((entry (mevedel-view--pending-tool-entry args)))
+      (when-let* ((entry (mevedel-view--pending-tool-finished-entry args)))
         (setq mevedel-view--pending-tool-calls
               (delq entry mevedel-view--pending-tool-calls)))
-      (unless mevedel-view--pending-tool-calls
-        (mevedel-view--delete-pending-tool-live-lines))
       (unless (or mevedel-view--pending-tool-calls
                   (mevedel-view--request-progress-visible-p))
         (mevedel-view--stop-spinner-timer))
       (when (and (mevedel-view-stream-in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
-        (mevedel-view--refresh-pending-tool-lines)
         (mevedel-view--schedule-tool-boundary-render data-buf)
         (mevedel-view--debug-log
          'post-tool-hook-after-schedule
@@ -1991,34 +1991,32 @@ debounced so bursts of completed tool calls coalesce."
   ;; provide a control plist.
   nil)
 
-(defun mevedel-view--delete-pending-tool-live-lines ()
-  "Delete fragment-backed pending-tool live-tail rows from the view buffer."
-  (mevedel-view-zone-clear 'history-live)
-  (setq mevedel-view--spinner-tool-targets nil))
-
-(defun mevedel-view--insert-pending-tool-lines (entries &optional previous)
-  "Render fragment-backed pending tool live-tail rows for ENTRIES.
-ENTRIES is a subset of `mevedel-view--pending-tool-calls' (head N).
-PREVIOUS holds displayed tool samples captured before any transcript deletion.
-When the full list exceeds `mevedel-view-pending-tools-visible-max',
-the caller passes only the visible head and a tail-summary row is
-appended.
-
-Pending-tool rows are part of the in-flight transcript live tail, so
-they fall back to the history/status boundary rather than the input
-  marker when no render insertion marker is dynamically bound."
-  (let ((anchor (mevedel-view--pending-tool-insertion-target)))
-    (mevedel-view-zone-reconcile
-     'history-live anchor anchor
-     (mevedel-view--pending-tool-fragments entries)))
-  (mevedel-view--capture-tool-animation-targets)
-  ;; Newly inserted rows display their initial glyph until a frame tick.  A
-  ;; surviving row retains both its display and phase across reconciliation.
+(defun mevedel-view--adopt-tool-animation-targets (start end previous)
+  "Animate the running tool rows a live render drew in START..END.
+PREVIOUS holds the samples displayed before the render replaced the rows."
+  (mevedel-view--capture-tool-animation-targets start end)
+  ;; Newly drawn rows display their initial glyph until a frame tick.  A
+  ;; row that survives a redraw retains both its display and its phase.
   (setq mevedel-view--spinner-tool-samples nil)
   (mevedel-view--restore-tool-animation-targets previous)
   (setq mevedel-view--spinner-rendered-tool-style
         mevedel-view-tool-spinner-style)
   (mevedel-view--start-spinner-timer))
+
+(defun mevedel-view--retire-pending-tool-rows ()
+  "Remove running tool decorations no render will replace.
+A turn that stopped without settling, or a live render with nothing to
+redraw, leaves them behind.  Only the in-flight turn can hold them."
+  (apply #'mevedel-view--release-animation-targets
+         mevedel-view--spinner-tool-targets)
+  (setq mevedel-view--spinner-tool-targets nil)
+  (when-let* (((markerp mevedel-view--status-marker))
+              (end (marker-position mevedel-view--status-marker)))
+    (let ((inhibit-modification-hooks t))
+      (mevedel-view--retire-pending-decorations
+       (min end (or (mevedel-view-stream-in-flight-turn-start-position)
+                    (point-min)))
+       end))))
 
 (defun mevedel-view-stream-active-response-marker (info data-buffer)
   "Return INFO's active response insertion marker for DATA-BUFFER."
@@ -2099,8 +2097,8 @@ NO-PROGRESS suppresses active-turn presentation."
       (progn
         (mevedel-view--stop-request-progress)
         (mevedel-view--cancel-scheduled-render t)
-        (setq mevedel-view--pending-tool-calls nil)
-        (mevedel-view--delete-pending-tool-live-lines))
+        (mevedel-view--retire-pending-tool-rows)
+        (setq mevedel-view--pending-tool-calls nil))
     (mevedel-view-stream--release-turn)))
 
 (defun mevedel-view-stream--release-turn ()
@@ -2109,6 +2107,7 @@ NO-PROGRESS suppresses active-turn presentation."
   ;; A superseding full render must not recreate progress from the old
   ;; spinner timestamp or a request that has not finished settling yet.
   (setq mevedel-view--pending-tool-calls nil
+        mevedel-view--carried-tool-samples nil
         mevedel-view--request-progress-suppressed t
         mevedel-view--spinner-start-time nil
         mevedel-view--spinner-phase-start nil
@@ -2173,10 +2172,9 @@ NO-PROGRESS suppresses active-turn presentation."
                    'render-response-after-spinner
                    :state (mevedel-view--debug-state data-buf start end))
                   (mevedel-view--cancel-scheduled-render t)
-                  ;; Clear the list before dropping its rows, or the
-                  ;; render below rebuilds the live tail from it.
+                  ;; Settling draws only what reached the transcript.
+                  (mevedel-view--retire-pending-tool-rows)
                   (setq mevedel-view--pending-tool-calls nil)
-                  (mevedel-view--delete-pending-tool-live-lines)
                   (setq end
                         (or (mevedel-view--append-request-summary
                              data-buf start)

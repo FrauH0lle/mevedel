@@ -98,17 +98,19 @@ detailed rendering and recovery contracts.
 
 Request progress animation is presentation only. The view stream schedules
 one timer for ordinary visible decorative frames and elapsed metadata, separate from
-transcript rendering; it updates registered fragment-owned display spans and
-never writes the authoritative transcript. Each one-shot callback rearms its
+transcript rendering; it updates registered display spans (the request label's
+fragment and the running-tool spans the live render drew) and never writes the
+authoritative transcript. Each one-shot callback rearms its
 timer from the present, so a stall neither replays overdue callbacks nor
 allocates a new timer at frame rate. Time-based frame selection skips missed
 samples and retains phase across power changes. The foreground label
 offers shimmer, breathe, bounce, dots, ellipsis, braille, ascii, and static;
-pending-tool rows offer shimmer, braille, ascii, dots, or static indicators.
+running tool rows offer shimmer, braille, ascii, dots, or static indicators.
 Color animations prepare bounded, theme-derived frame banks; each live view
-reserves enough banks for its registered tool rows, overflow row and main label,
+reserves enough banks for its registered running rows and main label,
 with a four-bank minimum, in addition to a six-bank shared reuse cache. The
-visible-tool row cap bounds this working set. All eligible banks are prepared
+tool grouping threshold bounds this working set: beyond it, running calls share
+one group row. All eligible banks are prepared
 at semantic boundaries, preventing other views from evicting an active sample.
 A mixed set of color and portable glyph tool rows keeps both cadences. A frozen
 row retains its phase while adopting changed text or a destination display. Theme changes and edits to the
@@ -217,7 +219,8 @@ backup, unknown or stale power information uses the conservative 15-fps
 saving ceiling. Ordinary decorative frames require full redisplay and the
 measured pgtk build presents the whole surface, so the shimmer is cadenced: one one-second sweep
 every four seconds, resting in between with no frames scheduled, and
-pending-tool rows sweep their verb and tool name in the same frames. The
+running tool rows sweep their tool name, or a running group its count, in the
+same frames. The
 October 2026 measurement below records why. `full` forces the normal ceiling; `save` forces the saving
 ceiling. The lower ceiling never speeds up a naturally slower animation or
 changes its cycle duration. A saving ceiling of zero freezes decorative
@@ -342,6 +345,26 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 2026: running tool calls join the activity run
+
+In-flight calls were separate `Calling TOOL: arg…` fragments in a
+`history-live` zone below the turn, capped at five plus an overflow row, and
+redrawn by every pre- and post-tool hook as well as by the boundary render that
+followed. A parallel batch therefore stacked a column of rows under the
+settled activity summary describing the same work, and swapped it out a moment
+later. gptel runs every pre-tool hook of a batch at once and every post-tool
+hook only after the whole batch, so the immediate redraws bought nothing the
+50 ms boundary render did not already deliver. Running calls now join the
+turn's trailing activity run inside the live render, counting toward its
+grouping threshold, so the batch has its final shape while it runs and settling
+changes only the marker. The `tool-burst` benchmark (a 1 MiB view, three
+batches of four parallel calls) measured the old path at 20.0–20.7 ms median
+per round with 74 zone reconciliations and 518 view modification ticks, and the
+new one at 11.8–12.6 ms with 10 reconciliations and 158 ticks; the number of
+live renders is unchanged, and spinner ticks and tool-segment projection stayed
+at parity. `mevedel-view-pending-tools-visible-max` was removed:
+the grouping threshold now bounds the rows.
 
 ### October 2026: separate grouped presentation from canonical tool identity
 

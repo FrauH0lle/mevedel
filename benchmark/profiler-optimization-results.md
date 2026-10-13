@@ -115,6 +115,29 @@ removed 99.997% of the requested scan range and prevents unrelated matching
 properties elsewhere in the view from being mutated; the 0.4% timing change is
 below the materiality gate.
 
+## Running tool calls in the activity run
+
+Workload (`tool-burst`): one in-flight turn after a 1 MiB rendered transcript,
+with a selected multiline composer draft, running three parallel batches of
+four calls in gptel's hook order: every pre-tool hook, a boundary render, the
+results, every post-tool hook, and a boundary render.  Each round stops and
+removes its turn.  Both revisions ran the same harness, alternating, three
+times each; the table gives the range of the five-round medians.
+
+| Revision | Median wall time | Sampled allocation | Zone reconciles | View modification ticks | Live renders |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `a5210c4` baseline | 20.0–20.7 ms | 2,104,006 bytes | 74 | 518 | 6 |
+| Running calls in the run | 11.8–12.6 ms | 1,969,662–1,977,846 bytes | 10 | 158 | 6 |
+
+`spinner-ticks` (ported to draw its row with the live render's functions) and
+`tool-segments` stayed at parity: 1.30–1.50 ms against 1.31–1.39 ms, and
+4.36–4.48 ms against 4.19–4.72 ms.
+
+Decision: ship.  The change removes the per-hook fragment reconciliation, so a
+burst does 39% less work at an unchanged number of renders.  It falls short
+of the 10 ms materiality gate in absolute terms, but it was made for
+presentation and had to show no regression, which all three scenarios meet.
+
 ## Interactive rerun
 
 The supplied real-session diagnostics close the interactive rerun:

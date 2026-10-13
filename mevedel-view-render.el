@@ -256,7 +256,6 @@
 (defvar mevedel-view--display-map)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
-(defvar mevedel-view-pending-tools-visible-max)
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--insert-attribution
@@ -359,6 +358,8 @@
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-go-to-segment
                   "mevedel-view-segments" (&optional number))
+(declare-function mevedel-view-historical-segment-p
+                  "mevedel-view-segments" ())
 (declare-function mevedel-view-return-to-latest-segment
                   "mevedel-view-segments" (&optional _event))
 (declare-function mevedel-view-segments-banner
@@ -368,23 +369,23 @@
 (declare-function mevedel-view-segments-initialize
                   "mevedel-view-segments" ())
 (autoload 'mevedel-view-segments-display-buffer "mevedel-view-segments")
+(autoload 'mevedel-view-historical-segment-p "mevedel-view-segments")
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--delete-pending-tool-live-lines
-                  "mevedel-view-stream" ())
+(declare-function mevedel-view--adopt-tool-animation-targets
+                  "mevedel-view-stream" (start end previous))
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))
 (declare-function mevedel-view--forget-request-progress-region
                   "mevedel-view-stream" ())
-(declare-function mevedel-view--insert-pending-tool-lines
-                  "mevedel-view-stream" (entries &optional previous))
-(declare-function mevedel-view--refresh-pending-tool-lines
-                  "mevedel-view-stream" (&optional previous))
+(declare-function mevedel-view--retire-pending-tool-rows
+                  "mevedel-view-stream" ())
+(declare-function mevedel-view--schedule-tool-boundary-render
+                  "mevedel-view-stream" (data-buf))
 (declare-function mevedel-view--snapshot-tool-animation-targets
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-animation-frame
                   "mevedel-view-animation" (style label seconds face &optional frame))
-(defvar mevedel-view-animation-prefixes)
 (declare-function mevedel-view--spinner-region-p
                   "mevedel-view-stream" (start end))
 (declare-function mevedel-view-stream-in-flight-turn-start-position
@@ -392,9 +393,11 @@
 (declare-function mevedel-view-stream-set-in-flight-turn-start
                   "mevedel-view-stream" (position))
 (defvar mevedel-view--data-turn-start)
+(defvar mevedel-view--carried-tool-samples)
 (defvar mevedel-view--execution-events)
 (defvar mevedel-view--in-flight-turn-start)
 (defvar mevedel-view--pending-tool-calls)
+(defvar mevedel-view--spinner-tool-targets)
 (defvar mevedel-view-tool-spinner-style)
 
 ;; `mevedel-view-table'
@@ -2181,7 +2184,10 @@ Execution outcome remains independent of lifecycle and disclosure state."
         (when-let* ((hint (mevedel-view--permission-approval-hint
                           (plist-get rendering :permission-approval-reason))))
           (setq line (concat line "  " hint)))
-        line))))
+        (if-let* ((count (plist-get rendering :pending-count)))
+            (mevedel-view--running-header
+             line count (plist-get rendering :pending-virtual))
+          line)))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
@@ -2567,6 +2573,19 @@ batch keeps its glyph gutter across a toggle.  The row gets its own copy
 of SOURCE's coordinates because section bounds compare source identity
 with `eq', which is what separates one row from the next and from the
 body of the block that ran them."
+  (if (eq (plist-get child :kind) 'pending)
+      ;; An in-flight call has no source or result: it is a running row
+      ;; with no disclosure of its own.
+      (let ((mevedel-view--rendering-indent
+             (concat mevedel-view--rendering-indent
+                     (or indent mevedel-view--child-call-indent))))
+        (mevedel-view--insert-pending-tool-row (plist-get child :entry)))
+    (mevedel-view--insert-settled-child-call-block
+     child source collapsed indent)))
+
+(defun mevedel-view--insert-settled-child-call-block
+    (child source collapsed indent)
+  "Insert CHILD's nested row under SOURCE; see the caller for COLLAPSED, INDENT."
   (when-let* ((rendering (mevedel-view--child-call-rendering child))
               ((not (plist-get rendering :hidden-p)))
               (source (or (plist-get child :source) source))
@@ -3653,14 +3672,14 @@ transcript has been rendered yet, return the position after the header."
         pos
       after-header)))
 
-(defun mevedel-view--pending-tool-insertion-target ()
-  "Return where pending tool live-tail lines should be inserted.
+(defun mevedel-view--history-boundary-target ()
+  "Return the live end of rendered history.
 
 The normal target is the live history/status boundary, or a dynamic
 render insertion marker that still points above the composer.  If marker
 teardown detached the status marker, recover to the current rendered
-history tail so pending live-tail text stays above status/interaction
-content without moving ahead of prior transcript turns."
+history tail so text placed there stays above status/interaction content
+without moving ahead of prior transcript turns."
   (let* ((input-pos (and (markerp mevedel-view--input-marker)
                          (marker-position mevedel-view--input-marker)))
          (render-pos (and (markerp mevedel-view--render-insertion-marker)
@@ -3678,88 +3697,196 @@ content without moving ahead of prior transcript turns."
              mevedel-view--render-insertion-marker)
         history-tail)))
 
-(defun mevedel-view--pending-tool-label (entry)
-  "Return the Calling label for pending tool ENTRY, without its approval hint."
-  (let ((name (nth 1 entry)) (detail (nth 2 entry)))
-    (cond ((equal name "WaitAgent") "Waiting for agents")
-          (detail (format "Calling %s: %s..." name detail))
-          (t (format "Calling %s..." name)))))
+;;;; In-flight tool calls
+;;
+;; A tool call the model has started but whose result has not reached the
+;; data buffer has no source to project.  The live render still shows it,
+;; in the grammar of the row it will become: it joins the turn's trailing
+;; activity run, counts toward that run's grouping, and marks the row as
+;; running.  When its result lands, the next render draws the same row
+;; settled, so finishing changes the marker, not the layout.  Pending
+;; decorations carry `mevedel-view-pending-tool-live'; nothing else depends
+;; on them, and no disclosure state is keyed by them.
 
-(defun mevedel-view--pending-tool-line-body (label &optional approval)
-  "Return the propertized fragment body for pending tool LABEL.
-APPROVAL is a reviewer explanation displayed outside the animated span.
-Before insertion the display frame is unknown; use a portable first frame.
-Shimmer animates LABEL's verb and tool name in place, \"Calling Bash\"
-without its arguments, resting until its sweep."
-  (let ((body
-         (if (eq mevedel-view-tool-spinner-style 'shimmer)
-             (let* ((end (or (string-match-p ":" label) (length label)))
-                    (word (substring label 0 end)))
-               (concat
-                (propertize word
-                            'font-lock-face 'mevedel-view-ephemeral
-                            'mevedel-view-inline-spinner-frame t
-                            'mevedel-view-pending-tool-live t
-                            'display (mevedel-view-animation-frame
-                                      'shimmer word 0 'mevedel-view-ephemeral
-                                      (selected-frame)))
-                (propertize (format "%s\n" (substring label end))
-                            'font-lock-face 'mevedel-view-ephemeral
-                            'mevedel-view-pending-tool-live t)))
-           (let ((frame (mevedel-view-animation-frame
-                         mevedel-view-tool-spinner-style "" 0
-                         'mevedel-view-ephemeral :multiple)))
-             (concat
+(defvar mevedel-view--render-pending nil
+  "Cell (ENTRIES) of in-flight tool calls the live render still has to draw.
+Bound only while the last in-flight turn renders.  The turn's trailing
+activity run takes ENTRIES with `mevedel-view--take-render-pending';
+otherwise the live render appends them after the turn.")
+
+(defun mevedel-view--take-render-pending ()
+  "Return and claim the in-flight tool entries of the current live render."
+  (when mevedel-view--render-pending
+    (prog1 (car mevedel-view--render-pending)
+      (setcar mevedel-view--render-pending nil))))
+
+(defun mevedel-view--pending-marker (id)
+  "Return the leading marker area of a running row animated under ID.
+Glyph spinner styles animate the marker itself.  Shimmer animates the
+row's label instead, and static draws nothing moving, so both keep the
+running dot.  Before insertion the display frame is unknown; glyphs use a
+portable first frame."
+  (if (memq mevedel-view-tool-spinner-style '(shimmer static))
+      (propertize "  ● " 'font-lock-face 'mevedel-view-agent-running)
+    (let ((frame (mevedel-view-animation-frame
+                  mevedel-view-tool-spinner-style "" 0 'mevedel-view-ephemeral
+                  :multiple)))
+      (concat (propertize "  " 'font-lock-face 'mevedel-view-agent-running)
               (propertize frame
                           'font-lock-face 'mevedel-view-ephemeral
                           'mevedel-view-inline-spinner-frame t
-                          'mevedel-view-pending-tool-live t
-                          'display frame)
-              (propertize (format "%s\n" label)
-                          'font-lock-face 'mevedel-view-ephemeral
-                          'mevedel-view-pending-tool-live t))))))
-    (if-let* ((hint (mevedel-view--permission-approval-hint approval)))
-        (concat (substring body 0 -1)
-                (propertize "  " 'mevedel-view-pending-tool-live t)
-                (propertize hint 'mevedel-view-pending-tool-live t)
-                (substring body -1))
-      body)))
+                          'mevedel-view-tool-animation-id id
+                          'display frame)))))
 
-(defun mevedel-view--pending-tool-fragments (entries)
-  "Return live-tail fragments for pending tool ENTRIES."
-  (let ((cap mevedel-view-pending-tools-visible-max)
-        (total (length mevedel-view--pending-tool-calls))
-        fragments)
-    (dolist (entry entries)
-      (push (list :namespace 'history-live
-                  :id (car entry)
-                  :body (mevedel-view--pending-tool-line-body
-                         (mevedel-view--pending-tool-label entry)
-                         (mevedel-view--permission-approval-reason (nth 3 entry))))
-            fragments))
-    (when (> total cap)
-      (push (list :namespace 'history-live
-                  :id :pending-tool-overflow
-                  :body (mevedel-view--pending-tool-line-body
-                         (format "%d more tools running…" (- total cap))))
-            fragments))
-    (nreverse fragments)))
+(defun mevedel-view--pending-label (text id)
+  "Return TEXT, shimmering under animation ID when shimmer is the style."
+  (if (eq mevedel-view-tool-spinner-style 'shimmer)
+      (propertize text
+                  'mevedel-view-inline-spinner-frame t
+                  'mevedel-view-tool-animation-id id
+                  'display (mevedel-view-animation-frame
+                            'shimmer text 0 'mevedel-view-ephemeral
+                            (selected-frame)))
+    text))
 
-(defun mevedel-view--strip-history-live-fragments-from-string (text)
-  "Return TEXT without fragment-backed live history rows."
+(defun mevedel-view--running-header (line count &optional virtual)
+  "Return group header LINE marked running with COUNT calls in flight.
+The settled marker gives way to the running one, and `· N running'
+follows the summary.  Unless VIRTUAL, the replaced marker is kept on the
+running marker so a stopped turn can restore it in place."
+  (let ((marker (mevedel-view--pending-marker 'pending-run)))
+    (concat
+     (propertize marker
+                 'mevedel-view-pending-tool-live t
+                 'mevedel-view-settled-marker
+                 (and (not virtual) (substring line 0 4)))
+     (substring line 4)
+     (propertize
+      (concat (propertize " · " 'font-lock-face 'mevedel-view-tool-metadata)
+              (mevedel-view--pending-label
+               (propertize (format "%d running" count)
+                           'font-lock-face 'mevedel-view-tool-metadata)
+               'pending-run))
+      'mevedel-view-pending-tool-live t))))
+
+(defun mevedel-view--pending-children (entries)
+  "Return activity group children for in-flight tool ENTRIES."
+  (mapcar (lambda (entry)
+            (list :kind 'pending :tool (nth 1 entry) :entry entry))
+          entries))
+
+(defun mevedel-view--pending-entry-settled-p (entry)
+  "Return non-nil when in-flight ENTRY finished before its result landed.
+gptel writes a parallel batch's results only after the whole batch, so a
+call the pipeline reports as finished keeps its place in the run until
+then, shown finished instead of running."
+  (plist-get (nth 3 entry) :settled))
+
+(defun mevedel-view--pending-running-count (entries)
+  "Return how many in-flight ENTRIES are still running, or nil for none."
+  (let ((count (cl-count-if-not #'mevedel-view--pending-entry-settled-p
+                                entries)))
+    (and (> count 0) count)))
+
+(defun mevedel-view--insert-pending-tool-row (entry)
+  "Insert the row for in-flight tool ENTRY.
+ENTRY is (KEY NAME DETAIL METADATA).  The row uses the settled tool row's
+`Tool: argument' grammar; shimmer animates the tool name.  A call that
+finished before its result landed takes the settled marker and is still."
+  (let ((key (car entry))
+        (detail (nth 2 entry))
+        (settled (mevedel-view--pending-entry-settled-p entry))
+        (start (point)))
+    (insert (cond
+             ((memq settled '(error failed denied blocked))
+              (propertize "  × " 'font-lock-face 'error))
+             (settled
+              (propertize "  ✓ " 'font-lock-face 'mevedel-view-tool-marker))
+             (t (mevedel-view--pending-marker key)))
+            (let ((name (propertize (or (nth 1 entry) "Tool")
+                                    'font-lock-face 'mevedel-view-tool-name)))
+              (if settled name (mevedel-view--pending-label name key)))
+            (if (and detail (not (string-empty-p detail)))
+                (concat ": " (propertize detail 'font-lock-face
+                                         'mevedel-view-tool-argument))
+              ""))
+    (when-let* ((hint (mevedel-view--permission-approval-hint
+                      (mevedel-view--permission-approval-reason (nth 3 entry)))))
+      (insert "  " hint))
+    (insert "\n")
+    (add-text-properties start (point)
+                         '(mevedel-view-type tool-pending
+                           mevedel-view-pending-tool-live t))
+    (mevedel-view--apply-rendering-indent start (point))))
+
+(defun mevedel-view--insert-pending-run (entries)
+  "Insert in-flight tool ENTRIES that no settled activity run absorbed.
+Above the grouping threshold they form one running group row, as they
+will once settled; otherwise each call gets its own running row."
+  (mevedel-view--insert-activity-rule-after-response)
+  (if (and (> mevedel-view-tool-group-collapse-threshold 0)
+           (> (length entries) mevedel-view-tool-group-collapse-threshold))
+      (let ((start (point)))
+        (mevedel-view--insert-summary-region
+         (mevedel-view--rendering-header-line
+          (list :header (mevedel-view--tool-group-header
+                         (mevedel-view--pending-children entries))
+                :vtype 'tool-group
+                :pending-count (mevedel-view--pending-running-count entries)
+                :pending-virtual t))
+         '(mevedel-view-type tool-pending
+           mevedel-view-pending-tool-live t))
+        (mevedel-view--apply-rendering-indent start (point)))
+    (mapc #'mevedel-view--insert-pending-tool-row entries)))
+
+(defun mevedel-view--retire-pending-decorations (start end)
+  "Remove in-flight tool decorations between START and END.
+Virtual rows disappear; a running group regains its settled marker and
+loses its running count.  Return non-nil when anything changed."
+  (let ((inhibit-read-only t)
+        (end (copy-marker end))
+        changed)
+    (save-excursion
+      (let ((pos start))
+        (while (and (< pos end)
+                    (setq pos (text-property-any
+                               pos end 'mevedel-view-pending-tool-live t)))
+          (let* ((settled (get-text-property pos 'mevedel-view-settled-marker))
+                 (stop (min (or (next-single-property-change
+                                 pos 'mevedel-view-pending-tool-live nil end)
+                                end)
+                            (or (next-single-property-change
+                                 pos 'mevedel-view-settled-marker nil end)
+                                end))))
+            (setq changed t)
+            (if (not settled)
+                (delete-region pos stop)
+              ;; Keep the row's section identity, not the running look.
+              (let ((section
+                     (cl-loop for (key value) on (text-properties-at pos)
+                              by #'cddr
+                              unless (memq key '(font-lock-face
+                                                 face display
+                                                 mevedel-view-pending-tool-live
+                                                 mevedel-view-settled-marker
+                                                 mevedel-view-inline-spinner-frame
+                                                 mevedel-view-tool-animation-id))
+                              append (list key value))))
+                (delete-region pos stop)
+                (goto-char pos)
+                (insert settled)
+                (add-text-properties pos (point) section)
+                (setq pos (point))))))))
+    (set-marker end nil)
+    changed))
+
+(defun mevedel-view--strip-pending-decorations-from-string (text)
+  "Return TEXT without in-flight tool decorations, or nil when empty."
   (when text
     (with-temp-buffer
       (insert text)
-      (let ((inhibit-read-only t)
-            (inhibit-modification-hooks t)
-            (pos (point-min)))
-        (while (setq pos (text-property-any
-                          pos (point-max)
-                          'mevedel-view-zone-namespace 'history-live))
-          (let ((end (or (next-single-property-change
-                          pos 'mevedel-view-zone-namespace nil (point-max))
-                         (point-max))))
-            (delete-region pos end))))
+      (let ((inhibit-modification-hooks t))
+        (mevedel-view--retire-pending-decorations (point-min) (point-max)))
       (let ((str (buffer-string)))
         (unless (string-empty-p str)
           str)))))
@@ -3767,8 +3894,8 @@ without its arguments, resting until its sweep."
 (defun mevedel-view--request-progress-anchor ()
   "Return where the foreground request progress row should be inserted.
 Request progress lives after status and interaction rows, directly
-before the input zone.  Fall back to the pending-tool target only when
-the input boundary cannot be recovered."
+before the input zone.  Fall back to the history boundary only when the
+input boundary cannot be recovered."
   (or (let ((input-pos (and (markerp mevedel-view--input-marker)
                             (marker-buffer mevedel-view--input-marker)
                             (eq (marker-buffer mevedel-view--input-marker)
@@ -3778,7 +3905,7 @@ the input boundary cannot be recovered."
              (<= (point-min) input-pos)
              (<= input-pos (point-max))
              input-pos))
-      (mevedel-view--pending-tool-insertion-target)))
+      (mevedel-view--history-boundary-target)))
 
 (defmacro mevedel-view-render--with-boundaries-advancing (&rest body)
   "Execute BODY while view zone boundary markers advance."
@@ -3841,15 +3968,15 @@ the data buffer range \[`mevedel-view--data-turn-start',
 end-of-data-buffer], grouping segments into turns and rendering them at
 the history boundary.
 
-When `mevedel-view--pending-tool-calls' is non-empty, reconciles one
-fragment-backed \"Calling TOOLNAME…\" history live-tail row per in-flight
-tool (capped by `mevedel-view-pending-tools-visible-max') so the user
-sees what's running even before results land in the data buffer.
+Unless SETTLE-P, calls in `mevedel-view--pending-tool-calls' join the
+last turn's trailing activity run as running calls, or follow the turn
+when it ends in something they cannot join, so the user sees what is
+running before results land in the data buffer.  They are drawn by this
+render only, and change the marker, not the layout, once settled.
 
 Assistant streaming remains data-buffer-derived full/incremental turn
 rerendering here: transcript parsing, collapse recovery, and final
-response reconciliation still need the authoritative data buffer.  The
-fragment migration is limited to ephemeral pending-tool live-tail rows.
+response reconciliation still need the authoritative data buffer.
 
 Optional START / END are used by the post-response path to decide
 whether the caller already has explicit segment coordinates.  When
@@ -3949,15 +4076,22 @@ the render so user toggles survive streaming ticks."
         ;; prevents a phase-8 regression when zone overlays land.
         (let ((inhibit-read-only t)
               (inhibit-modification-hooks t)
+              ;; Running rows are redrawn below; keep their animation phase.
+              ;; A full projection may already have removed them.
               (preserved-tools
-               (when pending (mevedel-view--snapshot-tool-animation-targets))))
-          (when pending
-            (mevedel-view--delete-pending-tool-live-lines))
+               (when pending
+                 (append (mevedel-view--snapshot-tool-animation-targets)
+                         (prog1 mevedel-view--carried-tool-samples
+                           (setq mevedel-view--carried-tool-samples nil)))))
+              (animated (or pending mevedel-view--spinner-tool-targets)))
+          ;; With nothing to redraw, calls that finished leave no row that a
+          ;; replacement would remove.
+          (unless (or turns pending)
+            (mevedel-view--retire-pending-tool-rows))
           (let* (;; Permission prompts and tool callbacks can trigger a view
-                 ;; refresh in the small window after pending tool lines have
-                 ;; been removed but before gptel has written the corresponding
-                 ;; result segments.  In that case, keep the previous in-flight
-                 ;; rendering instead of replacing it with a blank region.
+                 ;; refresh before gptel has written any result segments.  In
+                 ;; that case keep the previous in-flight rendering instead of
+                 ;; replacing it with a blank region.
                  (replace-p (or turns pending))
                  ;; Reject markers that pass `markerp' but are detached
                  ;; (`marker-position' returns nil): they would crash
@@ -4032,19 +4166,38 @@ the render so user toggles survive streaming ticks."
             ;; at the status boundary so any real-text status/interaction
             ;; UI below that boundary remains below the transcript.
             (let ((mevedel-view--render-insertion-marker rebuild-end)
-                  (continuation-p retained-p))
+                  (continuation-p retained-p)
+                  (in-flight (and pending (not settle-p) (list pending))))
               (setq render-start (marker-position rebuild-end))
-              (dolist (turn turns)
-                (mevedel-view--render-turn
-                 turn data-buf nil nil
-                 (prog1 continuation-p
-                   (setq continuation-p nil))))
-              (mevedel-view--ensure-request-progress data-buf)
-              (when pending
-                (let* ((cap mevedel-view-pending-tools-visible-max)
-                       (visible (cl-subseq pending 0 (min cap (length pending)))))
-                  (mevedel-view--insert-pending-tool-lines
-                   visible preserved-tools))))
+              (let ((rest turns))
+                (while rest
+                  ;; In-flight calls belong to the last turn's trailing run.
+                  (let ((mevedel-view--render-pending
+                         (and (null (cdr rest)) in-flight)))
+                    (mevedel-view--render-turn
+                     (car rest) data-buf nil nil
+                     (prog1 continuation-p
+                       (setq continuation-p nil))))
+                  (setq rest (cdr rest))))
+              ;; Calls that no trailing run absorbed follow the turn.
+              (when-let* ((left (car in-flight)))
+                (save-excursion
+                  (goto-char rebuild-end)
+                  (mevedel-view-render--with-boundaries-advancing
+                    ;; A response that opens with tool calls has no turn in
+                    ;; the transcript yet.  Draw its heading now, so the row
+                    ;; does not move when the first result brings it.  It is
+                    ;; part of the running decoration: a turn stopped before
+                    ;; any result removes it with the rows.
+                    (when (mevedel-view--live-turn-needs-header-p
+                           (min (or (mevedel-view-stream-in-flight-turn-start-position)
+                                    render-start)
+                                render-start)
+                           (point) data-buf)
+                      (mevedel-view--insert-assistant-header
+                       nil '(mevedel-view-pending-tool-live t)))
+                    (mevedel-view--insert-pending-run left))))
+              (mevedel-view--ensure-request-progress data-buf))
             (mevedel-view--debug-log
              'incremental-after-insert
              :state (mevedel-view--debug-state data-buf data-from data-to)))
@@ -4098,6 +4251,10 @@ the render so user toggles survive streaming ticks."
                  mevedel-view--live-view-tail-start nil))
               (when tail-first-end (set-marker tail-first-end nil))
               (when tail-end (set-marker tail-end nil))))
+          (when (and animated replace-p (marker-position rebuild-end))
+            (mevedel-view--adopt-tool-animation-targets
+             (or render-start (point-min)) (marker-position rebuild-end)
+             preserved-tools))
           (mevedel-view--ensure-request-progress data-buf)
           (unless mevedel-view--agent-transcript-p
             (mevedel-view--render-agent-status)
@@ -4189,14 +4346,18 @@ operations call their owned implementations rather than entering here again."
                   mevedel-view-render--pending nil)))))))
 
 (defun mevedel-view-render-live-update (data-buf)
-  "Update the current in-flight turn from DATA-BUF's mutable tail."
+  "Update the current in-flight turn from DATA-BUF's mutable tail.
+Nothing happens while the view projects an archived segment: the live
+turn is not on display, and drawing it would replace that segment's text."
   (unless (eq mevedel-view-render--terminal-turn mevedel-view--data-turn-start)
     (setq mevedel-view-render--terminal-p nil))
-  (unless mevedel-view-render--terminal-p
+  (unless (or mevedel-view-render--terminal-p
+              (mevedel-view-historical-segment-p))
     (mevedel-view-render-mutate
      'live
      (lambda ()
-       (unless mevedel-view-render--terminal-p
+       (unless (or mevedel-view-render--terminal-p
+                   (mevedel-view-historical-segment-p))
          (mevedel-view--render-live-region data-buf nil))))))
 
 (defun mevedel-view-render-settle (data-buf start end)
@@ -5850,8 +6011,10 @@ there, and still renders as its own line when no group absorbs it."
       (flush-thinking))
     (mevedel-view--split-completion-entries (nreverse out))))
 
-(defun mevedel-view--tool-activity-groupable-p (entries)
-  "Return non-nil when activity ENTRIES may fold across thinking."
+(defun mevedel-view--tool-activity-groupable-p (entries &optional pending)
+  "Return non-nil when activity ENTRIES may fold across thinking.
+PENDING in-flight calls count toward the threshold, as they will once
+settled."
   (let ((tool-entries
          (cl-remove-if-not
           (lambda (entry) (eq (plist-get entry :kind) 'tool))
@@ -5860,7 +6023,7 @@ there, and still renders as its own line when no group absorbs it."
                          (eq (plist-get entry :kind) 'hook-audit))
                        entries))
          (> mevedel-view-tool-group-collapse-threshold 0)
-         (> (length tool-entries)
+         (> (+ (length tool-entries) (length pending))
             mevedel-view-tool-group-collapse-threshold)
          (cl-every
           (lambda (entry)
@@ -5869,26 +6032,28 @@ there, and still renders as its own line when no group absorbs it."
                  (mevedel-view--tool-group-entry-p entry)))
           tool-entries))))
 
-(defun mevedel-view--render-tool-activity (segments data-buf)
+(defun mevedel-view--render-tool-activity (segments data-buf &optional pending)
   "Render activity SEGMENTS from DATA-BUF in source order.
 Special tool rows split otherwise groupable tool/reasoning runs.  Keep
 this activity mutable as one live unit until a response or other turn
-boundary arrives, so later tool calls can join the same group."
+boundary arrives, so later tool calls can join the same group.
+PENDING in-flight tool entries join the trailing tool run, or follow the
+activity when it ends in something they cannot join."
   (let ((unit-start (point))
         (mevedel-view--activity-entry-cache
          (or mevedel-view--activity-entry-cache (make-hash-table :test #'equal))))
     (cl-labels
-        ((render-run (segments)
+        ((render-run (segments &optional pending)
            (if (cl-every
                 (lambda (seg)
                   (mevedel-view--tool-activity-tool-segment-p seg data-buf))
                 segments)
-               (mevedel-view--render-tool-group segments data-buf)
+               (mevedel-view--render-tool-group segments data-buf pending)
              (let ((entries (mevedel-view--tool-activity-entries segments data-buf)))
-               (if (mevedel-view--tool-activity-groupable-p entries)
+               (if (mevedel-view--tool-activity-groupable-p entries pending)
                    (progn
                      (mevedel-view--insert-activity-rule-after-response)
-                     (mevedel-view--insert-tool-group entries data-buf))
+                     (mevedel-view--insert-tool-group entries data-buf pending))
                  (let (tool-group thinking-group)
                    (dolist (seg segments)
                      (if (mevedel-view--tool-activity-tool-segment-p seg data-buf)
@@ -5916,14 +6081,17 @@ boundary arrives, so later tool calls can join the same group."
                          (push seg thinking-group))))
                    (when tool-group
                      (mevedel-view--render-tool-group
-                      (nreverse tool-group) data-buf))
+                      (nreverse tool-group) data-buf pending)
+                     (setq pending nil))
                    (mevedel-view--flush-thinking-group
-                    thinking-group data-buf)))))))
+                    thinking-group data-buf)
+                   (when pending
+                     (mevedel-view--insert-pending-run pending))))))))
       (if (cl-every
            (lambda (seg)
              (mevedel-view--tool-activity-tool-segment-p seg data-buf))
            segments)
-          (render-run segments)
+          (render-run segments pending)
         (let (run special-run)
           (dolist (seg (mevedel-view--merge-tool-hook-audit-segments
                         segments data-buf))
@@ -5939,9 +6107,46 @@ boundary arrives, so later tool calls can join the same group."
                 (setq run nil))
               (setq special-run (and special t))
               (push seg run)))
-          (when run (render-run (nreverse run))))))
+          (when run (render-run (nreverse run) pending)))))
     (mevedel-view--mark-live-render-unit
      unit-start (cadr (car segments)))))
+
+(defun mevedel-view--insert-assistant-header (&optional variant-button extra)
+  "Insert the `Assistant' turn heading at point.
+VARIANT-BUTTON, when non-nil, follows the label.  EXTRA is a property
+list added to the heading's text."
+  (let ((header-start (point)))
+    (insert "Assistant")
+    (when variant-button
+      (insert "  " variant-button))
+    (insert "\n")
+    (add-text-properties
+     header-start (point)
+     (append '(font-lock-face mevedel-view-assistant-header
+               mevedel-view-type turn-header
+               mevedel-view-turn-role assistant
+               mevedel-view-collapsed nil)
+             extra))))
+
+(defun mevedel-view--live-turn-needs-header-p (start end data-buf)
+  "Return non-nil when running calls at END need an `Assistant' heading.
+START..END is the in-flight turn's rendering.  The heading is missing
+when no turn heading precedes END there, or the last one belongs to
+another role, such as a mailbox delivery.  A directive request in
+DATA-BUF has its own heading, so it never needs one."
+  (unless (with-current-buffer data-buf
+            (and mevedel--current-request
+                 (mevedel-request-directive-uuid mevedel--current-request)))
+    (let ((pos start) last)
+      (while (and (< pos end)
+                  (setq pos (text-property-any pos end 'mevedel-view-type
+                                               'turn-header)))
+        (setq last pos
+              pos (or (next-single-property-change
+                       pos 'mevedel-view-type nil end)
+                      end)))
+      (not (and last (eq (get-text-property last 'mevedel-view-turn-role)
+                         'assistant))))))
 
 (defun mevedel-view--render-assistant-turn
     (segments data-buf &optional variant-button directive continuation-p)
@@ -5952,27 +6157,19 @@ activity run does not prevent that run from folding.  Adjacent thinking
 segments are merged into a single summary.  VARIANT-BUTTON, when non-nil,
 is inserted beside the header.  CONTINUATION-P suppresses that header."
   (unless (or directive continuation-p)
-    (let ((header-start (point)))
-      (insert "Assistant")
-      (when variant-button
-        (insert "  " variant-button))
-      (insert "\n")
-      (add-text-properties
-       header-start (point)
-       '(font-lock-face mevedel-view-assistant-header
-         mevedel-view-type turn-header
-         mevedel-view-turn-role assistant
-         mevedel-view-collapsed nil))))
+    (mevedel-view--insert-assistant-header variant-button))
   (let ((view-buf (current-buffer))
         tool-group thinking-group request-summary-group)
     (cl-labels
         ((flush-thinking ()
            (mevedel-view--flush-thinking-group thinking-group data-buf)
            (setq thinking-group nil))
-         (flush-tools ()
+         (flush-tools (&optional trailing)
            (when tool-group
              (mevedel-view--render-tool-activity
-              (nreverse tool-group) data-buf)
+              (nreverse tool-group) data-buf
+              ;; Only the turn's final activity can take in-flight calls.
+              (and trailing (mevedel-view--take-render-pending)))
              (setq tool-group nil))))
       (dolist (seg segments)
         (let ((type (car seg)))
@@ -6099,7 +6296,11 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
                    (push seg thinking-group))))))))
       ;; Flush remaining groups
       (flush-thinking)
-      (flush-tools)
+      (flush-tools t)
+      ;; Calls after the turn's last prose start their run here, where
+      ;; they will settle, rather than after the turn's closing spacing.
+      (when-let* ((left (mevedel-view--take-render-pending)))
+        (mevedel-view--insert-pending-run left))
       (dolist (seg (nreverse request-summary-group))
         (mevedel-view--render-request-summary-segment seg data-buf)))))
 
@@ -6288,20 +6489,24 @@ tool name instead of reparsing arguments and results for a collapsed group."
                            (plist-get entry :end)))
             child)))
 
-(defun mevedel-view--tool-group-rendering (entries data-buf &optional summary-only)
+(defun mevedel-view--tool-group-rendering
+    (entries data-buf &optional summary-only pending)
   "Return the grouped rendering for activity ENTRIES in DATA-BUF, or nil.
 The result reuses the compound-tool row machinery: each tool, reasoning
 occurrence, or delivery is a `:child-calls' entry with its own disclosure
 state.  A newly formed group keeps an already open child visible.
-SUMMARY-ONLY omits cached tool bodies; recompute before expanding children."
-  (let ((children
+SUMMARY-ONLY omits cached tool bodies; recompute before expanding children.
+PENDING in-flight tool entries count into the summary as running calls
+and follow the settled children."
+  (let* ((settled
           (let ((index 0)
                 out)
             (dolist (entry entries (nreverse out))
               (when-let* ((child (mevedel-view--tool-group-child
                                   entry data-buf index summary-only)))
                 (push child out))
-              (cl-incf index)))))
+              (cl-incf index))))
+         (children (append settled (mevedel-view--pending-children pending))))
     (when children
       (let ((completions (mevedel-view--group-completions children)))
       (list :header (mevedel-view--tool-group-header children completions)
@@ -6309,6 +6514,7 @@ SUMMARY-ONLY omits cached tool bodies; recompute before expanding children."
             :vtype 'tool-group
             :expandable-p t
             :child-calls children
+            :pending-count (mevedel-view--pending-running-count pending)
             :status (and (cl-some
                           (lambda (entry)
                             (eq (mevedel-view--rendering-status
@@ -6326,7 +6532,7 @@ SUMMARY-ONLY omits cached tool bodies; recompute before expanding children."
                                   (mevedel-view--child-call-state-key
                                    child (plist-get child :source)))))
                       (not (cdr state))))
-                  children)))))))
+                  settled)))))))
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)
@@ -6367,13 +6573,14 @@ stay with their nested row inside the group."
          (not (and (plist-member rendering :initially-collapsed-p)
                    (not (plist-get rendering :initially-collapsed-p))))))))
 
-(defun mevedel-view--insert-tool-group (entries data-buf)
+(defun mevedel-view--insert-tool-group (entries data-buf &optional pending)
   "Insert grouped activity ENTRIES as one expandable row for DATA-BUF.
+PENDING in-flight tool entries join the group as running calls.
 Return non-nil when the group row was inserted."
   (let* ((group-start (plist-get (car entries) :start))
          (group-end (plist-get (car (last entries)) :end))
          (rendering (mevedel-view--tool-group-rendering
-                     entries data-buf t))
+                     entries data-buf t pending))
          (source (and rendering
                       (mevedel-view-disclosure-source-range
                        data-buf group-start group-end))))
@@ -6381,11 +6588,12 @@ Return non-nil when the group row was inserted."
       (unless (plist-get
                (mevedel-view-disclosure-apply-rendering-state rendering source)
                :initially-collapsed-p)
-        (setq rendering (mevedel-view--tool-group-rendering entries data-buf)))
+        (setq rendering (mevedel-view--tool-group-rendering
+                         entries data-buf nil pending)))
       (mevedel-view--insert-rendered-tool rendering source)
       t)))
 
-(defun mevedel-view--render-tool-group (tool-segments data-buf)
+(defun mevedel-view--render-tool-group (tool-segments data-buf &optional pending)
   "Render consecutive TOOL-SEGMENTS from DATA-BUF.
 Each tool call gets its own collapsible entry.  A registered
 `:renderer' is invoked when the segment carries a render-data
@@ -6394,7 +6602,9 @@ Adjacent visible renderings with equal `:coalesce-key' values keep
 only the final row and show the number of combined calls.  Hook audits
 from every combined call remain in source order.  Runs of more than
 `mevedel-view-tool-group-collapse-threshold' plain rows fold into one
-grouped activity row that expands into compound-tool nested rows."
+grouped activity row that expands into compound-tool nested rows.
+PENDING in-flight tool entries extend the trailing run, counting toward
+its threshold, or start a run of their own after a row that cannot fold."
   (let* ((unit-start (point))
          (unit-source (cadr (car tool-segments)))
          (tool-segments
@@ -6492,19 +6702,24 @@ grouped activity row that expands into compound-tool nested rows."
                        (mevedel-view--decorate-markdown-in-range
                         ins-start (point))))))))
              (flush-run
-               (run)
-               (let ((run-entries (nreverse run)))
+               (run &optional pending)
+               (let* ((run-entries (nreverse run))
+                      (total (+ (length run-entries) (length pending))))
                  (if (and (> mevedel-view-tool-group-collapse-threshold 0)
-                          (> (length run-entries)
-                             mevedel-view-tool-group-collapse-threshold)
+                          run-entries
+                          (> total mevedel-view-tool-group-collapse-threshold)
                           (progn
                             (unless inserted-rule
                               (mevedel-view--insert-activity-rule-after-response)
                               (setq inserted-rule t))
                             (mevedel-view--insert-tool-group
-                             run-entries data-buf)))
+                             run-entries data-buf pending)))
                      (cl-incf rendered (length run-entries))
-                   (mapc #'insert-entry run-entries)))))
+                   (mapc #'insert-entry run-entries)
+                   (when pending
+                     (if run-entries
+                         (mapc #'mevedel-view--insert-pending-tool-row pending)
+                       (mevedel-view--insert-pending-run pending)))))))
           (let (run)
             (dolist (entry entries)
               (if (mevedel-view--tool-group-entry-p entry)
@@ -6513,8 +6728,8 @@ grouped activity row that expands into compound-tool nested rows."
                   (flush-run run)
                   (setq run nil))
                 (insert-entry entry)))
-            (when run
-              (flush-run run))))
+            (when (or run pending)
+              (flush-run run pending))))
       (mevedel-view--debug-log
        'render-tool-group
        :segments (length tool-segments)
@@ -7542,36 +7757,12 @@ ends at PREFIX-END."
              prefix-lines prefix-end prefix-start))))))
 
 (defun mevedel-view--volatile-live-tail-line-p (line)
-  "Return non-nil when LINE is too volatile for live-tail matching."
-  (let* ((trimmed (string-trim (or line "")))
-         (pending-labels
-          (delq nil
-                (mapcar (lambda (entry)
-                          (let ((label (mevedel-view--pending-tool-label entry))
-                                (hint (mevedel-view--permission-approval-hint
-                                       (mevedel-view--permission-approval-reason
-                                        (nth 3 entry)))))
-                            (string-trim (concat label (and hint (concat "  " hint))))))
-                        mevedel-view--pending-tool-calls))))
-    (when (> (length mevedel-view--pending-tool-calls)
-             mevedel-view-pending-tools-visible-max)
-      (push (format "%d more tools running…"
-                    (- (length mevedel-view--pending-tool-calls)
-                       mevedel-view-pending-tools-visible-max))
-            pending-labels))
+  "Return non-nil when LINE is too volatile for live-tail matching.
+In-flight tool decorations never reach this check: they are stripped
+before the tail is matched."
+  (let ((trimmed (string-trim (or line ""))))
     (or (string-empty-p trimmed)
         (string-match-p "\\`[[:space:]]*… Thinking\\.\\.\\." trimmed)
-        (cl-some (lambda (label)
-                   (or (string= trimmed label)
-                       (cl-some (lambda (frame)
-                                  (and (not (string-empty-p frame))
-                                       (string-prefix-p frame trimmed)
-                                       (string= (string-trim-left
-                                                 (substring trimmed
-                                                            (length frame)))
-                                                label)))
-                                mevedel-view-animation-prefixes)))
-                 pending-labels)
         (string-match-p "\\`[[:space:]]*[✓✗●!›…]?[[:space:]]*Agent:"
                         trimmed))))
 
@@ -8255,11 +8446,12 @@ Until the complete plan is ready, keep the previous view in place."
            (immediate (mevedel-view-render--priority-turns (plist-get plan :turns) t))
            (states (mevedel-view-disclosure-capture-state
                     (point-min) (mevedel-view--input-marker-position)))
-           (preserved-tools
-            (when (and (not historical) (not agent)
-                       mevedel-view--pending-tool-calls)
-              (mevedel-view--snapshot-tool-animation-targets)))
            installed)
+      ;; The projection removes running rows; their next live render
+      ;; restores the phase they displayed.
+      (when (and (not historical) mevedel-view--pending-tool-calls)
+        (setq mevedel-view--carried-tool-samples
+              (mevedel-view--snapshot-tool-animation-targets)))
       ;; A reader can move onto any pending response before its callback.
       ;; Project chat prompts now so each such response has a real header
       ;; above it, with both a preview and a click target.  Keep the costly
@@ -8311,8 +8503,8 @@ Until the complete plan is ready, keep the previous view in place."
                             (cl-remove-if-not (lambda (entry) (memq (car entry) priority)) pending)
                             (cl-remove-if (lambda (entry) (memq (car entry) priority)) pending))))
                    (mevedel-view--full-rerender-finish
-                    data live-data (list :view-buffer view) historical started
-                    preserved-tools)))))
+                    data live-data (list :view-buffer view) historical
+                    started)))))
             (setf (plist-get job :phase) 'project)
             (if (plist-get job :pending)
                 (mevedel-view-render-resume-batch)
@@ -8424,17 +8616,17 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
              (with-current-buffer data-buf (point-max)))))))))
 
 (defun mevedel-view--full-rerender-finish
-    (data-buf live-data-buf rendering historical-p start-time preserved-tools)
+    (data-buf live-data-buf rendering historical-p start-time)
   "Rebuild live chrome after projecting DATA-BUF.
 LIVE-DATA-BUF owns live status.  RENDERING identifies the view.
 HISTORICAL-P suppresses live-only rows.  START-TIME is for diagnostics.
-PRESERVED-TOOLS holds displayed pending-tool samples from before the reset."
+The projection drew settled history only; in-flight tool calls return
+with the next boundary render of the live turn."
   (with-current-buffer (plist-get rendering :view-buffer)
+    (when (and (not historical-p) mevedel-view--pending-tool-calls)
+      (mevedel-view--schedule-tool-boundary-render live-data-buf))
     (unless mevedel-view--agent-transcript-p
       (mevedel-view-refresh-input-prompt)
-      (when (and (not historical-p)
-                 mevedel-view--pending-tool-calls)
-        (mevedel-view--refresh-pending-tool-lines preserved-tools))
       (mevedel-view--render-status live-data-buf)
       (mevedel-view--interaction-rebuild)
       (mevedel-view--ensure-request-progress live-data-buf)
@@ -8517,16 +8709,11 @@ view chrome."
                           (tail-end
                            (marker-position mevedel-view--status-marker))
                           ((< tail-start tail-end)))
-                (mevedel-view--strip-history-live-fragments-from-string
-                 (buffer-substring tail-start tail-end))))
-             (preserved-tools
-              (when (and (not source-changed-p)
-                         (not historical-p)
-                         (not agent-transcript-p)
-                         mevedel-view--pending-tool-calls)
-                (mevedel-view--snapshot-tool-animation-targets))))
-        (unless mevedel-view--pending-tool-calls
-          (mevedel-view--delete-pending-tool-live-lines))
+                (mevedel-view--strip-pending-decorations-from-string
+                 (buffer-substring tail-start tail-end)))))
+        (when (and (not historical-p) mevedel-view--pending-tool-calls)
+          (setq mevedel-view--carried-tool-samples
+                (mevedel-view--snapshot-tool-animation-targets)))
         (mevedel-view--debug-log
          'full-rerender-begin
          :in-flight-was in-flight-was
@@ -8547,8 +8734,7 @@ view chrome."
            data-buf rendering in-flight-was
            data-turn-start-pos preserved-live-tail)
             (mevedel-view--full-rerender-finish
-             data-buf live-data-buf rendering historical-p start-time
-             preserved-tools))))))))
+             data-buf live-data-buf rendering historical-p start-time))))))))
 
 ;;
 ;;; Optimistic user turn rendering
