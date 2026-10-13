@@ -177,7 +177,8 @@
   (let ((mevedel-execution-inline-output-limit 6)
         (record (mevedel-execution--record-create
                  :execution-id "exec-1"
-                 :origin (mevedel-execution--origin-create :owner "/root"))))
+                 :origin (mevedel-execution--origin-create
+                          :owner "/root" :tool-use-id "bash-1"))))
     (cl-letf (((symbol-function 'mevedel-execution--facts)
                (lambda (_) '(:state running :omitted-output-bytes 0))))
       (mevedel-execution--retain-output record "abcdef")
@@ -185,6 +186,7 @@
                              :output-preview-truncated-p))
       (mevedel-execution--retain-output record "ghi")
       (let ((snapshot (mevedel-execution--user-snapshot record)))
+        (should (equal "bash-1" (plist-get snapshot :tool-use-id)))
         (should (equal "defghi" (plist-get snapshot :output-tail)))
         (should (plist-get snapshot :output-preview-truncated-p))
         (should (= 0 (plist-get snapshot :omitted-output-bytes)))))))

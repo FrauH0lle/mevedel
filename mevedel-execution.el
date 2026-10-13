@@ -2021,6 +2021,7 @@ after WAIT-MS while the process remains live."
      (append
       facts
       (list :owner (mevedel-execution--origin-owner origin)
+            :tool-use-id (mevedel-execution--origin-tool-use-id origin)
             :permission-approvals (mevedel-execution--record-permission-approvals record)
             :yielded (and (mevedel-execution--record-yielded-p record) t)
             :started-at (mevedel-execution--record-started-at record)

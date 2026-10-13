@@ -55,8 +55,8 @@
 (declare-function mevedel-execution-list-user "mevedel-execution" (session))
 
 ;; `mevedel-view-audit'
-(declare-function mevedel-view-audit-show-control-result
-                  "mevedel-view-audit" (execution-id))
+(declare-function mevedel-view-audit-show-result
+                  "mevedel-view-audit" (record))
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-open-agent-transcript
@@ -1895,8 +1895,7 @@ issue, so a stale control cannot dismiss a later failure with the same id."
   "Return the status line for live execution SNAPSHOT.
 It names the command and owner without output: the original Bash row owns
 progress, and RET jumps there."
-  (let* ((id (plist-get snapshot :execution-id))
-         (owner (plist-get snapshot :owner))
+  (let* ((owner (plist-get snapshot :owner))
          (command (replace-regexp-in-string
                    "[\n\r\t]+" " " (or (plist-get snapshot :command) "Bash")))
          (line (concat
@@ -1911,7 +1910,7 @@ progress, and RET jumps there."
      (list 'mouse-face 'highlight
            'help-echo "RET: show the running command's Bash row"
            'mevedel-view-zone-activate
-           (lambda () (mevedel-view-show-live-execution id owner)))
+           (lambda () (mevedel-view-show-live-execution snapshot)))
      line)
     line))
 
@@ -1930,13 +1929,17 @@ Foreground commands already show as the pending call they belong to."
          (propertize (format "  +%d more\n" hidden)
                      'font-lock-face 'shadow))))))
 
-(defun mevedel-view-show-live-execution (execution-id owner)
-  "Show the Bash row of live EXECUTION-ID owned by OWNER."
-  (if (equal owner "/root")
-      (mevedel-view-audit-show-control-result execution-id)
-    (mevedel-view-open-agent-transcript owner)
-    (with-current-buffer (window-buffer (selected-window))
-      (mevedel-view-audit-show-control-result execution-id))))
+(defun mevedel-view-show-live-execution (snapshot)
+  "Show the originating Bash row identified by live execution SNAPSHOT."
+  (let ((owner (plist-get snapshot :owner))
+        (record (list :execution-id (plist-get snapshot :execution-id)
+                      :tool-use-id (plist-get snapshot :tool-use-id)
+                      :facts snapshot)))
+    (if (equal owner "/root")
+        (mevedel-view-audit-show-result record)
+      (mevedel-view-open-agent-transcript owner)
+      (with-current-buffer (window-buffer (selected-window))
+        (mevedel-view-audit-show-result record)))))
 
 (defun mevedel-view-open-executions ()
   "Open the current session's live execution cockpit."

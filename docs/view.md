@@ -1329,9 +1329,11 @@ directive, historical, agent, and side scopes cannot create one.
 While yielded (background) Bash commands are live, the status zone lists up to
 five of them by command and owner, followed by `+N more`. Activating a command
 line opens that command's result exactly like a breadcrumb's `[Show result]`:
-its original Bash row, opening the owning agent's transcript first. Activating
-`+N more` opens the execution cockpit. A managed-zone body line keeps its own
-activation; the fragment's activation applies only to lines without one. The
+its original Bash row, opening the owning agent's transcript first. The live
+snapshot carries the originating tool ID, including nested Bash children, so
+activation does not rediscover that identity by parsing transcript history.
+Activating `+N more` opens the execution cockpit. A managed-zone body line keeps
+its own activation; the fragment's activation applies only to lines without one. The
 main cockpit exposes the same surface as `Executions`, and `/ps` opens it
 directly. Its Elapsed and Bytes columns sort by their numbers, not their text. Execution start and settlement reconcile this fragment through the
 normal managed-zone path, preserving composer text, point, and windows.

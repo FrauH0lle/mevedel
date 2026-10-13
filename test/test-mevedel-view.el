@@ -1507,7 +1507,7 @@
     (cl-letf (((symbol-function 'mevedel-execution-list-user)
                (lambda (_)
                  '((:execution-id "e1" :owner "/root" :yielded t
-                    :command "make test")
+                    :tool-use-id "bash-1" :command "make test")
                    (:execution-id "e2" :owner "/root" :yielded t
                     :command "make lint"))))
               ((symbol-function 'mevedel-execution-count-user) (lambda (_) 2))
@@ -1515,7 +1515,11 @@
               ((symbol-function 'mevedel-executions-list-open)
                (lambda (&optional _context) (setq opened t)))
               ((symbol-function 'mevedel-view-audit-show-control-result)
-               (lambda (id) (setq shown id))))
+               (lambda (_) (error "Live activation scanned transcript history")))
+              ((symbol-function 'mevedel-view-audit-show-result)
+               (lambda (record)
+                 (setq shown (list (plist-get record :execution-id)
+                                   (plist-get record :tool-use-id))))))
       (let ((body (mevedel-view--status-executions-body session)))
         (should (equal "  ● make test\n  +1 more\n"
                        (substring-no-properties body)))
@@ -1534,11 +1538,37 @@
         (goto-char (point-min))
         (search-forward "make test")
         (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
-        (should (equal "e1" shown))
+        (should (equal '("e1" "bash-1") shown))
         (should-not opened)
         (search-forward "more")
         (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
         (should opened)))))
+
+(mevedel-deftest mevedel-view-show-live-execution ()
+  ,test
+  (test)
+  :doc "agent navigation uses the captured child tool identity in its owning view"
+  (let ((agent-view (generate-new-buffer " *live execution agent*"))
+        opened shown)
+    (unwind-protect
+        (save-window-excursion
+          (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
+                     (lambda (owner)
+                       (setq opened owner)
+                       (switch-to-buffer agent-view)))
+                    ((symbol-function 'mevedel-view-audit-show-control-result)
+                     (lambda (_) (error "Live activation scanned transcript history")))
+                    ((symbol-function 'mevedel-view-audit-show-result)
+                     (lambda (record)
+                       (should (eq (current-buffer) agent-view))
+                       (setq shown record))))
+            (mevedel-view-show-live-execution
+             '(:execution-id "exec-child" :tool-use-id "outer/1/1"
+               :owner "/root/worker"))
+            (should (equal opened "/root/worker"))
+            (should (equal (plist-get shown :tool-use-id) "outer/1/1"))
+            (should (equal (plist-get shown :execution-id) "exec-child"))))
+      (kill-buffer agent-view))))
 
 (mevedel-deftest mevedel-view-open-executions ()
   ,test
