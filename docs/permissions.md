@@ -716,8 +716,15 @@ patterns may authorize dangerous or complex forms. Invocation- and
 request-scoped delegated patterns may not. Explicit denies always win.
 When a prompted dangerous command is literal and contains no dynamic shell or
 glob ambiguity, session/workspace remembering stores the complete command
-exactly. Ambiguous commands remain invocation-only; users may still author
-broader rules directly.
+exactly. Executable paths retain this restriction: `/bin/rm cache` is not
+generalized to `/bin/rm cache:*`. Shells and wrappers likewise remain exact,
+whether named directly or by path. Shell quoting cannot hide the executable's
+name from these checks. Executable names containing whitespace or shell syntax
+remain exactly as authored, rather than becoming a prefix for a different
+executable after quote removal. Prefix generation also requires literal source
+spelling, including skipped environment assignments: `'LANG=C'` names an
+executable and must not be discarded as an assignment. Ambiguous commands remain
+invocation-only; users may still author broader rules directly.
 
 ### Child confinement
 

@@ -281,9 +281,15 @@
                    (lambda (_value) (ert-fail "A torn-down helper must not deliver a result"))
                    '(:pattern "*.md") descriptor #'mevedel-tool-fs-search-glob)
                   (mevedel-execution-teardown-all))
-              (should-error
-               (mevedel-tool-fs-search--documents
-                #'ignore '(:pattern "*.md") descriptor #'mevedel-tool-fs-search-glob)))
+              (let (results)
+                (mevedel-tool-fs-search--documents
+                 (lambda (value) (push value results))
+                 '(:pattern "*.md") descriptor #'mevedel-tool-fs-search-glob)
+                (should (= 1 (length results)))
+                (should (string-prefix-p "Error:" (plist-get (car results) :result)))
+                (should (string-search "memory://journal/" (plist-get (car results) :result)))
+                (should-not (string-search "Injected admission failure"
+                                           (plist-get (car results) :result)))))
             (should snapshot)
             (should-not (file-exists-p snapshot)))
         (mevedel-execution-teardown-all)))))

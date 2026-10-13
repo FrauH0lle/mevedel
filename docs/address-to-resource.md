@@ -449,6 +449,8 @@ Grep on a documentation directory first selects filenames with the caller's
 glob and type filters, then searches only contained Markdown files. A positive
 caller glob cannot expand this family to non-Markdown content or counts. Both
 selection and content search share the native cancellation and timeout budget.
+Startup failures at either stage return one error with the authored address,
+without exposing private helper scratch paths.
 
 The documentation owner uses the same source-aware package directory as system
 and tool prompts. When loading bytecode, an existing sibling `.el` file identifies

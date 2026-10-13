@@ -327,6 +327,23 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
                       :resolved :json-false))
     (should (eq :json-false (plist-get (car (mevedel-test--discussions workspace "schema"))
                                        :resolved))))
+  :doc "retrying an older unsent message never sends someone else's newer reply"
+  (mevedel-test--with-discussion-room
+    (mevedel-test--discussion-act room guest (mevedel-test--discussion-post :toAssistant nil))
+    (mevedel-test--discussion-act
+     room guest (list :action "reply" :item "tool-1" :discussionId "0123456789abcdef0123"
+                      :messageId "fedcba9876543210fedc" :text "A newer note"))
+    (should-error (mevedel-test--discussion-act room guest (mevedel-test--discussion-post)))
+    (should-not (mevedel-session-pending-follow-ups session)))
+  :doc "retrying a queued message after a newer reply stays an idempotent success"
+  (mevedel-test--with-discussion-room
+    (mevedel-test--discussion-act room guest (mevedel-test--discussion-post))
+    (mevedel-test--discussion-act
+     room guest (list :action "reply" :item "tool-1" :discussionId "0123456789abcdef0123"
+                      :messageId "fedcba9876543210fedc" :text "A newer note"))
+    (should (plist-get (mevedel-test--discussion-act room guest (mevedel-test--discussion-post))
+                       :queued))
+    (should (= 1 (length (mevedel-session-pending-follow-ups session)))))
   :doc "collects whole-artifact messages in the general discussion, which stays open"
   (mevedel-test--with-discussion-room
     (dolist (id '("abcdefabcdefabcdef12" "abcdefabcdefabcdef13"))
@@ -468,6 +485,8 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
       (mevedel-test--discussion-act room guest (mevedel-test--discussion-post))
       (should (mevedel-collaboration-discussions--question-known-p
                data-buf item "1123456789abcdef0123"))
+      (should-not (mevedel-collaboration-discussions--question-known-p
+                   data-buf "artifact:other" "1123456789abcdef0123"))
       (mevedel-session-set-pending-input-paused session nil)
       (cl-letf (((symbol-function 'gptel-send) #'ignore))
         (mevedel-view--drain-follow-up data-buf))
@@ -475,13 +494,15 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
       (should (mevedel-collaboration-discussions--question-known-p
                data-buf item "1123456789abcdef0123"))
       ;; The delivered prompt names the turn the session is now running.
+      (should-not (mevedel-collaboration-discussions--question-known-p
+                   data-buf "artifact:other" "1123456789abcdef0123"))
       (should (equal "1123456789abcdef0123"
                      (plist-get (plist-get (with-current-buffer data-buf
                                              mevedel-view--turn-guest-attribution)
                                            :shared)
                                 :questionId)))
       (should-not (mevedel-collaboration-discussions--question-known-p data-buf item "other"))))
-  :doc "finds a request accepted before compaction in the archived segments"
+  :doc "finds a request accepted before compaction; an unreadable archive leaves others unknown"
   (let* ((directory (make-temp-file "discussion-retry-" t))
          (session (mevedel-session--create :save-path directory :current-segment 2
                                            :authority-mode 'pid-lock))
@@ -504,8 +525,61 @@ artifacts schema, notes and gone, and SENT collects outgoing frames."
           (should-not (mevedel-collaboration-discussions--question-known-p
                        (current-buffer) "artifact:doc" "q2"))
           (should-not (mevedel-collaboration-discussions--question-known-p
-                       (current-buffer) "artifact:other" "q1")))
-      (delete-directory directory t))))
+                       (current-buffer) "artifact:other" "q1"))
+          ;; Segment two is missing: a match elsewhere still settles a
+          ;; question, but no answer settles one it could hold.
+          (setf (mevedel-session-current-segment session) 3)
+          (should (mevedel-collaboration-discussions--question-known-p
+                   (current-buffer) "artifact:doc" "q1"))
+          (should-error (mevedel-collaboration-discussions--question-known-p
+                         (current-buffer) "artifact:doc" "q2")
+                        :type 'user-error))
+      (delete-directory directory t)))
+  :doc "a message this action stored skips the retry lookup; a retried one uses it"
+  (mevedel-test--with-discussion-room
+    (let ((lookups 0))
+      (cl-letf* ((original (symbol-function
+                            'mevedel-collaboration-discussions--question-known-p))
+                 ((symbol-function 'mevedel-collaboration-discussions--question-known-p)
+                  (lambda (&rest args) (cl-incf lookups) (apply original args))))
+        (mevedel-test--discussion-act room guest (mevedel-test--discussion-post))
+        (should (= 0 lookups))
+        (should (plist-get (mevedel-test--discussion-act
+                            room guest (mevedel-test--discussion-post))
+                           :queued))
+        (should (= 1 lookups))
+        (should (= 1 (length (mevedel-session-pending-follow-ups session)))))))
+  :doc "a retry delivered before compaction is found past an unreadable archive, else refused"
+  (mevedel-test--with-discussion-room
+    ;; The message is stored; its request was delivered and then archived by
+    ;; compaction into segment one.  Segment two is missing.
+    (mevedel-test--discussion-act room guest (mevedel-test--discussion-post :toAssistant nil))
+    (let ((save-path (mevedel-session-save-path session)))
+      (make-directory save-path t)
+      (setf (mevedel-session-current-segment session) 3)
+      (with-temp-buffer
+        (org-mode)
+        (mevedel--insert-user-turn "Make this bigger")
+        (insert (mevedel--format-hook-audit-record
+                 (list :type 'guest-prompt :name "Alice"
+                       :shared (list :kind "artifact" :itemId "artifact:schema"
+                                     :discussionId "0123456789abcdef0123"
+                                     :messageId "1123456789abcdef0123"
+                                     :questionId "1123456789abcdef0123"))))
+        (insert (propertize "Done" 'gptel 'response))
+        (let ((gptel--bounds nil)) (gptel--save-state))
+        (write-region (point-min) (point-max)
+                      (mevedel-session-artifacts-segment-path save-path 1) nil 'silent))
+      (should (plist-get (mevedel-test--discussion-act room guest (mevedel-test--discussion-post))
+                         :queued))
+      (should-not (mevedel-session-pending-follow-ups session))
+      ;; With the delivering archive unreadable too, delivery is unknown.
+      (delete-file (mevedel-session-artifacts-segment-path save-path 1))
+      (should (string-match-p
+               "cannot be checked"
+               (cadr (should-error (mevedel-test--discussion-act
+                                    room guest (mevedel-test--discussion-post))))))
+      (should-not (mevedel-session-pending-follow-ups session)))))
 
 (mevedel-deftest mevedel-collaboration-discussions-turn-settled ()
   ,test
@@ -722,6 +796,64 @@ answers in DATA-BUF."
         (should (string-match-p (cadr case) (or (plist-get reply :error) "")))))
     (should-not (mevedel-session-pending-follow-ups session))
     (should (= 1 (length (mevedel-test--shared-discussions workspace board)))))
+  :doc "a rejected attachment set removes the real host's already saved board snapshot"
+  (mevedel-test--with-shared-discussion-room
+    (let ((media (make-temp-file "discussion-media-" t)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--media-dir) (lambda () media)))
+            (let ((reply (mevedel-test--shared-act
+                          room guest
+                          (list :action "post" :item (concat "artifact:" board)
+                                :target '(:kind "whole") :messageId "aaaaaaaaaaaaaaaaaaaa"
+                                :text "Use the attachment" :toAssistant t
+                                :images '((:mime "invalid/type" :data "eA=="))))))
+              (should (string-match-p "attachments could not be attached"
+                                      (or (plist-get reply :error) "")))
+              (should-not (mevedel-session-pending-follow-ups session))
+              (should-not (directory-files media nil "\\`[^.]"))))
+        (delete-directory media t))))
+  :doc "stopping a room revokes a discussion waiting in the real editing queue"
+  (mevedel-test--with-shared-discussion-room
+    (let (reply)
+      (mevedel-collaboration-discussions-perform
+       room guest
+       (list :action "post" :item (concat "artifact:" board) :target '(:kind "whole")
+             :messageId "aaaaaaaaaaaaaaaaaaaa" :text "Too late" :toAssistant t)
+       (lambda (value) (setq reply value))
+       ;; Both guest channels used only this check, which survives room stop.
+       (lambda () (eq guest (mevedel-collaboration--guest room 1))))
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-stop) #'ignore))
+        (mevedel-collaboration--stop-internal room 'stopped))
+      (mevedel-test--wait (lambda () reply))
+      (should (plist-get reply :error))
+      (should-not (mevedel-test--shared-discussions workspace board))
+      (should-not (mevedel-session-pending-follow-ups session))))
+  :doc "the host's replay of a stored message is what enables the retry lookup"
+  (mevedel-test--with-shared-discussion-room
+    (let ((lookups 0)
+          (post (list :action "post" :item (concat "artifact:" board) :target '(:kind "whole")
+                      :messageId "aaaaaaaaaaaaaaaaaaaa" :text "Once" :toAssistant t)))
+      (cl-letf* ((original (symbol-function
+                            'mevedel-collaboration-discussions--question-known-p))
+                 ((symbol-function 'mevedel-collaboration-discussions--question-known-p)
+                  (lambda (&rest args) (cl-incf lookups) (apply original args))))
+        (should-not (plist-get (mevedel-test--shared-act room guest post) :error))
+        (should (= 0 lookups))
+        (should (plist-get (mevedel-test--shared-act room guest post) :queued))
+        (should (< 0 lookups))
+        (should (= 1 (length (mevedel-session-pending-follow-ups session))))
+        ;; Delivered, then compacted away into an archive nobody can read: the
+        ;; retry is refused to its sender rather than lost or queued again.
+        (with-current-buffer data-buf
+          (mevedel-session-set-pending-input-paused session nil)
+          (cl-letf (((symbol-function 'gptel-send) #'ignore))
+            (mevedel-view--drain-follow-up data-buf))
+          (let ((inhibit-read-only t)) (erase-buffer)))
+        (setf (mevedel-session-current-segment session) 2)
+        (should (string-match-p "cannot be checked"
+                                (or (plist-get (mevedel-test--shared-act room guest post) :error)
+                                    "")))
+        (should-not (mevedel-session-pending-follow-ups session)))))
   :doc "the room composer reaches the general discussion through the editor channel"
   (mevedel-test--with-shared-discussion-room
     (let (sent)

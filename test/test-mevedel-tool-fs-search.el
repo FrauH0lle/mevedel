@@ -29,6 +29,101 @@
      (unwind-protect (progn ,@body)
        (delete-directory tmp-dir t))))
 
+(mevedel-deftest mevedel-tool-fs-search-resource-startup-errors ()
+  ,test
+  (test)
+  :doc "Grep exact-file and Glob resource startup errors never expose helper paths"
+  (test-mevedel-tool-fs-search--with-directory
+    (let ((mevedel-resource--source-dir tmp-dir))
+      (make-directory (file-name-concat tmp-dir "docs"))
+      (write-region "needle\n" nil (file-name-concat tmp-dir "docs/a.md") nil 'silent)
+      (dolist (operation '(grep glob))
+        (dolist (delivery '(signal immediate deferred))
+          (let* ((address (if (eq operation 'grep) "mevedel://a.md" "mevedel://"))
+                 (attempt (mevedel-resource-prepare operation address nil))
+                 (mevedel-resource-current-attempts (list (cons address attempt)))
+                 (failure '(file-error "Cannot start helper" "/private/scratch"))
+                 (handler (if (eq operation 'grep)
+                              #'mevedel-tool-fs-search-grep #'mevedel-tool-fs-search-glob))
+                 helper-callback results)
+            (ert-info ((format "%s %s" operation delivery))
+              (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                         (lambda (callback &rest _)
+                           (setq helper-callback callback)
+                           (pcase delivery
+                             ('signal (signal (car failure) (cdr failure)))
+                             ('immediate (funcall callback (list :error failure :output ""))))
+                           #'ignore)))
+                (funcall handler (lambda (value) (push value results))
+                         (list :path address :pattern (if (eq operation 'grep) "needle" "*.md"))))
+              ;; Deliver outside the resource's dynamic search bindings.
+              (when (eq delivery 'deferred)
+                (funcall helper-callback (list :error failure :output "")))
+              (should (= 1 (length results)))
+              (let ((text (plist-get (car results) :result)))
+                (should (string-prefix-p "Error:" text))
+                (should (string-search address text))
+                (should-not (string-search "/private/scratch" text)))
+              (when (eq delivery 'deferred)
+                (funcall helper-callback (list :error failure :output ""))
+                (should (= 1 (length results))))))))))
+  :doc "ordinary filesystem searches retain their startup diagnostics"
+  (test-mevedel-tool-fs-search--with-directory
+    (dolist (handler '(mevedel-tool-fs-search-grep mevedel-tool-fs-search-glob))
+      (let ((failure '(file-error "Cannot start helper" "/private/scratch")))
+        (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                   (lambda (&rest _) (signal (car failure) (cdr failure)))))
+          (should (equal failure (should-error
+                                  (funcall handler #'ignore
+                                           (list :path tmp-dir :pattern "needle"))))))
+        (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                   (lambda (callback &rest _)
+                     (funcall callback (list :error failure :output ""))
+                     #'ignore)))
+          (funcall handler (lambda (value) (setq result value))
+                   (list :path tmp-dir :pattern "needle"))
+          (should (string-search "/private/scratch" (plist-get result :result)))))))
+  :doc "resource startup failure does not swallow or redeliver a downstream callback error"
+  (test-mevedel-tool-fs-search--with-directory
+    (let ((mevedel-resource--source-dir tmp-dir))
+      (make-directory (file-name-concat tmp-dir "docs"))
+      (write-region "needle\n" nil (file-name-concat tmp-dir "docs/a.md") nil 'silent)
+      (dolist (operation '(grep glob))
+        (dolist (delivery '(signal immediate deferred))
+          (let* ((address (if (eq operation 'grep) "mevedel://a.md" "mevedel://"))
+                 (attempt (mevedel-resource-prepare operation address nil))
+                 (mevedel-resource-current-attempts (list (cons address attempt)))
+                 (handler (if (eq operation 'grep)
+                              #'mevedel-tool-fs-search-grep #'mevedel-tool-fs-search-glob))
+                 (deliveries 0)
+                 helper-callback)
+            (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                       (lambda (callback &rest _)
+                         (setq helper-callback callback)
+                         (pcase delivery
+                           ('signal (error "Private startup failure: /private/scratch"))
+                           ('immediate (funcall callback '(:error (error "/private/scratch")))))
+                         #'ignore)))
+              (cl-flet ((invoke ()
+                          (funcall handler
+                                   (lambda (_value)
+                                     (cl-incf deliveries)
+                                     (error "Downstream delivery failed"))
+                                   (list :path address :pattern "needle"))))
+                (should
+                 ;; Synchronous errors also cross resource-execute's existing
+                 ;; address annotation boundary; deferred callback errors do not.
+                 (equal (list 'error
+                              (concat "Downstream delivery failed"
+                                      (unless (eq delivery 'deferred)
+                                        (format " (%s)" address))))
+                        (should-error
+                         (if (eq delivery 'deferred)
+                             (progn (invoke)
+                                    (funcall helper-callback '(:error (error "/private/scratch"))))
+                           (invoke)))))))
+            (should (= 1 deliveries))))))))
+
 (mevedel-deftest mevedel-tool-fs-search--scrub-resource-search-output ()
   ,test
   (test)
@@ -637,7 +732,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                     #'mevedel-tool-fs-search-grep
                     (list :pattern "needle" :path address
                           :output_mode "content"))))
-              (should (string-match-p "mevedel://guide\\.md\n1:public needle" result))
+              (should (string-match-p "mevedel://guide\\.md:1:public needle" result))
               (should (string-match-p "1:public needle" result))
               (should-not (string-match-p "private needle" result))
               (should-not (string-match-p "ignored\\.txt" result))
@@ -669,7 +764,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                    (list :pattern "needle" :path address
                          :output_mode "content"))))
             (should (string-match-p
-                     "skill://local-agents/demo/prompt\\.md\n1:public needle" result))
+                     "skill://local-agents/demo/prompt\\.md:1:public needle" result))
             (should-not (string-match-p (regexp-quote root) result))))
       (delete-directory root t)))
   :doc "runs ripgrep in a remote target and returns target-native paths"
@@ -1166,10 +1261,49 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                                                    ("count" "1\n")))))
               (should (equal (concat "artifact://hit.txt"
                                      (pcase mode
-                                       ("content" "\n1:needle\n")
+                                       ("content" ":1:needle\n")
                                        ("count" ":1\n")))
                              (plist-get result :result))))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-fs-search/resource-pagination ()
+  (let* ((root (make-temp-file "mevedel-resource-pages-" t))
+         (docs (file-name-concat root "docs"))
+         (mevedel-resource--source-dir root)
+         (mevedel-tool-fs-search--glob-default-head-limit 2)
+         (operation ,operation)
+         (address ,address))
+    (unwind-protect
+        (progn
+          (make-directory docs)
+          (dotimes (index 4)
+            (with-temp-file (file-name-concat docs (format "guide-%d.md" index))
+              (insert "needle one\nneedle two\nneedle three\nneedle four\n")))
+          (let* ((attempt (mevedel-resource-prepare operation address nil))
+                 (mevedel-resource-current-attempts (list (cons address attempt)))
+                 (result
+                  (test-mevedel-tool-fs-search--await-callback
+                   (if (eq operation 'glob)
+                       #'mevedel-tool-fs-search-glob
+                     #'mevedel-tool-fs-search-grep)
+                   (append (list :path address :head_limit 2) ',options)))
+                 (matches (seq-filter
+                           (lambda (line) (string-prefix-p "mevedel://" line))
+                           (split-string result "\n" t))))
+            (should (= 2 (length matches)))
+            (should (string-search "Results truncated" result))
+            (should-not (string-search root result))
+            (should-not (string-search "\0" result))))
+      (delete-directory root t)))
+  (operation address options)
+  :doc "single-root Glob bounds logical files rather than NUL-delimited lines"
+  'glob "mevedel://" (:pattern "*.md")
+  :doc "single-root Grep bounds logical matching filenames"
+  'grep "mevedel://" (:pattern "needle" :output_mode "files_with_matches")
+  :doc "single-root Grep content pages retain each match's source after an offset"
+  'grep "mevedel://" (:pattern "needle" :output_mode "content" :offset 1)
+  :doc "explicit-file Grep content pages retain the exact source without NUL separators"
+  'grep "mevedel://guide-0.md" (:pattern "needle" :output_mode "content" :offset 1))
 
 (mevedel-deftest mevedel-tool-fs-search/artifact-discovery ()
   ,test

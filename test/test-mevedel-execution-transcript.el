@@ -12,11 +12,16 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-engine-test-support
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-engine-test-support"))
 (require 'gptel)
 (require 'mevedel-agents)
 (require 'mevedel-execution-target)
 (require 'mevedel-execution)
 (require 'mevedel-execution-transcript)
+(require 'mevedel-gptel-stream-bridge)
 (require 'mevedel-pipeline)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-durability)
@@ -222,6 +227,33 @@
 (mevedel-deftest mevedel-execution-transcript--record-breadcrumb ()
   ,test
   (test)
+  :doc "publishes project completions when the logical transcript has no fixed file"
+  (mevedel-test--with-captured-diagnostics nil
+    (mevedel-engine-test--with-session
+      (insert "Saved input\n")
+      (mevedel-session-artifacts-save session buffer)
+      (should-not (file-exists-p buffer-file-name))
+      (let ((logical (file-relative-name
+                      buffer-file-name (mevedel-session-save-path session)))
+            (event (list :type 'terminal :data-buffer buffer :owner "/root"
+                         :tool-use-id "project-call"
+                         :facts '(:execution-id "project-exec" :command "true"
+                                  :state completed :outcome success))))
+        (goto-char (point-max))
+        (insert "Unsent draft\n")
+        (dotimes (_ 2)
+          (mevedel-execution-transcript--record-breadcrumb event))
+        (let ((published
+               (decode-coding-string
+                (mevedel-session-artifacts-read-artifact session logical t)
+                'utf-8-unix)))
+          (should-not (string-search "Unsent draft" published))
+          (should (= 1 (length
+                        (mevedel-execution-transcript-test--restored-audit-records
+                         published 'execution-breadcrumb)))))
+        (should (string-search "Unsent draft" (buffer-string)))
+        (should (buffer-modified-p))
+        (should-not (file-exists-p buffer-file-name)))))
   :doc "persists one completion without writing an unsent in-memory draft"
   (let* ((path (make-temp-file "mevedel-execution-breadcrumb-"))
          (buffer (find-file-noselect path))
@@ -259,19 +291,93 @@
           (set-buffer-modified-p nil))
         (kill-buffer buffer))
       (delete-file path)))
+  :doc "keeps flushed stream text eligible for checkpoint after completion publication"
+  (let* ((path (make-temp-file "mevedel-execution-breadcrumb-batch-"))
+         (buffer (find-file-noselect path))
+         (session (mevedel-session--create :authority-mode 'pid-lock
+                                          :name "breadcrumb-batch"))
+         (mevedel-gptel-stream-bridge-insert-batch-delay 60)
+         (advice #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)
+         (installed (advice-member-p advice 'gptel-curl--stream-insert-response))
+         info)
+    (unwind-protect
+        (with-current-buffer buffer
+          (delay-mode-hooks (org-mode))
+          (setq-local mevedel--session session)
+          (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+          (setq info (list :buffer buffer :position (point-marker)))
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :fsm (gptel-make-fsm :info info)))
+          (unless installed
+            (advice-add 'gptel-curl--stream-insert-response :around advice))
+          (gptel-curl--stream-insert-response "Checkpointed." info)
+          (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info)
+          (mevedel-session-artifacts-stabilize-gptel-bounds)
+          (write-region (point-min) (point-max) path nil 'silent)
+          (set-buffer-modified-p nil)
+          (set-visited-file-modtime)
+          (gptel-curl--stream-insert-response " Unsaved batch." info)
+          (should-not (buffer-modified-p))
+          (mevedel-execution-transcript--record-breadcrumb
+           (list :data-buffer buffer :owner "/root" :tool-use-id "call-batch"
+                 :facts '(:execution-id "exec-batch" :command "true"
+                          :state completed :outcome success)))
+          (should (string-search "Unsaved batch." (buffer-string)))
+          (with-temp-buffer
+            (insert-file-contents path)
+            (should-not (string-search "Unsaved batch." (buffer-string))))
+          (should (buffer-modified-p))
+          ;; A subsequent checkpoint must publish the flushed response and
+          ;; the in-memory placement, replacing the standalone disk append.
+          (mevedel-session-artifacts-stabilize-gptel-bounds)
+          (mevedel-session-artifacts-save-buffer-silently)
+          (should-not (buffer-modified-p))
+          (with-temp-buffer
+            (insert-file-contents path)
+            (delay-mode-hooks (org-mode))
+            (mevedel-transcript-restore-properties)
+            (let ((spans (mevedel-transcript-audit-buffer-spans
+                          'execution-breadcrumb)))
+              (should (= 1 (length spans)))
+              (should (equal "exec-batch"
+                             (plist-get (plist-get (car spans) :record)
+                                        :execution-id)))
+              (goto-char (point-min))
+              (should (< (search-forward "Checkpointed.")
+                         (search-forward " Unsaved batch.")
+                         (plist-get (car spans) :start)))
+              (should (eq 'response
+                          (get-text-property (match-beginning 0) 'gptel)))
+              ;; gptel's trailing newline remains after the record; the
+              ;; completion is at the active response, not the disk tail.
+              (should (< (mevedel-transcript--audit-block-end
+                          (current-buffer) (plist-get (car spans) :end))
+                         (point-max))))))
+      (when info
+        (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch info))
+      (unless installed
+        (advice-remove 'gptel-curl--stream-insert-response advice))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-file path)))
   :doc "keeps a dirty in-memory completion when publication fails"
   (with-temp-buffer
-    (let (warning)
+    (let (warning attempted)
       (set-buffer-modified-p nil)
       (cl-letf (((symbol-function 'mevedel-execution-transcript--persist-terminal-record)
-                 (lambda (_record) (error "simulated publication failure")))
+                 (lambda (_record &optional _render-data)
+                   (setq attempted t)
+                   (error "Simulated publication failure")))
                 ((symbol-function 'display-warning)
                  (lambda (_type message &rest _args) (setq warning message))))
         (mevedel-execution-transcript--record-breadcrumb
          (list :data-buffer (current-buffer) :owner "/root" :tool-use-id "call-x"
                :facts '(:execution-id "exec-x" :command "true"
                         :state completed :outcome success))))
-      (should (string-match-p "simulated publication failure" warning))
+      (should attempted)
+      (should (equal "Could not publish execution completion exec-x: Simulated publication failure"
+                     warning))
       (should (buffer-modified-p))
       (should (= 1 (length (mevedel-transcript-audit-records
                             (buffer-string) 'execution-breadcrumb))))))

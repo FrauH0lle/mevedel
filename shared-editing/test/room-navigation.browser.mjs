@@ -19,6 +19,9 @@ async function room(t, failRead = false) {
         return {connect(){
           options.onConnection('Connected','connected');
           options.onFrame({t:'welcome',readOnly:false,commands:[]});
+          options.onFrame({t:'store-artifacts',artifacts:items.map(item=>({
+            id:item.id,kind:item.kind,title:item.title,item:true,attached:true
+          }))});
           options.onFrame({t:'snapshot-chunk',final:true,records:[{id:'brief',kind:'tool',artifact:'brief.html',size:400}]});
         },end(){},async send(frame){
           if(frame.t==='editing'){

@@ -245,21 +245,28 @@ deterministic and limits omit whole candidates, reported as `:omitted'."
                                             '(:network t))
                                        (and (plist-get (cdr rule) :file-system)
                                             (list :file-system
-                                                  (plist-get (cdr rule) :file-system)))))
-                                (mevedel-permission-review--rule-coverage
-                                 rule profile target)))
+                                                  (plist-get (cdr rule) :file-system)))))))
                   found)))))
     (let ((budget mevedel-permission-review--candidate-budget)
           (omitted 0) kept)
       (dolist (item (sort (nreverse found)
                           (lambda (a b) (or (< (car a) (car b))
                                             (and (= (car a) (car b)) (< (cadr a) (cadr b)))))))
-        (let ((size (string-bytes (prin1-to-string (caddr item)))))
+        (let ((candidate (caddr item)))
+          ;; Coverage can touch remote files.  Do not inspect candidates that
+          ;; cannot fit even before their coverage explanation is appended.
           (if (or (>= (length kept) mevedel-permission-review--candidate-limit)
-                  (> size budget))
+                  (> (string-bytes (prin1-to-string candidate)) budget))
               (cl-incf omitted)
-            (cl-decf budget size)
-            (push (caddr item) kept))))
+            (setq candidate
+                  (append candidate
+                          (mevedel-permission-review--rule-coverage
+                           (plist-get candidate :rule) profile target)))
+            (let ((size (string-bytes (prin1-to-string candidate))))
+              (if (> size budget)
+                  (cl-incf omitted)
+                (cl-decf budget size)
+                (push candidate kept))))))
       (list :candidates (nreverse kept) :omitted omitted))))
 
 (defun mevedel-permission-review--evidence (entry)

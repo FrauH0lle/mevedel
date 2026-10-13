@@ -134,7 +134,12 @@ let documentSelection = null,
   assistant,
   /* Discussions with the live state of their targets, as the panel shows them. */
   discussions = [],
-  hoverShape = null;
+  hoverShape = null,
+  /* The board pins drawn with the assistant's working ring. */
+  drawnWorking = '';
+const workingPins = () => discussions
+  .filter((d) => d.target?.kind === 'objects' && !d.resolved && assistant?.working(d.id))
+  .map((d) => d.id).join('\n');
 let recoveryWarning = '';
 // Set when changes the host committed could not be read after a skipped revision.
 let missed = false;
@@ -505,6 +510,7 @@ function discussionAnchor(discussion, scene) {
 /* Numbered pins at the top-right corner of each open discussion's target. */
 function drawDiscussionMarkers(scene, scale) {
   const anchored = discussions.filter((d) => d.target?.kind === 'objects' && !d.resolved);
+  drawnWorking = workingPins();
   $('discussion-markers').innerHTML = anchored.map((d, index) => {
     const box = discussionAnchor(d, scene);
     if (!box) return '';
@@ -2464,7 +2470,8 @@ async function start(event) {
     },
     reveal: discussion => editor ? revealPassage(discussion.target.range) : revealObjects(discussion),
     stored: setDiscussions, state: () => ({ readOnly, online }), restored: recovery?.assistant,
-    onConversation: () => { if (!editor && doc) draw(); },
+    // Only the pins' working rings follow the conversation.
+    onConversation: () => { if (!editor && doc && workingPins() !== drawnWorking) draw(); },
   });
   assistant.renderDraft();
   if (editor && matchMedia('(min-width:1100px)').matches) {

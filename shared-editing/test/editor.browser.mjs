@@ -1272,6 +1272,64 @@ test('editor interaction regressions', async (t) => {
       assert.equal((await sent(page,'post')).length,1);
       await page.close();
     });
+    await t.test('streamed conversation updates keep typing in a focused reply', async () => {
+      const {page, frame} = await open();
+      await frame.locator('[data-shape="ellipse"]').click();
+      await frame.locator('#discuss-selection').click();
+      await frame.locator('#question').fill('Discuss this');
+      await frame.locator('#ask-assistant').uncheck();
+      await frame.locator('#question-send').click();
+      const input = anchored(frame).locator('textarea');
+      await anchored(frame).locator('.thread-message').waitFor();
+      await input.click();
+      await page.keyboard.type('Keep');
+      await page.evaluate(()=>window.port.postMessage({type:'conversation',records:[],own:[],connected:true,busy:true}));
+      await frame.locator('#conversation-state').getByText('Assistant working',{exact:true}).waitFor();
+      await page.keyboard.type(' typing');
+      assert.equal(await input.inputValue(),'Keep typing');
+      assert.equal(await input.evaluate(n=>n===document.activeElement),true);
+      // Streaming chunks change no draft, so none re-encodes the item for saving.
+      // Frame messages arrive asynchronously: count once the typing's are in.
+      const drafts = async () => {
+        const count = () => page.evaluate(()=>window.messages.filter(m=>m.type==='draft').length);
+        let last, now = await count();
+        do {
+          last = now;
+          await page.waitForTimeout(250);
+          now = await count();
+        } while (now !== last);
+        return now;
+      };
+      const before = await drafts();
+      for (const text of ['A', 'An', 'Ans'])
+        await page.evaluate(text=>window.port.postMessage({type:'conversation',own:[],connected:true,busy:true,
+          records:[{id:'a1',kind:'assistant',text}]}), text);
+      await frame.locator('#discussions').getByText('Ans',{exact:true}).waitFor();
+      assert.equal(await drafts(),before);
+      await page.close();
+    });
+    await t.test('a whole-item message reviewed before a remote change is refused unposted', async () => {
+      const {page, frame} = await open();
+      await frame.locator('#ask-toggle').click();
+      await frame.locator('#question').fill('Describe the attached board');
+      await page.evaluate(async () => {
+        const reply = await window.apply({action:'patch',opId:'remote-add',
+          changes:[{id:'added',after:{type:'rectangle',x:500,y:100,width:100,height:100}}]});
+        window.port.postMessage({type:'changed',...reply});
+      });
+      await frame.locator('#question-send').click();
+      await frame.locator('#assistant-notice').getByText(/Content changed/).waitFor();
+      assert.equal((await page.evaluate(()=>window.asked())).length,0);
+      const general = (await page.evaluate(()=>window.apply({action:'read'}))).discussions
+        .find(d => d.id === 'general');
+      assert.equal(general?.messages.length ?? 0,0);
+      await frame.locator('#context-title').click();
+      await frame.locator('#refresh-context').click();
+      await frame.locator('#question-send').click();
+      await askedCount(page,1);
+      assert.match((await page.evaluate(()=>window.asked()))[0].prompt,/"added"/);
+      await page.close();
+    });
     await t.test('phone assistant overlays the editor, keeps draft and preserves its scroll position', async () => {
       const { page, frame } = await open({kind:'document',viewport:{width:375,height:500}});
       await frame.locator('.tiptap').click();

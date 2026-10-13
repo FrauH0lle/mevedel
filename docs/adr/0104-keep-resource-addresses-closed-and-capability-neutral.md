@@ -111,6 +111,14 @@ All revisions below refine ADR 0104's closed resolver decision.
   despite a safe file-list projection. Directory Grep now selects filenames using
   caller filters, admits only contained Markdown files, and searches that set
   within one cancellation and timeout budget. Ordinary-path search is unchanged.
+- **Resource search pagination.** Single-root searches applied line limits before
+  projecting ripgrep's NUL-delimited filenames, so a two-entry page could return
+  every file; content offsets could also discard the only source heading. Logical
+  filename projection now precedes pagination, and all resource content matches
+  carry a source address, including explicit-file searches. Delivered helper
+  startup errors use the same private-path-safe settlement as signalled errors,
+  including direct exact-file Grep and Glob helpers. Ordinary filesystem
+  searches retain their native startup diagnostics.
 - **Compiled installation roots.** Straight's build tree contained regular
   `.elc` files but symlinked source and documentation. Deriving the documentation
   root from the bytecode made valid reads fail containment and discovery return

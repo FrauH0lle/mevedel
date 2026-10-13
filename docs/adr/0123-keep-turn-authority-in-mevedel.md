@@ -142,9 +142,13 @@ lock had cleared a minute later, so failing the turn only handed the caller a
 wait. The Claude launch recognizes that refusal and the ACP prompt re-sends the
 same prompt once, 30 seconds later, in the same conversation. It does so only
 while the prompt has reported no tool call, so the replay repeats no effect.
-The streamed refusal stays in the transcript, and cancelling during the wait
-settles the turn at once. Any other failure, a second refusal, or a refusal
-after a tool call still ends the turn.
+The streamed refusal stays in the transcript, and the wait keeps the
+conversation busy. Cancelling during the wait settles that turn at once,
+without cancelling a successor started by its completion callback. After the
+replay is sent, cancellation again waits for the prompt's acknowledgement.
+Any other failure, a second refusal, or a refusal after a tool call still ends
+the turn. Errors in the retry policy also settle the turn: acp.el contains
+callback exceptions but cannot release mevedel's active-turn state.
 
 Queued input records one durable delivery intent, a sidecar-only `dispatching`
 mark, before dispatch; delivery writes nothing further, so a committed prompt

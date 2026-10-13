@@ -175,7 +175,8 @@
                   "mevedel-tool-render-data" (tool-use-id))
 (declare-function mevedel-tool-render-data-strip
                   "mevedel-tool-render-data" (string &optional expected-tool-use-id))
-(defvar mevedel-tool-render-data-open)
+(declare-function mevedel-tool-render-data-trusted-range-p
+                  "mevedel-tool-render-data" (start end &optional object))
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tool-ui--render-agent "mevedel-tool-ui"
@@ -4694,19 +4695,20 @@ EXPANDED means insert the disclosure body expanded."
             (unless info
               (dolist (block (mevedel-tool-render-data-blocks text))
                 (when-let* (((not info))
-                            (open (string-search mevedel-tool-render-data-open
-                                                 text (car block)))
-                            (range (mevedel-tool-render-data-block-at
-                                    (+ (cadr seg) open)))
-                            (data (mevedel-view--inline-skill-render-data-from-text
-                                   (buffer-substring (car range) (cadr range)))))
+                            (data (caddr block))
+                            ((eq (plist-get data :kind) 'inline-skill))
+                            ((not (plist-member data :mevedel-tool-use-id)))
+                            ((mevedel-tool-render-data-trusted-range-p
+                              (car block) (cadr block) text)))
                   ;; Anchor the record, not its surrounding segment: gptel
                   ;; may append separators to that segment during dispatch.
+                  ;; The codec already decoded the payload and its bounds.
                   (setq info
                         (plist-put
                          data :source
                          (mevedel-view-disclosure-source-range
-                          data-buf (car range) (cadr range)))))))
+                          data-buf (+ (cadr seg) (car block))
+                          (+ (cadr seg) (cadr block))))))))
             (setq hook-audits
                   (append hook-audits
                           (mevedel-view--hook-audit-records-from-text text))))))

@@ -81,6 +81,62 @@
             "Body\n")
     (mevedel-transcript-restore-sanitize-bounds)
     (should-not (org-entry-get (point-min) "GPTEL_BOUNDS")))
+  :doc "discards dotted bounds lists without aborting restoration"
+  (dolist (raw '("((response (2 3)) . broken)"
+                 "((response . broken))"
+                 "((response (2 . 3)))"
+                 "((response (2 3 . broken)))"))
+    (ert-info ((format "Malformed bounds: %s" raw))
+      (with-temp-buffer
+        (org-mode)
+        (insert ":PROPERTIES:\n:GPTEL_BOUNDS: " raw "\n:END:\nBody\n")
+        (set-buffer-modified-p nil)
+        (mevedel-transcript-restore-properties)
+        (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))
+        (should-not (buffer-modified-p)))))
+  :doc "discards circular bounds lists without looping during restoration"
+  (dolist (raw '("#1=((response (2 3)) . #1#)"
+                 "(#1=(response (2 3) . #1#))"
+                 "((response #1=(2 3 . #1#)))"))
+    (ert-info ((format "Malformed bounds: %s" raw))
+      (with-temp-buffer
+        (org-mode)
+        (insert ":PROPERTIES:\n:GPTEL_BOUNDS: " raw "\n:END:\nBody\n")
+        (set-buffer-modified-p nil)
+        (mevedel-transcript-restore-properties)
+        (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))
+        (should-not (buffer-modified-p)))))
+  :doc "keeps valid sibling ranges and values when malformed entries are removed"
+  (dolist (malformed '("(response . broken)"
+                      "#1=(response (2 3) . #1#)"
+                      "(42 (2 3))"
+                      "(response (2 . 3))"
+                      "(response #1=(2 3 . #1#))"))
+    (ert-info ((format "Malformed entry: %s" malformed))
+      (with-temp-buffer
+        (org-mode)
+        (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\nAnswer\nTool\n")
+        (dotimes (_ 5)
+          (goto-char (point-min))
+          (search-forward "Answer")
+          (let ((beg (match-beginning 0)) (end (match-end 0)))
+            (search-forward "Tool")
+            (org-entry-put
+             (point-min) "GPTEL_BOUNDS"
+             (format "((response (%d %d) (2 . 3) #2=(2 3 . #2#)) (tool (%d %d \"call-id\")) %s)"
+                     beg end (match-beginning 0) (match-end 0) malformed))))
+        (set-buffer-modified-p nil)
+        ;; Test the saved format directly without structural grammar changing
+        ;; the fixture's intentionally minimal tool span.
+        (mevedel-transcript-restore-sanitize-bounds)
+        (gptel--restore-props (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
+        (goto-char (point-min))
+        (search-forward "Answer")
+        (should (eq 'response (get-text-property (match-beginning 0) 'gptel)))
+        (search-forward "Tool")
+        (should (equal '(tool . "call-id")
+                       (get-text-property (match-beginning 0) 'gptel)))
+        (should-not (buffer-modified-p)))))
   :doc "does not mark buffers modified while clamping bounds"
   (with-temp-buffer
     (org-mode)
@@ -141,6 +197,28 @@
     (search-forward "Thinking.")
     (should (eq (get-text-property (match-beginning 0) 'gptel) 'ignore))
     (search-forward "Assistant answer.")
+    (should (eq (get-text-property (match-beginning 0) 'gptel) 'response)))
+  :doc "normalizes the body after sanitation substantially shrinks the drawer"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+            "#+begin_reasoning\nThinking.\n#+end_reasoning\n"
+            "Answer.\n")
+    (dotimes (_ 5)
+      (goto-char (point-min))
+      (search-forward "Answer.")
+      (org-entry-put
+       (point-min) "GPTEL_BOUNDS"
+       (prin1-to-string
+        `((response (,(match-beginning 0) ,(match-end 0))
+                    ,@(make-list 100 '...))))))
+    (set-buffer-modified-p nil)
+    (mevedel-transcript-restore-properties)
+    (should-not (buffer-modified-p))
+    (goto-char (point-min))
+    (search-forward "Thinking.")
+    (should (eq (get-text-property (match-beginning 0) 'gptel) 'ignore))
+    (search-forward "Answer.")
     (should (eq (get-text-property (match-beginning 0) 'gptel) 'response)))
   :doc "does not overwrite newer live properties when restoring only if missing"
   (with-temp-buffer

@@ -96,7 +96,17 @@ user accepted resolving those, and only those, on completion.
   message identity; their answers show at the end of the general discussion.
 - Answers are placed by the attribution's message identity, so the editor and
   the room no longer infer the answered message from the discussion's version.
-- Retry idempotency checks the queue, the live transcript and the item's
-  archived turns for every kind, as editor questions did before, so a retry
-  after compaction is not queued twice.
+- Retry idempotency checks the queue, the live transcript and the archived
+  segments for every kind, as editor questions did before, so a retry after
+  compaction is not queued twice. Reading archives costs time proportional to
+  the session's age -- 126 ms per request with ten 300 KB archives when every
+  request paid it -- so the check runs only when the request may be a retry:
+  its message was already stored before this action, which the artifact store
+  sees directly and the editing host reports from its operation receipts. An
+  explicit **Send to assistant** always checks. A match in any readable
+  archive settles a retry. Without one, an unreadable archive leaves delivery
+  unknown, so the retry is refused to its sender instead of being queued a
+  second time; a new message never reads archives and is unaffected.
+- A retried message is sent only while it is still its discussion's latest;
+  otherwise the sender reviews the discussion again, for every kind.
 - `shared://ID/discussions` replaces `shared://ID/comments` for models.

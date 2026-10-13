@@ -1044,6 +1044,22 @@
     (should (string-match-p
              "Session/always allow will add: `sudo pwd'" captured-content)))
 
+  :doc "disabling command remembering removes the promised command rules"
+  (let* ((cell (list (list :operation t)))
+         (entry (list :kind 'bash :reusable-operation-p t
+                      :remember-authority-cell cell :allow-patterns '("git fetch:*")))
+         content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+               (lambda (body &rest _) (setq content body))))
+      (dolist (remember '(t nil t))
+        (setcar cell (list :operation remember))
+        (mevedel-permission--prompt-async-bash
+         "git fetch origin" 'unknown t nil #'ignore nil entry)
+        (dolist (body (list content (mevedel-queue--entry-metadata-get entry :remote-body)))
+          (should (eq remember (and (string-match-p "Session/always allow will add" body) t))))
+        (unless remember
+          (should (string-match-p "approval remembers: nothing" content))))))
+
   :doc "complex prompts suppress session and persistent allow"
   (let (captured-include captured-suppress captured-content)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)

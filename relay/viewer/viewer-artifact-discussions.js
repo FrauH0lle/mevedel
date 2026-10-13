@@ -905,7 +905,6 @@ function createArtifactDiscussionController(options) {
   let queued = [];
   let stored = [];            // the host store's discussions for view.name
   const pending = new Map();  // discussionId -> local discussion awaiting the store
-  const replyDrafts = new Map();
   let requestSequence = 0;
   const inflight = new Map(); // reqId -> {resolve, reject}
 
@@ -978,41 +977,49 @@ function createArtifactDiscussionController(options) {
 
   // -- Threads ----------------------------------------------------------
 
-  // What the assistant made of a discussion: its latest request in
-  // the transcript or this guest's queue, and the reply that followed.
-  function assistantState(id) {
-    let state = '';
-    let recordId = null;
-    let reply = '';
-    let latest = false;
-    for (let index = 0; index < records.length; index++) {
-      const record = records[index];
-      const shared = record && record.shared;
-      if (record && record.kind === 'user') latest = false;
-      if (!record || record.kind !== 'user' || !shared || shared.kind !== 'artifact'
-          || shared.discussionId !== id) continue;
-      state = 'sent';
-      recordId = record.id;
-      reply = '';
-      latest = true;
-      for (let next = index + 1; next < records.length; next++) {
-        const later = records[next];
-        if (!later) continue;
-        if (later.kind === 'user') break;
-        if (later.kind === 'assistant' && typeof later.text === 'string' && later.text.trim()) {
-          reply = later.text;
-          state = 'answered';
-          break;
-        }
+  // Every discussion's latest request in the transcript with the first reply
+  // that followed it, the discussion of the room's latest user turn, and the
+  // discussions in this guest's queue.  One pass serves every discussion:
+  // streaming republishes markers for each record update.  Cleared whenever
+  // records, queue, activity or the artifact change.
+  let threads = null;
+  function threadStates() {
+    if (threads) return threads;
+    const item = `artifact:${view.name}`;
+    const mine = shared => shared && shared.kind === 'artifact' && shared.itemId === item
+      && typeof shared.discussionId === 'string';
+    const byId = new Map();
+    let current = null;
+    let latest = null;
+    for (const record of records) {
+      if (!record) continue;
+      if (record.kind === 'user') {
+        current = mine(record.shared) ? {state: 'sent', recordId: record.id, reply: ''} : null;
+        latest = current && record.shared.discussionId;
+        if (current) byId.set(latest, current);
+      } else if (current && current.state === 'sent' && record.kind === 'assistant'
+                 && typeof record.text === 'string' && record.text.trim()) {
+        current.reply = record.text;
+        current.state = 'answered';
       }
     }
-    if (queued.some(entry => entry && entry.shared && entry.shared.kind === 'artifact'
-                    && entry.shared.discussionId === id)) state = 'queued';
+    const queuedIds = new Set(queued.filter(entry => entry && mine(entry.shared))
+                                    .map(entry => entry.shared.discussionId));
+    return (threads = {byId, latest, queuedIds});
+  }
+
+  // What the assistant made of discussion ID: its latest request in the
+  // transcript or this guest's queue, and the reply that followed.
+  function assistantState(id) {
+    const {byId, latest, queuedIds} = threadStates();
+    const found = byId.get(id);
+    const state = queuedIds.has(id) ? 'queued' : found ? found.state : '';
     // The session's running turn is the room's latest user turn: while it is
     // this thread's request the assistant is working on it, through its first
     // reply text and on to the turn's end.
-    const working = state === 'queued' || (latest && busy());
-    return {state, recordId, reply, working};
+    const working = state === 'queued' || (latest === id && busy());
+    return {state, recordId: found ? found.recordId : null,
+            reply: found ? found.reply : '', working};
   }
 
   // How a message reads in a thread: a selection sent alone has no text.
@@ -1157,13 +1164,12 @@ function createArtifactDiscussionController(options) {
   // A textarea with an "Ask assistant" checkbox, on by default, and one
   // submit button: posting is one action, and a people-only note is one
   // untick away.
-  function messageForm(className, placeholder, submitLabel, draft) {
+  function messageForm(className, placeholder, submitLabel) {
     const form = el('form', className);
     const input = el('textarea', 'artifact-discussion-input');
     input.placeholder = placeholder;
     input.rows = 3;
     input.setAttribute('aria-label', placeholder);
-    if (draft) input.value = draft;
     const status = el('p', 'artifact-discussion-status', '');
     status.setAttribute('role', 'status');
     const actions = el('div', 'artifact-discussion-actions');
@@ -1282,10 +1288,14 @@ function createArtifactDiscussionController(options) {
   }
 
   function fillCard(card, discussion) {
-    const reply = view.card === card && card.querySelector
-      ? card.querySelector('.artifact-discussion-input') : null;
-    if (reply) replyDrafts.set(discussion.id, reply.value);
-    card.replaceChildren();
+    // Keep the live form attached while streaming or a store broadcast
+    // refreshes the thread. Replacing it resets the assistant choice, focus
+    // and pending submission, and the receipt would clear a detached input.
+    const form = view.card === card && card.querySelector
+      ? card.querySelector('.artifact-discussion-reply-form') : null;
+    if (form) {
+      for (const child of [...card.children]) if (child !== form) child.remove();
+    } else card.replaceChildren();
     card.dataset.version = cardVersion(discussion);
     const status = discussion.working && discussion.state !== 'queued' ? 'Assistant working…'
       : {queued: 'Queued for the assistant', sent: 'Sent to assistant',
@@ -1302,7 +1312,8 @@ function createArtifactDiscussionController(options) {
     close.setAttribute('aria-label', 'Close');
     close.addEventListener('click', closeCard);
     head.append(close);
-    card.append(head, el('p', 'artifact-discussion-target', discussion.anchor.label || ''));
+    card.insertBefore(head, form);
+    card.insertBefore(el('p', 'artifact-discussion-target', discussion.anchor.label || ''), form);
     const thread = el('div', 'artifact-discussion-thread');
     if (discussion.empty) thread.append(el('p', 'artifact-discussion-text', 'No messages yet.'));
     for (const message of discussion.empty ? [] : [discussion, ...discussion.replies]) {
@@ -1310,13 +1321,13 @@ function createArtifactDiscussionController(options) {
       item.append(el('strong', '', `${message.actor || 'Guest'}: `), String(message.text || ''));
       thread.append(item);
     }
-    card.append(thread);
+    card.insertBefore(thread, form);
     if (discussion.reply) {
       const excerpt = discussion.reply.length > 1200
         ? discussion.reply.slice(0, 1200).trimEnd() + '…' : discussion.reply;
       const answer = renderMarkdown(excerpt);
       answer.className = 'prose artifact-discussion-reply';
-      card.append(answer);
+      card.insertBefore(answer, form);
     }
     if (!view.cardPinned) return;
     const actions = el('div', 'artifact-discussion-actions');
@@ -1344,10 +1355,13 @@ function createArtifactDiscussionController(options) {
         });
         actions.append(resolve);
       }
+      if (form) {
+        card.append(actions);
+        return;
+      }
       const parts = messageForm('artifact-discussion-reply-form',
                                 discussion.general ? 'Write about the whole artifact…' : 'Reply…',
-                                discussion.general ? 'Post' : 'Post reply',
-                                replyDrafts.get(discussion.id));
+                                discussion.general ? 'Post' : 'Post reply');
       parts.form.addEventListener('submit', async event => {
         event.preventDefault();
         const text = checkedText(parts);
@@ -1361,7 +1375,6 @@ function createArtifactDiscussionController(options) {
                text, toAssistant: parts.assistant.checked}
             : {action: 'reply', item: view.id, discussionId: discussion.id,
                messageId: newId(), text, toAssistant: parts.assistant.checked});
-          replyDrafts.delete(discussion.id);
           parts.input.value = '';
           parts.status.textContent = '';
         } catch (error) {
@@ -1469,6 +1482,7 @@ function createArtifactDiscussionController(options) {
       view.name = name;
       view.mode = false;
       stored = [];
+      threads = null;
       lastMarkers = '';
       frame.addEventListener('load', () => publishMarkers(true));
       updateToggle(0);
@@ -1482,18 +1496,22 @@ function createArtifactDiscussionController(options) {
       view.name = null;
       view.mode = false;
       stored = [];
+      threads = null;
       updateToggle(0);
     },
     records(next) {
       records = Array.isArray(next) ? next : [];
+      threads = null;
       publishMarkers();
     },
     queue(entries) {
       queued = Array.isArray(entries) ? entries : [];
+      threads = null;
       publishMarkers();
     },
     // The session's activity changed; working markers follow it.
     activity() {
+      threads = null;
       publishMarkers();
     },
     // The host store changed for the item the frame names.

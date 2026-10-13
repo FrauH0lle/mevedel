@@ -44,6 +44,7 @@ const HOST = `<!doctype html><html><head><style>
   .artifact-discussion-composer,.artifact-discussion-card{position:absolute;background:#fff;border:1px solid #333}
 </style></head><body>
   <button id="artifact-discussion" hidden>Discuss</button>
+  <button id="artifact-general" hidden>Whole artifact</button>
   <div id="artifact-body"></div>
 </body></html>`;
 
@@ -97,6 +98,7 @@ async function setup(page) {
       },
       el, body: document.getElementById('artifact-body'),
       toggle: document.getElementById('artifact-discussion'),
+      general: document.getElementById('artifact-general'),
       flash: () => {}, renderMarkdown: text => el('div', '', text),
       reveal: id => { window.revealed = id; }, canDiscuss: () => true,
     });
@@ -375,6 +377,38 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
     assert.equal(await page.textContent('#artifact-discussion'), 'Discuss · 1',
                  'the selection sent alone is still open');
     assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('general discussion isolates item replies and preserves the live form', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await setup(page);
+    await page.evaluate(html => window.show(html, 'tool-1'), ARTIFACT);
+    await artifactFrame(page);
+    await page.click('#artifact-general');
+    await page.evaluate(() => window.controller.records([
+      {id: 'u1', kind: 'user', shared: {kind: 'artifact', itemId: 'artifact:other',
+        discussionId: 'general', questionId: 'q1'}},
+      {id: 'a1', kind: 'assistant', text: 'OTHER ARTIFACT ANSWER'},
+    ]));
+    assert.doesNotMatch(await page.textContent('.artifact-discussion-card'), /OTHER ARTIFACT ANSWER/);
+    await page.fill('.artifact-discussion-reply-form textarea', '> draft\nsecond line');
+    await page.uncheck('.artifact-discussion-reply-form input[type=checkbox]');
+    await page.focus('.artifact-discussion-reply-form textarea');
+    await page.evaluate(() => window.controller.records([
+      {id: 'u2', kind: 'user', shared: {kind: 'artifact', itemId: 'artifact:schema.html',
+        discussionId: 'general', questionId: 'q2'}},
+      {id: 'a2', kind: 'assistant', text: 'THIS ARTIFACT ANSWER'},
+    ]));
+    assert.match(await page.textContent('.artifact-discussion-card'), /THIS ARTIFACT ANSWER/);
+    assert.equal(await page.inputValue('.artifact-discussion-reply-form textarea'), '> draft\nsecond line');
+    assert.equal(await page.isChecked('.artifact-discussion-reply-form input[type=checkbox]'), false);
+    assert.equal(await page.evaluate(() => document.activeElement.matches(
+      '.artifact-discussion-reply-form textarea')), true);
   } finally {
     await browser.close();
   }

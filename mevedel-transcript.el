@@ -357,13 +357,19 @@ its surrounding call, including a saved metadata run that ends partway
 through the payload; an unbound block still needs producer provenance.
 With LITERAL, return a valid block without checking its authority."
   (when-let* ((block
-              (or (and mevedel-transcript--render-data-blocks
-                       (gethash position mevedel-transcript--render-data-blocks))
+              (or (when-let* ((memo mevedel-transcript--render-data-blocks)
+                              (cached (gethash position memo))
+                              ((<= (cadr cached)
+                                   (min (or limit (point-max)) (point-max)))))
+                    cached)
                   (save-excursion
                     (goto-char position)
                     (when (looking-at-p "<!-- mevedel-render-data -->")
                       (mevedel-tool-render-data-block-at position limit))))))
-    (when mevedel-transcript--render-data-blocks
+    ;; A bounded read may omit the optional final newline.  Do not replace
+    ;; the complete-source entry with that shorter representation.
+    (when (and mevedel-transcript--render-data-blocks
+               (or (null limit) (>= limit (point-max))))
       (puthash position block mevedel-transcript--render-data-blocks))
     (pcase-let ((`(,begin ,end ,data) block))
       (cond
@@ -380,9 +386,14 @@ With LITERAL, return a valid block without checking its authority."
                                  (point-min))))))
             (when (and (stringp owner)
                        (or (mevedel-tool-render-data-call-range-p data begin end)
-                           (equal target (get-text-property context 'gptel))
-                           (and (> context (point-min))
-                                (equal target (get-text-property (1- context) 'gptel)))))
+                           ;; Recovery extends an existing metadata run, never
+                           ;; literal user text merely adjacent to a tool.
+                           (and (eq (get-text-property position 'gptel)
+                                    'mevedel-render-data)
+                                (or (equal target (get-text-property context 'gptel))
+                                    (and (> context (point-min))
+                                         (equal target (get-text-property
+                                                        (1- context) 'gptel)))))))
               block)))
        ((mevedel-tool-render-data-trusted-range-p position end)
         block)))))

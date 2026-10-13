@@ -155,7 +155,10 @@ truncation reporting; context lines remain part of the returned line budget.
 Unlimited content keeps the existing 1000-match per-file ceiling, and count
 mode still counts every match.
 Resource content matches carry their source address on each line, so paging
-does not discard the filename needed to follow a match with Read.
+does not discard the filename needed to follow a match with Read. This includes
+single-directory and explicit-file searches. Resource filename lists are converted
+to logical entries before applying Glob and Grep page limits; ripgrep's internal
+NUL separators do not turn an entire list into one returned entry.
 Bounded resource content keeps only the requested offset, page and one extra
 line before formatting source addresses; a dense search does not format every
 per-file match merely to return a small global page.

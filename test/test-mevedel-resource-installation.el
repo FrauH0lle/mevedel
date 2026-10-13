@@ -333,73 +333,117 @@
                 (deliver 0 (list :exit-code 0 :output (concat guide "\0")))
                 (should (= 1 (length calls)))
                 (should (= 1 (length results))))
+              ;; Delivered startup failures need the same privacy treatment as
+              ;; signalled startup failures, including after file selection.
+              (dolist (stage '(0 1))
+                (invoke)
+                (when (= stage 1)
+                  (deliver 0 (list :exit-code 0 :output (concat guide "\0"))))
+                (deliver stage
+                         '(:exit-code -1 :output ""
+                           :error (file-error "Cannot start helper" "/private/scratch")))
+                (should (= 1 (length results)))
+                (should (string-prefix-p "Error:" (plist-get (car results) :result)))
+                (should-not (string-search "/private/scratch"
+                                           (plist-get (car results) :result))))
               (invoke)
               (setq now 121.0)
               (deliver 0 (list :exit-code 0 :output (concat guide "\0")))
               (should (= 1 (length calls)))
               (should (string-search "timed out" (plist-get (car results) :result))))))
       (delete-directory root t)))
-  :doc "public pipeline Grep settles a real second-stage scratch failure once without private paths"
-  (let* ((root (make-temp-file "mevedel-package-grep-startup-" t))
-         (docs (file-name-concat root "docs"))
-         (blocked (file-name-concat root "private-scratch-parent"))
-         (workspace (mevedel-workspace--create :root root))
-         (session (mevedel-session--create :workspace workspace :permission-mode 'full-auto))
-         (mevedel-resource--source-dir root)
-         (make-temp (symbol-function 'make-temp-file))
-         (scratch-attempts 0)
-         scratch-failure escaped results cancel)
+  :doc "public resource search settles staged or direct scratch failure once without private paths"
+  (pcase-dolist (`(,operation ,address ,failure-stage)
+                 '((grep "mevedel://" 1) (grep "mevedel://" 2)
+                   (grep "mevedel://guide.md" 1) (glob "mevedel://" 1)))
+    (let* ((root (make-temp-file "mevedel-package-grep-startup-" t))
+           (docs (file-name-concat root "docs"))
+           (blocked (file-name-concat root "private-scratch-parent"))
+           (workspace (mevedel-workspace--create :root root))
+           (session (mevedel-session--create :workspace workspace :permission-mode 'full-auto))
+           (mevedel-resource--source-dir root)
+           (make-temp (symbol-function 'make-temp-file))
+           (scratch-attempts 0)
+           scratch-failure escaped results cancel attempt)
+      (unwind-protect
+          (with-temp-buffer
+            (setq-local mevedel--session session mevedel--workspace workspace
+                        default-directory (file-name-as-directory root))
+            (make-directory docs t)
+            (write-region "public needle\n" nil (file-name-concat docs "guide.md") nil 'silent)
+            ;; A regular file cannot be the parent of a helper scratch directory.
+            (write-region "blocked" nil blocked nil 'silent)
+            (cl-letf (((symbol-function 'make-temp-file)
+                       (lambda (prefix &optional directory suffix text)
+                         (let ((temporary-file-directory
+                                (if (and directory (equal prefix "mevedel-helper-")
+                                         (= failure-stage (cl-incf scratch-attempts)))
+                                    (file-name-as-directory blocked)
+                                  temporary-file-directory)))
+                           (condition-case failure
+                               (funcall make-temp prefix directory suffix text)
+                             (file-error
+                              (setq scratch-failure failure)
+                              (signal (car failure) (cdr failure))))))))
+              (mevedel-test--with-captured-diagnostics nil
+                (setq attempt (mevedel-resource-prepare
+                               operation address (list :session session)))
+                (setq cancel
+                      (mevedel-pipeline--step-handler
+                       (list :tool (mevedel-tool--create
+                                    :name (if (eq operation 'grep) "Grep" "Glob")
+                                    :handler (if (eq operation 'grep)
+                                                 #'mevedel-tool-fs-search-grep
+                                               #'mevedel-tool-fs-search-glob)
+                                    :async-p t)
+                             :args (list :path address
+                                         :pattern (if (eq operation 'grep) "needle" "*.md")
+                                         :output_mode "content")
+                             :resource-attempts
+                             (list (cons address attempt)))
+                       (lambda (context) (push context results))
+                       (lambda (&rest failure) (ert-fail failure))))
+                (let ((deadline (+ (float-time) 5)))
+                  (condition-case failure
+                      (while (and (not results) (not scratch-failure)
+                                  (< (float-time) deadline))
+                        (accept-process-output nil 0.01))
+                    (error (setq escaped failure)))))
+              (should (= failure-stage scratch-attempts))
+              (should (eq 'file-error (car scratch-failure)))
+              (should-not escaped)
+              (should-not (gethash attempt mevedel-resource--attempt-table))
+              (should-not (mevedel-execution-session-live-p session))
+              (should (= 1 (length results)))
+              (let ((result (car results)))
+                (should (eq 'error (plist-get result :handler-status)))
+                (should (string-prefix-p "Error:" (plist-get result :result)))
+                (should-not (string-search root (plist-get result :result)))
+                (should-not (string-search "private-scratch-parent" (plist-get result :result))))
+              (funcall cancel)
+              (funcall cancel)
+              (accept-process-output nil 0.01)
+              (should (= 1 (length results)))))
+        (when (functionp cancel) (funcall cancel))
+        (delete-directory root t))))
+  :doc "initial startup failure propagates downstream callback errors without redelivery"
+  (let ((root (make-temp-file "mevedel-package-grep-callback-" t))
+        (mevedel-tool-fs-search--resource-address "mevedel://")
+        (deliveries 0))
     (unwind-protect
-        (with-temp-buffer
-          (setq-local mevedel--session session mevedel--workspace workspace
-                      default-directory (file-name-as-directory root))
-          (make-directory docs t)
-          (write-region "public needle\n" nil (file-name-concat docs "guide.md") nil 'silent)
-          ;; A regular file cannot be the parent of a helper scratch directory.
-          (write-region "blocked" nil blocked nil 'silent)
-          (cl-letf (((symbol-function 'make-temp-file)
-                     (lambda (prefix &optional directory suffix text)
-                       (let ((temporary-file-directory
-                              (if (and directory (equal prefix "mevedel-helper-")
-                                       (= 2 (cl-incf scratch-attempts)))
-                                  (file-name-as-directory blocked)
-                                temporary-file-directory)))
-                         (condition-case failure
-                             (funcall make-temp prefix directory suffix text)
-                           (file-error
-                            (setq scratch-failure failure)
-                            (signal (car failure) (cdr failure))))))))
-            (mevedel-test--with-captured-diagnostics nil
-              (setq cancel
-                    (mevedel-pipeline--step-handler
-                     (list :tool (mevedel-tool--create
-                                  :name "Grep" :handler #'mevedel-tool-fs-search-grep :async-p t)
-                           :args '(:path "mevedel://" :pattern "needle" :output_mode "content")
-                           :resource-attempts
-                           (list (cons "mevedel://" (mevedel-resource-prepare
-                                                     'grep "mevedel://" (list :session session)))))
-                     (lambda (context) (push context results))
-                     (lambda (&rest failure) (ert-fail failure))))
-              (let ((deadline (+ (float-time) 5)))
-                (condition-case failure
-                    (while (and (not results) (not scratch-failure)
-                                (< (float-time) deadline))
-                      (accept-process-output nil 0.01))
-                  (error (setq escaped failure)))))
-            (should (= 2 scratch-attempts))
-            (should (eq 'file-error (car scratch-failure)))
-            (should-not escaped)
-            (should (= 1 (length results)))
-            (let ((result (car results)))
-              (should (eq 'error (plist-get result :handler-status)))
-              (should (string-prefix-p "Error:" (plist-get result :result)))
-              (should-not (string-search root (plist-get result :result)))
-              (should-not (string-search "private-scratch-parent" (plist-get result :result))))
-            (funcall cancel)
-            (funcall cancel)
-            (accept-process-output nil 0.01)
-            (should (= 1 (length results)))))
-      (when cancel (funcall cancel))
+        (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                   (lambda (&rest _)
+                     (signal 'file-error '("Private startup failure" "/private/scratch")))))
+          (should
+           (equal '(error "Downstream delivery failed")
+                  (should-error
+                   (mevedel-tool-fs-search--start-grep
+                    (lambda (result)
+                      (cl-incf deliveries)
+                      (should-not (string-search "/private/scratch" (plist-get result :output)))
+                      (error "Downstream delivery failed"))
+                    nil (list root) (list root) nil nil nil))))
+          (should (= 1 deliveries)))
       (delete-directory root t))))
 
 (provide 'test-mevedel-resource-installation)

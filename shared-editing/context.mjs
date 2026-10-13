@@ -86,14 +86,15 @@ export function captureContext(doc, { selection = [], range, region } = {}) {
 }
 
 /* An editor question carries the hash of the snapshot its sender reviewed
-   and fails when content moved on; the snapshot itself never travels back. A room message about the whole item has no reviewed
-   snapshot; it asks about the item as currently committed. */
+   and fails when content moved on; the snapshot itself never travels back.
+   A room message about the whole item has no reviewed snapshot; it asks
+   about the item as currently committed. */
 export function checkContext(doc, request) {
   const whole = request.whole === true;
   check(!whole || (!request.range && !request.selection?.length && !request.region),
     'A whole-item question takes no selection');
   const captured = captureContext(doc, whole ? {} : request);
-  check(whole || request.expected === contentHash(captured.snapshot),
+  check((whole && request.expected === undefined) || request.expected === contentHash(captured.snapshot),
     'Content changed. Review and refresh the attached context before sending.');
   return captured;
 }

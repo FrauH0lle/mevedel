@@ -47,13 +47,14 @@ Return non-nil when the property drawer changed."
                      (error invalid)))
            changed)
       (if (or (eq bounds invalid)
-              (not (listp bounds)))
+              (not (proper-list-p bounds)))
           (progn
             (org-entry-delete (point-min) "GPTEL_BOUNDS")
             (setq changed t))
         (cl-labels
             ((sanitize-range (range)
                (when (and (consp range)
+                          (proper-list-p range)
                           (integerp (car range))
                           (integerp (cadr range)))
                  (let ((start (max (point-min)
@@ -63,7 +64,9 @@ Return non-nil when the property drawer changed."
                    (when (< start end)
                      (append (list start end) (cddr range))))))
              (sanitize-entry (entry)
-               (when (consp entry)
+               (when (and (consp entry)
+                          (proper-list-p entry)
+                          (symbolp (car entry)))
                  (let (ranges)
                    (dolist (range (cdr entry))
                      (when-let* ((sanitized (sanitize-range range)))
@@ -166,6 +169,12 @@ still runs whenever transcript properties are present."
       (when (and (org-entry-get (point-min) "GPTEL_BOUNDS")
                  (or (not only-if-missing) (not present)))
         (mevedel-transcript-restore-sanitize-bounds)
+        ;; Sanitation can shrink the drawer past the old scan start.  Use
+        ;; the repaired body's position for the normalization check below.
+        (setq scan-start
+              (mevedel-transcript--skip-leading-summary-block
+               (mevedel-transcript--skip-leading-properties-drawer
+                (point-min))))
         (when-let* ((bounds (org-entry-get (point-min) "GPTEL_BOUNDS")))
           (condition-case err
               (gptel--restore-props (read bounds))

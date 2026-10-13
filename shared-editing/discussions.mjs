@@ -243,9 +243,9 @@ export class DiscussionPanel {
       const files = this.files.items();
       await this.save();
       const result = await this.request({action:'discussion', op:'post', messageId:draft.opId,
-        text:draft.text, toAssistant,
+        text:draft.text, toAssistant, expected:contentHash(a.snapshot),
         ...(selection
-          ? {discussionId:id, expected:contentHash(a.snapshot),
+          ? {discussionId:id,
              target:a.range ? {kind:'passage', range:a.range}
                : {kind:'objects', selection:a.selection, ...(a.region ? {region:a.region} : {})}}
           : {target:{kind:'whole'}}),
@@ -433,11 +433,14 @@ export class DiscussionPanel {
     $('discussions-hint').textContent = anchorTerms().empty;
     $('discussions-hint').hidden = anchored.some(d => !d.resolved || $('show-resolved').checked);
     const previous = new Map([...list.children].map(n => [n.dataset.discussionId, n]));
-    for (const discussion of this.discussions) {
+    for (const node of [...previous.values()])
+      if (!this.find(node.dataset.discussionId)) { node.remove(); previous.delete(node.dataset.discussionId); }
+    for (const [index, discussion] of this.discussions.entries()) {
       const id = discussion.id, whole = id === GENERAL;
       const card = previous.get(id) || this.buildCard(discussion);
-      list.append(card);
-      previous.delete(id);
+      // Moving a connected card would drop the focus of a reply being typed
+      // while streamed updates arrive; place only cards out of order.
+      if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
       card.classList.toggle('resolved', discussion.resolved);
       card.hidden = discussion.resolved && !$('show-resolved').checked;
       card.querySelector('summary').textContent = whole ? `Whole ${kind}`
@@ -476,7 +479,6 @@ export class DiscussionPanel {
         : discussion.anchorStatus === 'changed' ? anchorTerms().changed
         : working ? 'The assistant is working on this' : '';
     }
-    for (const node of previous.values()) node.remove();
     // A written reply outlives a discussion not yet received after a reload.
     for (const [id, reply] of Object.entries(this.drafts.replies))
       if (!this.find(id) && !reply.text) delete this.drafts.replies[id];
@@ -490,12 +492,17 @@ export class DiscussionPanel {
   updateConversation(data) {
     this.conversation = data;
     // A retracted queue entry can be explicitly retried with its original identity.
+    let retracted = false;
     for (const pending of Object.values(this.drafts.requests)) {
       if (pending.receipt && data.connected && !data.busy
           && !data.own?.some(e => e.shared?.questionId === pending.opId)
-          && !data.records?.some(r => r.shared?.questionId === pending.opId)) pending.receipt = false;
+          && !data.records?.some(r => r.shared?.questionId === pending.opId)) {
+        pending.receipt = false;
+        retracted = true;
+      }
     }
-    this.changed();
+    // Streaming sends an update per chunk; saving drafts encodes the whole item.
+    if (retracted) this.changed();
     this.setDiscussions(this.discussions);
     this.onConversation();
   }
@@ -532,6 +539,13 @@ export class DiscussionPanel {
     }
     const scroll = $('assistant-scroll');
     const follow = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40;
+    // Cards and their answer slots are looked up once per render, not per
+    // record: streaming renders every record for each update.
+    const cards = new Map([...$('discussions').children].map(n => [n.dataset.discussionId, n]));
+    const slots = new Map();
+    for (const [id, card] of cards)
+      for (const node of card.querySelectorAll('.thread-message .thread-conversation'))
+        slots.set(`${id}\n${node.dataset.version}`, node);
     const containers = [...$('discussions').querySelectorAll('.thread-conversation')];
     const previous = new Map(containers.flatMap(c => [...c.children]).map(n => [n.dataset.recordId, n]));
     for (const container of containers) container.replaceChildren();
@@ -543,9 +557,9 @@ export class DiscussionPanel {
       if (record.shared) node.dataset.questionId = record.shared.questionId;
       // A request belongs to the message it answers; a record no stored
       // message claims follows its discussion, or the whole item's.
-      const card = this.card(context?.discussionId) || this.card(GENERAL);
-      const answers = [...card.querySelectorAll('.thread-message .thread-conversation')];
-      const target = answers.find(n => n.dataset.version === context?.messageId);
+      const id = cards.has(context?.discussionId) ? context.discussionId : GENERAL;
+      const card = cards.get(id);
+      const target = context?.messageId ? slots.get(`${id}\n${context.messageId}`) : undefined;
       // The message already shows the request; its turn keeps only who sent
       // it and the context it carried.
       if (target && record.kind === 'user' && record.shared && !record.shared.edited) node.classList.add('thread-question');

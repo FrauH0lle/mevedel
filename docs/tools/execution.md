@@ -32,10 +32,12 @@ additional_permissions={"file_system":{"write":["/exact/path"]}}
 ```
 
 Read and write are separate grants; write permits reading that same resource.
-Exact approval does not grant its parent or siblings. The user can explicitly
-select a containing directory tree in the permission card; the displayed scope
-then covers its descendants. This does not grant other protected paths, network,
-or unrestricted processes. Filesystem approval also does not authorize the
+Exact approval does not grant its parent or siblings. When confinement cannot
+represent exact directory access, the harness prepares that same directory's
+tree before automatic review or the human card; approval judges that disclosed
+scope. The user can also explicitly select a containing directory tree in the
+card. A tree scope covers its descendants. This does not grant other protected
+paths, network, or unrestricted processes. Filesystem approval also does not authorize the
 command itself; command policy is checked independently. Network and filesystem
 grants can be combined in one `additional_permissions` object when both are
 needed.

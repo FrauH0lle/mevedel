@@ -230,11 +230,17 @@ for line in sys.stdin:
                     print(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
                         "sessionId": session_id, "update": {
                             "sessionUpdate": "tool_call", "toolCallId": "native-1"}}}), flush=True)
-                if refresh_attempts == 1 or prompt != "refresh-race":
+                if refresh_attempts == 1 or prompt not in ("refresh-race", "refresh-race-wait"):
                     chunk("Failed to refresh OAuth token")
-                    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {
+                    refusal = {"jsonrpc": "2.0", "id": request_id, "error": {
                         "code": -32603, "message": "Internal error: Failed to refresh OAuth token: "
-                        "another Claude Code process is refreshing it or exited mid-refresh."}}), flush=True)
+                        "another Claude Code process is refreshing it or exited mid-refresh."}}
+                    # A duplicated failure must not schedule another replay.
+                    print(json.dumps(refusal), flush=True)
+                    print(json.dumps(refusal), flush=True)
+                elif prompt == "refresh-race-wait":
+                    pending = request_id
+                    chunk("retry waiting")
                 else:
                     chunk("answer:attempt-%d" % refresh_attempts)
                     reply(request_id, {"stopReason": "end_turn"})

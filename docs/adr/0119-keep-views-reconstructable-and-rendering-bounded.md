@@ -273,6 +273,17 @@ now reads the complete Lisp object before accepting its closing delimiter;
 only authorized payloads are opaque to structural indexing. Decoding in place
 and sharing blocks across resumable phases retains bounded traversal without
 changing the wire format or weakening owner/provenance checks.
+Split-run recovery requires persisted metadata provenance on the opener:
+adjacency to a tool and a matching owner ID alone let literal user text acquire
+metadata authority. Shared decoded blocks also respect each caller's read
+boundary; a bounded decode cannot replace a complete cached block with a
+shorter one. Review regressions demonstrated both failures without these checks.
+Prepared-skill disclosures also reuse the codec's decoded object and exact
+record bounds. Review found that locating one attachment decoded its complete
+body three times and copied it again just to recover those bounds. The view
+now checks the decoded record's kind, absence of a tool owner, and trusted
+property range directly. This keeps one decode per record without adding a
+cache or changing independent attachment/Prompt folding.
 Activity classification and insertion
 reuse entries within that render, with independent coalescing counts. Settled
 batch jobs additionally prepare source-backed entries a few at a time and

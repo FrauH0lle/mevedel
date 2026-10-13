@@ -23,6 +23,8 @@
                   "mevedel-execution-telemetry" (summary))
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-publish-transcript-state
                   "mevedel-session-artifacts"
                   (session root-buffer transcript-path content &optional coding))
@@ -35,6 +37,8 @@
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-transcript-segments
                   "mevedel-session-artifacts" (session live-buffer))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-publish-transcript-state
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-artifact
@@ -174,8 +178,7 @@ the new segment of the same transcript."
 The visited buffer remains authoritative in memory.  Update only its last
 published file with the hidden record and, when TERMINAL-DATA is provided,
 the matching original Bash row; do not publish an unsent in-memory draft."
-  (when-let* ((path buffer-file-name)
-              ((file-exists-p path)))
+  (when-let* ((path buffer-file-name))
     (let* ((session (or mevedel--session
                         (error "Transcript has no session")))
            (portable (mevedel-session-codec-portable-authority-p session))
@@ -186,39 +189,44 @@ the matching original Bash row; do not publish an unsent in-memory draft."
                       mevedel--agent-invocation)
                    (current-buffer))))
            (coding (or buffer-file-coding-system 'utf-8-unix)))
-      (with-temp-buffer
-        (if portable
-            (progn
-              (setq buffer-file-coding-system coding)
-              (insert
-               (decode-coding-string
-                (mevedel-session-artifacts-read-artifact
-                 session
-                 (file-relative-name
-                  path (mevedel-session-save-path session)))
-                coding)))
-          (insert-file-contents path))
-        (let ((org-agenda-file-menu-enabled nil)) (org-mode))
-        (mevedel-transcript-restore-properties)
-        (when terminal-data
-          (mevedel-tool-render-data-update
-           (current-buffer) (plist-get record :tool-use-id) terminal-data))
-        (unless (if (eq (plist-get record :type) 'execution-breadcrumb)
-                    (mevedel-execution-transcript--breadcrumb-present-p record)
-                  (mevedel-execution-transcript--completion-record-p
-                   (plist-get record :tool-use-id) record))
-          (goto-char (point-max))
-          (insert (mevedel--format-hook-audit-record record))
-          (mevedel-session-artifacts-stabilize-gptel-bounds)
+      (when (if portable
+                (mevedel-session-artifacts-artifact-present-p
+                 session (file-relative-name
+                          path (mevedel-session-save-path session)))
+              (file-exists-p path))
+        (with-temp-buffer
           (if portable
-              (mevedel-session-artifacts-publish-transcript-state
-               session root-buffer path
-               (buffer-substring-no-properties (point-min) (point-max))
-               coding)
-            (mevedel-session-persistence-write-current-buffer-atomically
-             path))))
-      (set-visited-file-modtime)
-      t)))
+              (progn
+                (setq buffer-file-coding-system coding)
+                (insert
+                 (decode-coding-string
+                  (mevedel-session-artifacts-read-artifact
+                   session
+                   (file-relative-name
+                    path (mevedel-session-save-path session)))
+                  coding)))
+            (insert-file-contents path))
+          (let ((org-agenda-file-menu-enabled nil)) (org-mode))
+          (mevedel-transcript-restore-properties)
+          (when terminal-data
+            (mevedel-tool-render-data-update
+             (current-buffer) (plist-get record :tool-use-id) terminal-data))
+          (unless (if (eq (plist-get record :type) 'execution-breadcrumb)
+                      (mevedel-execution-transcript--breadcrumb-present-p record)
+                    (mevedel-execution-transcript--completion-record-p
+                     (plist-get record :tool-use-id) record))
+            (goto-char (point-max))
+            (insert (mevedel--format-hook-audit-record record))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (if portable
+                (mevedel-session-artifacts-publish-transcript-state
+                 session root-buffer path
+                 (buffer-substring-no-properties (point-min) (point-max))
+                 coding)
+              (mevedel-session-persistence-write-current-buffer-atomically
+               path))))
+        (set-visited-file-modtime)
+        t))))
 
 (defun mevedel-execution-transcript--record-breadcrumb (event)
   "Record one chronological completion for terminal yielded EVENT.
@@ -259,12 +267,18 @@ receives it at its end."
                               execution-id (error-message-string err))
                       :warning)
                      nil)))
-            (let ((text (mevedel--format-hook-audit-record record)))
-              (unless (mevedel--insert-at-active-response data-buffer text)
+            (let* ((text (mevedel--format-hook-audit-record record))
+                   (active-position
+                    (mevedel--insert-at-active-response data-buffer text)))
+              (unless active-position
                 (save-excursion
                   (goto-char (point-max))
-                  (insert text))))
-            (set-buffer-modified-p (or modified-p (not persisted-p)))))))))
+                  (insert text)))
+              ;; Publication only appends to the last saved transcript.
+              ;; Active insertion can flush unsaved stream text or close
+              ;; reasoning, and its position differs from the saved append.
+              (set-buffer-modified-p
+               (or modified-p (not persisted-p) active-position)))))))))
 
 (defun mevedel-execution-transcript--replace-archived-record
     (tool-use-id replacement)

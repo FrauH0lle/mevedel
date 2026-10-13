@@ -311,7 +311,48 @@
   (let ((mevedel-bash-dangerous-commands '("curl")))
     (should (equal '("curl get https://example.com")
                    (mevedel-bash-policy-allow-patterns
-                    "curl get https://example.com")))))
+                    "curl get https://example.com"))))
+  :doc "executable paths do not generalize dangerous commands or wrappers"
+  (let ((mevedel-bash-dangerous-commands '("rm" "curl")))
+    (dolist (command '("/bin/rm cache" "/usr/bin/curl get https://example.com"
+                       "/bin/sh script" "./bash script" "/usr/bin/env git fetch"))
+      (should (equal (list command) (mevedel-bash-policy-allow-patterns command)))))
+  :doc "shell quoting cannot disguise dangerous executable names or wrappers"
+  (let ((mevedel-bash-dangerous-commands '("rm")))
+    (dolist (command '("'rm' cache" "r'm' cache" "r\\m cache"
+                       "'/bin/sh' script" "e'nv' git fetch"))
+      (should (equal (list command) (mevedel-bash-policy-allow-patterns command))))))
+
+(mevedel-deftest mevedel-bash-policy-remembered-executable-identity ()
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (dolist (pair '(("'./safe tool' run" "./safe tool run extra")
+                    ("\"./safe tool\" run" "./safe tool run extra")
+                    ("./safe\\ tool run" "./safe tool run extra")
+                    ("'/bin/rm ' cache" "/bin/rm  cache extra")
+                    ("'./safe;tool' run" "./safe;tool run extra")
+                    ("'./safe$tool' run" "./safe$tool run extra")
+                    ("'LANG=C' npm run" "npm run extra")
+                    ("\"LANG=C\" npm run" "npm run extra")))
+      (let* ((command (car pair))
+             (other (cadr pair))
+             (patterns (mevedel-bash-policy-allow-patterns command))
+             (context
+              (list :mode 'ask
+                    :execution-directory default-directory
+                    :allowed-roots (list default-directory)
+                    :buckets
+                    (list (cons :session
+                                (mapcar (lambda (pattern)
+                                          (list "Bash" :pattern pattern :action 'allow))
+                                        patterns))))))
+        (ert-info ((format "Remembering %S produced %S" command patterns))
+          ;; Exercise the actual authority boundary, not just prefix spelling.
+          (should (eq 'ask (mevedel-bash-policy-check-permission
+                           other :permission-context context)))
+          (should (eq 'allow (mevedel-bash-policy-check-permission
+                             command :permission-context context)))
+          (should (equal patterns (list command))))))))
 
 (mevedel-deftest mevedel-bash-policy-reusable-operation-p ()
   ,test
@@ -340,7 +381,10 @@
   (let ((mevedel-bash-dangerous-commands '("rm")))
     (dolist (command '("git -C repo fetch" "pwd && git fetch" "git fetch $REMOTE"
                        "LANG=C git fetch" "FOO=bar git fetch" "doas git fetch" "env git fetch"
-                       "rm cache" "git fetch *" "git fetch &" ""))
+                       "rm cache" "git fetch *" "git fetch &" ""
+                       "git  fetch origin" "git\tfetch origin" "\"git\" fetch origin"
+                       "'git' fetch origin" "'rm' cache" "r'm' cache" "r\\m cache"
+                       "/bin/sh script" "/usr/bin/env git fetch" "/bin/rm cache"))
       (should-not (mevedel-bash-policy-stable-prefix command)))))
 
 (mevedel-deftest mevedel-bash-policy-effective-sandbox-mode ()

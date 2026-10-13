@@ -367,5 +367,51 @@
       (should (equal body (plist-get rendering :body)))
       (should (equal "Skill: synthetic (2 lines)" (plist-get rendering :header))))))
 
+(mevedel-deftest mevedel-view--inline-skill-info ()
+  ,test
+  (test)
+  :doc "anchors the decoded record without reparsing its attachment bodies"
+  (with-temp-buffer
+    (insert "User text\n")
+    (let* ((start (point))
+           (body (concat "Quoted markers: " mevedel-tool-render-data-open
+                         "\n" mevedel-tool-render-data-close))
+           (record (list :kind 'inline-skill :display-text "Use $alpha"
+                         :attachments (list (list :name "alpha" :body body))
+                         :prompt "Prepared prompt"))
+           (decode (symbol-function 'mevedel-tool-render-data--read-block))
+           (decodes 0))
+      (insert (mevedel-tool-render-data-format record))
+      (let ((end (point)))
+        (insert "\nFollowing separator\n")
+        (let ((info
+               (cl-letf (((symbol-function 'mevedel-tool-render-data--read-block)
+                          (lambda (&rest args)
+                            (cl-incf decodes)
+                            (apply decode args))))
+                 (mevedel-view--inline-skill-info
+                  (list (list 'user (point-min) (point-max))) (current-buffer)))))
+          (should (equal body (plist-get (car (plist-get info :attachments)) :body)))
+          (should (= start (car (plist-get info :source))))
+          (should (= end (cdr (plist-get info :source))))
+          (should (= 1 decodes))))))
+
+  :doc "rejects untrusted and tool-owned records before accepting a trusted attachment"
+  (with-temp-buffer
+    (let ((record '(:kind inline-skill :display-text "Use $alpha"
+                    :attachments ((:name "alpha" :body "Trusted body"))
+                    :prompt "Prepared prompt")))
+      (insert (substring-no-properties (mevedel-tool-render-data-format record)))
+      (insert (mevedel-tool-render-data-format record "tool-owner"))
+      (should-not
+       (mevedel-view--inline-skill-info
+        (list (list 'user (point-min) (point-max))) (current-buffer)))
+      (let ((start (point)))
+        (insert (mevedel-tool-render-data-format record))
+        (let ((info (mevedel-view--inline-skill-info
+                     (list (list 'user (point-min) (point-max))) (current-buffer))))
+          (should (equal "Prepared prompt" (plist-get info :prompt)))
+          (should (= start (car (plist-get info :source)))))))))
+
 (provide 'test-mevedel-view-render-skills)
 ;;; test-mevedel-view-render-skills.el ends here

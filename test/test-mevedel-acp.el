@@ -171,7 +171,7 @@
        (mevedel-acp-prompt connection [((type . "text") (text . "again"))]
                            #'ignore #'ignore))))
 
-:doc "a prompt refused before any tool call is re-sent once when the launch accepts the failure"
+  :doc "a prompt refused before any tool call is re-sent once when the launch accepts the failure"
   (let ((mevedel-acp-test--launch-options
          (list :prompt-retry-delay
                (lambda (failure)
@@ -226,6 +226,37 @@
         (should (= 1 (length outcomes)))
         (should (eq 'error (plist-get (car outcomes) :status))))))
 
+  :doc "an error in the retry policy settles instead of stranding a refused prompt"
+  (let ((mevedel-acp-test--launch-options
+         (list :prompt-retry-delay (lambda (_) (error "Retry policy failed")))))
+    (mevedel-acp-test--with-connection nil
+      (let (outcomes)
+        (mevedel-acp-prompt connection [((type . "text") (text . "refresh-race"))]
+                            #'ignore (lambda (outcome) (push outcome outcomes)))
+        (await (lambda () outcomes))
+        (should (= 1 (length outcomes)))
+        (should (eq 'error (plist-get (car outcomes) :status)))
+        (should (equal "Retry policy failed" (plist-get (car outcomes) :message)))
+        (should (eq 'closed (mevedel-acp-state connection))))))
+
+  :doc "closing during a retry wait retires its timer without dispatching a replay"
+  (let ((mevedel-acp-test--launch-options (list :prompt-retry-delay (lambda (_) 60))))
+    (mevedel-acp-test--with-connection nil
+      (let (outcomes timer)
+        (mevedel-acp-prompt connection [((type . "text") (text . "refresh-race"))]
+                            #'ignore (lambda (outcome) (push outcome outcomes)))
+        (await (lambda () (plist-get (mevedel-acp-active connection) :retry-timer)))
+        (setq timer (plist-get (mevedel-acp-active connection) :retry-timer))
+        (should (eq 'prompting (mevedel-acp-state connection)))
+        (should-error (mevedel-acp-prompt connection [] #'ignore #'ignore))
+        (mevedel-acp-close connection)
+        (funcall (timer--function timer))
+        (should (= 1 (length outcomes)))
+        (should (eq 'interrupted (plist-get (car outcomes) :status)))
+        (should-not (memq timer timer-list))
+        (should-not (alist-get :process (mevedel-acp-client connection)))
+        (should (eq 'closed (mevedel-acp-state connection))))))
+
   :doc "agent permission and filesystem requests are refused, never executed"
   (mevedel-acp-test--with-connection nil
     (let ((text "") outcome)
@@ -242,8 +273,10 @@
                        (plist-get answers :permission)))
         (should (= -32601 (plist-get (plist-get answers :fs) :code)))))))
 
-(mevedel-deftest mevedel-acp-cancel
-  (:doc "interrupt waits for the cancelled prompt response and keeps history usable")
+(mevedel-deftest mevedel-acp-cancel ()
+  ,test
+  (test)
+  :doc "interrupt waits for the cancelled prompt response and keeps history usable"
   (mevedel-acp-test--with-connection nil
     (let (streaming outcomes)
       (mevedel-acp-prompt connection [((type . "text") (text . "wait"))]
@@ -264,7 +297,73 @@
         (should (eq 'success (plist-get (car outcomes) :status)))
         ;; A cancelled timer may still be delivered after TRAMP restores its list.
         (funcall (timer--function watchdog))
-        (should (eq 'idle (mevedel-acp-state connection)))))))
+        (should (eq 'idle (mevedel-acp-state connection))))))
+
+  :doc "cancelling a retry wait cannot cancel a turn started by its completion"
+  (let ((mevedel-acp-test--launch-options (list :prompt-retry-delay (lambda (_) 60))))
+    (mevedel-acp-test--with-connection nil
+      (let (outcomes replacement timer)
+        (mevedel-acp-prompt
+         connection [((type . "text") (text . "refresh-race"))] #'ignore
+         (lambda (outcome)
+           (push outcome outcomes)
+           (mevedel-acp-prompt connection [((type . "text") (text . "wait"))]
+                               #'ignore (lambda (value) (push value replacement)))))
+        (await (lambda () (plist-get (mevedel-acp-active connection) :retry-timer)))
+        (setq timer (plist-get (mevedel-acp-active connection) :retry-timer))
+        (mevedel-acp-cancel connection)
+        (should (= 1 (length outcomes)))
+        (should (eq 'interrupted (plist-get (car outcomes) :status)))
+        (should-not (plist-get (mevedel-acp-active connection) :cancelled))
+        (should-not (mevedel-acp-timer connection))
+        ;; TRAMP can restore a cancelled timer: it must not replay the old prompt.
+        (funcall (timer--function timer))
+        (should-not replacement)
+        (mevedel-acp-cancel connection)
+        (await (lambda () replacement))
+        (should (= 1 (length replacement)))
+        (should (eq 'interrupted (plist-get (car replacement) :status))))))
+
+  :doc "cancellation racing the refusal never schedules a replay"
+  (let ((mevedel-acp-test--launch-options
+         (list :prompt-retry-delay (lambda (_) (ert-fail "Cancelled prompt retried")))))
+    (mevedel-acp-test--with-connection nil
+      (let (outcomes)
+        (mevedel-acp-prompt
+         connection [((type . "text") (text . "refresh-race"))]
+         (lambda (notification)
+           (when (alist-get 'update (alist-get 'params notification))
+             (mevedel-acp-cancel connection)))
+         (lambda (outcome) (push outcome outcomes)))
+        (await (lambda () outcomes))
+        (should (= 1 (length outcomes)))
+        (should (eq 'error (plist-get (car outcomes) :status)))
+        (should (eq 'closed (mevedel-acp-state connection)))
+        (should-not (mevedel-acp-timer connection)))))
+
+  :doc "cancellation after replay waits for that prompt's acknowledgement"
+  (let ((mevedel-acp-test--launch-options (list :prompt-retry-delay (lambda (_) 0.01))))
+    (mevedel-acp-test--with-connection nil
+      (let (outcomes streaming)
+        (mevedel-acp-prompt
+         connection [((type . "text") (text . "refresh-race-wait"))]
+         (lambda (notification)
+           (when (equal "retry waiting"
+                        (alist-get 'text (alist-get 'content
+                          (alist-get 'update (alist-get 'params notification)))))
+             (setq streaming t)))
+         (lambda (outcome) (push outcome outcomes)))
+        (await (lambda () streaming))
+        (should (plist-get (mevedel-acp-active connection) :retried))
+        (should-not (plist-get (mevedel-acp-active connection) :retry-timer))
+        (mevedel-acp-cancel connection)
+        (should-not outcomes)
+        (should (mevedel-acp-timer connection))
+        (await (lambda () outcomes))
+        (should (= 1 (length outcomes)))
+        (should (eq 'interrupted (plist-get (car outcomes) :status)))
+        (should (eq 'idle (mevedel-acp-state connection)))
+        (should-not (mevedel-acp-timer connection))))))
 
 (mevedel-deftest mevedel-acp--live-p
   (:doc "a dead but unreaped agent fails the connection instead of restarting")

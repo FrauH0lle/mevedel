@@ -72,8 +72,6 @@
                   "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--room-workspace
                   "mevedel-collaboration-guest" (room))
-(declare-function mevedel-collaboration--save-guest-attachments
-                  "mevedel-collaboration-guest" (images))
 (declare-function mevedel-collaboration--save-guest-files
                   "mevedel-collaboration-guest" (data-buffer images))
 
@@ -87,10 +85,10 @@
 (defvar mevedel-view--turn-guest-attribution)
 
 ;; `mevedel-shared-conversation'
-(declare-function mevedel-shared-conversation-history
+(declare-function mevedel-shared-conversation-archived-question-p
                   "mevedel-shared-conversation"
-                  (session item-id &rest keys))
-(autoload 'mevedel-shared-conversation-history "mevedel-shared-conversation")
+                  (session item-id question-id))
+(autoload 'mevedel-shared-conversation-archived-question-p "mevedel-shared-conversation")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -460,11 +458,14 @@ conversation knows it; an HTML artifact's is \"artifact:STORE-ID\"."
 
 (defun mevedel-collaboration-discussions--question-known-p (data-buffer item question-id)
   "Return non-nil when QUESTION-ID is already queued or delivered in DATA-BUFFER.
-ITEM is the attribution's item identity, `artifact:ID'.  A retried send then
-succeeds without queueing the message twice, also when the request was
-delivered before compaction moved it into an archived segment."
+ITEM is the attribution's item identity.  A retried send then succeeds
+without queueing the message twice, also when the request was delivered
+before compaction moved it into an archived segment.  Reading archives costs
+time proportional to the session's age, so callers ask only when the
+request may be a retry."
   (let ((known (lambda (shared)
                  (and (plist-get shared :discussionId)
+                      (equal (plist-get shared :itemId) item)
                       (equal (plist-get shared :questionId) question-id)))))
     (with-current-buffer data-buffer
       (or (cl-some (lambda (entry) (funcall known (plist-get entry :shared-question)))
@@ -472,9 +473,8 @@ delivered before compaction moved it into an archived segment."
           (cl-some (lambda (attribution)
                      (funcall known (plist-get (cdr attribution) :shared)))
                    (mevedel-transcript-audit-guest-prompts))
-          (cl-some (lambda (turn) (funcall known (plist-get turn :shared)))
-                   (plist-get (mevedel-shared-conversation-history mevedel--session item)
-                              :turns))))))
+          (mevedel-shared-conversation-archived-question-p
+           mevedel--session item question-id)))))
 
 (defun mevedel-collaboration-discussions-answering-buffer (room item thread-session)
   "Return the data buffer of the session that answers about store ITEM.
@@ -504,13 +504,16 @@ dedicated session."
         (truncate-string-to-width label 120 nil nil "…")))))
 
 (defun mevedel-collaboration-discussions--send
-    (room guest item discussion message question-id images &optional capture)
+    (room guest item discussion message question-id images &optional capture version fresh)
   "Queue MESSAGE of DISCUSSION about ITEM for the answering session.
 QUESTION-ID identifies the request; IMAGES are the sender's attachment
 frames.  CAPTURE is what the editing host captured of a whiteboard's or
 document's target: (:prompt TEXT :png BASE64 :revision N :quote Q); an HTML
-artifact's target is captured here.  Return the reply fields: the
-answering session and queue state."
+artifact's target is captured here.  VERSION, when non-nil, is the message
+id a new request must still have as MESSAGE's; a known request is answered
+as queued regardless.  FRESH means this action just stored the message
+QUESTION-ID names, so its request cannot be known yet.  Return the reply
+fields: the answering session and queue state."
   (let* ((kind (plist-get item :kind))
          (data-buffer (mevedel-collaboration-discussions-answering-buffer
                        room (plist-get item :store) (plist-get discussion :session)))
@@ -518,9 +521,12 @@ answering session and queue state."
          (answering (list :session (mevedel-session-session-id session)
                           :sessionName (mevedel-session-name session))))
     (mevedel-artifact-store-attach session (plist-get item :store) data-buffer)
-    (if (mevedel-collaboration-discussions--question-known-p
-         data-buffer (plist-get item :item) question-id)
+    (if (and (not fresh)
+             (mevedel-collaboration-discussions--question-known-p
+              data-buffer (plist-get item :item) question-id))
         (append (list :queued t :questionId question-id) answering)
+      (when (and version (not (equal version (plist-get message :id))))
+        (error "Discussion changed.  Review it before sending again"))
       (let* ((alone (eq (plist-get message :alone) t))
              (text (if alone
                        (mevedel-collaboration-discussions-alone-request kind)
@@ -533,16 +539,6 @@ answering session and queue state."
                             (unless general
                               (concat "\n" (mevedel-collaboration-discussions--thread
                                             discussion)))))
-             (paths (append
-                     ;; A board's rendering of the target rides beside the
-                     ;; sender's own files.
-                     (when-let* ((png (plist-get capture :png)))
-                       (or (with-current-buffer (buffer-local-value
-                                                 'mevedel--view-buffer data-buffer)
-                             (mevedel-collaboration--save-guest-attachments
-                              (list (list :mime "image/png" :data png))))
-                           (error "The board snapshot could not be attached")))
-                     (mevedel-collaboration--save-guest-files data-buffer images)))
              (shared (append (list :kind kind
                                    :itemId (plist-get item :item)
                                    :title (plist-get item :title)
@@ -559,16 +555,24 @@ answering session and queue state."
                                      :quote (truncate-string-to-width
                                              (or (plist-get capture :quote) "") 2000
                                              nil nil "…")))))
-             queued)
+             paths queued)
         (unwind-protect
-            (setq queued
+            (progn
+              ;; Acquire both sets inside the cleanup boundary: saving the
+              ;; sender's files can fail after the board snapshot was saved.
+              (when-let* ((png (plist-get capture :png)))
+                (setq paths (mevedel-collaboration--save-guest-files
+                             data-buffer (list (list :mime "image/png" :data png)))))
+              (setq paths (append paths (mevedel-collaboration--save-guest-files
+                                        data-buffer images)))
+              (setq queued
                   (mevedel-view-enqueue-external-follow-up
                    data-buffer input
                    :guest-name (plist-get guest :name)
                    :guest-id (plist-get guest :guest-id)
                    :guest-role (mevedel-collaboration--guest-role guest)
                    :paths paths
-                   :shared-question shared))
+                   :shared-question shared)))
           ;; Files of a message that was not queued leave with it.
           (unless queued
             (dolist (path paths) (ignore-errors (delete-file path)))))
@@ -634,18 +638,28 @@ receives the result plist, or (:error MESSAGE)."
                  (list :region (plist-get target :region)))))))
 
 (defun mevedel-collaboration-discussions--shared-ask
-    (room guest item id question-id version target expected images authorize callback)
+    (room guest item id question-id version target expected images authorize callback
+          &optional fresh)
   "Send ITEM's discussion ID at VERSION to the assistant, then call CALLBACK.
 QUESTION-ID identifies the request.  TARGET names the discussed part as the
 sender reviewed it and EXPECTED that content's hash; a discussion about the
 whole item has none.  IMAGES are the sender's attachment frames.
-AUTHORIZE, when non-nil, must still permit the operation."
+AUTHORIZE, when non-nil, must still permit the operation.  FRESH means the
+host just stored the message QUESTION-ID names."
   (let ((room-buffer (and (plist-get room :session)
-                          (mevedel-collaboration--room-data-buffer room))))
-    (if (and room-buffer
-             (mevedel-collaboration-discussions--question-known-p
-              room-buffer (plist-get item :item) question-id))
-        (funcall callback (list :discussionId id :queued t :questionId question-id))
+                          (mevedel-collaboration--room-data-buffer room)))
+        known)
+    ;; This may run in the host's reply, outside the caller's refusal handler:
+    ;; history that cannot settle a retry is the sender's refusal.
+    (condition-case err
+        (setq known (and room-buffer (not fresh)
+                         (mevedel-collaboration-discussions--question-known-p
+                          room-buffer (plist-get item :item) question-id)))
+      (error (setq known (list :error (error-message-string err)))))
+    (cond
+     ((plist-get known :error) (funcall callback known))
+     (known (funcall callback (list :discussionId id :queued t :questionId question-id)))
+     (t
       (mevedel-collaboration-discussions--shared-call
        item (append (list :action "read" :question t :image t :imageMax 1024
                           :discussionId id :version version)
@@ -667,7 +681,8 @@ AUTHORIZE, when non-nil, must still permit the operation."
                                 (list :prompt (plist-get result :prompt)
                                       :png (plist-get result :png)
                                       :revision (plist-get result :revision)
-                                      :quote (plist-get result :quote)))))
+                                      :quote (plist-get result :quote))
+                                nil fresh)))
                   (when (mevedel-collaboration-discussions--answered discussions id answer)
                     (mevedel-collaboration-discussions--shared-call
                      item (list :action "discussion-answered" :discussionId id
@@ -677,7 +692,7 @@ AUTHORIZE, when non-nil, must still permit the operation."
                                 :actor (mevedel-collaboration-discussions--actor guest))
                      authorize #'ignore))
                   (append (list :discussionId id) answer)))
-            (error (list :error (error-message-string err))))))))))
+            (error (list :error (error-message-string err)))))))))))
 
 (defun mevedel-collaboration-discussions--shared-reviewed (args)
   "Return the target ARGS name for an existing discussion, as reviewed.
@@ -710,7 +725,9 @@ AUTHORIZE, when non-nil, must still permit the operation."
                    (lambda (answer)
                      (funcall callback
                               (if (plist-get answer :error) answer
-                                (append (list :messageId message-id) answer)))))))))))
+                                (append (list :messageId message-id) answer))))
+                   ;; The host replays an operation it already recorded.
+                   (not (eq (plist-get result :replayed) t)))))))))
     (pcase action
       ("list"
        (mevedel-collaboration--store-read guest)
@@ -861,13 +878,16 @@ A whole-item target adds to the item's general discussion."
               (when to-assistant
                 (mevedel-collaboration-discussions--ask-now
                  room guest item discussions id message-id
-                 (plist-get args :images)))))))
+                 (plist-get args :images) message-id (not (eq discussion existing))))))))
 
 (defun mevedel-collaboration-discussions--ask-now
-    (room guest item discussions id question-id images)
+    (room guest item discussions id question-id images &optional version fresh)
   "Send discussion ID of ITEM's DISCUSSIONS as it stands; return reply fields.
 QUESTION-ID identifies the request; the discussion's latest message is its
-request.  IMAGES are the sender's attachment frames."
+request.  IMAGES are the sender's attachment frames.  VERSION, when non-nil,
+is the message the sender asks about, which must still be the latest: a
+retried message never sends a newer one under its identity.  FRESH means
+this action just stored that message."
   (let* ((discussion (or (mevedel-collaboration-discussions--find discussions id)
                          (error "That discussion no longer exists")))
          (message (car (last (mevedel-collaboration-discussions--messages discussion))))
@@ -876,7 +896,7 @@ request.  IMAGES are the sender's attachment frames."
                      (error "Reopen this discussion before asking the assistant"))
                    (unless message (error "This discussion has no message to send"))
                    (mevedel-collaboration-discussions--send
-                    room guest item discussion message question-id images)))
+                    room guest item discussion message question-id images nil version fresh)))
          (answered (mevedel-collaboration-discussions--answered discussions id answer)))
     (when answered (mevedel-collaboration-discussions--save item answered))
     answer))
@@ -900,7 +920,8 @@ request.  IMAGES are the sender's attachment frames."
     (append (list :discussionId id :messageId message-id)
             (when (eq (plist-get args :toAssistant) t)
               (mevedel-collaboration-discussions--ask-now
-               room guest item discussions id message-id (plist-get args :images))))))
+               room guest item discussions id message-id (plist-get args :images)
+               message-id (not (eq updated discussion)))))))
 
 (defun mevedel-collaboration-discussions--resolve (item args actor)
   "Resolve or reopen ITEM's discussion as ARGS ask, attributed to ACTOR."
@@ -925,8 +946,9 @@ request.  IMAGES are the sender's attachment frames."
 The reply is a plist of fields for the sender, or (:error MESSAGE) when the
 action is refused.  CALLBACK is called exactly once: at once for an HTML
 artifact, once its editing host answers for a whiteboard or document.
-AUTHORIZE, when non-nil, must still permit the operation when that host
-runs it."
+The room must remain live and the link must still permit the action when
+that host runs it.  AUTHORIZE, when non-nil, adds the caller's continuing
+authority check."
   (let ((answered nil))
     (cl-flet ((reply (value)
                 (unless answered
@@ -938,9 +960,17 @@ runs it."
                          (unless (member action '("list" "post" "reply" "resolve" "ask"))
                            (error "Unknown discussion action"))
                          (mevedel-collaboration-discussions--item
-                          room guest (plist-get args :item)))))
+                          room guest (plist-get args :item))))
+                 (caller-authorize authorize)
+                 (authorize
+                  (lambda ()
+                    (and (memq room (mevedel-collaboration--workspace-rooms
+                                     (plist-get item :workspace)))
+                         (or (equal action "list") (plist-get guest :writable))
+                         (or (null caller-authorize) (funcall caller-authorize))))))
             (unless (or (equal action "list") (plist-get guest :writable))
               (error "This link can view the item but not discuss it"))
+            (unless (funcall authorize) (error "Discussion authority ended"))
             (if (plist-get item :shared)
                 (mevedel-collaboration-discussions--shared-perform
                  room guest item args authorize #'reply)

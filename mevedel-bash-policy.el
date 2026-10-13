@@ -479,7 +479,7 @@ REQUEST may supply exact additive filesystem grants for this invocation."
 (defun mevedel-bash-policy--bash-segment-words (segment)
   "Return shell words parsed from SEGMENT, or nil when parsing fails."
   (condition-case nil
-      (split-string-and-unquote segment)
+      (mevedel-bash-analysis--split-command segment)
     (error nil)))
 
 (defun mevedel-bash-policy--bash-env-assignment-p (word)
@@ -516,10 +516,12 @@ general rule."
         word)))
 
 (defun mevedel-bash-policy--bash-command-never-prefix-p (command)
-  "Return non-nil when COMMAND should not get a broad prefix rule."
-  (member command
-          (append mevedel-bash-dangerous-commands
-                  mevedel-bash-policy--bash-never-prefix-commands)))
+  "Return non-nil when COMMAND should not get a broad prefix rule.
+Executable paths retain the restrictions of their command name."
+  (let ((commands (append mevedel-bash-dangerous-commands
+                          mevedel-bash-policy--bash-never-prefix-commands)))
+    (or (member command commands)
+        (member (file-name-nondirectory command) commands))))
 
 (defun mevedel-bash-policy--bash-prefix-for-segment (segment)
   "Return a stable command prefix for Bash SEGMENT, or nil.
@@ -528,17 +530,29 @@ The heuristic follows Claude Code's low-maintenance shape: derive
 `command subcommand' generically, only when the second token looks
 like a subcommand rather than a flag, path, file name, or number.
 Dangerous commands and shell/wrapper commands are not generalized."
-  (let* ((words (mevedel-bash-policy--bash-segment-words segment))
-         (words (and words
+  (let* ((parsed (mevedel-bash-policy--bash-segment-words segment))
+         (words (and parsed
                      (mevedel-bash-policy--bash-strip-safe-env-assignments
-                      words)))
+                      parsed)))
          (command (car words))
          (subcommand (cadr words)))
     (when (and command
                subcommand
+               ;; Prefix rules are shell text, not argv.  Decoded whitespace
+               ;; or shell syntax would change the executable when rejoined.
+               (string-match-p "\\`[[:alnum:]_./:@%+=,-]+\\'" command)
                (not (mevedel-bash-policy--bash-command-never-prefix-p command))
                (mevedel-bash-policy--bash-subcommand-token-p subcommand))
-      (string-join (list command subcommand) " "))))
+      ;; Include skipped assignments in the source check: quoted `LANG=C'
+      ;; names an executable, not an environment assignment.  If decoding
+      ;; changes this prefix's spelling, remember the authored segment exactly.
+      (let ((source-prefix
+             (string-join
+              (cl-subseq parsed 0 (+ 2 (- (length parsed) (length words)))) " ")))
+        (when (and (string-prefix-p source-prefix segment)
+                   (or (= (length source-prefix) (length segment))
+                       (memq (aref segment (length source-prefix)) '(?\s ?\t ?\n))))
+          (string-join (list command subcommand) " "))))))
 
 (defun mevedel-bash-policy--bash-allow-pattern-for-segment (segment)
   "Return the reusable allow pattern suggested for Bash SEGMENT.
@@ -584,7 +598,15 @@ Only one reusable segment has a prefix.  Compounds, dynamic syntax, unsafe
 environment assignments, wrappers, dangerous commands and a leading option
 have none.  The executable stays literal; paths are not reduced to names."
   (when (mevedel-bash-policy-single-reusable-segment-p command)
-    (mevedel-bash-policy--bash-prefix-for-segment (string-trim command))))
+    (let* ((text (string-trim command))
+           (prefix (mevedel-bash-policy--bash-prefix-for-segment text)))
+      ;; Evidence slices arguments after this prefix.  A shell-word prefix
+      ;; with normalized quoting or whitespace is not a literal text prefix.
+      (when (and prefix
+                 (string-prefix-p prefix text)
+                 (or (= (length prefix) (length text))
+                     (memq (aref text (length prefix)) '(?\s ?\t ?\n))))
+        prefix))))
 
 (defun mevedel-bash-policy-effective-permission-mode
     (&optional permission-context)

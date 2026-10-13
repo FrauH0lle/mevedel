@@ -35,7 +35,11 @@ by `:sandbox-permissions` (full escalation, which operation matching also
 ignores) are excluded.
 A candidate either matches the operation through the ordinary rule matcher or,
 for one reusable Bash segment, shares its literal `executable subcommand`
-prefix. Executable paths are not reduced to names. Dynamic or compound commands
+prefix. Nearby-prefix evidence requires literal spelling and spacing, without
+normalizing quoted words; executable paths are not reduced to names. Shells,
+wrappers and dangerous executables have no nearby prefix, even by absolute path
+or with a shell-quoted executable name.
+Dynamic or compound commands
 relate only to an identical rule, and Eval compares expressions literally. Each
 candidate records its bucket, rule, match basis, argument differences, profile
 and which selected network/filesystem requirements it covers or lacks. Coverage
@@ -43,8 +47,9 @@ uses child-execution coverage, preserving access level, tree extent, canonical
 paths and protected descendants. At most eight candidates within 8 KiB of
 serialized evidence are sent,
 ordered by match basis and rule order; whole candidates beyond that are counted
-as omitted. Candidates are context, not grants, and freshness checks compare
-them like other evidence.
+as omitted. Candidates already excluded by the count or serialized-size limit
+do not perform filesystem coverage checks. Candidates are context, not grants,
+and freshness checks compare them like other evidence.
 
 The isolated request buffer itself holds the selected guardian backend/model,
 system policy and disabled tools/context before gptel snapshots it. It follows

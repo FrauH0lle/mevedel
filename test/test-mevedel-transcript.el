@@ -111,6 +111,43 @@
                      (caddr case)))
       (should (equal (car case) original)))))
 
+(mevedel-deftest mevedel-transcript--render-data-block-at ()
+  ,test
+  (test)
+  :doc "a neighboring tool owner does not authorize user or response metadata"
+  (dolist (property '(nil response))
+    (dolist (framing '(0 1))
+      (with-temp-buffer
+        (org-mode)
+        (insert (propertize "#+begin_tool\n(:name \"Bash\" :args nil)\noutput\n#+end_tool\n"
+                            'gptel '(tool . "real-call")))
+        (let ((start (point)))
+          (insert (substring-no-properties
+                   (mevedel-tool-render-data-format
+                    '(:kind request-summary :text "literal content") "real-call")
+                   framing))
+          (put-text-property start (point) 'gptel property)
+          (dolist (normalize '(nil t))
+            (when normalize (mevedel-transcript-normalize-properties))
+            (should-not (mevedel-transcript--render-data-block-at
+                         (+ start 1 (- framing))))
+            (should-not (assq 'render-data
+                              (mevedel-transcript--structural-ranges
+                               (point-min) (point-max)
+                               (mevedel-transcript--property-segments
+                                (point-min) (point-max))))))))))
+  :doc "cached decoding still respects bounded reads including optional newlines"
+  (with-temp-buffer
+    (insert (mevedel-tool-render-data-format '(:kind request-summary)))
+    (let ((mevedel-transcript--render-data-blocks (make-hash-table :test #'eql)))
+      (should (mevedel-transcript--render-data-block-at 2))
+      (should-not (mevedel-transcript--render-data-block-at 2 (- (point-max) 2)))
+      (should (= (1- (point-max))
+                 (cadr (mevedel-transcript--render-data-block-at
+                        2 (1- (point-max))))))
+      (should (= (point-max)
+                 (cadr (mevedel-transcript--render-data-block-at 2)))))))
+
 (mevedel-deftest mevedel-transcript--structural-ranges ()
   ,test
   (test)

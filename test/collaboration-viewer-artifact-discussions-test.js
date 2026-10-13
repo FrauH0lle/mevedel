@@ -16,6 +16,11 @@ class Box extends Element {
   }
   getBoundingClientRect() { return {left: 0, top: 0, width: 800, height: 600}; }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this); }
+  insertBefore(node, reference) {
+    if (!reference) return this.append(node);
+    node.parent = this;
+    this.children.splice(this.children.indexOf(reference), 0, node);
+  }
 }
 
 const ids = ['artifacts-box', 'artifacts-summary', 'artifacts', 'artifact-panel',
@@ -85,7 +90,7 @@ controller.storedDiscussions({item: 'artifact:other', discussions: []});
 controller.render([
   {id: 'tool-1', kind: 'tool', artifact: 'page.html'},
   {id: 'u1', kind: 'user', guest: 'Alice',
-   shared: {kind: 'artifact', title: 'page.html', questionId: 'c1-m', discussionId: 'c1', text: 'Wave'}},
+   shared: {kind: 'artifact', itemId: 'artifact:page', title: 'page.html', questionId: 'c1-m', discussionId: 'c1', text: 'Wave'}},
   {id: 'a1', kind: 'assistant', text: 'Waved.'},
 ]);
 const markers = posted.filter(message => message.t === 'discussion-markers').at(-1);
@@ -100,7 +105,7 @@ const lastMarker = () => posted.filter(message => message.t === 'discussion-mark
 const delivered = [
   {id: 'tool-1', kind: 'tool', artifact: 'page.html'},
   {id: 'u1', kind: 'user', guest: 'Alice',
-   shared: {kind: 'artifact', title: 'page.html', questionId: 'c1-m', discussionId: 'c1', text: 'Wave'}},
+   shared: {kind: 'artifact', itemId: 'artifact:page', title: 'page.html', questionId: 'c1-m', discussionId: 'c1', text: 'Wave'}},
 ];
 controller.render(delivered);
 assert.equal(lastMarker().state, 'sent');
@@ -116,11 +121,21 @@ busy = false;
 controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
 assert.equal(lastMarker().state, 'answered');
 busy = true;
-controller.queue([{id: 9, shared: {kind: 'artifact', discussionId: 'c1'}}]);
+controller.queue([{id: 9, shared: {kind: 'artifact', itemId: 'artifact:page', discussionId: 'c1'}}]);
 assert.equal(lastMarker().state, 'working');
 controller.queue([]);
 busy = false;
 controller.render(delivered);
+assert.equal(lastMarker().state, 'sent');
+controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
+// The thread's newest request decides: a later unanswered one is merely sent,
+// and a reply to another item's request answers nothing here.
+controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'},
+                   {id: 'u3', kind: 'user', shared: {kind: 'artifact', itemId: 'artifact:page',
+                                                     discussionId: 'c1', questionId: 'c1-n'}},
+                   {id: 'u4', kind: 'user', shared: {kind: 'artifact', itemId: 'artifact:other',
+                                                     discussionId: 'c1', questionId: 'x'}},
+                   {id: 'a4', kind: 'assistant', text: 'Other answer.'}]);
 assert.equal(lastMarker().state, 'sent');
 controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
 
@@ -171,7 +186,7 @@ controller.storedDiscussions({item: 'artifact:page', discussions: [
    messages: [{id: 'g1', actor: 'Alice', text: 'Overall?'},
               {id: 'g2', actor: 'Bob', text: 'Shorter, please'}]}]});
 assert.equal(wholeButton.textContent, 'Whole artifact · 2');
-controller.render([{id: 'u9', kind: 'user', guest: 'Bob', shared: {kind: 'artifact', title: 'page.html',
+controller.render([{id: 'u9', kind: 'user', guest: 'Bob', shared: {kind: 'artifact', itemId: 'artifact:page', title: 'page.html',
   questionId: 'g2', discussionId: 'general', messageId: 'g2', text: 'Shorter, please'}},
                    {id: 'a9', kind: 'assistant', text: 'Shortened.'}]);
 wholeButton.dispatch('click');

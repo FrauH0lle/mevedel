@@ -103,6 +103,33 @@ an older turn. Stop reading archives once that omission is established."
                      (kill-buffer buffer))))))
     (list :turns (nreverse entries) :truncated truncated)))
 
+(defun mevedel-shared-conversation-archived-question-p (session item-id question-id)
+  "Return non-nil when an archived segment of SESSION holds QUESTION-ID.
+The question must be attributed to ITEM-ID.  Newest archives are read first
+and reading stops at the first match.  A match in a readable archive
+settles the question even when another archive is unreadable; without one,
+an unreadable archive leaves delivery unknown, so signal a `user-error'
+naming it rather than answer that the question was never delivered."
+  (let (unreadable)
+    (or (cl-loop
+         for number downfrom (1- (or (mevedel-session-current-segment session) 1)) to 1
+         thereis
+         (let ((buffer (condition-case err
+                           (mevedel-session-artifacts-read-segment session number)
+                         (user-error (push (error-message-string err) unreadable) nil))))
+           (when buffer
+             (unwind-protect
+                 (with-current-buffer buffer
+                   (cl-some (lambda (attribution)
+                              (let ((shared (plist-get (cdr attribution) :shared)))
+                                (and (equal (plist-get shared :itemId) item-id)
+                                     (equal (plist-get shared :questionId) question-id))))
+                            (mevedel-transcript-audit-guest-prompts)))
+               (kill-buffer buffer)))))
+        (when unreadable
+          (user-error "This retry cannot be checked against earlier session history: %s"
+                      (car (last unreadable)))))))
+
 (defun mevedel-shared-conversation-current ()
   "Return the shared-item range of the current buffer's final user prompt."
   (cl-find-if (lambda (range) (plist-get range :last-user))

@@ -539,7 +539,8 @@ export async function handle(request) {
     if (Object.hasOwn(state.receipts, request.opId))
       return {
         state,
-        result: { id: state.id, revision: state.revision, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc), background: before.background }))} : {}), discussions: readDiscussions(doc, state.discussions), update: b64(encode(doc)),
+        // REPLAYED tells Emacs a retried discussion message may already be asked.
+        result: { id: state.id, revision: state.revision, replayed: true, ...before, ...(request.image && before.kind === 'whiteboard' ? {png: await png(boardSVG(before.content, { files: filesOf(doc), background: before.background }))} : {}), discussions: readDiscussions(doc, state.discussions), update: b64(encode(doc)),
           model: modelResult(state, before, null) },
       };
     // ponytail: bounded receipt ledger; compact with acknowledged client epochs if long-lived boards reach this ceiling.
@@ -578,6 +579,9 @@ export async function handle(request) {
       const added = message(alone);
       const id = whole ? GENERAL_DISCUSSION : request.discussionId;
       check(identifier(id), 'Invalid discussion identity');
+      // A reviewed whole-item capture is checked before its message is stored,
+      // as a selection's is below: a refreshed retry must not post it twice.
+      if (whole && request.expected !== undefined) checkContext(doc, { whole: true, expected: request.expected });
       const existing = discussions.find(d => d.id === id);
       if (existing) discussions = replace(append(existing, added));
       else {

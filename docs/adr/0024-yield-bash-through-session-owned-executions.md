@@ -43,6 +43,13 @@ presentation records in `mevedel-execution-transcript.el` keep these facts
 reconstructable across redraw, reload, and compaction; they do not create a
 second process registry or alter delivery to the model or agent.
 
+Completion publication resolves project transcripts through the session's
+artifact store, not the existence of a fixed transcript file. Portable sessions
+do not keep such files; using that check silently left completions unpublished.
+Publication updates only saved content, never an unsent draft. A mid-turn
+insertion keeps the live buffer modified so its response-position ordering and
+any flushed stream text are included in the next checkpoint.
+
 ## Rationale and consequences
 
 One owner absorbs process groups, output bounds, cancellation, and cleanup for

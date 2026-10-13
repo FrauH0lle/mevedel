@@ -852,7 +852,10 @@ the shared permission prompt contract."
              (when commands-summary
                (mevedel-permission--card-field "Detected commands: " commands-summary))
              (mevedel-permission--format-scope entry)
-             (when (and allow-patterns (not rule-creating-disabled-p))
+             (when (and allow-patterns (not rule-creating-disabled-p)
+                        (or (not (plist-get entry :remember-authority-cell))
+                            (plist-get (car (plist-get entry :remember-authority-cell))
+                                       :operation)))
                (mevedel-permission--card-field
                 "Session/always allow will add: "
                 (mapconcat (lambda (pattern) (format "`%s'" pattern))

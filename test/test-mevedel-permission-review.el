@@ -19,6 +19,60 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-permission-review/cold ()
+  ,test
+  (test)
+  :doc "source and compiled reviewer evidence work without umbrella fixtures"
+  (let* ((root (file-name-directory (locate-library "mevedel-permission-review")))
+         (compiled (make-temp-file "mevedel-permission-cold-" t))
+         (files '("mevedel-bash-policy.el" "mevedel-permission-prompt.el"
+                  "mevedel-permission-queue.el" "mevedel-permission-review.el")))
+    (cl-labels
+        ((run (form)
+           (with-temp-buffer
+             (let ((status (call-process
+                            (expand-file-name invocation-name invocation-directory)
+                            nil t nil "--batch" "-Q" "--eval" (prin1-to-string form))))
+               (ert-info ((buffer-string))
+                 (should (equal 0 status))
+                 (should (equal "" (buffer-string))))))))
+      (unwind-protect
+          (progn
+            (run `(progn
+                    (setq load-path ',load-path)
+                    (require 'bytecomp)
+                    (let ((byte-compile-error-on-warn t)
+                          (byte-compile-verbose nil)
+                          (byte-compile-dest-file-function
+                           (lambda (file)
+                             (expand-file-name
+                              (concat (file-name-base file) ".elc") ,compiled))))
+                      (dolist (file ',files)
+                        (unless (byte-compile-file (expand-file-name file ,root))
+                          (error "Permission compilation failed: %s" file))))))
+            (dolist (directory (list root compiled))
+              (run
+               `(progn
+                  (setq load-path ',(cons directory load-path))
+                  (require 'mevedel-permission-review)
+                  (require 'mevedel-permission-prompt)
+                  (let* ((session (mevedel-session--create
+                                   :permission-mode 'edits
+                                   :working-directory temporary-file-directory))
+                         (entry (list :kind 'eval :session session :mode "live"
+                                      :expression "(+ 1 2)" :justification "Cold check"))
+                         (evidence (mevedel-permission-review--evidence entry)))
+                    (unless (eq 'live-emacs
+                                (plist-get (plist-get evidence :confinement) :execution))
+                      (error "Wrong cold execution boundary"))
+                    (unless (string-match-p "Cold check"
+                                            (mevedel-permission--format-justification entry))
+                      (error "Missing cold reason"))
+                    (unless (string-match-p "unrestricted"
+                                            (mevedel-permission--execution-warnings entry))
+                      (error "Missing cold warning")))))))
+        (delete-directory compiled t)))))
+
 (mevedel-deftest mevedel-permission-review--parse ()
   ,test
   (test)
@@ -232,6 +286,18 @@
                             "Eval" "(+ 1  2)" buckets nil nil)
                            :candidates)))
 
+  :doc "nearby evidence never slices arguments using a normalized prefix"
+  (dolist (operation '("git  fetch origin" "git\tfetch origin" "\"git\" fetch origin"
+                       "'git' fetch origin" "/bin/sh script argument"))
+    (let ((rule (if (string-prefix-p "/bin/sh" operation)
+                    "/bin/sh script other"
+                  "git fetch upstream")))
+      (should-not
+       (plist-get (mevedel-permission-review--rule-candidates
+                   "Bash" operation `((:session ("Bash" :pattern ,rule :action allow)))
+                   nil nil)
+                  :candidates))))
+
   :doc "deterministic limits omit whole candidates and disclose the count"
   (let* ((rules (cl-loop for index below 12
                          collect (list "Bash" :pattern (format "git fetch remote%d" index)
@@ -259,7 +325,40 @@
       (should (< (* 2 (length candidate)) 8192))
       (should (> (* 2 (string-bytes candidate)) 8192)))
     (should (= 1 (length (plist-get result :candidates))))
-    (should (= 1 (plist-get result :omitted)))))
+    (should (= 1 (plist-get result :omitted))))
+
+  :doc "omitted candidates do not perform filesystem coverage checks"
+  (let* ((path "/ssh:review.invalid:/cache")
+         (grant (list :path path :access 'write :recursive t))
+         (profile (list :file-system (list grant)))
+         (rule (list "Bash" :pattern "git fetch:*" :action 'allow
+                     :file-system (list grant)))
+         (buckets (list (cons :session (make-list 100 rule))))
+         (target (mevedel-execution-target-create "/ssh:review.invalid:/project/"))
+         (calls 0))
+    ;; Stop at the filesystem coverage boundary, never contact the fake host.
+    (cl-letf (((symbol-function 'mevedel-execution-grants-covering-grant)
+               (lambda (queried access grants recursive queried-target)
+                 (cl-incf calls)
+                 (should (equal queried path))
+                 (should (eq access 'write))
+                 (should recursive)
+                 (should (eq queried-target target))
+                 (car grants))))
+      (let ((result (mevedel-permission-review--rule-candidates
+                     "Bash" "git fetch origin" buckets profile target)))
+        (should (= 8 (length (plist-get result :candidates))))
+        (should (= 92 (plist-get result :omitted)))
+        (should (= 8 calls)))
+      (setq calls 0)
+      (let* ((huge (list "Bash" :pattern "git fetch:*" :action 'allow
+                         :file-system (list (list :path (make-string 9000 ?x)
+                                                   :access 'read))))
+             (result (mevedel-permission-review--rule-candidates
+                      "Bash" "git fetch origin" (list (list :session huge)) profile target)))
+        (should-not (plist-get result :candidates))
+        (should (= 1 (plist-get result :omitted)))
+        (should (= 0 calls))))))
 
 (mevedel-deftest mevedel-permission-review--model ()
   ,test
