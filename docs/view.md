@@ -1517,8 +1517,9 @@ and agent transcript handles are intentionally outside this chrome-fragment
 model even when they are clickable or collapsible. They are projections of
 the authoritative data buffer and keep source-coordinate disclosure state.
 Provider failures are expanded by default and preserve the complete provider
-message and error payload for manual retry. Codex's bounded sample retries show
-transient root/agent status (for example, `Codex at capacity · retry 3/10 in 4s`)
+message and error payload for manual retry. Bounded sample retries across all
+mevedel-admitted native gptel backends show transient root/agent status
+(for example, a capacity failure with `retry 3/10 in 4s`)
 without intermediate failure blocks. Failed provisional output is rolled back
 before replay; earlier completed work and the composer draft remain intact.
 One final ignored request summary persists `:retry-errors` and
@@ -1526,7 +1527,7 @@ One final ignored request summary persists `:retry-errors` and
 shows bounded sanitized diagnostics in chronological attempt order (attempt,
 HTTP status, type, code, message), and labels exhaustion in both the header and
 body, including the number of failed attempts. Legacy failures without these
-fields keep their ordinary rendering. See [bounded sample recovery](architecture.md#bounded-codex-sample-recovery).
+fields keep their ordinary rendering. See [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery).
 `mevedel-view-render-live-update` retains completed
 semantic units in the view and reparses only the mutable source-backed tail.
 Standalone reasoning summaries and grouped activity runs are units; reasoning

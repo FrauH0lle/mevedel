@@ -46,7 +46,8 @@ configuration even if presets, role definitions, or parent settings change.
 Root-session permission decisions and confinement remain live shared policy,
 not part of the frozen request configuration.
 
-Codex OAuth children use the [bounded sample recovery](architecture.md#bounded-codex-sample-recovery)
+Children on every mevedel-admitted native gptel backend use the
+[bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery)
 controller, with an independent allowance of 10 retries plus the initial
 attempt for each model sample. Backoff keeps the child active and its capacity
 slot reserved; the parent continues waiting and receives exactly one final
@@ -56,8 +57,8 @@ Attempt-local provisional output is discarded before replay. `InterruptAgent`,
 deadline expiry, buffer death and teardown cancel backoff, including when no
 transport is registered. Root abort does not automatically interrupt an
 independently retained child. Provider-reported usage from physical attempts
-is counted once; absent usage stays unknown. Claude's built-in retry behavior
-is unchanged.
+is counted once; absent usage stays unknown. Claude Code/ACP stays separate
+and self-retrying; unadmitted background gptel retry policies are unchanged.
 
 Claude Code selections dispatch through ACP using the frozen child model and
 instructions. Each canonical child path has its own native conversation

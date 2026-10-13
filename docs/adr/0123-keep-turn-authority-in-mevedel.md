@@ -144,30 +144,43 @@ exit and may resume after repair, while submitted failure or interruption requir
 explicit continuation. Native history recovery still requires an idle conversation and
 preserves the transcript and effects.
 
-Codex OAuth recovery stays below the admitted turn boundary. The
-`mevedel-gptel-retry` controller normalizes Responses errors even in HTTP-200
-streams and retries a prepared model sample up to 10 times after its initial
-attempt. Success resets that sample allowance; root and retained children have
-independent budgets. Replay bypasses WAIT preparation, retaining tools/results,
+Bounded sample recovery stays below the admitted turn boundary for all
+mevedel-admitted native gptel backends, not just Codex OAuth. The
+`mevedel-gptel-retry` controller retries a prepared model sample up to 10 times
+after its initial attempt. Success resets that sample allowance; root,
+directive, shared-item and retained-agent requests own independent budgets.
+Replay bypasses WAIT preparation, retaining tools/results,
 sample count, request identity, model, effort and permissions. Attempt-local
 provisional output is rolled back and obsolete callbacks are inert. Backoff
 is cancellable without a live transport; cancellation, interruption, deadlines,
 buffer death and teardown cannot leave a delayed producer active.
 
+gptel retains native transport and provider parsing; generic recovery uses
+conservative HTTP-status and structured-error classification, with permanent
+structured errors taking precedence over transient status or message text.
+Small Responses-specific normalization fills missing error/completion events,
+including errors in HTTP-200 streams, without imposing that protocol on other
+providers. Parser adapters preserve native optional arguments.
+Standard SSE/JSON envelopes enable completion checks; unknown native extension
+formats retain gptel's own end-of-stream policy.
 Transient server, overload, temporary rate-limit and recognized transport
 errors, including narrowly matched model-at-capacity messages without retry
 advice, can recover. Authentication/permission, invalid request, model-not-found,
 context overflow, quota exhaustion and local bookkeeping errors cannot;
-output-limit and content-filter completion are not interrupted transport.
+output-limit and content-filter completion are not interrupted transport, and
+unknown errors are not presumed transient.
 Intermediate failures publish status, not terminal error blocks. Exhaustion
 settles once through the existing pipeline, persists bounded chronological
 attempt diagnostics with the original provider error, and pauses an affected
-Goal rather than invoking its settled-turn retry policy. Reported usage has a
-distinct physical-call identity and is charged once; absent usage stays
-unknown. The controller admits only mevedel-owned Codex OAuth requests, and
-zero `mevedel-gptel-retry-max-retries` disables it. Other providers, background
-retry policies and Claude's built-in retries are unchanged. Details are in
-[bounded sample recovery](../architecture.md#bounded-codex-sample-recovery).
+Goal rather than invoking its settled-turn retry policy. An owned permanent
+refusal also pauses the affected Goal instead of gaining new-turn retries.
+Reported usage has a distinct physical-call identity and is charged once; absent usage stays
+unknown. Zero `mevedel-gptel-retry-max-retries` disables the controller.
+Unadmitted background gptel policies are unchanged. Claude Code/ACP stays
+separate and self-retrying, retaining its built-in retry behavior and the
+credential-lock replay below. The all-backend admission contract does not
+assert paid-service verification for every provider. Details are in
+[bounded sample recovery](../architecture.md#bounded-native-gptel-sample-recovery).
 
 One prompt failure is absorbed instead of returned. Every Claude process on the
 host shares one credential store. A prompt that needs a token refresh while
@@ -231,6 +244,19 @@ Receipt establishes SDK acceptance, not model understanding or retention
 through later compaction.
 
 ## Decision history
+
+- **Native retry scope:** the first bounded controller admitted only Codex
+  OAuth requests, interpreting Responses-specific error handling as a provider
+  boundary. The user clarified that the intended policy was generic: every
+  mevedel-admitted native gptel backend should recover the prepared sample,
+  while Claude Code/ACP and unadmitted background policies remain separate.
+  Cross-backend review also confirmed a global Gemini streaming regression:
+  installed parser advice accepted three arguments, but Gemini passes the
+  optional fourth `include-text` argument even outside Codex recovery. This
+  demonstrated that a Codex-only admission gate did not isolate global adapters.
+  Recovery now follows request admission rather than Codex backend type;
+  adapters preserve native arguments and leave provider parsing to gptel,
+  with only a small missing-event normalization layer specific to Responses.
 
 - **Recovery after client loss:** the cooperative-transfer guard also rejected
   direct lease acquisition for native sessions. After an Emacs crash, an

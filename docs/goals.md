@@ -274,10 +274,14 @@ remain held until the Goal resumes. Once a Goal is complete, the next queued
 follow-up is an ordinary non-Goal message. There is no maximum-turn or no-tool
 heuristic.
 
-Codex OAuth requests first use [bounded sample recovery](architecture.md#bounded-codex-sample-recovery):
+All mevedel-admitted native gptel backends first use
+[bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery):
 10 retries plus the initial attempt per model sample, independently for root
-and child requests, without replaying completed tools or charging extra Goal
-turns. An exhausted controller marks its terminal FSM info with
+and child requests, including directive and shared-item requests, without
+rerunning preparation, replaying completed tools, or charging extra Goal turns.
+Claude Code/ACP remains separate and self-retrying; unadmitted background
+gptel retry policies are unchanged. An exhausted controller marks its terminal
+FSM info with
 `:mevedel-retry-exhausted`; settlement charges known usage and one failed Goal
 turn, then pauses the affected active Goal with the provider's concrete reason.
 It does not use Goal's settled-turn retry allowance to multiply the 11-attempt

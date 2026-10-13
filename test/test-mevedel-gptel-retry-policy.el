@@ -1,4 +1,4 @@
-;;; test-mevedel-gptel-retry-policy.el --- Codex retry policy tests -*- lexical-binding: t -*-
+;;; test-mevedel-gptel-retry-policy.el --- Native retry policy tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -14,6 +14,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-gptel-retry)
+(require 'gptel-openai-oauth)
 (require 'mevedel-view)
 (require 'mevedel-view-stream)
 
@@ -80,7 +81,7 @@ Bind request, backend, fsm, state and info for assertions."
   :doc "policy: transient structured codes retry even with HTTP200"
   (dolist (code '("server_error" "internal_server_error" "overloaded_error"
                   "server_is_overloaded" "model_at_capacity" "model_capacity_exceeded"
-                  "service_unavailable_error" "rate_limit_exceeded" "slow_down"
+                  "service_unavailable_error" "rate_limit_exceeded" "rate_limit_error" "slow_down"
                   "stream_interrupted" "timeout_error"))
     (should (mevedel-gptel-retry--retryable-p (list :code code) "200"))
     (should (mevedel-gptel-retry--retryable-p (list :type code) "200")))
@@ -477,7 +478,7 @@ Bind request, backend, fsm, state and info for assertions."
     (should (equal '(:input 15 :output 3 :cached 5) (plist-get info :tokens)))
     (should-not (plist-get info :error)))
 
-  :doc "response parser: unowned and non-OAuth Responses backends retain native behavior"
+  :doc "response parser: unowned requests bypass recovery; owned non-OAuth errors normalize"
   (test-mevedel-retry-policy--with-live
     (let ((unowned (list :backend backend)))
       (mevedel-gptel-retry--parse-response
@@ -486,7 +487,70 @@ Bind request, backend, fsm, state and info for assertions."
     (let ((other (gptel--make-openai-responses :name "retry-policy-non-oauth")))
       (mevedel-gptel-retry--parse-response
        #'gptel--parse-response other '(:error (:code "server_error")) info)
-      (should-not (plist-get info :error)))))
+      (should (equal '(:code "server_error") (plist-get info :error))))))
+
+(mevedel-deftest mevedel-gptel-retry--totalize-usage ()
+  ,test
+  (test)
+  :doc "terminal usage: totals are idempotent and absent reports remain incomplete"
+  (let ((state (list :reported-tokens '(:input 7 :output 2)))
+        (info (list :tokens '(:input 12 :output 3))))
+    (mevedel-gptel-retry--totalize-usage state info)
+    (mevedel-gptel-retry--totalize-usage state info)
+    (should (equal '(:input 19 :output 5) (plist-get info :tokens)))
+    (should-not (plist-get info :mevedel-retry-usage-incomplete))
+    (setq info (list :tokens nil))
+    (mevedel-gptel-retry--totalize-usage state info)
+    (should (equal '(:input 7 :output 2) (plist-get info :tokens)))
+    (should (plist-get info :mevedel-retry-usage-incomplete)))
+  :doc "terminal usage: a missing failed report remains incomplete after success"
+  (let ((state (list :usage-incomplete t))
+        (info (list :tokens '(:input 12))))
+    (mevedel-gptel-retry--totalize-usage state info)
+    (should (equal '(:input 12) (plist-get info :tokens)))
+    (should (plist-get info :mevedel-retry-usage-incomplete))))
+
+(ert-deftest mevedel-gptel-retry--retryable-p/numeric-provider-status ()
+  (dolist (code '(408 429 500 503))
+    (should (mevedel-gptel-retry--retryable-p (list :code code) "200")))
+  (dolist (code '(400 401 402 403 404 413))
+    (should-not (mevedel-gptel-retry--retryable-p (list :code code) "503"))))
+
+(mevedel-deftest mevedel-gptel-retry--parse-http ()
+  ,test
+  (test)
+  :doc "HTTP advice: curl and URL signatures preserve native result, args and point"
+  (dolist (url '(nil t))
+    (with-temp-buffer
+      (insert "HTTP/1.1 503 Unavailable\r\nRetry-After: 12.5\r\n\r\n{}")
+      (goto-char (point-max))
+      (let* ((info (list :mevedel-retry-state t))
+             (args (if url (list 'backend info) (list info)))
+             (position (point)))
+        (should (equal 'native
+                       (apply #'mevedel-gptel-retry--parse-http
+                              (lambda (&rest received)
+                                (should (equal args received))
+                                (should (= position (point)))
+                                'native)
+                              args)))
+        (should (= position (point)))
+        (should (equal "12.5" (plist-get info :mevedel-retry-advice))))))
+  :doc "HTTP advice: body text cannot forge a retry header; unowned requests are native"
+  (dolist (owned '(nil t))
+    (with-temp-buffer
+      (insert "HTTP/1.1 503 Unavailable\n\nretry-after: 999\n")
+      (let ((info (list :mevedel-retry-state owned)))
+        (should (eq 'native (mevedel-gptel-retry--parse-http
+                             (lambda (_) 'native) info)))
+        (should-not (plist-get info :mevedel-retry-advice)))))
+  :doc "HTTP advice: normalized in-band errors reach the native transport error result"
+  (let* ((error-data '(:code "server_error"))
+         (info (list :mevedel-retry-state t :error error-data)))
+    (with-temp-buffer
+      (should (equal (list nil "200" "HTTP/1.1 200 OK" error-data)
+                     (mevedel-gptel-retry--parse-http
+                      (lambda (_) '(nil "200" "HTTP/1.1 200 OK")) info))))))
 
 (ert-deftest mevedel-gptel-retry--pending-p/permanent-overrides-earlier-pending ()
   (test-mevedel-retry-policy--with-live

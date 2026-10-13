@@ -10,6 +10,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-gptel-retry)
+(require 'gptel-openai-oauth)
 (require 'mevedel-gptel-stream-bridge)
 (require 'mevedel-telemetry-usage)
 (require 'mevedel-agent-exec)

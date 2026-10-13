@@ -464,27 +464,44 @@ through post-response hooks. Failed send startup and directive rollback end only
 their own request; nested replacement requests remain active. Interrupted agent
 startup uses the same rollback as provider errors.
 
-### Bounded Codex sample recovery
+### Bounded native gptel sample recovery
 
 `mevedel-gptel-retry.el` adds request-local recovery only to mevedel-admitted
-Codex OAuth requests, selected by backend type: root, directive/shared-item,
-and retained-subagent requests. `mevedel-gptel-retry-max-retries` defaults to
-10 retries after the initial attempt, at most 11 physical provider calls per
+native gptel requests across all backends, not just Codex OAuth: root,
+directive, shared-item, and retained-agent requests.
+`mevedel-gptel-retry-max-retries` defaults to 10 retries after the initial
+attempt, at most 11 physical provider calls per
 logical model sample; zero disables this controller. Each successful sample
 resets the allowance. Root and concurrent children have independent budgets.
-Other gptel requests and separate background retry policies are unchanged.
-Claude Code keeps its built-in retries and mevedel's existing one-time
-credential-refresh-lock replay.
+Unadmitted background gptel requests and their separate retry policies are
+unchanged. Claude Code/ACP remains a separate, self-retrying engine; it keeps
+its built-in retries and mevedel's existing one-time credential-refresh-lock
+replay.
 
-The controller normalizes nested Responses errors, flat `error` events,
-`response.failed` errors, and interrupted streams, including errors delivered
-with HTTP 200. Structured transient server/overload/rate-limit errors, HTTP
-408/5xx, recognized curl/network failures, and narrowly matched temporary
+gptel retains provider transport and parsing. The controller classifies errors
+conservatively using HTTP status and structured provider errors from native
+parsing or complete SSE/JSON-line error envelopes, not tool data or prose. Permanent
+structured refusals take precedence over transient status or message text.
+Structured transient server/overload/rate-limit errors, HTTP
+408/429/5xx, recognized curl/network failures, and narrowly matched temporary
 overload or **model at capacity** messages can retry, even without server retry
 advice. Cancellation, authentication/permission errors, invalid requests,
 model-not-found, context overflow, exhausted quota, and local bookkeeping
 failures do not retry. Output-limit and content-filter stops are not mistaken
-for interrupted transport.
+for interrupted transport. Unknown errors are not assumed transient.
+
+Small Responses-specific normalization fills missing error/completion events:
+nested Responses errors, flat `error` events, `response.failed` errors, and
+interrupted Responses streams, including errors delivered with HTTP 200. It
+does not impose Responses event semantics on other providers; stream adapters
+also recognize completion markers for the standard SSE/JSON stream envelopes.
+Truncated recognized streams recover; unknown extension formats retain gptel's
+native end-of-stream policy rather than acquiring a Responses completion rule.
+Parser adapters
+forward native optional arguments, including Gemini's `include-text`, without
+changing provider parsing. Admission across all native gptel backends is the
+recovery scope, not a claim that every provider's paid service or every error
+shape has been tested.
 
 Recovery replays the prepared sample below ordinary WAIT preparation, after
 context and reminder injection. It preserves completed tools, their results,
@@ -504,6 +521,8 @@ request summary: the existing provider error payload plus `:retry-errors`
 (chronological, bounded sanitized attempt diagnostics, at most 11) and
 `:retry-exhausted`. The live FSM flag `:mevedel-retry-exhausted` makes the
 affected Goal pause instead of multiplying the bound with settled-turn retries.
+An owned nonretryable error carries `:mevedel-retry-permanent` and likewise
+pauses the affected Goal rather than retrying a permanent refusal as a new turn.
 Provider-reported usage is counted once per physical dispatch with a distinct
 telemetry call identity; missing usage remains unknown, not zero. Retry state
 is live request state and is not resumed after restart.

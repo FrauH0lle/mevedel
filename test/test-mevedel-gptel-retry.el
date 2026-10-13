@@ -401,6 +401,33 @@
       (should (= 1 finished))
       (should-not gptel-post-response-functions))))
 
+(ert-deftest mevedel-gptel-retry-dispatch/nonstream-physical-usage-is-not-totalized ()
+  "Physical usage observers see each attempt, not the logical sample total."
+  (dolist (curl '(nil t))
+    (let (events)
+      (mevedel-retry-test--with-http
+          (list "{\"error\":{\"code\":\"server_error\"},\"usage\":{\"input_tokens\":7,\"output_tokens\":2}}"
+                "{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Recovered answer\"}]}],\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}")
+        (let ((gptel-use-curl curl) (url-proxy-services nil))
+          (plist-put (gptel-fsm-info fsm) :stream nil)
+          (plist-put (gptel-fsm-info fsm) :callback #'gptel--insert-response)
+          (unwind-protect
+              (progn
+                (mevedel-telemetry-usage-install)
+                (cl-letf (((symbol-function 'mevedel-telemetry-usage--emit)
+                           (lambda (_call stage &rest props)
+                             (when (eq stage 'finish) (push props events)))))
+                  (gptel--fsm-transition fsm)
+                  (mevedel-retry-test--drain-native))
+                (setq events (nreverse events))
+                (should (= 2 (length events)))
+                (should (equal '(error success) (mapcar (lambda (event) (plist-get event :outcome)) events)))
+                (should (equal '(7 12) (mapcar (lambda (event) (plist-get event :input-tokens)) events)))
+                (should (equal '(2 3) (mapcar (lambda (event) (plist-get event :output-tokens)) events)))
+                (should (equal '(:input 19 :output 5 :cached 0)
+                               (plist-get (gptel-fsm-info fsm) :tokens))))
+            (mevedel-telemetry-usage-uninstall)))))))
+
 (mevedel-deftest mevedel-gptel-retry--sum-tokens ()
   ,test
   (test)
