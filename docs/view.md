@@ -789,6 +789,12 @@ Terminology:
   Pending Inputs and an armed session fork do not pause active elapsed time.
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
+  The composer's first line follows the prompt prefix (`[edits] > `);
+  explicit and soft-wrapped continuation lines are indented by the width of
+  the prefix's last line, so the draft forms one aligned column. The indent
+  is a display-only `line-prefix`/`wrap-prefix` on the composer overlay and
+  is recomputed whenever the prompt is rebuilt for another mode or scope;
+  the draft text, submissions, and kills never contain it.
 
 Only composer edits are undoable. Renders above the composer record their
 own undo entries, which Emacs never trims between commands: a busy view once

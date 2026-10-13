@@ -871,7 +871,25 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
             #'mevedel-view-history-beginning-of-line)
 
 (defvar-local mevedel-view--composer-keymap-overlay nil
-  "Overlay that gives the editable composer its local keymap.")
+  "Overlay over the editable composer.
+It supplies the composer keymap and the continuation indent that aligns
+later draft lines under the first character after the prompt.")
+
+(defun mevedel-view--update-composer-indent ()
+  "Align composer continuation lines with the end of the prompt.
+The prefix is display-only: the draft text, submission, and kills never
+contain it.  The first draft line starts inside the read-only prompt, so
+only explicit and soft-wrapped continuation lines receive it."
+  (when (overlayp mevedel-view--composer-keymap-overlay)
+    (let* ((start (mevedel-view--input-start))
+           (indent (make-string
+                    (string-width
+                     (buffer-substring-no-properties
+                      (save-excursion (goto-char start) (line-beginning-position))
+                      start))
+                    ?\s)))
+      (overlay-put mevedel-view--composer-keymap-overlay 'line-prefix indent)
+      (overlay-put mevedel-view--composer-keymap-overlay 'wrap-prefix indent))))
 
 
 (defvar-local mevedel-view--skill-argument-hint-overlay nil
@@ -1343,7 +1361,8 @@ and other input properties remain untouched."
                  'keymap
                  (if mevedel-view--side-conversation-p
                      mevedel-view--side-conversation-keymap
-                   mevedel-view--composer-keymap))))
+                   mevedel-view--composer-keymap))
+    (mevedel-view--update-composer-indent)))
 
 ;;
 ;;; Input forwarding
@@ -1534,7 +1553,8 @@ follows `mevedel-view--input-marker'."
            (when (overlayp mevedel-view--composer-keymap-overlay)
              (move-overlay
               mevedel-view--composer-keymap-overlay
-              (mevedel-view--input-start) (point-max)))))))))
+              (mevedel-view--input-start) (point-max))
+             (mevedel-view--update-composer-indent))))))))
 
 (defun mevedel-view-cycle-permission-mode ()
   "Cycle the current session's permission mode from the view buffer."

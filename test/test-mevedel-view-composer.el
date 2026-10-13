@@ -1483,6 +1483,45 @@
         (set-marker mevedel-view--input-marker nil)
         (should (= expected (mevedel-view--prompt-start-position)))))))
 
+(mevedel-deftest mevedel-view--update-composer-indent
+  (:doc "aligns composer continuation lines with the end of the prompt")
+  ,test
+  (test)
+
+  :doc "continuation lines are indented by the prompt width, text untouched"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      ;; Type into the empty composer: inserted text joins the overlay.
+      (goto-char (mevedel-view--input-start))
+      (insert "> first\nsecond")
+      (let* ((first-line (save-excursion
+                           (goto-char (mevedel-view--input-start))
+                           (line-beginning-position)))
+             (second-line (save-excursion
+                            (goto-char (mevedel-view--input-start))
+                            (forward-line 1)
+                            (point))))
+        (should-not (get-char-property first-line 'line-prefix))
+        (should (equal "  " (get-char-property second-line 'line-prefix)))
+        (should (equal "  " (get-char-property second-line 'wrap-prefix)))
+        (should (equal "> first\nsecond" (mevedel-view--input-text))))))
+
+  :doc "a prompt rebuilt for another mode updates the indent width"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "draft\nmore")
+      (dolist (case '((full-auto . "[full-auto] > ") (ask . "> ")))
+        (setq-local mevedel-permission-mode (car case))
+        (mevedel-view-refresh-input-prompt)
+        (let ((second-line (save-excursion
+                             (goto-char (mevedel-view--input-start))
+                             (forward-line 1)
+                             (point))))
+          (should (equal (make-string (length (cdr case)) ?\s)
+                         (get-char-property second-line 'line-prefix)))
+          (should (equal "draft\nmore" (mevedel-view--input-text))))))))
+
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")
   ,test
