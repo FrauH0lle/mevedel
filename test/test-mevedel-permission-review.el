@@ -442,6 +442,12 @@
                 (should (equal "gpt-4.1" (plist-get data :model)))
                 (should (equal (mevedel-system-build-prompt 'permission-review)
                                (plist-get data :instructions)))
+                (should (string-match-p "task-relevant observational inspection"
+                                        (plist-get data :instructions)))
+                (should (string-match-p "Lack of confinement alone is not a reason to ask"
+                                        (plist-get data :instructions)))
+                (should (string-match-p "effects depend on unknown functions or unseen code"
+                                        (plist-get data :instructions)))
                 (should-not (plist-get data :tools))))
           (when cancel (funcall cancel))))))
   :doc "streaming providers receive a streamed request and one complete reply"
@@ -554,6 +560,63 @@
                    "{\"decision\":\"ask\",\"reason\":\"Offline decision\"}"))
         (should (eq 'reviewer source)))))
 
+  :doc "persists bounded explanations for each reviewer decision without telemetry text"
+  (let* ((mevedel-permission-log-enabled t)
+         (mevedel-telemetry-enabled t)
+         (reason (concat "review-private-details-" (make-string 900 ?x)))
+         (bounded (plist-get
+                   (mevedel-permission-review--parse
+                    (json-serialize (list :decision "ask" :reason reason)))
+                   :reason))
+         (fallbacks 0))
+    (setf (mevedel-session-save-path session) root)
+    (should (<= (string-width bounded) 500))
+    (should (< (length bounded) (length reason)))
+    (dolist (decision '(allow-once ask deny))
+      (setq outcomes nil)
+      (mevedel-permission-review-start entry (lambda () (cl-incf fallbacks)))
+      (funcall provider-callback
+               (json-serialize (list :decision (symbol-name decision) :reason reason)))
+      ;; Duplicate replies cannot change the durable decision or explanation.
+      (funcall provider-callback "{\"decision\":\"deny\",\"reason\":\"Late answer\"}")
+      (let* ((records (mevedel-test--permission-log-entries session))
+             (record (car (last records))))
+        (should (= (length records) (1+ (cl-position decision '(allow-once ask deny)))))
+        (should (eq 'permission-review-completed (plist-get record :event)))
+        (should (eq decision (plist-get record :outcome)))
+        (should (eq 'reviewer (plist-get record :review-source)))
+        (should (equal bounded (plist-get record :review-reason))))
+      (should (equal outcomes
+                     (pcase decision
+                       ('ask nil)
+                       ('deny (list (cons 'deny bounded)))
+                       (_ '(allow-once)))))
+      (with-temp-buffer
+        (insert-file-contents (mevedel-telemetry-path session))
+        (should (search-forward "permission-review-completed" nil t))
+        (goto-char (point-min))
+        (should-not (search-forward "review-private-details-" nil t))))
+    (should (= 1 fallbacks)))
+
+  :doc "forwarded side review audits exclude the explanation text"
+  (let ((parent (mevedel-session--create :permission-mode 'edits))
+        (mevedel-permission-log-enabled t)
+        (mevedel-telemetry-enabled t))
+    (setf (mevedel-session-audit-session session) parent)
+    (mevedel-permission-review-start entry #'ignore)
+    (funcall provider-callback
+             "{\"decision\":\"ask\",\"reason\":\"Private reviewer explanation\"}")
+    (let ((diagnostic (car (mevedel-session-permission-log-pending session)))
+          (events (mevedel-session-telemetry-pending parent)))
+      (should (equal "Private reviewer explanation"
+                     (plist-get diagnostic :review-reason)))
+      (should (= 1 (length events)))
+      (should (eq 'permission-review-completed (plist-get (car events) :event)))
+      (should (eq 'btw (plist-get (car events) :conversation-scope)))
+      (should-not (plist-member (car events) :review-reason))
+      (should-not (string-match-p "Private reviewer explanation"
+                                  (prin1-to-string events)))))
+
   :doc "equal expression strings need not retain their sharing topology"
   (let* ((expression (copy-sequence "(+ 1 2)"))
          (args (list :expression expression :mode "live"))
@@ -599,6 +662,9 @@
       (should (= 1 notifications))
       (should (= 1 cards))
       (should-not outcomes)
+      (let ((record (car (mevedel-session-permission-log-pending session))))
+        (should (eq 'unavailable (plist-get record :review-source)))
+        (should-not (plist-get record :review-reason)))
       (mevedel-permission-queue-abort-all session)))
 
   :doc "timeout cancels the provider and falls back exactly once"
@@ -607,6 +673,9 @@
     (sleep-for 0.03)
     (should (= 1 fallbacks))
     (should (= 1 cancelled))
+    (let ((record (car (mevedel-session-permission-log-pending session))))
+      (should (eq 'timeout (plist-get record :review-source)))
+      (should-not (plist-get record :review-reason)))
     (funcall provider-callback "{\"decision\":\"allow-once\",\"reason\":\"Late\"}")
     (should-not outcomes))
 

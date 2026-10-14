@@ -669,7 +669,10 @@ additive filesystem/network authority, or execution without confinement.
 Count `permission-displayed` to measure actual initial card displays. Admission
 is `permission-enqueued`; refreshing a card's scope or queue count does not emit
 another display. Automatic review records `permission-review-completed` with
-outcome, source and elapsed seconds, without raw user evidence. It does not count
+outcome, source, elapsed seconds and the settled reviewer's bounded explanation
+(`:review-reason`), without adding raw reviewer responses or supplied user
+evidence. The explanation stays in `permission-log.el`, not unified telemetry
+or forwarded side audits, and does not confer authority. It does not count
 as a displayed card or a human answer. Each admitted request settles once as
 `permission-resolved` for a user answer, `permission-coalesced` for a covering
 policy decision, `permission-swept` for owner-request teardown, or

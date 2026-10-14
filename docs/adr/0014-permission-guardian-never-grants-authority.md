@@ -18,11 +18,19 @@ represent an exact directory ([ADR 0086](0086-reuse-approved-execution-permissio
 the reviewer judges that disclosed scope. Direct saved rules related to the
 operation arrive as candidates with their capability coverage. They inform the
 judgment of current intent but grant nothing and do not change deterministic
-matching.
+matching. Live Eval is judged by the visible expression's actual effects:
+task-authorized observational inspection of ordinary runtime metadata and
+settings may be approved once despite its unconfined execution environment.
+Unknown effects, unrelated private data and mutations do not inherit that
+authorization from a read-only justification.
 Provider evidence and freshness snapshots use one complete, fixed serialization;
 callback printer settings and equal-value sharing are not changes in authority.
 
 Errors, timeout, missing evidence and uncertainty display the ordinary card.
+The session permission log retains the settled reviewer's bounded explanation
+for allow, ask and deny outcomes. It records no raw response or supplied user
+evidence, and the explanation is excluded from unified telemetry and forwarded
+side audits. It is diagnostic only, never permission authority.
 Cancellation owns provider cleanup; late/duplicate responses cannot settle twice.
 Terminal request state also prevents review startup before queue admission;
 late canceller registrations cannot reopen an ended request.
@@ -78,3 +86,10 @@ October 2026 offline review probes reproduced false evidence changes under ACP's
 callback printer bindings and after equal strings stopped sharing identity.
 Freshness and provider input now use fixed printer settings without reference
 labels, preserving value changes without rejecting unchanged evidence.
+
+An October 2026 view-debugging request asked only to read loaded function
+metadata and view settings. The reviewer deferred twice, rather than timing out
+or failing, but its explanation disappeared with the human card. Policy now
+distinguishes an unconfined environment's potential capabilities from a plainly
+observational expression's effects, and the permission log retains the bounded
+explanation so future deferrals can be diagnosed without guessing.

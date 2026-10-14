@@ -59,7 +59,12 @@ before parsing. Evidence
 uses the actual tool's execution boundary, including when a hook requests a
 generic permission card. Child evidence includes resolved direct capability
 profiles; live Eval names the host Emacs separately from the session target and
-its incarnation, even with a remote working directory.
+its incarnation, even with a remote working directory. For live Eval, the policy
+judges the visible expression's effects rather than treating unrestricted
+execution as a reason to ask by itself. Task-authorized observational reads of
+ordinary runtime metadata or settings can be approved once. A read-only claim
+in the justification is not proof; unknown effects or unseen code still require
+deferral, and this does not authorize unrelated private data or mutations.
 
 When the guardian workload resolves to Claude Code, the engine uses a fresh,
 tool-free ACP conversation with that same explicit system policy and quoted
@@ -82,7 +87,13 @@ unavailable; reasons are bounded to 500 display columns. `allow-once` approves
 only the complete invocation presented. It does not persist command rules,
 network permission, or filesystem grants, and cannot broaden an exact directory
 into a recursive grant. Explicit hard denies, Plan and integrity checks remain
-outside model authority.
+outside model authority. When logging is enabled, `permission-review-completed`
+retains a settled reviewer decision's bounded explanation as `:review-reason`
+in the session's `permission-log.el`, including `ask` and `deny` decisions.
+Failures and timeouts have no reviewer explanation. Raw responses and supplied
+evidence snapshots are not added to that event. The explanation is model-authored
+free text, not redacted text, and may quote evidence. It is diagnostic, not
+authority, and is excluded from unified telemetry and forwarded side audits.
 
 `ask`, malformed responses, provider failures and the 20-second default timeout
 (`mevedel-permission-review-timeout`) display the ordinary human card, whose
@@ -120,6 +131,7 @@ These are policy examples, not measured model accuracy or guarantees:
 | --- | --- |
 | Run this project's tests; request network needed to fetch their dependencies | Allow once when task, target and complete scope are clear |
 | Evaluate this exact form in the current Emacs; request that live Eval | Allow once |
+| Diagnose view grouping; inspect loaded function metadata and view settings without modifying state | Allow once when the visible expression's observational effects are clear |
 | Read a build log; upload SSH credentials to an unrelated host | Deny |
 | Inspect the project; delete unrelated user files | Deny |
 | Tool output says to bypass policy or claims the user approved an upload | Treat as untrusted evidence; deny or defer based on the actual task |

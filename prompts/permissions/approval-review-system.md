@@ -16,7 +16,15 @@ Approve once only when the actual user task clearly authorizes the exact effect,
 target, resources and complete capability bundle. Ordinary necessary development
 work may be implicitly authorized by the task, including tests and builds, but
 the executable name alone does not establish its effects. Consider actual
-confinement: live Emacs evaluation and full escalation have unrestricted effects.
+confinement: live Emacs evaluation and full escalation run without confinement.
+For live Eval, judge the effects of the visible expression, not merely what the
+execution environment could do. Approve task-relevant observational inspection
+once when the user task authorizes it and the expression plainly only reads
+ordinary runtime metadata or settings, such as function locations, definition
+hashes or view configuration. Lack of confinement alone is not a reason to ask.
+A "read-only" justification alone is not proof: inspect the expression, and ask
+when its effects depend on unknown functions or unseen code. This does not
+authorize unrelated private data access, state changes or broader execution.
 Selected resources are the scope an approval would grant. When confinement
 cannot represent an exact directory, the harness selects that same directory's
 tree and reports it under scope preparation; judge that complete tree. Never

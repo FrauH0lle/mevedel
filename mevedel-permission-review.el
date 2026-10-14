@@ -4,7 +4,8 @@
 
 ;; Reviews complete permission exceptions before human queue admission.  The
 ;; reviewer grants one invocation only; policy, ownership and request freshness
-;; remain deterministic.  No transcript evidence is copied into diagnostics.
+;; remain deterministic.  Diagnostics retain the bounded reviewer explanation,
+;; not its raw response or supplied transcript evidence.
 
 ;;; Code:
 
@@ -448,7 +449,8 @@ owned here; mutable policy or evidence never inherits an older approval."
                (mevedel-permission-queue--log
                 'permission-review-completed entry session
                 :outcome (if (consp outcome) (car outcome) outcome)
-                :review-source source :review-seconds (- (float-time) started)))
+                :review-source source :review-seconds (- (float-time) started)
+                :review-reason (and (eq source 'reviewer) reason)))
              (if (eq outcome 'ask)
                  (progn
                    ;; The human card explains why it was not settled here.
@@ -497,7 +499,8 @@ owned here; mutable policy or evidence never inherits an older approval."
                             (t (deliver 'ask 'changed))))
                        (error (deliver (cons 'deny (error-message-string err)) 'integrity))))
                     ((eq (plist-get decision :decision) 'deny)
-                     (deliver (cons 'deny (plist-get decision :reason)) 'reviewer))
+                     (let ((reason (plist-get decision :reason)))
+                       (deliver (cons 'deny reason) 'reviewer reason)))
                     (t (deliver 'ask 'reviewer (plist-get decision :reason)))))
                (error (deliver 'ask 'unavailable))))))
       (setq pending (cons entry #'cancel))
