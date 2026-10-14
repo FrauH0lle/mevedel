@@ -1074,9 +1074,16 @@ settles from a timer and delivers its result in a later event-loop turn, so
 input and redisplay run between process settlement and the tool's
 continuation (result handling and, on gptel backends, the next request).
 Together they would make each tool completion one uninterruptible pause.
-Stops, aborts and teardown still deliver before they return, because their
-callers wait for the settled outcome. Delivery from inside another remote
-command still waits for an idle transport.
+Stops and aborts still deliver to waiting foreground callers before they
+return. If owner teardown arrives after natural settlement but before delivery,
+it completes that foreground callback before releasing the spool. Session
+teardown and discarded background work cancel pending delivery instead; no
+late callback or mailbox publication can revive a retired owner. Delivery
+from inside another remote command still waits for an idle transport. Queued
+or running result delivery still blocks session transfer and history mutation.
+An unclaimed result after a failed mailbox delivery remains pollable by its
+original owner, but does not block those operations once delivery has ended;
+neither do retained results already delivered.
 
 Bash waits up to `yield_time_ms` (10 seconds by default; the declared
 250-30000ms schema range is enforced by the input-repair clamp with a

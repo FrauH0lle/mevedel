@@ -41,8 +41,11 @@ Native resource-grant semantics are independent and unchanged.
 
 Final path validation remains in the editor and checks the filesystem afresh.
 Writable-symlink checks inspect only prefixes inside the shallowest covering
-writable root, and one preparation tests each shared prefix once. Below an
-already canonical writable root, a path whose every component that check proved
+writable root, and each validation pass tests each shared prefix once. Candidate
+processing can yield during filesystem I/O, so the final validation pass clears
+the earlier prefix observations before rechecking the completed restrictions.
+Missing targets also receive an uncached check before host directory creation.
+Below an already canonical writable root, a path whose every component that check proved
 is not a symlink is its own canonical spelling and is not resolved again; other
 paths still resolve through `file-truename`. Restriction sorting computes each
 depth once. Git pointer files
@@ -132,3 +135,13 @@ replays over the same candidates reduced the median from about 160 to 43 ms with
 byte-identical restrictions. Discovery itself and the protected set are
 unchanged; excluding ignored trees from discovery was rejected because a nested
 `.git` there remains a real write target.
+
+A follow-up real-filesystem regression replaced a protected directory with a
+symlink during candidate processing. Reusing the candidate cache in final
+validation accepted that mutable crossing and omitted the canonical target.
+Final validation now starts with a fresh prefix cache; sharing within each pass
+and the canonical-spelling optimization remain intact. A second regression
+showed that final refusal alone was too late for a later missing state root:
+cached ancestors let its preparation create a directory through the new symlink.
+Missing targets now recheck their full writable path before creation. The earlier
+timing above predates these additional fresh checks.

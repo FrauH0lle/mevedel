@@ -362,8 +362,8 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 (defun mevedel-sandbox--writable-symlink-component (path writable-roots &optional checked)
   "Return the first symlink crossing in PATH under WRITABLE-ROOTS.
 CHECKED, when non-nil, is a hash table of prefixes already found not to be
-symlinks during the same preparation.  Protected candidates share most of
-their prefixes, so one preparation tests each prefix once."
+symlinks during the same validation pass.  Protected candidates share most
+of their prefixes, so each pass tests each prefix once."
   (let* ((path (directory-file-name (expand-file-name path)))
          (path-length (length path))
          start found)
@@ -709,9 +709,12 @@ a one-element list; path and symlink checks still happen here."
             (let* ((path (plist-get candidate :path))
                    (mode (plist-get candidate :mode))
                    (directory-p (plist-get candidate :directory-p))
+                   (exists-p (file-exists-p path))
                    (symlink
+                    ;; Missing targets may create host directories.  Do not
+                    ;; reuse an earlier candidate's proof before that mutation.
                     (mevedel-sandbox--writable-symlink-component
-                     path writable-roots checked)))
+                     path writable-roots (and exists-p checked))))
               (when symlink
                 (signal
                  'mevedel-sandbox-policy-error
@@ -719,7 +722,7 @@ a one-element list; path and symlink checks still happen here."
                   (format
                    "Cannot enforce protected path %s across writable symlink %s"
                    path symlink))))
-              (unless (file-exists-p path)
+              (unless exists-p
                 (when (and directory-p
                            (cl-some
                             (lambda (root)
@@ -780,6 +783,10 @@ a one-element list; path and symlink checks still happen here."
                                   (when (plist-get candidate :create-parents)
                                     (list :required t)))
                           restrictions))))))
+          ;; Candidate processing performs I/O and can yield.  A prefix proved
+          ;; earlier may now be a symlink; final validation needs a fresh proof,
+          ;; while still sharing common prefixes within this pass.
+          (clrhash checked)
           (let (resolved)
             (dolist (restriction restrictions)
               (let* ((path (plist-get restriction :path))

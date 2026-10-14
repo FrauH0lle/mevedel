@@ -3112,7 +3112,11 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
                (with-current-buffer data-buffer
                  (mevedel-tool-render-data-segment-bounds tool-use-id))))
     (let ((pos (point-min))
-          (limit (point-max))
+          ;; Yanking a tool row keeps its identity properties.  A draft is
+          ;; never a refresh target, even if grouping hides the original row.
+          (limit (if mevedel-view--agent-transcript-p
+                     (point-max)
+                   (or (mevedel-view--input-marker-position) (point-max))))
           found)
       (while (and (< pos limit) (not found))
         (let* ((source (get-text-property pos 'mevedel-view-source))

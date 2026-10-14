@@ -456,9 +456,12 @@ records keep reporting their error.  Order follows the directory listing."
          (marked (make-hash-table :test #'equal))
          groups)
     (when inspected
-      ;; Forget identities whose records collection removed.
-      (let (gone)
-        (maphash (lambda (id _) (unless (member id ids) (push id gone))) inspected)
+      ;; Forget identities whose records collection removed.  Records are
+      ;; retained for reversal, so avoid a quadratic list scan here.
+      (let ((present (make-hash-table :test #'equal :size (length ids)))
+            gone)
+        (dolist (id ids) (puthash id t present))
+        (maphash (lambda (id _) (unless (gethash id present) (push id gone))) inspected)
         (dolist (id gone) (remhash id inspected))))
     (dolist (id ids)
       (let ((pin (and inspected (gethash id inspected))))

@@ -214,6 +214,10 @@ supply the surrounding controls. Each redraw preserves the user-owned composer.
 History-boundary recovery stops at the input prompt. Copying a rendered response
 and yanking it into a draft can retain transcript source/type properties, but
 those properties do not make composer text part of history.
+Targeted tool-row refreshes also stop at that boundary: a copied tool row in a
+draft is not a live result, even after the original row moves into a group.
+Refreshing it would add spurious composer undo entries despite restoring the
+draft text.
 
 Informational recovery notices offer a **Dismiss** control. It removes only
 that notice, not the failure's retained agent result or transcript. Blocking
@@ -1456,7 +1460,8 @@ any project buffer) lists the store by title, with each artifact's kind, attachm
 the current session, version count, modification time and size, sorting
 versions and sizes by their numbers; `t` toggles between all and attached
 artifacts. Stable ids remain in the details report and identify rows even when
-titles are identical. It opens an artifact locally (`o`, `e`),
+titles are identical. Row labels replace title newlines and tabs with spaces;
+the stored title remains unchanged. It opens an artifact locally (`o`, `e`),
 attaches it to the current session (`a`), views or restores a version (`v`),
 duplicates it into an independent artifact (`D`), opens its dedicated session
 (`c`), and deletes it with its versions, discussions and dedicated session (`d`).

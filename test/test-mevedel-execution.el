@@ -852,6 +852,85 @@
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-execution--discard-record/deferred
+  (:doc "teardown and transport cancellation own queued natural completion")
+  (dolist (yielded '(nil t))
+    (dolist (reason '(session-ended owner-stopped transport-cancelled))
+      (let* ((root (make-temp-file "mevedel-deferred-teardown-" t))
+             (session (test-mevedel-execution--session root))
+             (release (file-name-concat root "release"))
+             (mevedel-sandbox-mode 'off)
+             (finish (symbol-function 'mevedel-execution--finish-managed))
+             (callbacks 0) observation torn-down key mail pending-after-teardown
+             (mevedel-execution-mailbox-delivery-function
+              (lambda (&rest _) (setq mail t) t)))
+        (unwind-protect
+            (cl-letf (((symbol-function 'mevedel-execution--finish-managed)
+                       (lambda (record &optional defer)
+                         (funcall finish record defer)
+                         (when defer
+                           (setq key (list 'execution-delivery
+                                           (mevedel-execution--record-token record)))
+                           ;; No event-loop opportunity between settlement
+                           ;; and teardown: delivery is still queued.
+                           (pcase reason
+                             ('session-ended (mevedel-execution-teardown-session session))
+                             ('owner-stopped (mevedel-execution-stop-owner session "main"))
+                             ('transport-cancelled (mevedel-transport-cancel-pending key)))
+                           (setq torn-down t
+                                 pending-after-teardown
+                                 (mevedel-execution--record-delivery-pending-p record))))))
+              (mevedel-execution-start-bash
+               (lambda (value) (cl-incf callbacks) (setq observation value))
+               :session session :owner "main" :owner-context session
+               :command (list "sh" "-c"
+                              "while [ ! -e \"$1\" ]; do sleep 0.01; done; printf done"
+                              "wait-for-release" release)
+               :workdir root :writable-roots (list root)
+               :artifact-directory root :yield-time-ms (and yielded 1))
+              (when yielded
+                (test-mevedel-execution--wait (lambda () observation))
+                (should (eq 'running (plist-get (plist-get observation :facts) :state))))
+              (write-region "" nil release nil 'silent)
+              (test-mevedel-execution--wait (lambda () torn-down))
+              (should-not (gethash key mevedel-transport--pending))
+              (should-not pending-after-teardown)
+              (should-not (mevedel-execution-session-live-p session))
+              (should (= callbacks (if (or yielded (eq reason 'owner-stopped)) 1 0)))
+              (when (and (not yielded) (eq reason 'owner-stopped))
+                (should (equal "done" (plist-get observation :output)))
+                (should (eq 'completed (plist-get (plist-get observation :facts) :state))))
+              (accept-process-output nil 0.05)
+              (should-not mail)
+              (should (= callbacks (if (or yielded (eq reason 'owner-stopped)) 1 0))))
+          (when key (mevedel-transport-cancel-pending key))
+          (mevedel-execution-teardown-session session)
+          (delete-directory root t))))))
+
+(mevedel-deftest mevedel-execution--finish-managed/no-mailbox
+  (:doc "forced completion without a mailbox clears delivery work but stays pollable")
+  (let* ((root (make-temp-file "mevedel-stopped-no-mailbox-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-execution-mailbox-delivery-function nil)
+         initial id record)
+    (unwind-protect
+        (progn
+          (setq initial (test-mevedel-execution--start-managed
+                         session root '("sh" "-c" "sleep 30"))
+                id (plist-get (plist-get initial :facts) :execution-id)
+                record (mevedel-execution--owned-yielded-record session "main" id))
+          (mevedel-execution-stop-user session id)
+          (test-mevedel-execution--wait
+           (lambda () (mevedel-execution--record-finished-p record)))
+          (should-not (mevedel-execution--record-delivery-pending-p record))
+          (should-not (mevedel-execution--record-delivery-state record))
+          (should-not (mevedel-execution-session-live-p session))
+          (let ((final (test-mevedel-execution--observe session id)))
+            (should (eq 'stopped (plist-get (plist-get final :facts) :termination)))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-execution-start-bash
   (:doc "runs managed commands through confinement and resource capture")
   ,test
@@ -862,13 +941,15 @@
          (mevedel-sandbox-mode 'off)
          (settling nil)
          (finish (symbol-function 'mevedel-execution-process--finish))
-         observation delivered-while-settling)
+         observation delivered-while-settling live-before-delivery)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-execution-process--finish)
                    (lambda (&rest args)
                      (setq settling t)
                      (unwind-protect (apply finish args)
-                       (setq settling nil)))))
+                       (setq settling nil
+                             live-before-delivery
+                             (mevedel-execution-session-live-p session))))))
           (mevedel-execution-start-bash
            (lambda (value)
              (setq observation value
@@ -879,6 +960,8 @@
            :artifact-directory root :yield-time-ms nil)
           (test-mevedel-execution--wait (lambda () observation))
           (should-not delivered-while-settling)
+          (should live-before-delivery)
+          (should-not (mevedel-execution-session-live-p session))
           (should (eq 'completed (plist-get (plist-get observation :facts) :state))))
       (mevedel-execution-teardown-session session)
       (delete-directory root t)))

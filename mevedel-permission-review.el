@@ -70,6 +70,8 @@ CANCEL accepts a reason: `aborted' for teardown, `policy' for mode changes.")
 Shared equal values print in full rather than as object-reference labels.
 Use this representation for provider input and asynchronous freshness checks."
   (let ((print-circle nil)
+        (float-output-format nil)
+        (print-integers-as-characters nil)
         (print-length nil)
         (print-level nil)
         (print-quoted t)

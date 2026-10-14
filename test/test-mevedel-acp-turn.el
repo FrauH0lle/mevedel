@@ -382,6 +382,49 @@ BODY delivers the receipt and a Read call through `connection', `content' and
         (should row)
         (should (< text row))))))
 
+(mevedel-deftest mevedel-acp-turn-start/announcement-timeout
+  (:quiet t :doc "missing announcements are bounded and disconnected calls stay inert")
+  (dolist (disconnect '(nil t))
+    (mevedel-engine-test--with-session
+      (let* ((path (file-name-concat root "source.txt"))
+             (start (symbol-function 'mevedel-mcp-start))
+             (mevedel-acp-turn--announce-wait 0.03)
+             (calls 0) dispatch result
+             (gptel-pre-tool-call-functions
+              (list (lambda (_) (cl-incf calls) nil))))
+        (write-region "evidence" nil path nil 'silent)
+        (cl-letf (((symbol-function 'mevedel-mcp-start)
+                   (lambda (tools callback &rest rest)
+                     (setq dispatch callback)
+                     (apply start tools callback rest))))
+          (mevedel-acp-turn-start
+           request
+           (lambda (mcp _hook)
+             (list :command (executable-find "python3")
+                   :args (list mevedel-test--acp-peer) :cwd root :mcp mcp
+                   :tool-id-field :fixtureToolId :announces-tool-calls t))
+           [((type . "text") (text . "wait"))]
+           (list (mevedel-tool-ensure "Read"))))
+        (mevedel-test--await 5 "Turn did not start"
+          (string-search "waiting" (buffer-string)))
+        (let ((cancel (funcall dispatch "Read" (list :file_path path)
+                               '(:fixtureToolId "unannounced")
+                               (lambda (value) (setq result value)))))
+          (should (= 0 calls))
+          (should-not result)
+          (if disconnect
+              (progn
+                (funcall cancel)
+                (sleep-for 0.1)
+                (should (= 0 calls))
+                (should-not result))
+            (mevedel-test--await 5 "Unannounced call did not time out" result)
+            (should (= 1 calls))
+            (should-not (eq t (plist-get result :isError)))))
+        (mevedel-abort buffer)
+        (mevedel-test--await 5 "Turn did not settle"
+          (not (mevedel-turn-busy-p buffer)))))))
+
 (mevedel-deftest mevedel-acp-turn-start/tool-hooks (:quiet t)
   ,test
   (test)

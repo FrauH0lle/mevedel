@@ -848,7 +848,7 @@
          (session (test-mevedel-execution--session root))
          (owner "explorer--rejected")
          (mevedel-sandbox-mode 'off)
-         events initial final id)
+         events initial final id live-during-delivery)
     ;; The mailbox deliberately rejects delivery here, and settlement
     ;; reports that it found no consumer.
     (mevedel-test--with-captured-diagnostics nil
@@ -859,7 +859,10 @@
                   (push event events)
                   'rerender-timer)))
               (mevedel-execution-mailbox-delivery-function
-               (lambda (_event _context) nil)))
+               (lambda (_event _context)
+                 (setq live-during-delivery
+                       (mevedel-execution-session-live-p session))
+                 nil)))
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root '("sh" "-c" "sleep .05; printf unclaimed")
@@ -879,6 +882,16 @@
             (should record)
             (should-not (mevedel-execution--record-delivery-state record))
             (should (mevedel-execution-owner-live-p session owner)))
+          ;; A rejected result is still owner-claimable, but no delivery work
+          ;; remains.  User controls cannot recover it for a missing owner.
+          (should-not (mevedel-execution-session-live-p session))
+          (should live-during-delivery)
+          (should-not (mevedel-execution-list-user session))
+          (should (= 0 (mevedel-execution-stop-all-user session)))
+          (should-error (mevedel-execution-stop-user session id)
+                        :type 'mevedel-execution-not-found)
+          (should-error (mevedel-execution-observe session "/root" id #'ignore)
+                        :type 'mevedel-execution-not-found)
           (mevedel-execution-observe
            session owner id (lambda (value) (setq final value)))
           (should (equal "unclaimed" (plist-get final :output)))

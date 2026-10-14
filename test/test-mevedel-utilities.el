@@ -527,16 +527,36 @@
 
   :doc "gptel's fold of an inserted tool result neither folds nor runs user TAB hooks"
   (progn
+    (require 'gptel)
     (require 'org)
     (let ((ran nil))
       (let ((org-cycle-tab-first-hook (list (lambda () (setq ran t) nil))))
         (with-temp-buffer
           (mevedel--transcript-org-mode)
-          (insert "#+begin_tool (Read :file_path \"a\")\nresult line\n#+end_tool\n")
-          ;; gptel's own call: point on the closing line, not a command.
+          (let* ((tool (gptel-make-tool :name "Read" :function #'ignore))
+                 (info (list :buffer (current-buffer) :position (point-marker)
+                             :callback #'gptel--insert-response :tools (list tool)
+                             :tool-use '((:id "fold-call" :name "Read"))))
+                 (this-command nil)
+                 (cycles 0)
+                 (cycle (symbol-function 'org-cycle)))
+            ;; Exercise the producer as well as the hook: gptel suppresses
+            ;; fold errors, so a failed fold alone would look like success.
+            (cl-letf (((symbol-function 'org-cycle)
+                       (lambda (&rest args)
+                         (cl-incf cycles)
+                         (apply cycle args))))
+              (gptel--display-tool-results
+               (list (list tool '(:file_path "a") "result line")) info))
+            (should (= 1 cycles))
+            (should (equal '(tool . "fold-call")
+                           (get-text-property
+                            (save-excursion
+                              (goto-char (point-min))
+                              (1- (search-forward "result line")))
+                            'gptel))))
           (goto-char (point-max))
           (forward-line -1)
-          (let ((this-command nil)) (org-cycle))
           (should-not (invisible-p (save-excursion (goto-char (point-min))
                                                    (search-forward "result"))))
           ;; The same block still folds from an interactive TAB.

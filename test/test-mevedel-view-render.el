@@ -4760,6 +4760,53 @@
 (mevedel-deftest mevedel-view-render--refresh-tool-row-now ()
   ,test
   (test)
+  :doc "copied tool rows in the composer never become refresh targets or undo edits"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "#+begin_tool\n(:name \"Read\" :args (:file_path \"a.el\"))\n\nfirst result\n#+end_tool\n"
+     '(tool . "first"))
+    (let ((mevedel-view-tool-group-collapse-threshold 1))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let* ((row (mevedel-view--tool-row-region data-buf "first"))
+               (kill-ring nil)
+               (kill-ring-yank-pointer nil)
+               (interprogram-cut-function nil)
+               (interprogram-paste-function nil))
+          (should row)
+          (kill-new (filter-buffer-substring (car row) (cadr row)))
+          (goto-char (mevedel-view--input-start))
+          (insert "> ")
+          (yank)
+          (insert "\nsecond line")
+          (mevedel-view-test--insert-data
+           data-buf
+           "#+begin_tool\n(:name \"Read\" :args (:file_path \"b.el\"))\n\nsecond result\n#+end_tool\n"
+           '(tool . "second"))
+          (mevedel-view--full-rerender)
+          (let ((draft (mevedel-view--input-text)))
+            ;; The original row now lives inside a collapsed activity group.
+            (should (text-property-any (point-min) mevedel-view--input-marker
+                                       'mevedel-view-type 'tool-group))
+            (should-not (text-property-any (point-min) mevedel-view--input-marker
+                                           'mevedel-view-type 'tool-summary))
+            (should (text-property-any (mevedel-view--input-start) (point-max)
+                                       'mevedel-view-type 'tool-summary))
+            (buffer-enable-undo)
+            (setq buffer-undo-list nil)
+            (goto-char (point-max))
+            (insert "typed")
+            (undo-boundary)
+            (let ((undo buffer-undo-list))
+              (should-not (mevedel-view--refresh-tool-row data-buf "first"))
+              (should (eq undo buffer-undo-list)))
+            (should-not (mevedel-view--tool-row-region data-buf "first"))
+            (should (equal (concat draft "typed") (mevedel-view--input-text)))
+            (mevedel-view--sanitize-undo)
+            (undo-start)
+            (undo-more 1)
+            (should (equal draft (mevedel-view--input-text))))))))
   :doc "progress refresh retains unrelated completed tool renderings"
   (mevedel-view-test--with-buffers
     (let ((stable-position nil)

@@ -106,6 +106,8 @@ rechecks current policy, evidence, resource selection and session ownership.
 Changed evidence defers to the user; a newly applicable hard deny blocks it.
 Provider input and freshness snapshots use the same complete representation,
 independent of callback printer settings and sharing between equal values.
+Integer arguments retain numeric spelling and floating-point arguments retain
+full precision even under customized display formatting.
 Execution rechecks use Bash/Eval policy even for generic hook cards, including
 segment and requested-capability denies when switching to Full Access.
 Changing mode or cancelling the owning request invalidates pending review.

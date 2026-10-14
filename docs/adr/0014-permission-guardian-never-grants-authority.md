@@ -86,6 +86,10 @@ October 2026 offline review probes reproduced false evidence changes under ACP's
 callback printer bindings and after equal strings stopped sharing identity.
 Freshness and provider input now use fixed printer settings without reference
 labels, preserving value changes without rejecting unchanged evidence.
+Follow-up numeric probes found two more ambient printer settings: character
+notation changed unchanged integer arguments, while a lossy float format merged
+distinct values. Serialization now fixes both settings as well, retaining numeric
+spelling and full floating-point precision for provider input and freshness.
 
 An October 2026 view-debugging request asked only to read loaded function
 metadata and view settings. The reviewer deferred twice, rather than timing out

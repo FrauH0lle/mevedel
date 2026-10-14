@@ -4940,9 +4940,17 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
 
-  :doc "lost-only hydration persists current bounds for local and artifact writes"
-  (dolist (callback-p '(nil t))
-    (let* ((root (file-name-as-directory (make-temp-file "hydrate-bounds-" t)))
+  :doc "hydration repairs persist current bounds and no request config"
+  ;; Each variant is (CALLBACK-P . PTC-P).  Hydration runs before chat setup
+  ;; installs mevedel's gptel save-state advice, as on a cold first resume,
+  ;; so a repair must not write gptel's request configuration to the drawer.
+  (dolist (variant '((nil) (t) (nil . ptc) (t . ptc)))
+    (let* ((callback-p (car variant))
+           (ptc-p (cdr variant))
+           (advised (advice-member-p
+                     #'mevedel-session-artifacts--save-gptel-state-around
+                     'gptel--save-state))
+           (root (file-name-as-directory (make-temp-file "hydrate-bounds-" t)))
            (workspace (test-mevedel-session-persistence--make-file-workspace root))
            (session (mevedel-session-create "main" workspace root))
            (buffer (generate-new-buffer " *hydrate-bounds*"))
@@ -4971,10 +4979,20 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
               (mevedel-session-artifacts-stabilize-gptel-bounds)
               (write-region nil nil path nil 'silent)
               (setq buffer-file-name path))
+            (advice-remove 'gptel--save-state
+                           #'mevedel-session-artifacts--save-gptel-state-around)
             (cl-letf (((symbol-function 'mevedel-session-artifacts-check-target-incarnation)
                        #'ignore)
                       ((symbol-function 'mevedel-ptc-checkpoint-reconcile)
-                       (lambda (_session) '(0 . 0)))
+                       (lambda (_session)
+                         (if (not ptc-p) '(0 . 0)
+                           ;; A recovered ToolCall result shifts later spans.
+                           (goto-char (point-min))
+                           (search-forward "Prompt\n")
+                           (insert (propertize
+                                    "#+begin_tool\n(:name \"ToolCall\" :args (:expression \"nil\"))\n\nnil\n#+end_tool\n"
+                                    'gptel '(tool . "hydrate-ptc")))
+                           '(1 . 0))))
                       ((symbol-function 'mevedel--chat-buffer-init-common) #'ignore)
                       ((symbol-function 'mevedel-agent-persistence-restore-tree)
                        (lambda (&rest _) 0))
@@ -4989,15 +5007,22 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
             (with-temp-buffer
               (if callback-p (insert (plist-get artifact :content))
                 (insert-file-contents path))
+              (let ((case-fold-search t) properties)
+                (goto-char (point-min))
+                (while (re-search-forward "^[ \t]*:\\(GPTEL_[^:]+\\):" nil t)
+                  (push (upcase (match-string 1)) properties))
+                (should (equal '("GPTEL_BOUNDS") properties)))
               (org-mode)
               (mevedel-transcript-restore-properties)
               (should (eq 'lost (plist-get
                                 (mevedel-tool-render-data-for-tool
                                  (current-buffer) "hydrate-bash") :state)))
-              (dolist (range (alist-get 'tool
-                                       (read (org-entry-get (point-min) "GPTEL_BOUNDS"))))
-                (goto-char (car range))
-                (should (looking-at-p "(:name ")))
+              (let ((ranges (alist-get 'tool
+                                       (read (org-entry-get (point-min) "GPTEL_BOUNDS")))))
+                (should (= (if ptc-p 3 2) (length ranges)))
+                (dolist (range ranges)
+                  (goto-char (car range))
+                  (should (looking-at-p "(:name "))))
               (should (= 1 (length (mevedel-transcript-audit-records (buffer-string)))))
               (let ((gptel--known-backends nil)
                     (gptel-model 'gpt-4o))
@@ -5007,6 +5032,8 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
         (when (buffer-live-p buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer))
+        (when advised
+          (mevedel-session-artifacts-install-gptel-save-state-advice))
         (delete-directory root t)
         (mevedel-workspace-clear-registry)))))
 

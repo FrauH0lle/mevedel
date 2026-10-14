@@ -84,13 +84,21 @@
     (let ((print-circle t) (print-length 2) (print-level 1)
           (print-quoted nil) (print-escape-newlines nil)
           (print-escape-control-characters nil)
-          (print-escape-nonascii t) (print-escape-multibyte t))
+          (print-escape-nonascii t) (print-escape-multibyte t)
+          (print-integers-as-characters t))
       (should (equal snapshot (mevedel-permission-review--serialize facts))))
     (should (equal facts (read snapshot)))
     (setcar (plist-get facts :operation) (copy-sequence text))
     (should (equal snapshot (mevedel-permission-review--serialize facts)))
     (aset text 0 ?X)
-    (should-not (equal snapshot (mevedel-permission-review--serialize facts)))))
+    (should-not (equal snapshot (mevedel-permission-review--serialize facts))))
+  :doc "numeric evidence stays complete despite lossy ambient float formatting"
+  (let* ((float-output-format "%.1f")
+         (first (mevedel-permission-review--serialize '(:argument 1.01)))
+         (second (mevedel-permission-review--serialize '(:argument 1.04))))
+    (should-not (equal first second))
+    (should (equal '(:argument 1.01) (read first)))
+    (should (equal '(:argument 1.04) (read second)))))
 
 (mevedel-deftest mevedel-permission-review--parse ()
   ,test

@@ -1643,7 +1643,9 @@ with no successor becomes `lost`. Reconciliation can change transcript length;
 both fork staging and restored-buffer hydration reserialize `GPTEL_BOUNDS`
 before saving or publishing repaired text, even when no ToolCall checkpoint
 inserted anything. This keeps later tool and hidden-audit spans aligned after
-reload, including staging buffers without gptel save hooks.
+reload, including staging buffers without gptel save hooks. These repair saves
+rewrite only `GPTEL_BOUNDS`, not gptel's full save state: hydration precedes the
+chat setup that keeps gptel's request configuration out of the drawer.
 
 After acquiring a PID lock, resume reconciles the sidecar segment counter with
 the files on disk and finalizes the predecessor when recovering a newer segment.

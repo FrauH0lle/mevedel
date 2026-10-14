@@ -128,6 +128,22 @@
                   (mevedel-artifacts-list--details
                    (mevedel-cockpit-surface-selected) nil)))))))
 
+  :doc "multiline titles stay in one cockpit row without changing stored titles"
+  (mevedel-artifacts-list-test--with-store
+    (let ((title "Project\nplan\tphase\rone"))
+      (mevedel-artifact-store-create-meta
+       workspace "board" "state.json" 'whiteboard title)
+      (with-current-buffer (mevedel-artifacts-list-open
+                            (mevedel-artifacts-list-test--context session view data))
+        (ert-info ((buffer-substring-no-properties (point-min) (point-max)))
+          (should (= 1 (count-lines (point-min) (point-max)))))
+        (should (equal "Project plan phase one"
+                       (aref (cadr (assoc "board" tabulated-list-entries)) 0)))
+        (mevedel-cockpit-goto-id "board")
+        (let ((item (mevedel-cockpit-surface-selected)))
+          (should (equal "board" (plist-get item :id)))
+          (should (equal title (plist-get item :title)))))))
+
   :doc "opens from a plain project buffer without a session"
   (mevedel-artifacts-list-test--with-store
     (mevedel-artifacts-list-test--artifact session store "mockup" "index.html" "x")

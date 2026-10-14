@@ -779,6 +779,53 @@ a disabled transport cleans immediately instead of dropping work"
                                  :key (lambda (restriction) (plist-get restriction :path))
                                  :test #'equal))))
       (delete-directory parent t)))
+  :doc "final validation rejects a symlink installed after the candidate proof"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-recheck-" t)))
+         (protected (file-name-concat root "secret"))
+         (moved (file-name-concat root "moved"))
+         (mevedel-protected-paths `((,(concat protected "/**") . inaccessible)))
+         (pointer-targets (symbol-function 'mevedel-sandbox--git-pointer-targets)))
+    (unwind-protect
+        (progn
+          (make-directory protected)
+          ;; Model a concurrent filesystem change at an intervening I/O seam.
+          ;; Real paths exercise both canonicalization and the final proof.
+          (cl-letf (((symbol-function 'mevedel-sandbox--git-pointer-targets)
+                     (lambda (path)
+                       (prog1 (funcall pointer-targets path)
+                         (when (equal path protected)
+                           (rename-file protected moved)
+                           (make-symbolic-link moved protected))))))
+            (should-error
+             (mevedel-sandbox--protected-restrictions root (list root))
+             :type 'mevedel-sandbox-policy-error)))
+      (delete-directory root t)))
+  :doc "state creation does not reuse an ancestor proof from an earlier candidate"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-create-check-" t)))
+         (outside (make-temp-file "mevedel-sandbox-create-outside-" t))
+         (branch (file-name-concat root "branch"))
+         (seen (file-name-concat branch "seen"))
+         (state (file-name-concat branch ".state"))
+         (candidates (list (list :path seen :mode 'read-only :directory-p t)
+                           (list :path state :mode 'read-only :directory-p t
+                                 :create-parents t)))
+         (pointer-targets (symbol-function 'mevedel-sandbox--git-pointer-targets)))
+    (unwind-protect
+        (progn
+          (make-directory seen t)
+          (cl-letf (((symbol-function 'mevedel-sandbox--git-pointer-targets)
+                     (lambda (path)
+                       (prog1 (funcall pointer-targets path)
+                         (when (equal path seen)
+                           (rename-file branch (file-name-concat root "moved"))
+                           (make-symbolic-link outside branch))))))
+            (should-error
+             (mevedel-sandbox--protected-restrictions root (list root) nil
+                                                      (list candidates))
+             :type 'mevedel-sandbox-policy-error))
+          (should-not (file-exists-p (file-name-concat outside ".state"))))
+      (delete-directory root t)
+      (delete-directory outside t)))
   :doc "missing state roots mount only the protected leaf and retain permanent parents"
   (let* ((root (make-temp-file "mevedel-sandbox-state-roots-" t))
          (state (file-name-concat root ".mevedel/artifacts/.state"))
@@ -814,6 +861,38 @@ a disabled transport cleans immediately instead of dropping work"
           (let ((preparation (mevedel-sandbox--protected-restrictions root (list root))))
             (should (file-directory-p state))
             (should-not (plist-get preparation :cleanup-paths))))
+      (delete-directory root t)))
+  :doc "fresh validation passes still share prefix proofs across candidates"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-proof-count-" t)))
+         (paths (mapcar (lambda (index)
+                          (file-name-concat root "runs" (number-to-string index) ".git"))
+                        (number-sequence 1 32)))
+         (candidates (mapcar (lambda (path)
+                               (list :path path :mode 'read-only :directory-p t))
+                             paths))
+         (check (symbol-function 'mevedel-sandbox--writable-symlink-component))
+         (symlink-p (symbol-function 'file-symlink-p))
+         (checking nil)
+         (probes (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (dolist (path paths) (make-directory path t))
+          (cl-letf (((symbol-function 'mevedel-sandbox--writable-symlink-component)
+                     (lambda (&rest args)
+                       (unwind-protect
+                           (progn (setq checking t) (apply check args))
+                         (setq checking nil))))
+                    ((symbol-function 'file-symlink-p)
+                     (lambda (path)
+                       (when checking
+                         (puthash path (1+ (gethash path probes 0)) probes))
+                       (funcall symlink-p path))))
+            (mevedel-sandbox--protected-restrictions root (list root) nil
+                                                    (list candidates)))
+          ;; Two common prefixes and two unique prefixes per candidate,
+          ;; each tested once in each of the two independent proof passes.
+          (should (= 66 (hash-table-count probes)))
+          (maphash (lambda (_path count) (should (= count 2))) probes))
       (delete-directory root t)))
   :doc "paths under a canonical root keep their spelling without resolving it again"
   (let* ((root (file-truename (make-temp-file "mevedel-sandbox-canonical-" t)))

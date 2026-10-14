@@ -25,7 +25,6 @@
 (defvar remote-file-name-inhibit-cache)
 
 ;; `gptel'
-(declare-function gptel--save-state "ext:gptel" nil)
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (defvar gptel--preset)
 (defvar gptel-display-buffer-action)
@@ -1528,10 +1527,10 @@ ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
                (+ ptc-insertions
                   (mevedel-tool-render-data-reconcile-lost-executions buf))))
           (when (> transcript-repairs 0)
-            (when (> ptc-insertions 0)
-              (gptel--save-state))
-            ;; Lost-execution repairs can also change transcript length without
-            ;; a PTC insertion.  Both publication paths need current offsets.
+            ;; PTC insertions and lost-execution repairs both change transcript
+            ;; length; both publication paths need current offsets.  Rewrite
+            ;; only bounds: chat setup has not installed the advice that keeps
+            ;; `gptel--save-state' from writing request config to the drawer.
             (mevedel-session-artifacts-stabilize-gptel-bounds)
             (if artifact-callback
                 (funcall

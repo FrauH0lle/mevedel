@@ -294,6 +294,7 @@ row redraws a second.")
   artifact-address
   callback
   child
+  delivery-pending-p
   delivery-state
   error-data
   execution-id
@@ -695,6 +696,10 @@ The process spool remains owned by RECORD until registry cleanup."
 
 Delete its spool unless PRESERVE-SPOOL is non-nil."
   (let ((removed-live-p (mevedel-execution--managed-live-p record)))
+    ;; A naturally ended child may still have its delivery queued.  Never
+    ;; let that continuation read a released spool or revive a retired owner.
+    (mevedel-transport-cancel-pending
+     (list 'execution-delivery (mevedel-execution--record-token record)))
     (mevedel-execution--release-runtime record)
     (unless preserve-spool
       (when-let* ((child (mevedel-execution--record-child record)))
@@ -1460,7 +1465,8 @@ returning: their callers expect the outcome settled."
                child-result (mevedel-execution--record-workdir record))))
       (when preparation
         (mevedel-sandbox-cleanup preparation))
-      (setf (mevedel-execution--record-finished-p record) t)
+      (setf (mevedel-execution--record-finished-p record) t
+            (mevedel-execution--record-delivery-pending-p record) t)
       (mevedel-execution--settle-mutation record)
       (let* ((facts (mevedel-execution--record-sandbox-facts record))
              (refused-p (plist-get facts :refused))
@@ -1496,16 +1502,18 @@ returning: their callers expect the outcome settled."
       (mevedel-execution--release-scheduler record)
       (let ((deliver
              (lambda ()
-               (if (mevedel-execution--record-yielded-p record)
-                   (if (mevedel-execution--record-observer record)
-                       (mevedel-execution--deliver-observer record)
-                     (when mevedel-execution-mailbox-delivery-function
-                       (mevedel-execution--deliver-independent record)))
-                 (let ((callback (mevedel-execution--record-callback record)))
-                   (unless (eq (mevedel-execution--record-delivery-state record)
-                               'discarded)
-                     (funcall callback
-                              (mevedel-execution--observation record t)))))))
+               (unwind-protect
+                   (if (mevedel-execution--record-yielded-p record)
+                       (if (mevedel-execution--record-observer record)
+                           (mevedel-execution--deliver-observer record)
+                         (when mevedel-execution-mailbox-delivery-function
+                           (mevedel-execution--deliver-independent record)))
+                     (let ((callback (mevedel-execution--record-callback record)))
+                       (unless (eq (mevedel-execution--record-delivery-state record)
+                                   'discarded)
+                         (funcall callback
+                                  (mevedel-execution--observation record t)))))
+                 (setf (mevedel-execution--record-delivery-pending-p record) nil))))
             (workdir (mevedel-execution--record-workdir record)))
         ;; Delivery starts the tool's continuation -- result handling and,
         ;; for gptel, the next request -- and for background commands
@@ -1519,7 +1527,10 @@ returning: their callers expect the outcome settled."
                      (mevedel-transport-run-when-idle
                       (list 'execution-delivery
                             (mevedel-execution--record-token record))
-                      workdir deliver nil (and defer 0)))
+                      workdir deliver
+                      (lambda ()
+                        (setf (mevedel-execution--record-delivery-pending-p record) nil))
+                      (and defer 0)))
           (funcall deliver))))))
 
 (defun mevedel-execution--publish-yielded-artifact (record)
@@ -2156,13 +2167,16 @@ after WAIT-MS while the process remains live."
       live-p)))
 
 (defun mevedel-execution-session-live-p (session)
-  "Return non-nil when SESSION owns any unsettled child process."
+  "Return non-nil while SESSION owns a process or pending result delivery.
+An unclaimed result after a failed delivery remains owner-pollable, but is
+not active work and cannot keep session transfer or history changes blocked."
   (when-let* ((state (and session
                           (mevedel-session-execution-state session))))
     (let (live-p)
       (dolist (record (mevedel-execution--state-record-list state))
-         (unless (mevedel-execution--record-finished-p record)
-           (setq live-p t)))
+        (when (or (not (mevedel-execution--record-finished-p record))
+                  (mevedel-execution--record-delivery-pending-p record))
+          (setq live-p t)))
       live-p)))
 
 (defun mevedel-execution--finalize-discarded-record
@@ -2186,6 +2200,19 @@ MANAGED-LIVE-P records whether RECORD was user-visible before teardown."
 (defun mevedel-execution--discard-record (record reason)
   "Kill and forget RECORD because of lifecycle REASON."
   (let ((managed-live-p (mevedel-execution--managed-live-p record)))
+    (when (and (mevedel-execution--record-execution-id record)
+               (mevedel-execution--record-finished-p record)
+               (not (mevedel-execution--record-delivery-state record)))
+      ;; Settlement and delivery are separate event-loop turns.  Teardown
+      ;; can arrive between them: a foreground owner-stop still owes its
+      ;; caller the outcome, but session teardown and yielded work discard it.
+      (mevedel-transport-cancel-pending
+       (list 'execution-delivery (mevedel-execution--record-token record)))
+      (if (and (eq reason 'owner-stopped)
+               (not (mevedel-execution--record-yielded-p record)))
+          (funcall (mevedel-execution--record-callback record)
+                   (mevedel-execution--observation record t))
+        (setf (mevedel-execution--record-delivery-state record) 'discarded)))
     (unless (mevedel-execution--record-finished-p record)
       (setf (mevedel-execution--record-termination record) reason)
       (when managed-live-p
