@@ -100,6 +100,7 @@
 ;; `mevedel-compact'
 (declare-function mevedel--compact-handle-agent-wait
                   "mevedel-compact" (fsm))
+(autoload 'mevedel--compact-handle-agent-wait "mevedel-compact")
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-agent-budget-notice "mevedel-goal" (fsm))

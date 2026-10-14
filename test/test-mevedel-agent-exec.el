@@ -80,7 +80,33 @@ fire-count and payload."
                         (cdr wait-entry)))
     (should (member #'mevedel--compact-handle-agent-wait
                     (cdr wait-entry)))
-    (should-not (member #'gptel--handle-wait (cdr wait-entry)))))
+    (should-not (member #'gptel--handle-wait (cdr wait-entry))))
+
+  :doc "Agent-tool cold path binds every handler before compaction loads"
+  (let ((root (file-name-directory (locate-library "mevedel-agent-exec")))
+        (emacs (expand-file-name invocation-name invocation-directory)))
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              emacs nil t nil "--batch" "-Q" "-L" root
+              "--eval"
+              (prin1-to-string
+               '(progn
+                  ;; The Agent tool lives in `mevedel-tools'; agent runtime
+                  ;; then loads execution lazily.
+                  (require 'mevedel)
+                  (require 'mevedel-tools)
+                  (require 'mevedel-agent-exec)
+                  (when (featurep 'mevedel-compact)
+                    (error "Agent execution must not load compaction eagerly"))
+                  (dolist (entry mevedel-agent-exec--handlers)
+                    (dolist (handler (cdr entry))
+                      (unless (fboundp handler)
+                        (error "Unbound %s handler: %S"
+                               (car entry) handler)))))))))
+        (ert-info ((buffer-string))
+          (should (equal 0 status))
+          (should (string-empty-p (string-trim (buffer-string)))))))))
 
 
 (mevedel-deftest mevedel-agent-exec--make-callback ()
