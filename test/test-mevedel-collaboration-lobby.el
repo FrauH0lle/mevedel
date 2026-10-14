@@ -13,12 +13,21 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-session-test-support"))
 (require 'cl-lib)
 (require 'mevedel-collaboration-lobby)
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+;; Restoring a session loads the chat view.  Its first load initializes
+;; D-Bus (through `battery'), which reads events and so cannot happen
+;; inside a lobby frame; load it here so lock cases test locks only.
+(require 'mevedel-view-stream)
 (require 'mevedel-workspace)
 
 (defun mevedel-collaboration-lobby-test--workspace (root)
@@ -65,6 +74,156 @@ running lobby touches no real state."
   (let ((session (mevedel-session--create :name id)))
     (setf (mevedel-session-session-id session) id)
     session))
+
+(defun mevedel-collaboration-lobby-test--dead-pid ()
+  "Return the PID of a child process that has exited and been reaped."
+  (let ((child (make-process :name "lobby-dead-holder" :command '("true")
+                             :noquery t :sentinel #'ignore)))
+    (while (process-live-p child) (accept-process-output child 0.01))
+    (process-id child)))
+
+(defun mevedel-collaboration-lobby-test--file-bytes (path)
+  "Return PATH's exact contents, or nil when it does not exist."
+  (when (file-exists-p path)
+    (with-temp-buffer
+      (insert-file-contents-literally path)
+      (buffer-string))))
+
+(defun mevedel-collaboration-lobby-test--session-live-p (id)
+  "Return the live buffer of the session with ID, or nil."
+  (seq-find (lambda (buffer)
+              (when-let* ((session (buffer-local-value 'mevedel--session
+                                                       buffer)))
+                (equal id (mevedel-session-session-id session))))
+            (buffer-list)))
+
+(defun mevedel-collaboration-lobby-test--open-locked (lock &optional interfere guest)
+  "Open a saved file session whose `.lock' records LOCK from a lobby frame.
+The session is really saved, listed, restored and locked; only the room
+transport and the room itself are stand-ins.  INTERFERE, when non-nil,
+receives the lock path just before any attempt to replace an existing
+lock, standing in for another client that changed it first.
+GUEST is the requesting guest's plist, a writable guest by default.
+Return a plist: :reply is the guest's open reply, :before and :after
+are the lock file's bytes around the open, :holder is the lock read
+back, :prompts lists the prompts asked in Emacs, and :live says whether
+the session ended up open."
+  (cl-destructuring-bind (workspace . root)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* (prompts lock-path before sent
+           (mevedel-collaboration-lobby--lobbies
+            (make-hash-table :test #'equal))
+           (session (mevedel-session-create "main" workspace))
+           (id (mevedel-session-session-id session))
+           (data (generate-new-buffer " *lobby-locked*"))
+           (lobby (mevedel-collaboration-lobby-test--lobby workspace))
+           (change-lock (symbol-function
+                         'mevedel-session-persistence--change-lock))
+           (ask (lambda (prompt &rest _)
+                  (push prompt prompts)
+                  (signal 'inhibited-interaction (list prompt)))))
+      (unwind-protect
+          (progn
+            (with-current-buffer data
+              (org-mode)
+              (insert "Saved transcript\n")
+              (mevedel-session-artifacts-save session data))
+            (test-mevedel-session-persistence--release-and-kill data session)
+            (setq lock-path (mevedel-session-persistence--lock-path
+                             (mevedel-session-save-path session)))
+            (should-not (file-exists-p lock-path))
+            (with-temp-file lock-path
+              (let ((print-length nil) (print-level nil))
+                (prin1 lock (current-buffer))))
+            (setq before (mevedel-collaboration-lobby-test--file-bytes
+                          lock-path))
+            (puthash 2 (or guest '(:name "Writer" :writable t))
+                     (plist-get lobby :guests))
+            (puthash root lobby mevedel-collaboration-lobby--lobbies)
+            (cl-letf (((symbol-function
+                        'mevedel-collaboration--transport-send)
+                       (lambda (_transport peer frame)
+                         (push (cons peer frame) sent) t))
+                      ((symbol-function 'mevedel-collaboration--start)
+                       (lambda (_session _buffer)
+                         '(:link-view "v" :link-full "f" :link-owner "o")))
+                      ((symbol-function 'y-or-n-p) ask)
+                      ((symbol-function 'yes-or-no-p) ask)
+                      ((symbol-function 'read-char-choice) ask)
+                      ((symbol-function 'read-directory-name) ask)
+                      ((symbol-function
+                        'mevedel-session-persistence--change-lock)
+                       (lambda (path expected buffer-name)
+                         (when (and interfere expected)
+                           (funcall interfere path))
+                         (funcall change-lock path expected buffer-name))))
+              (mevedel-collaboration-lobby--on-frame
+               root 2 (list :t "open-session" :reqId 7 :id id)))
+            (should (= 1 (length sent)))
+            (list :reply (cdar sent)
+                  :before before
+                  :after (mevedel-collaboration-lobby-test--file-bytes
+                          lock-path)
+                  :holder (mevedel-session-persistence--read-lock lock-path)
+                  :prompts prompts
+                  :live (and (mevedel-collaboration-lobby-test--session-live-p
+                              id)
+                             t)))
+        (let ((restored (mevedel-collaboration-lobby-test--session-live-p id)))
+          (test-mevedel-session-persistence--release-and-kill
+           restored (and restored (buffer-local-value 'mevedel--session
+                                                      restored))))
+        (when (buffer-live-p data) (kill-buffer data))
+        (delete-directory root t)
+        (mevedel-workspace-clear-registry)))))
+
+(defun mevedel-collaboration-lobby-test--stamp (seconds)
+  "Return a lock invocation stamp SECONDS from now."
+  (format-time-string "%FT%H-%M-%S" (time-add (current-time) seconds)))
+
+(defun mevedel-collaboration-lobby-test--holder ()
+  "Start a live child process to stand in for a lock holder."
+  (make-process :name "lobby-live-holder" :command '("sleep" "60")
+                :noquery t :sentinel #'ignore))
+
+(defun mevedel-collaboration-lobby-test--identity (process)
+  "Return PROCESS's current OS identity, skipping where none is available."
+  (or (mevedel-session-persistence--pid-identity (process-id process))
+      (ert-skip "Process identity is unavailable on this host")))
+
+(defun mevedel-collaboration-lobby-test--other-identity (identity &optional boot)
+  "Return a valid IDENTITY for a different process incarnation.
+With BOOT, keep the start ticks and replace the boot id instead, as
+after a reboot; otherwise keep the boot and move the start earlier."
+  (should (string-match "\\`\\(.+\\):\\([0-9]+\\)\\'" identity))
+  (let ((boot-id (match-string 1 identity))
+        (ticks (string-to-number (match-string 2 identity))))
+    (if boot
+        (format "%s:%d" boot ticks)
+      (format "%s:%d" boot-id (max 0 (- ticks 1000))))))
+
+(defun mevedel-collaboration-lobby-test--should-open (outcome)
+  "Assert OUTCOME opened the session under a fresh lock, asking nothing."
+  (should (equal '(:t "open-session" :reqId 7 :ok t :link "f")
+                 (plist-get outcome :reply)))
+  (should-not (plist-get outcome :prompts))
+  (should (plist-get outcome :live))
+  (let ((holder (plist-get outcome :holder)))
+    (should (equal (emacs-pid) (plist-get holder :pid)))
+    (should (equal (system-name) (plist-get holder :hostname)))
+    (should (equal (mevedel-session-persistence--pid-identity (emacs-pid))
+                   (plist-get holder :process-identity)))))
+
+(defun mevedel-collaboration-lobby-test--should-refuse (outcome &optional message)
+  "Assert OUTCOME refused the guest and left the lock byte for byte.
+MESSAGE, when non-nil, is the refusal the guest must receive."
+  (let ((reply (plist-get outcome :reply)))
+    (should (eq :json-false (plist-get reply :ok)))
+    (should-not (plist-get reply :link))
+    (when message
+      (should (equal message (plist-get reply :message)))))
+  (should-not (plist-get outcome :live))
+  (should (equal (plist-get outcome :before) (plist-get outcome :after))))
 
 (mevedel-deftest mevedel-collaboration-lobby--read-credentials
   (:doc "accepts only complete, well-formed stored credentials")
@@ -242,8 +401,10 @@ running lobby touches no real state."
         (should (string-prefix-p "{\"t\":\"lobby\",\"project\":\"proj\",\"workspace\":\"key-w\",\"sessions\":[{"
                                  (json-encode frame)))))))
 
-(mevedel-deftest mevedel-collaboration-lobby--session-buffer
-  (:doc "uses a live session, restores a listed one, and refuses others")
+(mevedel-deftest mevedel-collaboration-lobby--session-buffer ()
+  ,test
+  (test)
+  :doc "uses a live session, restores a listed one, and refuses others"
   (let ((live (generate-new-buffer " *lobby-live*"))
         restored)
     (unwind-protect
@@ -273,7 +434,128 @@ running lobby touches no real state."
               ;; An id is a selection among listed sessions, never a path.
               (should-error (mevedel-collaboration-lobby--session-buffer
                              lobby "../../etc")))))
-      (kill-buffer live))))
+      (kill-buffer live)))
+  :doc "opens a session whose same-host holder died, without asking"
+  (dolist (stamp (list (mevedel-collaboration-lobby-test--stamp -86400)
+                       "unrecorded"))
+    ;; A dead PID proves the holder gone, with or without an identity.
+    (mevedel-collaboration-lobby-test--should-open
+     (mevedel-collaboration-lobby-test--open-locked
+      (list :pid (mevedel-collaboration-lobby-test--dead-pid)
+            :hostname (system-name) :emacs-invocation-time stamp
+            :buffer "*crashed*"))))
+  :doc "opens a session whose recorded PID now names another incarnation"
+  (let ((reuser (mevedel-collaboration-lobby-test--holder)))
+    (unwind-protect
+        (let ((identity (mevedel-collaboration-lobby-test--identity reuser)))
+          ;; The holder started earlier in this boot, or in an earlier boot.
+          ;; Its recorded wall time is current, so only identity decides.
+          (dolist (recorded
+                   (list (mevedel-collaboration-lobby-test--other-identity
+                          identity)
+                         (mevedel-collaboration-lobby-test--other-identity
+                          identity "00000000-0000-4000-8000-000000000000")))
+            (mevedel-collaboration-lobby-test--should-open
+             (mevedel-collaboration-lobby-test--open-locked
+              (list :pid (process-id reuser) :hostname (system-name)
+                    :process-identity recorded
+                    :emacs-invocation-time
+                    (mevedel-collaboration-lobby-test--stamp 0)
+                    :buffer "*crashed*")))))
+      (delete-process reuser)))
+  :doc "refuses, untouched, a live holder whatever wall time it recorded"
+  (let ((holder (mevedel-collaboration-lobby-test--holder)))
+    (unwind-protect
+        (let ((identity (mevedel-collaboration-lobby-test--identity holder)))
+          ;; A day-old stamp is what a holder in a time zone west of this
+          ;; Emacs used to look like; it is diagnostic only.
+          (dolist (stamp (list (mevedel-collaboration-lobby-test--stamp -86400)
+                               (mevedel-collaboration-lobby-test--stamp 60)
+                               "unrecorded"))
+            (mevedel-collaboration-lobby-test--should-refuse
+             (mevedel-collaboration-lobby-test--open-locked
+              (list :pid (process-id holder) :hostname (system-name)
+                    :process-identity identity
+                    :emacs-invocation-time stamp :buffer "*holder*"))
+             "This session needs a decision in Emacs first")))
+      (delete-process holder)))
+  :doc "refuses, untouched, a live PID whose identity proves nothing"
+  (let ((holder (mevedel-collaboration-lobby-test--holder)))
+    (unwind-protect
+        (let ((identity (mevedel-collaboration-lobby-test--identity holder)))
+          (dolist (recorded (list nil "" "garbage" 42 (list identity)
+                                  (concat "not-a-boot-id:"
+                                          (cadr (split-string identity ":")))
+                                  (concat (car (split-string identity ":"))
+                                          ":-5")
+                                  (concat (car (split-string identity ":"))
+                                          ":")
+                                  (upcase identity)
+                                  (concat (car (split-string identity ":"))
+                                          ":0" (cadr (split-string identity ":")))
+                                  (concat identity "x")))
+            (ert-info ((format "recorded identity %S" recorded))
+              (mevedel-collaboration-lobby-test--should-refuse
+               (mevedel-collaboration-lobby-test--open-locked
+                (append (list :pid (process-id holder) :hostname (system-name))
+                        (when recorded (list :process-identity recorded))
+                        (list :emacs-invocation-time
+                              (mevedel-collaboration-lobby-test--stamp -86400)
+                              :buffer "*holder*")))
+               "This session needs a decision in Emacs first"))))
+      (delete-process holder)))
+  :doc "refuses, untouched, another host's lock even with a dead local PID"
+  (mevedel-collaboration-lobby-test--should-refuse
+   (mevedel-collaboration-lobby-test--open-locked
+    (list :pid (mevedel-collaboration-lobby-test--dead-pid)
+          :hostname (concat "not-" (system-name) ".invalid")
+          :emacs-invocation-time
+          (mevedel-collaboration-lobby-test--stamp -86400)
+          :buffer "*elsewhere*"))
+   "This session needs a decision in Emacs first")
+  :doc "refuses a view link, leaving even a dead holder's lock untouched"
+  (mevedel-collaboration-lobby-test--should-refuse
+   (mevedel-collaboration-lobby-test--open-locked
+    (list :pid (mevedel-collaboration-lobby-test--dead-pid)
+          :hostname (system-name)
+          :emacs-invocation-time
+          (mevedel-collaboration-lobby-test--stamp -86400)
+          :buffer "*crashed*")
+    nil '(:name "Viewer"))
+   "A view link cannot open sessions")
+  :doc "refuses, untouched, a same-host lock without a usable PID"
+  (dolist (lock (list (list :hostname (system-name))
+                      (list :pid nil :hostname (system-name))
+                      (list :pid "4242" :hostname (system-name))
+                      (list :pid 0 :hostname (system-name))
+                      (list :pid -1 :hostname (system-name))
+                      (list :pid 1.5 :hostname (system-name))))
+    (mevedel-collaboration-lobby-test--should-refuse
+     (mevedel-collaboration-lobby-test--open-locked
+      (append lock
+              (list :emacs-invocation-time
+                    (mevedel-collaboration-lobby-test--stamp -86400)
+                    :buffer "*malformed*")))))
+  :doc "refuses when another client replaces the stale lock first"
+  (let* ((competitor (list :pid (emacs-pid) :hostname (system-name)
+                           :emacs-invocation-time
+                           mevedel-session-persistence--emacs-invocation-time
+                           :buffer "*competitor*"))
+         (outcome
+          (mevedel-collaboration-lobby-test--open-locked
+           (list :pid (mevedel-collaboration-lobby-test--dead-pid)
+                 :hostname (system-name)
+                 :emacs-invocation-time
+                 (mevedel-collaboration-lobby-test--stamp -86400)
+                 :buffer "*crashed*")
+           (lambda (path)
+             (with-temp-file path
+               (prin1 competitor (current-buffer)))))))
+    (should (eq :json-false (plist-get (plist-get outcome :reply) :ok)))
+    (should-not (plist-get outcome :prompts))
+    (should-not (plist-get outcome :live))
+    ;; The competitor keeps the lock it won.
+    (should (equal competitor (plist-get outcome :holder)))))
 
 (mevedel-deftest mevedel-collaboration-lobby--handle-open
   (:doc "hands writable guests the session room at their own tier")

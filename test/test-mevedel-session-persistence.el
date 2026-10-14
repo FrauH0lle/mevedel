@@ -2091,74 +2091,110 @@
 ;;
 ;;; Phase 6: locking
 
+(defun test-mevedel-session-persistence--identity (ticks &optional boot)
+  "Return a well-formed process identity with start TICKS.
+BOOT replaces the fixed fixture boot id, standing in for another boot."
+  (format "%s:%d" (or boot "0f1e2d3c-4b5a-4968-8776-655443322110") ticks))
+
 (mevedel-deftest mevedel-session-persistence--same-host-lock-active-p ()
   ,test
   (test)
-  :doc "returns nil for dead PIDs"
+  :doc "keeps malformed PIDs active without probing them"
+  (cl-letf (((symbol-function 'mevedel-session-persistence--pid-alive-p)
+             (lambda (&rest _) (ert-fail "Invalid PID was probed")))
+            ((symbol-function 'mevedel-session-persistence--pid-identity)
+             (lambda (&rest _) (ert-fail "Invalid PID identity was read"))))
+    (dolist (pid '(nil 0 -1 1.5 "123"))
+      (should (mevedel-session-persistence--same-host-lock-active-p
+               (list :pid pid
+                     :process-identity
+                     (test-mevedel-session-persistence--identity 1))))))
+  :doc "returns nil for dead PIDs whatever identity they recorded"
   (cl-letf (((symbol-function
               'mevedel-session-persistence--pid-alive-p)
+             (lambda (&rest _) nil))
+            ((symbol-function 'mevedel-session-persistence--pid-identity)
              (lambda (&rest _) nil)))
-    (should-not
-     (mevedel-session-persistence--same-host-lock-active-p
-      (list :pid 12345
-            :emacs-invocation-time "2026-04-23T14-30-15"))))
-  :doc "keeps live PIDs active when process start predates lock time"
-  (let* ((lock-time (current-time))
-         (lock-str  (format-time-string "%FT%H-%M-%S" lock-time)))
-    (cl-letf (((symbol-function
-                'mevedel-session-persistence--pid-alive-p)
-               (lambda (&rest _) t))
-              ((symbol-function
-                'mevedel-session-persistence--pid-start-time)
-               (lambda (&rest _) (time-subtract lock-time 10))))
-      (should
-       (mevedel-session-persistence--same-host-lock-active-p
-        (list :pid 12345 :emacs-invocation-time lock-str)))))
-  :doc "keeps live PIDs active within timestamp tolerance"
-  (let* ((lock-time (current-time))
-         (lock-str  (format-time-string "%FT%H-%M-%S" lock-time)))
-    (cl-letf (((symbol-function
-                'mevedel-session-persistence--pid-alive-p)
-               (lambda (&rest _) t))
-              ((symbol-function
-                'mevedel-session-persistence--pid-start-time)
-               (lambda (&rest _) (time-add lock-time 1))))
-      (should
-       (mevedel-session-persistence--same-host-lock-active-p
-        (list :pid 12345 :emacs-invocation-time lock-str)))))
-  :doc "treats live PIDs as stale when process start proves PID reuse"
-  (let* ((lock-time (time-subtract (current-time) (* 30 24 60 60)))
-         (lock-str  (format-time-string "%FT%H-%M-%S" lock-time)))
-    (cl-letf (((symbol-function
-                'mevedel-session-persistence--pid-alive-p)
-               (lambda (&rest _) t))
-              ((symbol-function
-                'mevedel-session-persistence--pid-start-time)
-               (lambda (&rest _) (current-time))))
+    (dolist (recorded (list nil "garbage"
+                            (test-mevedel-session-persistence--identity 7)))
       (should-not
        (mevedel-session-persistence--same-host-lock-active-p
-        (list :pid 12345 :emacs-invocation-time lock-str)))))
-  :doc "keeps live PIDs active when process start is unavailable"
+        (list :pid 12345 :process-identity recorded
+              :emacs-invocation-time "2026-04-23T14-30-15")))))
+  :doc "keeps a live PID active while it is the recorded incarnation"
+  ;; Wall time is diagnostic only: a stamp a month old, as a holder in a
+  ;; time zone west of this Emacs used to look, proves nothing.
   (cl-letf (((symbol-function
               'mevedel-session-persistence--pid-alive-p)
              (lambda (&rest _) t))
-            ((symbol-function
-              'mevedel-session-persistence--pid-start-time)
-             (lambda (&rest _) nil)))
+            ((symbol-function 'mevedel-session-persistence--pid-identity)
+             (lambda (_) (test-mevedel-session-persistence--identity 7))))
+    (dolist (stamp (list (format-time-string
+                          "%FT%H-%M-%S"
+                          (time-subtract (current-time) (* 30 24 60 60)))
+                         "old" nil))
+      (should
+       (mevedel-session-persistence--same-host-lock-active-p
+        (list :pid 12345
+              :process-identity (test-mevedel-session-persistence--identity 7)
+              :emacs-invocation-time stamp)))))
+  :doc "treats a live PID as stale when its identity proves another incarnation"
+  (cl-letf (((symbol-function
+              'mevedel-session-persistence--pid-alive-p)
+             (lambda (&rest _) t))
+            ((symbol-function 'mevedel-session-persistence--pid-identity)
+             (lambda (_) (test-mevedel-session-persistence--identity 7))))
+    ;; An earlier start in this boot, or the same ticks in another boot.
+    (dolist (recorded (list (test-mevedel-session-persistence--identity 6)
+                            (test-mevedel-session-persistence--identity
+                             7 "00000000-0000-4000-8000-000000000000")))
+      (should-not
+       (mevedel-session-persistence--same-host-lock-active-p
+        (list :pid 12345 :process-identity recorded
+              :emacs-invocation-time "2026-04-23T14-30-15")))))
+  :doc "keeps a live PID active when its current identity is unavailable"
+  (cl-letf (((symbol-function
+              'mevedel-session-persistence--pid-alive-p)
+             (lambda (&rest _) t))
+            ((symbol-function 'mevedel-session-persistence--pid-identity)
+             (lambda (_) nil)))
     (should
      (mevedel-session-persistence--same-host-lock-active-p
       (list :pid 12345
-            :emacs-invocation-time "2026-04-23T14-30-15"))))
-  :doc "keeps live PIDs active when lock time is malformed"
+            :process-identity (test-mevedel-session-persistence--identity 6)))))
+  :doc "keeps a live PID active when the recorded identity proves nothing"
   (cl-letf (((symbol-function
               'mevedel-session-persistence--pid-alive-p)
              (lambda (&rest _) t))
-            ((symbol-function
-              'mevedel-session-persistence--pid-start-time)
-             (lambda (&rest _) (current-time))))
-    (should
-     (mevedel-session-persistence--same-host-lock-active-p
-      (list :pid 12345 :emacs-invocation-time "old")))))
+            ((symbol-function 'mevedel-session-persistence--pid-identity)
+             (lambda (_) (test-mevedel-session-persistence--identity 7))))
+    (let ((valid (test-mevedel-session-persistence--identity 6)))
+      ;; A lock from before identities, with a reuse-looking wall time,
+      ;; stays active: the time-based proof is gone.
+      (should
+       (mevedel-session-persistence--same-host-lock-active-p
+        (list :pid 12345
+              :emacs-invocation-time
+              (format-time-string
+               "%FT%H-%M-%S"
+               (time-subtract (current-time) (* 30 24 60 60))))))
+      (dolist (recorded (list nil "" "garbage" 42 (list valid)
+                              (intern valid)
+                              "not-a-boot-id:6"
+                              "0f1e2d3c-4b5a-4968-8776-655443322110:"
+                              "0f1e2d3c-4b5a-4968-8776-655443322110:-6"
+                              "0f1e2d3c-4b5a-4968-8776-655443322110:6x"
+                              ;; String equality would call these a
+                              ;; different process, so they are not
+                              ;; identities at all.
+                              (upcase valid)
+                              "0f1e2d3c-4b5a-4968-8776-655443322110:06"
+                              (concat " " valid)
+                              (concat valid "\n")))
+        (ert-info ((format "recorded %S" recorded))
+          (should
+           (mevedel-session-persistence--same-host-lock-active-p
+            (list :pid 12345 :process-identity recorded))))))))
 
 
 (mevedel-deftest mevedel-session-persistence--active-lock-p ()
@@ -2181,21 +2217,20 @@
   (let ((tempdir (file-name-as-directory
                   (make-temp-file "mevedel-lock-test-" t))))
     (unwind-protect
-        (let* ((lock-path (mevedel-session-persistence--lock-path tempdir))
-               (lock-time (time-subtract (current-time) (* 30 24 60 60))))
+        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
           (with-temp-file lock-path
             (prin1 (list :pid 12345
                          :hostname (system-name)
-                         :emacs-invocation-time
-                         (format-time-string "%FT%H-%M-%S" lock-time)
+                         :process-identity
+                         (test-mevedel-session-persistence--identity 6)
                          :buffer "*reused*")
                    (current-buffer)))
           (cl-letf (((symbol-function
                       'mevedel-session-persistence--pid-alive-p)
                      (lambda (&rest _) t))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-start-time)
-                     (lambda (&rest _) (current-time))))
+                      'mevedel-session-persistence--pid-identity)
+                     (lambda (_) (test-mevedel-session-persistence--identity 7))))
             (should-not
              (mevedel-session-persistence--active-lock-p tempdir))))
       (delete-directory tempdir t))))
@@ -2217,7 +2252,11 @@
             (should (file-exists-p lock-path))
             (let ((plist (mevedel-session-persistence--read-lock lock-path)))
               (should (= (emacs-pid) (plist-get plist :pid)))
-              (should (equal "*test-buf*" (plist-get plist :buffer))))))
+              (should (equal "*test-buf*" (plist-get plist :buffer)))
+              ;; The holder records its own incarnation for reuse proofs.
+              (should (equal (mevedel-session-persistence--pid-identity
+                              (emacs-pid))
+                             (plist-get plist :process-identity))))))
       (delete-directory tempdir t)))
   :doc "unreadable raced lock signals instead of recursing"
   (let ((tempdir (file-name-as-directory
@@ -2290,13 +2329,12 @@
   (let ((tempdir (file-name-as-directory
                   (make-temp-file "mevedel-lock-test-" t))))
     (unwind-protect
-        (let* ((lock-path (mevedel-session-persistence--lock-path tempdir))
-               (lock-time (time-subtract (current-time) (* 30 24 60 60))))
+        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
           (with-temp-file lock-path
             (prin1 (list :pid 12345
                          :hostname (system-name)
-                         :emacs-invocation-time
-                         (format-time-string "%FT%H-%M-%S" lock-time)
+                         :process-identity
+                         (test-mevedel-session-persistence--identity 6)
                          :buffer "*old-buf*")
                    (current-buffer)))
           (cl-letf (((symbol-function 'read-char-choice)
@@ -2308,8 +2346,11 @@
                       'mevedel-session-persistence--pid-alive-p)
                      (lambda (&rest _) t))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-start-time)
-                     (lambda (&rest _) (current-time))))
+                      'mevedel-session-persistence--pid-identity)
+                     (lambda (pid)
+                       (if (eql pid 12345)
+                           (test-mevedel-session-persistence--identity 7)
+                         (test-mevedel-session-persistence--identity 8)))))
             (should (mevedel-session-persistence-lock-acquire
                      tempdir "*new-buf*"
                      (test-mevedel-session-persistence--pid-lock-context))))
@@ -2364,7 +2405,58 @@
           ;; Original lock remains untouched.
           (let ((plist (mevedel-session-persistence--read-lock lock-path)))
             (should (= 999999 (plist-get plist :pid)))))
-      (delete-directory tempdir t))))
+      (delete-directory tempdir t)))
+  :doc "explicit stale reclaim skips confirmation but preserves competing holders"
+  (dolist (reused '(nil t))
+    (dolist (race '(nil t))
+      (ert-info ((format "reused %s, race %s" reused race))
+        (let* ((directory (make-temp-file "mevedel-lock-reclaim-" t))
+               (path (mevedel-session-persistence--lock-path directory))
+               (mevedel-session-persistence--reclaim-stale-locks t)
+               (inhibit-interaction t)
+               (old (list :pid 12345 :hostname (system-name)
+                          :process-identity
+                          (test-mevedel-session-persistence--identity 6)
+                          :buffer "old"))
+               (competitor (list :pid (emacs-pid) :hostname (system-name)
+                                 :buffer "competitor"))
+               (change (symbol-function 'mevedel-session-persistence--change-lock))
+               checked)
+          (unwind-protect
+              (progn
+                (write-region (prin1-to-string old) nil path nil 'silent)
+                (cl-letf (((symbol-function 'y-or-n-p)
+                           (lambda (&rest _) (ert-fail "Unexpected stale prompt")))
+                          ((symbol-function 'read-char-choice)
+                           (lambda (&rest _) (ert-fail "Unexpected conflict prompt")))
+                          ((symbol-function 'mevedel-session-persistence--pid-alive-p)
+                           (lambda (_) reused))
+                          ((symbol-function 'mevedel-session-persistence--pid-identity)
+                           (lambda (_) (test-mevedel-session-persistence--identity 7)))
+                          ((symbol-function 'mevedel-session-persistence--change-lock)
+                           (lambda (lock expected buffer)
+                             (setq checked t)
+                             (should (equal old expected))
+                             (when race
+                               (write-region (prin1-to-string competitor)
+                                             nil path nil 'silent))
+                             (funcall change lock expected buffer))))
+                  (if race
+                      (should-error
+                       (mevedel-session-persistence-lock-acquire
+                        directory "new"
+                        (test-mevedel-session-persistence--pid-lock-context)))
+                    (should
+                     (mevedel-session-persistence-lock-acquire
+                      directory "new"
+                      (test-mevedel-session-persistence--pid-lock-context)))))
+                (should checked)
+                (let ((holder (mevedel-session-persistence--read-lock path)))
+                  (if race
+                      (should (equal competitor holder))
+                    (should (= (emacs-pid) (plist-get holder :pid)))
+                    (should (equal "new" (plist-get holder :buffer))))))
+            (delete-directory directory t)))))))
 
 
 (mevedel-deftest mevedel-session-persistence--change-lock ()
@@ -2471,24 +2563,48 @@
                               workspace))
                (stale-dir    (file-name-as-directory
                               (file-name-concat sessions-dir "reused-sess")))
-               (stale-lock   (file-name-concat stale-dir ".lock"))
-               (lock-time    (time-subtract (current-time) (* 30 24 60 60))))
+               (stale-lock   (file-name-concat stale-dir ".lock")))
           (make-directory stale-dir t)
           (with-temp-file stale-lock
             (prin1 (list :pid 12345
                          :hostname (system-name)
-                         :emacs-invocation-time
-                         (format-time-string "%FT%H-%M-%S" lock-time)
+                         :process-identity
+                         (test-mevedel-session-persistence--identity 6)
                          :buffer "*reused*")
                    (current-buffer)))
           (cl-letf (((symbol-function
                       'mevedel-session-persistence--pid-alive-p)
                      (lambda (&rest _) t))
                     ((symbol-function
-                      'mevedel-session-persistence--pid-start-time)
-                     (lambda (&rest _) (current-time))))
+                      'mevedel-session-persistence--pid-identity)
+                     (lambda (_) (test-mevedel-session-persistence--identity 7))))
             (mevedel-session-persistence--sweep-stale-locks workspace))
           (should-not (file-exists-p stale-lock)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "leaves a live holder's lock alone whatever wall time it recorded"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((sessions-dir (mevedel-session-artifacts-sessions-dir
+                              workspace))
+               (live-dir     (file-name-as-directory
+                              (file-name-concat sessions-dir "west-sess")))
+               (live-lock    (file-name-concat live-dir ".lock")))
+          (make-directory live-dir t)
+          (with-temp-file live-lock
+            (prin1 (list :pid (emacs-pid)
+                         :hostname (system-name)
+                         :process-identity
+                         (mevedel-session-persistence--pid-identity (emacs-pid))
+                         :emacs-invocation-time
+                         (format-time-string
+                          "%FT%H-%M-%S"
+                          (time-subtract (current-time) (* 30 24 60 60)))
+                         :buffer "*west*")
+                   (current-buffer)))
+          (mevedel-session-persistence--sweep-stale-locks workspace)
+          (should (file-exists-p live-lock)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
   :doc "leaves same-host live-PID locks alone"
@@ -4505,15 +4621,17 @@
                   (with-temp-file lock-path
                     (prin1 (list :pid 12345
                                  :hostname (system-name)
-                                 :emacs-invocation-time forged
+                                 :process-identity
+                                 (test-mevedel-session-persistence--identity 6)
                                  :buffer "*old-buf*")
                            (current-buffer))))
                 (cl-letf (((symbol-function
                             'mevedel-session-persistence--pid-alive-p)
                            (lambda (&rest _) t))
                           ((symbol-function
-                            'mevedel-session-persistence--pid-start-time)
-                           (lambda (&rest _) (current-time))))
+                            'mevedel-session-persistence--pid-identity)
+                           (lambda (_)
+                             (test-mevedel-session-persistence--identity 7))))
                   (let ((deleted
                          (mevedel-session-persistence-cleanup-expired
                           workspace t)))
@@ -5756,7 +5874,144 @@
          (pid (process-id child)))
     (while (process-live-p child) (accept-process-output child 0.01))
     (should (integerp pid))
-    (should-not (mevedel-session-persistence--pid-alive-p pid))))
+    (should-not (mevedel-session-persistence--pid-alive-p pid)))
+  :doc "requires successful local enumeration to prove a PID dead"
+  (let ((default-directory "/ssh:unreachable:/project/"))
+    (dolist (observation '(error nil (123 456) (456)))
+      (cl-letf (((symbol-function 'list-system-processes)
+                 (lambda ()
+                   (should-not (file-remote-p default-directory))
+                   (if (eq observation 'error)
+                       (error "Process enumeration unavailable")
+                     observation))))
+        (should (eq (not (null (mevedel-session-persistence--pid-alive-p 123)))
+                    (not (equal observation '(456))))))))
+  :doc "invalid PIDs never count as proven dead"
+  (cl-letf (((symbol-function 'list-system-processes) (lambda () '(123))))
+    (dolist (pid '(nil 0 -1 1.5 "123"))
+      (should (mevedel-session-persistence--pid-alive-p pid)))))
+
+(defun test-mevedel-session-persistence--with-proc (files function)
+  "Call FUNCTION while reads of the `/proc' names in FILES use real fixtures.
+FILES maps an absolute file name to the contents of a temporary fixture
+file, or to `missing' to leave that fixture absent, as for a process that
+has exited.  Only those names are redirected; the real reader produces
+every byte and error.  Other files are read normally."
+  (let ((directory (make-temp-file "mevedel-proc-fixture-" t))
+        (insert (symbol-function 'insert-file-contents))
+        (index 0)
+        redirects)
+    (unwind-protect
+        (progn
+          (dolist (entry files)
+            (let ((fixture (file-name-concat directory
+                                             (number-to-string (cl-incf index)))))
+              (unless (eq (cdr entry) 'missing)
+                (write-region (cdr entry) nil fixture nil 'silent))
+              (push (cons (car entry) fixture) redirects)))
+          (cl-letf (((symbol-function 'insert-file-contents)
+                     (lambda (file &rest args)
+                       (apply insert (or (cdr (assoc file redirects)) file)
+                              args))))
+            (funcall function)))
+      (delete-directory directory t))))
+
+(defun test-mevedel-session-persistence--stat (command start)
+  "Return a `/proc/4242/stat' line for COMMAND with starttime START."
+  (concat "4242 (" command ") "
+          (mapconcat #'identity
+                     (append '("S")
+                             (mapcar #'number-to-string
+                                     (number-sequence 4 21))
+                             (list start)
+                             (mapcar #'number-to-string
+                                     (number-sequence 23 52)))
+                     " ")
+          "\n"))
+
+(mevedel-deftest mevedel-session-persistence--pid-identity ()
+  ,test
+  (test)
+  :doc "identifies live processes stably and distinctly, and not dead ones"
+  (let ((self (mevedel-session-persistence--pid-identity (emacs-pid)))
+        (child (make-process :name "session-identity-holder"
+                             :command '("sleep" "60") :noquery t
+                             :sentinel #'ignore)))
+    (unwind-protect
+        (progn
+          (unless self (ert-skip "Process identity is unavailable on this host"))
+          (should (string-match-p
+                   mevedel-session-persistence--process-identity-regexp self))
+          (should (equal self (mevedel-session-persistence--pid-identity
+                               (emacs-pid))))
+          (let ((other (mevedel-session-persistence--pid-identity
+                        (process-id child))))
+            (should (stringp other))
+            (should-not (equal self other))
+            ;; Both run in this boot.
+            (should (equal (car (split-string self ":"))
+                           (car (split-string other ":")))))
+          (let ((pid (process-id child)))
+            (delete-process child)
+            (let ((deadline (+ (float-time) 5)))
+              (while (and (memq pid (list-system-processes))
+                          (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should-not (memq pid (list-system-processes)))
+            (should-not (mevedel-session-persistence--pid-identity pid))))
+      (when (process-live-p child) (delete-process child))))
+  :doc "reads only local /proc, even from a remote workspace"
+  (let ((local (mevedel-session-persistence--pid-identity (emacs-pid))))
+    (unless local (ert-skip "Process identity is unavailable on this host"))
+    (let ((default-directory "/ssh:unreachable:/project/"))
+      (should (equal local (mevedel-session-persistence--pid-identity
+                            (emacs-pid))))))
+  :doc "never reads anything for invalid PIDs"
+  (cl-letf (((symbol-function 'insert-file-contents)
+             (lambda (&rest _) (ert-fail "Invalid PID read /proc"))))
+    (dolist (pid '(nil 0 -1 1.5 "123"))
+      (should-not (mevedel-session-persistence--pid-identity pid))))
+  :doc "takes the start ticks after the last parenthesis of the command"
+  (let ((boot "0f1e2d3c-4b5a-4968-8776-655443322110"))
+    (dolist (command '("emacs" "a b" "x) (y" ") 1 2 3 ("))
+      (ert-info ((format "command %S" command))
+        (test-mevedel-session-persistence--with-proc
+         `(("/proc/sys/kernel/random/boot_id" . ,(concat boot "\n"))
+           ("/proc/4242/stat"
+            . ,(test-mevedel-session-persistence--stat command "777")))
+         (lambda ()
+           (should (equal (concat boot ":777")
+                          (mevedel-session-persistence--pid-identity 4242))))))))
+  :doc "fails closed on unavailable or malformed /proc evidence"
+  (let ((boot "0f1e2d3c-4b5a-4968-8776-655443322110")
+        (stat (test-mevedel-session-persistence--stat "emacs" "777")))
+      (dolist (files
+               `((("/proc/sys/kernel/random/boot_id" . missing)
+                  ("/proc/4242/stat" . ,stat))
+                 (("/proc/sys/kernel/random/boot_id" . ,(concat boot "\n"))
+                  ("/proc/4242/stat" . missing))
+                 (("/proc/sys/kernel/random/boot_id" . "not-a-boot-id\n")
+                  ("/proc/4242/stat" . ,stat))
+                 (("/proc/sys/kernel/random/boot_id" . "")
+                  ("/proc/4242/stat" . ,stat))
+                 (("/proc/sys/kernel/random/boot_id" . ,(upcase boot))
+                  ("/proc/4242/stat" . ,stat))
+                 (("/proc/sys/kernel/random/boot_id" . ,boot)
+                  ("/proc/4242/stat" . "4242 (emacs) S 1 2 3\n"))
+                 (("/proc/sys/kernel/random/boot_id" . ,boot)
+                  ("/proc/4242/stat" . "garbage"))
+                 (("/proc/sys/kernel/random/boot_id" . ,boot)
+                  ("/proc/4242/stat"
+                   . ,(test-mevedel-session-persistence--stat "emacs" "-7")))
+                 (("/proc/sys/kernel/random/boot_id" . ,boot)
+                  ("/proc/4242/stat"
+                   . ,(test-mevedel-session-persistence--stat "emacs" "7x")))))
+        (ert-info ((format "proc %S" files))
+          (test-mevedel-session-persistence--with-proc
+           files
+           (lambda ()
+             (should-not
+              (mevedel-session-persistence--pid-identity 4242))))))))
 
 (mevedel-deftest mevedel-session-persistence-call-with-abandoned-lock ()
   ,test

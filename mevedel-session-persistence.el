@@ -882,8 +882,13 @@ already registered the session-owned data buffer."
 
 (defvar mevedel-session-persistence--emacs-invocation-time
   (format-time-string "%FT%H-%M-%S")
-  "Wall-clock time when this Emacs process started.
-Stamped into `.lock' files as a forensic / tiebreaker field.")
+  "Wall-clock time when the lock module loaded.
+Stamped into `.lock' files for diagnostics, never as liveness authority.")
+
+(defvar mevedel-session-persistence--reclaim-stale-locks nil
+  "When non-nil, reclaim provably stale same-host PID locks without prompting.
+Bound by lobby session opens; live, foreign and uncertain holders still
+require an interactive decision.  Portable leases are unaffected.")
 
 (defun mevedel-session-persistence--lock-path (session-dir)
   "Return the absolute path to SESSION-DIR's `.lock' file."
@@ -915,6 +920,7 @@ when another client changed the record or owns its mutation lock."
                         (let ((print-length nil) (print-level nil))
                           (prin1 (list :pid (emacs-pid) :hostname (system-name)
                                        :emacs-invocation-time mevedel-session-persistence--emacs-invocation-time
+                                       :process-identity (mevedel-session-persistence--pid-identity (emacs-pid))
                                        :buffer buffer-name) (current-buffer))))
                       (rename-file temporary lock-path t))
                   (delete-file lock-path))
@@ -940,46 +946,73 @@ Signal on a competing replacement so a caller cannot assume ownership."
       (error nil))))
 
 (defun mevedel-session-persistence--pid-alive-p (pid)
-  "Return non-nil if PID is a live process on the current host."
-  (and pid (numberp pid)
-       (condition-case _
-           (or (zerop (signal-process pid 0))
-               (process-attributes pid))
-         (error nil))))
+  "Return non-nil unless PID is provably absent from the current host.
+An unavailable process list is not evidence that a holder is dead."
+  ;; Process inspection follows `default-directory' through file handlers.
+  ;; These PIDs belong to the Emacs host, not a remote workspace.
+  (let ((default-directory "/"))
+    (condition-case nil
+        (let ((pids (list-system-processes)))
+          (or (not (and (integerp pid) (> pid 0)))
+              (null pids)
+              (memq pid pids)))
+      (error t))))
 
-(defconst mevedel-session-persistence--lock-start-time-tolerance 2
-  "Seconds of tolerance when comparing a lock timestamp to process start.
+(defconst mevedel-session-persistence--process-identity-regexp
+  (concat "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-"
+          "[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}:\\(?:0\\|[1-9][0-9]*\\)\\'")
+  "Shape of a Linux boot ID and process start tick count.")
 
-The lock timestamp is formatted to whole seconds, while process start
-attributes can carry sub-second precision and can be rounded differently
-by the host OS.")
-
-(defun mevedel-session-persistence--pid-start-time (pid)
-  "Return PID's process start time, or nil if unavailable."
-  (when (and pid (numberp pid))
-    (condition-case _
-        (cdr (assq 'start (process-attributes pid)))
-      (error nil))))
+(defun mevedel-session-persistence--pid-identity (pid)
+  "Return PID's clock-independent process identity on this host, or nil.
+Linux supplies a boot UUID and the process start ticks since boot.  Unlike
+wall-clock start times, these survive time-zone and clock changes.  Hosts
+without this evidence cannot prove PID reuse and keep live locks active."
+  (when (and (integerp pid) (> pid 0))
+    (let ((default-directory "/"))
+      (condition-case nil
+          (let* ((boot (with-temp-buffer
+                         (insert-file-contents "/proc/sys/kernel/random/boot_id")
+                         (string-trim (buffer-string))))
+                 (case-fold-search nil)
+                 (start
+                  (with-temp-buffer
+                    (insert-file-contents
+                     (file-name-concat "/proc" (number-to-string pid) "stat"))
+                    ;; The command (field 2) can contain spaces and closing
+                    ;; parentheses.  Only the last closing delimiter is safe.
+                    (goto-char (point-max))
+                    (when (search-backward ") " nil t)
+                      (forward-char 2)
+                      ;; The remaining fields start at 3; starttime is 22.
+                      (nth 19 (split-string
+                               (buffer-substring-no-properties
+                                (point) (point-max)))))))
+                 (identity (and start (concat boot ":" start))))
+            (and identity
+                 (string-match-p mevedel-session-persistence--process-identity-regexp
+                                 identity)
+                 identity))
+        (error nil)))))
 
 (defun mevedel-session-persistence--same-host-lock-active-p (lock-info)
   "Return non-nil if same-host LOCK-INFO describes an active holder.
 
-Dead PIDs are stale.  Live PIDs are considered active unless the live
-process start time proves PID reuse: a process that started clearly
-after the lock holder's recorded Emacs invocation cannot be the process
-that wrote the lock.  When the recorded invocation time or live process
-start time is unavailable, keep the lock active rather than risking data
-loss."
-  (when (mevedel-session-persistence--pid-alive-p
-         (plist-get lock-info :pid))
-    (let ((holder-start (mevedel-session-persistence-parse-iso-time
-                         (plist-get lock-info :emacs-invocation-time)))
-          (pid-start    (mevedel-session-persistence--pid-start-time
-                         (plist-get lock-info :pid))))
-      (or (not holder-start)
-          (not pid-start)
-          (<= (- (float-time pid-start) (float-time holder-start))
-              mevedel-session-persistence--lock-start-time-tolerance)))))
+Dead PIDs are stale.  A live PID is stale only when its clock-independent
+process identity differs from the lock holder's recorded identity.  Missing
+or malformed evidence keeps the lock active rather than risking data loss."
+  (let ((pid (plist-get lock-info :pid)))
+    (or (not (and (integerp pid) (> pid 0)))
+        (when (mevedel-session-persistence--pid-alive-p pid)
+          (let ((recorded (plist-get lock-info :process-identity))
+                (current (mevedel-session-persistence--pid-identity pid))
+                (case-fold-search nil))
+            (or (not (and (stringp recorded)
+                          (string-match-p
+                           mevedel-session-persistence--process-identity-regexp
+                           recorded)))
+                (not current)
+                (equal recorded current)))))))
 
 (defun mevedel-session-persistence-lock-acquire
     (session-dir buffer-name &optional session)
@@ -999,7 +1032,8 @@ aborts any of the 3-way conflict prompts.
 Portable project sessions acquire their renewable lease and never inspect the
 PID-lock table.  File-workspace sessions use the following lock table:
 - No existing lock: write a new lock, return t.
-- Lock from same host, dead PID: prompt to break (`y-or-n-p').
+- Provably stale same-host lock (dead or reused PID): prompt to break,
+  unless `mevedel-session-persistence--reclaim-stale-locks' is non-nil.
 - Lock from same host, live PID: 3-way prompt -- break / read-only / abort.
 - Lock from different host: 3-way prompt -- break / read-only / abort."
   (if (eq (mevedel-session-codec-authority-mode-for-path
@@ -1030,10 +1064,11 @@ PID-lock table.  File-workspace sessions use the following lock table:
                       lock-path))))
        ((and same-host
              (not (mevedel-session-persistence--same-host-lock-active-p existing)))
-        (if (y-or-n-p
-             (format "Stale mevedel lock (PID %d, buffer %s).  Break and proceed? "
-                     (plist-get existing :pid)
-                     (plist-get existing :buffer)))
+        (if (or mevedel-session-persistence--reclaim-stale-locks
+                (y-or-n-p
+                 (format "Stale mevedel lock (PID %d, buffer %s).  Break and proceed? "
+                         (plist-get existing :pid)
+                         (plist-get existing :buffer))))
             (progn
               (mevedel-session-persistence--write-lock lock-path buffer-name existing)
               t)
@@ -1104,7 +1139,7 @@ and unreadable locks remain untouched.  No prompt or conversation is created."
 
 A lock is stale only when its hostname matches this host and the holder
 is not active: either its PID is dead, or the PID is live but the live
-process start time proves PID reuse.  Cross-host locks are left alone.
+process identity proves PID reuse.  Cross-host locks are left alone.
 Best-effort; any I/O failure is swallowed.
 
 Called opportunistically from the `mevedel' session chooser."
@@ -2788,7 +2823,7 @@ nil when nothing was queued."
 (defun mevedel-session-persistence--active-lock-p (save-path)
   "Return non-nil if SAVE-PATH's `.lock' counts as active.
 A same-host lock is stale when its PID is dead or when the live process
-start time proves PID reuse.  Cross-host locks are always treated as
+identity proves PID reuse.  Cross-host locks are always treated as
 active because we cannot probe the remote process."
   (when-let* ((lock-info (mevedel-session-persistence--read-lock
                           (mevedel-session-persistence--lock-path save-path))))
@@ -2833,7 +2868,7 @@ The `mevedel-session-keep-recent-count' most-recently-updated sessions are
 never deleted regardless of age.  Pending journal capture pins prevent
 deletion.  PID-lock sessions with an active lock are skipped; cross-host
 locks are active, and same-host locks are stale when their PID is dead or
-when the live process start time proves PID reuse.  Portable sessions open
+when the live process identity proves PID reuse.  Portable sessions open
 in this Emacs are skipped; the others are deleted only through
 `mevedel-session-durability-delete-abandoned', which also requires the last
 lease renewal to be older than the cap.  Throttled to at most one sweep

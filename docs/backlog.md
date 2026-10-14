@@ -16,9 +16,10 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Consider making mevedel's data buffers hidden
 - Add optional cached container/VM/WSL detection to environment context for
   local and SSH targets; TRAMP execution targets are already reported.
-- Lobby: let a lobby open a session whose same-host lock is provably stale
-  (dead PID or PID reuse) without the Emacs prompt; today a crash leaves such
-  sessions refusable only from the keyboard. See `docs/collaboration.md#the-lobby`.
+- Fix cold lobby restores: loading `mevedel-view-stream` can initialize
+  battery/D-Bus under `inhibit-interaction`, repeatedly refusing even an unlocked session.
+  Keep optional power initialization out of browser restore; add a fresh-process
+  lobby-open regression.
 - Collaboration publishes while a reply streams still scan the whole
   transcript's segments (`mevedel-transcript-segments`, about two thirds of a
   retained publish: 8 of 12.5 ms at 1,001 records on the desktop). Resume the

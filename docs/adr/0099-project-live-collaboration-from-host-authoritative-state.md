@@ -44,6 +44,13 @@ excluded from model context. Browser permissions are one-shot, not a way to
 install reusable rules. Save, Rewind, Fork, lease transfer, publication, and
 execution-target changes remain host operations.
 
+The workspace lobby lets writable guests open listed sessions through the
+host's ordinary restore path. It may reclaim a provably stale same-host PID
+lock without confirmation, but only while the observed holder remains
+unchanged. Live, foreign or uncertain holders and portable lease takeovers
+retain their existing decision requirements; guest frames never wait for an
+Emacs prompt.
+
 Tool display comes from the host's bounded semantic presentation tree and
 selected direct-tool identity. Display metadata is allowlisted rather than
 exposing raw internal render data. Delivered Skill dependencies are historical
@@ -100,6 +107,17 @@ inherit the viewer origin that holds decrypted content and credentials.
 
 ## Decision history
 
+- **Lobby crash recovery, 2026-10-14:** lobby opens previously refused even a
+  provably stale same-host PID lock because lock acquisition asked Emacs to
+  confirm. A crashed host therefore stranded browser users until someone
+  returned to the keyboard. A lobby-scoped opt-in now skips only stale-lock
+  confirmation, retaining checked replacement and all other prompt refusals.
+  PID inspection also keeps invalid or unobservable holders active rather than
+  mistaking failed inspection for proof of death. Verification reproduced a live
+  UTC holder being reclaimed by a Europe/Zurich checker: the previous reuse
+  heuristic compared a zone-less invocation timestamp with a wall-clock process
+  start. Reuse now requires a different clock-independent process identity
+  (Linux boot UUID plus start ticks); missing evidence keeps live locks active.
 - **Nested event bursts, 2026-10-13:** a 200-child start/approval/settlement
   burst rebuilt 602 trees and visited 100,902 tree nodes. Reusing the existing
   publication timer avoids repeating whole-tree projection per child event,

@@ -428,11 +428,20 @@ out. The listing is sent on join and on request; the browser asks again on
 Refresh and whenever the lobby tab returns to the foreground.
 
 Guests act while nobody may be at the keyboard, so lobby frames run with
-`inhibit-interaction`. A step that would prompt in Emacs refuses the request
-instead of waiting: a session whose lock is held by another live Emacs, or was
-left stale by a crash, must be opened in Emacs first. A clean exit releases
-session locks. Rooms follow the same rule; see
+`inhibit-interaction`. Opening a file-workspace session automatically reclaims
+a same-host PID lock when the host proves its PID is dead or its process
+identity proves PID reuse. Replacement checks that the observed holder has not
+changed; a competing replacement refuses the open. Live, foreign-host,
+malformed or unprovable locks still need a decision in Emacs, as do portable
+lease takeovers requiring confirmation. Other steps that would prompt refuse
+the request instead of waiting. A clean exit releases session locks. Rooms
+follow the same no-prompt rule; see
 [questions nobody can answer](#questions-nobody-can-answer).
+
+PID-reuse proof uses Linux's boot ID and process start ticks, not a wall-clock
+timestamp. A live PID with missing or unavailable identity evidence remains
+protected, including locks written without that evidence. See
+[session locking](sessions.md#locking).
 
 In the browser, a lobby link renders the session list in place of the
 conversation and composer. Open replaces the page with the session's room;

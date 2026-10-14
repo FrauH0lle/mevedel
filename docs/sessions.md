@@ -2134,9 +2134,19 @@ repository's common exclude file. The generated entries are:
 File-workspace `.lock` files prevent concurrent edits. Same-host active lock →
 break / read-only / abort prompt; same-host stale lock → prompt to
 break; cross-host → break / read-only / abort prompt. Same-host locks
-are stale when their PID is dead or when the live process start time
-proves PID reuse. If the process start time or lock timestamp cannot be
-verified, the lock stays active.
+are stale when their PID is dead or their recorded process identity differs
+from the live process's identity. On Linux that identity is the kernel boot
+UUID plus `/proc/PID/stat`'s start tick count; time zones, daylight saving and
+wall-clock adjustments cannot turn the same process into a different holder.
+The lock's invocation timestamp is diagnostic only. Missing or malformed
+identity evidence, including on hosts without these `/proc` records, keeps a
+live PID active. Locks written without identity evidence can still be reclaimed
+when their PID is dead, but cannot establish PID reuse. Malformed PIDs and
+failed or unavailable process enumeration are not evidence of a dead holder. Process
+checks run on the Emacs host even when the current directory is remote.
+[Lobby opens](collaboration.md#the-lobby) reclaim provably stale same-host
+locks without confirmation, using the same checked replacement; ordinary
+Emacs acquisition retains the prompt. This does not change portable leases.
 
 Portable project sessions never use client PIDs as liveness authority.  Their `.lease/`
 directory contains portable generation records with an opaque client id,

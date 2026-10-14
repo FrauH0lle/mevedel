@@ -119,6 +119,7 @@
                                workspace))
 (declare-function mevedel-session-persistence-without-dedicated
                   "mevedel-session-persistence" (workspace entries))
+(defvar mevedel-session-persistence--reclaim-stale-locks)
 (autoload 'mevedel-session-persistence-delete "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-without-dedicated
   "mevedel-session-persistence")
@@ -387,8 +388,9 @@ Signal an error when ID names no session of LOBBY's workspace."
                          workspace)))
         (if-let* ((entry (mevedel-collaboration-lobby--saved-entry
                           workspace id)))
-            (mevedel-session-persistence-restore
-             (plist-get entry :save-path) nil nil workspace)
+            (let ((mevedel-session-persistence--reclaim-stale-locks t))
+              (mevedel-session-persistence-restore
+               (plist-get entry :save-path) nil nil workspace))
           (error "No such session")))))
 
 (defun mevedel-collaboration-lobby--open-reply (lobby peer request-id &rest keys)
