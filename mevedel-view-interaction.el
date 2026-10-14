@@ -106,6 +106,9 @@
                   (event &rest data))
 (declare-function mevedel-view--debug-state "mevedel-view-render"
                   (&optional data-buf start end))
+(declare-function mevedel-view-render-mutate
+                  "mevedel-view-render" (key function &optional replacement cleanup))
+(defvar mevedel-view-render--owner)
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--start-spinner-timer "mevedel-view-stream" (&optional resumed))
@@ -641,7 +644,18 @@ snapshot taken at registration."
           (set-window-point window position))))))
 
 (defun mevedel-view--interaction-render ()
-  "Render interaction-zone fragments and descriptor callback overlays."
+  "Render interaction-zone fragments and descriptor callback overlays.
+Coalesce materialization until an active projection writer finishes;
+descriptor registration and callback ownership remain immediate."
+  (unless mevedel-view--interaction-render-suppressed
+    (if (and (derived-mode-p 'mevedel-view-mode)
+             (bound-and-true-p mevedel-view-render--owner))
+        (mevedel-view-render-mutate
+         'interaction #'mevedel-view--interaction-render-now)
+      (mevedel-view--interaction-render-now))))
+
+(defun mevedel-view--interaction-render-now ()
+  "Materialize interactions without reentering a projection writer."
   (unless mevedel-view--interaction-render-suppressed
     (let* ((label (mevedel-view--interaction-count-label))
            (pairs (mevedel-view--interaction-descriptor-pairs))

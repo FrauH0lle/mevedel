@@ -1274,10 +1274,14 @@ can no longer be trusted."
              (setq delta (+ delta (- end beg))
                    bound (- bound (- end beg)))))
           ((and `(,(and (pred stringp) text) . ,(and (pred integerp) pos)))
-           (if (>= (abs pos) bound)
+           (if (and (>= (abs pos) bound)
+                    ;; Reversing the new prompt's insertion puts the old
+                    ;; prompt deletion exactly at the temporary boundary.
+                    ;; It is still chrome, not a deletion from the draft.
+                    (not (and (= (abs pos) bound)
+                              (get-text-property 0 'mevedel-view-prompt text))))
                (push (cons text (if (< pos 0) (- pos delta) (+ pos delta))) result)
-             ;; A render deletion; the prompt keeps it strictly before
-             ;; the composer.  Older positions sat after its text.
+             ;; A render deletion.  Older positions sat after its text.
              (setq delta (- delta (length text))
                    bound (+ bound (length text)))))
           (`(nil ,prop ,value ,(and (pred integerp) beg) . ,(and (pred integerp) end))

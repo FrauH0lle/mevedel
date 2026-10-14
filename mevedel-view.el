@@ -269,12 +269,15 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view-render-invalidate-live-tail
                   "mevedel-view-render" ())
+(declare-function mevedel-view-render-mutate
+                  "mevedel-view-render" (key function &optional replacement cleanup))
 (declare-function mevedel-view-render-resume-batch "mevedel-view-render" ())
 (declare-function mevedel-view-render-toggle-user-input
                   "mevedel-view-render" ())
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
 (declare-function mevedel-view--user-turn-text
                   "mevedel-view-render" (segments data-buf))
+(defvar mevedel-view-render--owner)
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-historical-segment-p
@@ -1979,7 +1982,17 @@ Foreground commands already show as the pending call they belong to."
           #'mevedel-view--execution-state-changed)
 
 (defun mevedel-view--render-status (&optional data-buf)
-  "Render task, execution, and aggregate agent status for DATA-BUF."
+  "Render task, execution, and aggregate agent status for DATA-BUF.
+Coalesce materialization until an active projection writer finishes;
+idle status redraws remain immediate."
+  (if (and (derived-mode-p 'mevedel-view-mode)
+           (bound-and-true-p mevedel-view-render--owner))
+      (mevedel-view-render-mutate
+       'status (lambda () (mevedel-view--render-status-now data-buf)))
+    (mevedel-view--render-status-now data-buf)))
+
+(defun mevedel-view--render-status-now (&optional data-buf)
+  "Materialize DATA-BUF's status without reentering a projection writer."
   (unless mevedel-view--agent-transcript-p
     (let* ((model (mevedel-view--status-model data-buf))
            (fragments (mevedel-view--status-fragments model))

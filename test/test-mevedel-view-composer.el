@@ -897,6 +897,48 @@
                        (buffer-substring-no-properties
                         (point-min) (mevedel-view--input-start)))))))
 
+  :doc "prompt refreshes remain outside composer undo history"
+  (dolist (modes '((full-auto) (ask) (full-auto ask edits ask)))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (buffer-enable-undo)
+        (setq buffer-undo-list nil)
+        (goto-char (mevedel-view--input-start))
+        (insert "> quoted\nsecond")
+        (undo-boundary)
+        (dolist (mode modes)
+          (setq-local mevedel-permission-mode mode)
+          (mevedel-view-refresh-input-prompt))
+        (let ((prompt (buffer-substring
+                       mevedel-view--input-marker (mevedel-view--input-start))))
+          (mevedel-view--sanitize-undo)
+          (undo-start)
+          (undo-more 1)
+          (should (equal-including-properties
+                   prompt (buffer-substring
+                           mevedel-view--input-marker (mevedel-view--input-start))))
+          (should (equal "" (mevedel-view--input-text)))
+          (should (= (overlay-start mevedel-view--composer-keymap-overlay)
+                     (mevedel-view--input-start)))))))
+
+  :doc "a real deletion at the draft boundary remains undoable after prompt refresh"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "> quoted\nsecond")
+      (buffer-enable-undo)
+      (setq buffer-undo-list nil)
+      (delete-region (mevedel-view--input-start) (point-max))
+      (undo-boundary)
+      (setq-local mevedel-permission-mode 'full-auto)
+      (mevedel-view-refresh-input-prompt)
+      (mevedel-view--sanitize-undo)
+      (undo-start)
+      (undo-more 1)
+      (should (equal "> quoted\nsecond" (mevedel-view--input-text)))
+      (should (= (overlay-start mevedel-view--composer-keymap-overlay)
+                 (mevedel-view--input-start)))))
+
   :doc "drops render-only history and multiline drafts starting with >"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -1575,6 +1617,32 @@
         (should (equal "  " (get-char-property second-line 'line-prefix)))
         (should (equal "  " (get-char-property second-line 'wrap-prefix)))
         (should (equal "> first\nsecond" (mevedel-view--input-text))))))
+
+  :doc "history redraw and optimistic turns never acquire the composer indent"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "First prompt\n\n" nil)
+    (mevedel-view-test--insert-data data-buf "First reply\n\n" 'response)
+    (with-current-buffer view-buf
+      (dolist (draft '("" "> first\nsecond\n"))
+        (mevedel-view--clear-input)
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (dotimes (_ 3)
+          (mevedel-view--full-rerender)
+          (mevedel-view--insert-user-message "Next prompt")
+          (mevedel-view--render-status)
+          (mevedel-view--interaction-rebuild)
+          (let ((start (mevedel-view--input-start)))
+            (should (= start (overlay-start mevedel-view--composer-keymap-overlay)))
+            (should (= (point-max) (overlay-end mevedel-view--composer-keymap-overlay)))
+            (should (equal draft (buffer-substring-no-properties start (point-max))))
+            (should-not (text-property-not-all
+                         (point-min) mevedel-view--input-marker
+                         'mevedel-view-prompt nil))
+            (let ((position (point-min)))
+              (while (< position start)
+                (should-not (get-char-property position 'line-prefix))
+                (setq position (next-char-property-change position start)))))))))
 
   :doc "the indent stays two columns when the prompt is rebuilt for a mode"
   (mevedel-view-test--with-buffers

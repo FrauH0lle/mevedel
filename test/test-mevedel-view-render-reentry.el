@@ -57,6 +57,214 @@
         (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
         (should (= (point) (+ 4 (mevedel-view--input-start))))))))
 
+(mevedel-deftest mevedel-view-render/chrome-reentry ()
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "chrome-reentry")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (mevedel-view-test--insert-data data-buf "Unique response body\n" 'response)
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min))))
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--status-marker nil))
+        (mevedel-view-test--insert-composer-draft ,draft (min 4 (length ,draft)))
+        (let ((original (symbol-function 'mevedel-view--fontify-response))
+              (prompt (buffer-substring-no-properties
+                       mevedel-view--input-marker (mevedel-view--input-start)))
+              entered)
+          (cl-letf (((symbol-function 'mevedel-view--fontify-response)
+                     (lambda (&rest args)
+                       (prog1 (apply original args)
+                         (unless entered
+                           (setq entered t)
+                           (should mevedel-view-render--owner)
+                           (let ((before (buffer-string)))
+                             (pcase ',zone
+                               ('status
+                                (setf (mevedel-session-recovery-issues session)
+                                      '((:message "Nonempty reentrant status" :blocking t)))
+                                (mevedel-view--render-status data-buf))
+                               ('interaction
+                                (let ((overlay
+                                       (mevedel-view--interaction-register
+                                        '(:id chrome-reentry :kind request
+                                          :body "Nonempty reentrant interaction"))))
+                                  (should (eq overlay
+                                              (gethash 'chrome-reentry
+                                                       mevedel-view--interaction-overlays)))
+                                  (should (mevedel-view-interaction-blocking-p))))
+                               ('progress
+                                (mevedel-view--update-spinner
+                                 "Nonempty reentrant progress" 'request)))
+                             (if (eq ',zone 'progress)
+                                 (let ((region (mevedel-view-zone-region 'progress)))
+                                   (should region)
+                                   (should (< (overlay-start region) (overlay-end region))))
+                               (should (equal-including-properties before (buffer-string)))
+                               (should-not (mevedel-view-zone-region ',zone))
+                               (should (assoc ',zone mevedel-view-render--pending)))))))))
+            (pcase ',render
+              ('full (mevedel-view--full-rerender))
+              ('incremental (mevedel-view-render-live-update data-buf))))
+          (should entered)
+          (should (mevedel-view-zone-region ',zone))
+          (should (= 1 (mevedel-view-test--count-substring
+                        "Unique response body" (buffer-string))))
+          (let ((start (mevedel-view--input-start))
+                (prompt-start (mevedel-view--input-marker-position)))
+            (should (equal ,draft (buffer-substring-no-properties start (point-max))))
+            (should (= (point) (+ start (min 4 (length ,draft)))))
+            (should (equal prompt (buffer-substring-no-properties prompt-start start)))
+            (should (= start (overlay-start mevedel-view--composer-keymap-overlay)))
+            (should (= (point-max) (overlay-end mevedel-view--composer-keymap-overlay)))
+            (let ((position prompt-start))
+              (while (< position start)
+                (should (get-text-property position 'mevedel-view-prompt))
+                (should-not (invisible-p position))
+                (should-not (get-char-property position 'display))
+                (setq position (1+ position))))
+            (let ((position start))
+              (while (< position (point-max))
+                (should-not (get-char-property position 'read-only))
+                (should-not (invisible-p position))
+                (setq position (1+ position))))
+            (let ((position (point-min)))
+              (while (< position start)
+                (should-not (get-char-property position 'line-prefix))
+                (should-not (get-char-property position 'wrap-prefix))
+                (setq position (1+ position))))
+            (dolist (name '(status interaction progress))
+              (when-let* ((region (mevedel-view-zone-region name)))
+                (should (<= mevedel-view--status-marker
+                            (overlay-start region) (overlay-end region) prompt-start))))
+            (save-excursion
+              (goto-char (point-min))
+              (search-forward "Unique response body")
+              (should (<= (point) mevedel-view--status-marker))
+              (should (eq 'response (get-text-property (1- (point)) 'mevedel-view-type)))))))))
+  (render zone draft)
+  :doc "full render keeps an empty composer after a nonempty status redraw"
+  full status ""
+  :doc "full render keeps a multiline composer after a nonempty status redraw"
+  full status "> draft\nsecond line\n"
+  :doc "incremental render keeps an empty composer after a nonempty status redraw"
+  incremental status ""
+  :doc "incremental render keeps a multiline composer after a nonempty status redraw"
+  incremental status "> draft\nsecond line\n"
+  :doc "full render keeps an empty composer after a nonempty interaction redraw"
+  full interaction ""
+  :doc "full render keeps a multiline composer after a nonempty interaction redraw"
+  full interaction "> draft\nsecond line\n"
+  :doc "incremental render keeps an empty composer after a nonempty interaction redraw"
+  incremental interaction ""
+  :doc "incremental render keeps a multiline composer after a nonempty interaction redraw"
+  incremental interaction "> draft\nsecond line\n"
+  :doc "full render keeps an empty composer after a nonempty progress redraw"
+  full progress ""
+  :doc "full render keeps a multiline composer after a nonempty progress redraw"
+  full progress "> draft\nsecond line\n"
+  :doc "incremental render keeps an empty composer after a nonempty progress redraw"
+  incremental progress ""
+  :doc "incremental render keeps a multiline composer after a nonempty progress redraw"
+  incremental progress "> draft\nsecond line\n")
+
+(mevedel-deftest mevedel-view--render-status-now ()
+  ,test
+  (test)
+  :doc "owned status materialization renders live state and preserves the draft"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq-local mevedel--session
+                  (mevedel-session--create
+                   :name "status-owned"
+                   :recovery-issues '((:message "Owned status" :blocking t))))
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (mevedel-view--render-status-now)
+      (should (mevedel-view-zone-fragment-bounds 'status 'recovery))
+      (should (string-search "Owned status" (buffer-string)))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+
+(mevedel-deftest mevedel-view--interaction-render-now ()
+  ,test
+  (test)
+  :doc "owned interaction materialization retains the immediate callback handle"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (let* ((callback #'ignore)
+             (mevedel-view--interaction-render-suppressed t)
+             (overlay
+              (mevedel-view--interaction-register
+               (list :id 'owned :kind 'request :body "Owned interaction"
+                     :activate callback))))
+        (let ((mevedel-view--interaction-render-suppressed nil))
+          (mevedel-view--interaction-render-now))
+        (should (mevedel-view-zone-fragment-bounds 'interaction 'owned))
+        (should (eq overlay (gethash 'owned mevedel-view--interaction-overlays)))
+        (should (eq callback (overlay-get overlay 'mevedel-view-interaction-activate)))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+
+(mevedel-deftest mevedel-view-render/chrome-coalescing ()
+  ,test
+  (test)
+  :doc "repeated status and interaction requests materialize once with latest state"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq-local mevedel--session (mevedel-session--create :name "chrome-coalescing"))
+      (let ((status-now (symbol-function 'mevedel-view--render-status-now))
+            (interaction-now (symbol-function 'mevedel-view--interaction-render-now))
+            (status-count 0)
+            (interaction-count 0)
+            (after-count 0)
+            overlay)
+        (cl-letf (((symbol-function 'mevedel-view--render-status-now)
+                   (lambda (&rest args)
+                     (cl-incf status-count)
+                     (apply status-now args)))
+                  ((symbol-function 'mevedel-view--interaction-render-now)
+                   (lambda ()
+                     (cl-incf interaction-count)
+                     (funcall interaction-now))))
+          (mevedel-view-render-mutate
+           'outer
+           (lambda ()
+             (let ((before (buffer-string)))
+               (dolist (label '("Old chrome" "Latest chrome"))
+                 (setf (mevedel-session-recovery-issues mevedel--session)
+                       (list (list :message label :blocking t)))
+                 (mevedel-view--render-status)
+                 (let ((registered
+                        (mevedel-view--interaction-register
+                         (list :id 'coalesced :kind 'request :body label
+                               :after-render (lambda () (cl-incf after-count))))))
+                   (when overlay (should (eq overlay registered)))
+                   (setq overlay registered))
+                 (should (mevedel-view-interaction-blocking-p))
+                 (should (equal-including-properties before (buffer-string))))
+               (should (= 2 (length mevedel-view-render--pending)))
+               (should (= 0 status-count interaction-count after-count))))))
+        (should (= 1 status-count interaction-count after-count))
+        (should-not (string-search "Old chrome" (buffer-string)))
+        (should (= 2 (mevedel-view-test--count-substring "Latest chrome" (buffer-string))))
+        (should (eq overlay (gethash 'coalesced mevedel-view--interaction-overlays))))))
+
+  :doc "isolated non-view interaction rendering does not acquire transcript ownership"
+  (with-temp-buffer
+    (insert "Isolated source\n")
+    (setq-local mevedel-view-render--owner t)
+    (cl-letf (((symbol-function 'mevedel-view-render-mutate)
+               (lambda (&rest _) (error "Unexpected transcript ownership"))))
+      (let ((overlay (mevedel-view--interaction-register
+                      '(:id isolated :kind request :body "Isolated interaction"))))
+        (should (overlay-buffer overlay))
+        (should (mevedel-view-zone-fragment-bounds 'interaction 'isolated))
+        (should (string-search "Isolated interaction" (buffer-string)))
+        (should (string-prefix-p "Isolated source\n" (buffer-string)))))))
+
 (mevedel-deftest mevedel-view-render-mutate/ownership ()
   ,test
   (test)

@@ -91,7 +91,12 @@ collapsed tool parsing also has its separate staged preparation lifecycle.
 Transcript writers also share per-view mutation ownership: nested projection,
 terminal, disclosure, and agent-refresh work coalesces rather than mutating
 captured view coordinates recursively. Source replacement retires obsolete
-intent, but not required terminal cleanup. Markdown fontification reuses a quiet
+intent, but not required terminal cleanup. Status and interaction materialization
+requested inside a projection joins that ownership queue, while descriptor
+registration and pause state remain immediate. Idle chrome-only redraws do not
+force pending history batches to complete. History-boundary recovery is bounded
+by the input prompt, even when a pasted draft retains transcript properties.
+Markdown fontification reuses a quiet
 hidden buffer for ordinary calls and isolates nested calls. Rendering never
 prompts to install missing grammars. The [view manual](../view.md) owns the
 detailed rendering and recovery contracts.
@@ -345,6 +350,30 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 2026: copied response properties cannot extend history into the composer
+
+A live disappearing composer retained an undo record of a history deletion that
+also contained the input prompt and a quoted draft with response properties.
+Copying a real response through the view's filter and yanking it into a multiline
+draft reproduced the prompt deletion on a status/live redraw, without undo.
+History-tail recovery claimed the pasted response as transcript because it
+searched to the end of the buffer. Recovery now stops at the prompt boundary;
+copying does not need to discard formatting or source properties to keep the
+draft safe. Regression coverage checks the prompt, exact draft, point, and
+composer overlay geometry after the production copy/yank/redraw path.
+
+### October 2026: chrome redraws must not interrupt projection
+
+Nonempty status and interaction redraws injected during response fontification
+left response text below the history/status boundary in both full and incremental
+renders. Preserving the draft and prompt alone did not detect this ordering
+failure. These nested materializations now coalesce through the existing
+projection owner rather than writing into the partially rebuilt view. Idle
+chrome updates retain their direct path so an unrelated status change does not
+force synchronous completion of a pending history batch. This reproduces and
+fixes the ordering failure; it does not establish the cause of the separately
+reported disappearing composer.
 
 ### October 2026: running tool calls join the activity run
 

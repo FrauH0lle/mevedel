@@ -2507,6 +2507,60 @@
 (mevedel-deftest mevedel-view--history-tail-position ()
   ,test
   (test)
+  :doc "copied response properties in a quoted draft cannot become history"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Question\n\n" nil)
+    (let ((response-start (with-current-buffer data-buf (point-max))))
+      (mevedel-view-test--insert-data
+       data-buf "Do you recall using Undo?\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((history-end (marker-position mevedel-view--status-marker))
+              (prompt (buffer-substring-no-properties
+                       mevedel-view--input-marker (mevedel-view--input-start)))
+              (kill-ring nil)
+              (kill-ring-yank-pointer nil)
+              (interprogram-cut-function nil)
+              (interprogram-paste-function nil))
+          (goto-char (point-min))
+          (search-forward "Assistant\n")
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker (match-beginning 0)))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf (copy-marker response-start)))
+          (search-forward "Do you recall using Undo?")
+          (kill-new (filter-buffer-substring
+                     (match-beginning 0) (match-end 0)))
+          (goto-char (mevedel-view--input-start))
+          (insert "> ")
+          (yank)
+          (insert "\nsecond line\n")
+          ;; Exercise actual copy/yank, not a hand-authored property stub.
+          (should (eq 'response
+                      (get-text-property (+ 2 (mevedel-view--input-start))
+                                         'mevedel-view-type)))
+          (goto-char (+ 5 (mevedel-view--input-start)))
+          (let ((draft (buffer-substring-no-properties
+                        (mevedel-view--input-start) (point-max)))
+                (tail (mevedel-view--history-tail-position)))
+            (mevedel-view--render-status)
+            (mevedel-view-render-live-update data-buf)
+            (let ((start (mevedel-view--input-start)))
+              (should (equal prompt (buffer-substring-no-properties
+                                     mevedel-view--input-marker start)))
+              (should (equal draft (buffer-substring-no-properties start (point-max))))
+              (should (= (point) (+ start 5)))
+              (should (= start (overlay-start mevedel-view--composer-keymap-overlay)))
+              (should-not (get-char-property (point-min) 'line-prefix)))
+            (should (= history-end tail)))))))
+
+  :doc "agent inspection has no composer and scans the complete transcript"
+  (with-temp-buffer
+    (setq-local mevedel-view--agent-transcript-p t)
+    (insert (propertize "Assistant\nAnswer\n" 'mevedel-view-type 'response))
+    (setq-local mevedel-view--input-marker (copy-marker (point-min)))
+    (should (= (point-max) (mevedel-view--history-tail-position))))
+
   :doc "recovers the last history boundary by property runs"
   (with-temp-buffer
     (insert "Header\n")

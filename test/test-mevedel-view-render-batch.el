@@ -176,6 +176,28 @@
 (mevedel-deftest mevedel-view-render-batched-full/other-writers ()
   ,test
   (test)
+  :doc "queued status and interaction updates leave unfinished history batched"
+  (mevedel-batch-test--with-history
+    (let ((session (mevedel-session--create :name "batch chrome")))
+      (setq-local mevedel--session session)
+      (with-current-buffer data-buf (setq-local mevedel--session session))
+      (mevedel-batch-test--start-projection view-buf)
+      (let ((batch mevedel-view-render--batch))
+        (mevedel-view-render-mutate
+         'full-batch
+         (lambda ()
+           (setf (mevedel-session-recovery-issues session)
+                 '((:message "Visible batched status" :blocking t)))
+           (mevedel-view--render-status data-buf)
+           (mevedel-view--interaction-register
+            '(:id batched-request :kind request :body "Visible batched interaction"))))
+        (should (eq batch mevedel-view-render--batch))
+        (should (string-search "Loading conversation turn" (buffer-string)))
+        (should (string-search "Visible batched status" (buffer-string)))
+        (should (string-search "Visible batched interaction" (buffer-string)))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ 4 (mevedel-view--input-start)))))))
+
   :doc "a synchronous full projection retires the old batch"
   (mevedel-batch-test--with-history
     (let ((expected (buffer-substring-no-properties (point-min) (point-max))))

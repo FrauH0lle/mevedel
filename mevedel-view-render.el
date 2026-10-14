@@ -3689,7 +3689,11 @@ When boundary markers are detached, recover the history/status boundary
 from the last rendered transcript character before the composer.  If no
 transcript has been rendered yet, return the position after the header."
   (let* ((after-header (mevedel-view--after-header-position))
-         (limit (point-max))
+         ;; A yanked response retains its source/type properties.  They do
+         ;; not turn user-owned draft text into rendered history.
+         (limit (if mevedel-view--agent-transcript-p
+                    (point-max)
+                  (or (mevedel-view--input-marker-position) (point-max))))
          (pos limit))
     (while (and (> pos after-header)
                 (not
@@ -4380,10 +4384,12 @@ operations call their owned implementations rather than entering here again."
                      (condition-case err
                          (when (and (= generation mevedel-view-render--generation)
                                     (eq source (mevedel-view-segments-display-buffer)))
-                           ;; Resolve queued writers against a complete projection,
-                           ;; including requests raised while a batch was installed.
+                           ;; Transcript writers need a complete projection.
+                           ;; Chrome uses live zone markers, so a nested status
+                           ;; update must not synchronously finish the batch.
                            (when (and mevedel-view-render--batch
-                                      (not (eq work-key 'full-batch)))
+                                      (not (memq work-key
+                                                 '(full-batch status interaction))))
                              (mevedel-view-render-cancel-batch)
                              (unless (eq work-key 'full)
                                (mevedel-view-render--full-now)))

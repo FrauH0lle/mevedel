@@ -209,6 +209,9 @@ flowchart TD
 
 The transcript supplies history; session state and interaction descriptors
 supply the surrounding controls. Each redraw preserves the user-owned composer.
+History-boundary recovery stops at the input prompt. Copying a rendered response
+and yanking it into a draft can retain transcript source/type properties, but
+those properties do not make composer text part of history.
 
 Informational recovery notices offer a **Dismiss** control. It removes only
 that notice, not the failure's retained agent result or transcript. Blocking
@@ -304,6 +307,10 @@ reviving streaming state. Idle settlement remains immediate. Source and turn
 replacement invalidate obsolete queued projection work, while mandatory terminal
 release remains ordered before replacement state. Failed writers release
 ownership without starving pending terminal cleanup.
+Status and interaction redraws requested during projection use the same queue:
+their descriptors and pause state update immediately, but text and callback
+overlays materialize after the active writer finishes. Idle chrome-only redraws
+remain immediate and do not force a pending history batch to complete.
 Redisplay stays inhibited until the writer and its queued work finish, so
 fontification cannot expose the temporarily deleted projection. Failed
 disclosure expansion rolls back its text replacement and retains the old row
@@ -879,6 +886,8 @@ reduce the view's undo list to composer entries, shifted past the text
 renders inserted or removed above the input marker. An entry that cannot be
 placed ends the history there. Transcript inspection views and generated data
 buffers keep no undo history.
+Rebuilding the prompt is also chrome: undoing a draft never restores an older
+permission badge or prompt prefix inside the composer.
 
 A submission that starts in the composer captures the draft it forwards, so a
 draft typed while `UserPromptSubmit`, skill preparation, or a slash command
