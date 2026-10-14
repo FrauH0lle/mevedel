@@ -694,6 +694,75 @@
         (kill-buffer buffer))
       (delete-file path))))
 
+(mevedel-deftest mevedel-execution-transcript--root-buffer ()
+  ,test
+  (test)
+  :doc "returns a root buffer itself and follows nested agents to the root"
+  (let* ((root (generate-new-buffer " *exec root*"))
+         (child (generate-new-buffer " *exec child*"))
+         (grandchild (generate-new-buffer " *exec grandchild*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer child
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :parent-data-buffer root)))
+          (with-current-buffer grandchild
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :parent-data-buffer child)))
+          (should (eq root (mevedel-execution-transcript--root-buffer root)))
+          (should (eq root (mevedel-execution-transcript--root-buffer child)))
+          (should (eq root (mevedel-execution-transcript--root-buffer
+                            grandchild))))
+      (mapc #'kill-buffer (list root child grandchild))))
+  :doc "publishes a nested agent's breadcrumb against the session root"
+  (let* ((dir (make-temp-file "mevedel-execution-nested-root-" t))
+         (path (expand-file-name "agents/grandchild.chat.org" dir))
+         (session (mevedel-session--create :name "nested root"))
+         (root (generate-new-buffer " *exec root*"))
+         (child (generate-new-buffer " *exec child*"))
+         (grandchild (generate-new-buffer " *exec grandchild*"))
+         published-root)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) dir)
+          (with-current-buffer child
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :parent-data-buffer root)))
+          (with-current-buffer grandchild
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :parent-data-buffer child))
+            (setq buffer-file-name path))
+          (cl-letf (((symbol-function
+                      'mevedel-session-codec-portable-authority-p)
+                     #'always)
+                    ((symbol-function
+                      'mevedel-session-artifacts-artifact-present-p)
+                     #'always)
+                    ((symbol-function 'mevedel-session-artifacts-read-artifact)
+                     (lambda (&rest _)
+                       ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"))
+                    ((symbol-function
+                      'mevedel-session-artifacts-publish-transcript-state)
+                     (lambda (_session root-buffer &rest _)
+                       (setq published-root root-buffer)))
+                    ((symbol-function 'set-visited-file-modtime) #'ignore))
+            (with-current-buffer grandchild
+              (should (mevedel-execution-transcript--persist-terminal-record
+                       (list :type 'execution-breadcrumb
+                             :execution-id "exec-nested-root"
+                             :tool-use-id "call-nested-root" :owner "/a/b"
+                             :command "true")))))
+          (should (eq root published-root)))
+      (with-current-buffer grandchild (setq buffer-file-name nil))
+      (mapc #'kill-buffer (list root child grandchild))
+      (delete-directory dir t))))
+
 (mevedel-deftest mevedel-execution-transcript-prepare-archive ()
   ,test
   (test)

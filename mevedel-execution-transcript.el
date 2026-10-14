@@ -175,6 +175,19 @@ the new segment of the same transcript."
                       (when (present older) (throw 'found t))
                     (kill-buffer older))))))))))
 
+(defun mevedel-execution-transcript--root-buffer (buffer)
+  "Return the session root data buffer owning transcript BUFFER.
+A nested agent's parent is another agent's buffer, so follow the
+invocation chain until a buffer without an agent invocation remains."
+  (let ((seen nil) invocation)
+    (while (and (buffer-live-p buffer)
+                (not (memq buffer seen))
+                (setq invocation
+                      (buffer-local-value 'mevedel--agent-invocation buffer)))
+      (push buffer seen)
+      (setq buffer (mevedel-agent-invocation-parent-data-buffer invocation)))
+    buffer))
+
 (defun mevedel-execution-transcript--persist-terminal-record
     (record &optional terminal-data)
   "Persist RECORD beside the current transcript without saving unsent edits.
@@ -187,10 +200,7 @@ the matching original Bash row; do not publish an unsent in-memory draft."
            (portable (mevedel-session-codec-portable-authority-p session))
            (root-buffer
             (and portable
-                 (if mevedel--agent-invocation
-                     (mevedel-agent-invocation-parent-data-buffer
-                      mevedel--agent-invocation)
-                   (current-buffer))))
+                 (mevedel-execution-transcript--root-buffer (current-buffer))))
            (coding (or buffer-file-coding-system 'utf-8-unix)))
       (when (if portable
                 (mevedel-session-artifacts-artifact-present-p
@@ -385,10 +395,8 @@ RENDER-DATA is retained in the hidden transcript audit record."
                     (mevedel-session-codec-portable-authority-p session))
                    (root-buffer
                     (and portable
-                         (if mevedel--agent-invocation
-                             (mevedel-agent-invocation-parent-data-buffer
-                              mevedel--agent-invocation)
-                           data-buffer)))
+                         (mevedel-execution-transcript--root-buffer
+                          data-buffer)))
                    (coding (or buffer-file-coding-system 'utf-8-unix)))
               (with-temp-buffer
                 (if portable
