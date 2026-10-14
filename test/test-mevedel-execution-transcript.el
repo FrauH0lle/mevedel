@@ -661,6 +661,37 @@
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
+      (delete-file path)))
+  :doc "parses the saved copy without running the user's Org hooks"
+  (let* ((path (make-temp-file "mevedel-execution-bare-"))
+         (buffer (find-file-noselect path))
+         (session (mevedel-session--create :authority-mode 'pid-lock
+                                           :name "bare copy"))
+         (hook-runs 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel--session session)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+            (write-region (point-min) (point-max) path nil 'silent)
+            (set-buffer-modified-p nil)
+            (set-visited-file-modtime))
+          (let ((org-mode-hook (list (lambda () (cl-incf hook-runs)))))
+            (with-current-buffer buffer
+              (should (mevedel-execution-transcript--persist-terminal-record
+                       (list :type 'execution-breadcrumb :execution-id "exec-bare"
+                             :tool-use-id "call-bare" :owner "/root" :command "true")))))
+          (should (= 0 hook-runs))
+          (with-temp-buffer
+            (insert-file-contents path)
+            (delay-mode-hooks (org-mode))
+            (mevedel-transcript-restore-properties)
+            (should (= 1 (length (mevedel-transcript-audit-records
+                                  (buffer-string) 'execution-breadcrumb))))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
       (delete-file path))))
 
 (mevedel-deftest mevedel-execution-transcript-prepare-archive ()

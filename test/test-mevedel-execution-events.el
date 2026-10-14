@@ -787,9 +787,9 @@
           ;; Settlement runs from a sentinel, which can fire while another
           ;; remote command is in flight.
           (cl-letf (((symbol-function 'mevedel-execution--finish-managed)
-                     (lambda (record)
+                     (lambda (&rest args)
                        (let ((mevedel-transport--depth 1))
-                         (funcall finish record)))))
+                         (apply finish args)))))
             (test-mevedel-execution--start-managed
              session root '("sh" "-c" "sleep .05; printf done")
              :tool-use-id "call-independent-busy")

@@ -856,6 +856,32 @@
   (:doc "runs managed commands through confinement and resource capture")
   ,test
   (test)
+  :doc "a command that ends on its own delivers after its settlement returns"
+  (let* ((root (make-temp-file "mevedel-managed-deferred-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         (settling nil)
+         (finish (symbol-function 'mevedel-execution-process--finish))
+         observation delivered-while-settling)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-execution-process--finish)
+                   (lambda (&rest args)
+                     (setq settling t)
+                     (unwind-protect (apply finish args)
+                       (setq settling nil)))))
+          (mevedel-execution-start-bash
+           (lambda (value)
+             (setq observation value
+                   delivered-while-settling settling))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "printf done")
+           :workdir root :writable-roots (list root)
+           :artifact-directory root :yield-time-ms nil)
+          (test-mevedel-execution--wait (lambda () observation))
+          (should-not delivered-while-settling)
+          (should (eq 'completed (plist-get (plist-get observation :facts) :state))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
   :doc "retains the original approval across yield and independent completion"
   (let* ((root (make-temp-file "mevedel-managed-approval-" t))
          (session (test-mevedel-execution--session root))

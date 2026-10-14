@@ -1439,8 +1439,11 @@ it briefly so repeated owner polls return the same result."
     (setf (mevedel-execution--record-scheduler-lease record) nil)
     (mevedel-execution-scheduler-release lease)))
 
-(defun mevedel-execution--finish-managed (record)
-  "Settle managed RECORD without delivering unsolicited model output."
+(defun mevedel-execution--finish-managed (record &optional defer)
+  "Settle managed RECORD without delivering unsolicited model output.
+DEFER delivers in a later event-loop turn, for a process that ended on its
+own and settles from a timer.  Stops, aborts and teardown deliver before
+returning: their callers expect the outcome settled."
   (unless (mevedel-execution--record-finished-p record)
     (let* ((preparation
             (mevedel-execution--record-sandbox-preparation record))
@@ -1504,15 +1507,19 @@ it briefly so repeated owner polls return the same result."
                      (funcall callback
                               (mevedel-execution--observation record t)))))))
             (workdir (mevedel-execution--record-workdir record)))
-        ;; Delivery publishes remote output and enqueues durable mail.  Its
-        ;; settlement is reached from a sentinel that can run inside another
-        ;; remote command, where the control filesystem refuses to nest and
-        ;; the result would be lost with a warning; deliver once it is free.
-        (unless (and (mevedel-transport-busy-p workdir)
+        ;; Delivery starts the tool's continuation -- result handling and,
+        ;; for gptel, the next request -- and for background commands
+        ;; publishes a breadcrumb and durable mail.  Sharing one callback
+        ;; with process settlement made each tool completion one long
+        ;; pause, so DEFER moves it to a later turn.  Settlement can also be
+        ;; reached from a sentinel inside another remote command, where the
+        ;; control filesystem refuses to nest; delivery then waits for an
+        ;; idle transport.  A disabled transport delivers in place.
+        (unless (and (or defer (mevedel-transport-busy-p workdir))
                      (mevedel-transport-run-when-idle
                       (list 'execution-delivery
                             (mevedel-execution--record-token record))
-                      workdir deliver))
+                      workdir deliver nil (and defer 0)))
           (funcall deliver))))))
 
 (defun mevedel-execution--publish-yielded-artifact (record)
@@ -1611,7 +1618,10 @@ process-filter appends use the published path."
       (when (eq 'unknown termination)
         (mevedel-execution--mark-unknown
          record error-data result))
-      (mevedel-execution--finish-managed record))))
+      ;; Only an end nobody requested may deliver later; a caller that
+      ;; stopped or aborted the process waits for its settled outcome.
+      (mevedel-execution--finish-managed
+       record (memq termination '(nil exited signaled timed-out))))))
 
 (defun mevedel-execution--launch-managed (record command)
   "Launch managed RECORD with raw COMMAND."

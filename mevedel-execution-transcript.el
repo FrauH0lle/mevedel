@@ -87,11 +87,11 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--insert-at-active-response
                   "mevedel-utilities" (buffer text))
+(declare-function mevedel--transcript-org-mode "mevedel-utilities" ())
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
 ;; `org'
-(declare-function org-mode "org" (&optional arg))
 (defvar org-agenda-file-menu-enabled)
 
 (defvar-local mevedel-execution-transcript--pending-terminals nil
@@ -209,7 +209,8 @@ the matching original Bash row; do not publish an unsent in-memory draft."
                     path (mevedel-session-save-path session)))
                   coding)))
             (insert-file-contents path))
-          (let ((org-agenda-file-menu-enabled nil)) (org-mode))
+          ;; Bare: the user's Org hooks cost 45 of 80 ms on a 2.9 MB copy.
+          (let ((org-agenda-file-menu-enabled nil)) (mevedel--transcript-org-mode))
           (mevedel-transcript-restore-properties)
           (when terminal-data
             (mevedel-tool-render-data-update
@@ -402,7 +403,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
                         coding)))
                   (insert-file-contents path))
                 (let ((org-agenda-file-menu-enabled nil))
-                  (org-mode))
+                  (mevedel--transcript-org-mode))
                 (mevedel-transcript-restore-properties)
                 (unless
                     (or
