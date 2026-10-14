@@ -105,6 +105,9 @@
 (defvar org-inhibit-startup)
 (defvar org-mode-hook)
 
+;; `org-cycle'
+(defvar org-cycle-tab-first-hook)
+
 ;; `org-indent'
 (declare-function org-indent-mode "org-indent" (&optional arg))
 (autoload 'org-indent-mode "org-indent")
@@ -541,9 +544,19 @@ prefixes, and every tool call and result stays in the buffer."
   (setq-local change-major-mode-hook nil)
   (mevedel--call-with-bare-transcript-mode #'org-mode)
   (setq-local org-element-cache-persistent nil
+              ;; Only our own handler, without the user's global TAB hooks.
+              org-cycle-tab-first-hook (list #'mevedel--transcript-cycle-skip)
               gptel-prompt-prefix-alist nil
               gptel-response-prefix-alist nil
               gptel-include-tool-results t))
+
+(defun mevedel--transcript-cycle-skip ()
+  "Skip `org-cycle' in transcript storage unless TAB invoked it.
+gptel folds every tool result and reasoning block it inserts.  Nobody looks
+at the transcript buffer -- the view renders its own disclosure -- yet each
+fold parsed Org structure without the element cache and ran the user's TAB
+hooks: 65 ms per tool result in a 2.9 MB transcript, growing with it."
+  (not (eq this-command 'org-cycle)))
 
 (defun mevedel--optimize-transcript-buffer ()
   "Apply buffer-local performance settings for generated transcript buffers."

@@ -525,6 +525,26 @@
     (should (equal '((org-mode . "*** ")) gptel-prompt-prefix-alist))
     (should (eq 'auto gptel-include-tool-results)))
 
+  :doc "gptel's fold of an inserted tool result neither folds nor runs user TAB hooks"
+  (progn
+    (require 'org)
+    (let ((ran nil))
+      (let ((org-cycle-tab-first-hook (list (lambda () (setq ran t) nil))))
+        (with-temp-buffer
+          (mevedel--transcript-org-mode)
+          (insert "#+begin_tool (Read :file_path \"a\")\nresult line\n#+end_tool\n")
+          ;; gptel's own call: point on the closing line, not a command.
+          (goto-char (point-max))
+          (forward-line -1)
+          (let ((this-command nil)) (org-cycle))
+          (should-not (invisible-p (save-excursion (goto-char (point-min))
+                                                   (search-forward "result"))))
+          ;; The same block still folds from an interactive TAB.
+          (let ((this-command 'org-cycle)) (org-cycle))
+          (should (invisible-p (save-excursion (goto-char (point-min))
+                                               (search-forward "result")))))
+        (should-not ran))))
+
   :doc "suppresses org-indent-mode while transcript Org hooks run"
   (progn
     (require 'org)
@@ -1429,6 +1449,15 @@ rejects trailing binary operators"
           (should (= 0 (hash-table-count mevedel--gc-holds)))
           (should-not mevedel--gc-timer))
       (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer)))))
+
+(mevedel-deftest mevedel--transcript-cycle-skip ()
+  ,test
+  (test)
+  :doc "skips programmatic folds and lets an interactive TAB cycle"
+  (progn
+    (let ((this-command nil)) (should (mevedel--transcript-cycle-skip)))
+    (let ((this-command 'self-insert-command)) (should (mevedel--transcript-cycle-skip)))
+    (let ((this-command 'org-cycle)) (should-not (mevedel--transcript-cycle-skip)))))
 
 (mevedel-deftest mevedel--optimize-transcript-buffer ()
   ,test

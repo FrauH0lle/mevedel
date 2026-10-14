@@ -947,6 +947,14 @@ mevedel tools do not set gptel's `:include` slot. Tool results containing
 nested-drawer confusion; the rendered view strips those storage
 artifacts where appropriate.
 
+gptel folds each tool result and reasoning block it inserts with `org-cycle`.
+Nobody reads the data buffer's folds -- the view owns disclosure -- and with
+Org's element cache disabled each fold parsed the surrounding structure and ran
+the user's TAB hooks: about 65 ms per tool result in a 2.9 MB transcript,
+growing with it. The transcript's buffer-local `org-cycle-tab-first-hook`
+holds only `mevedel--transcript-cycle-skip`, which answers every
+non-interactive call; an interactive TAB in the data buffer still cycles.
+
 ## Transcript structure
 
 `mevedel-transcript.el` owns the canonical transcript grammar. Its primary
