@@ -534,7 +534,10 @@ dispatch seam instead of spending another provider request. An independently
 retained child is not interrupted merely because its root is aborted.
 
 Intermediate failures update live status but do not enter terminal settlement
-or publish error blocks. Recovered output returns root progress to the status
+or publish error blocks. On a nonzero curl stream exit after response headers,
+the cleanup adapter skips the already-performed WAIT-to-TYPE transition so the
+terminal callback runs before ERRS closes its owner; cleanup then settles or
+parks the sample exactly once. Recovered output returns root progress to the status
 the retry wait replaced, unless another owner has claimed it since. Exhaustion
 settles once with one expandable ignored request summary: the existing
 provider error payload plus `:retry-errors` (chronological, bounded sanitized

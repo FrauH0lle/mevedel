@@ -64,6 +64,8 @@ a fresh allowance.  Claude Code and background requests are unaffected."
   "Native gptel machine whose cancellation belongs to this buffer.")
 (defvar mevedel-gptel-retry--dispatch-state nil
   "Sample whose native dispatch is creating an Org stream converter.")
+(defvar mevedel-gptel-retry--cleanup-header-fsm nil
+  "Machine whose stream headers already performed cleanup's TYPE transition.")
 
 (defun mevedel-gptel-retry--retryable-p (error-data status)
   "Classify ERROR-DATA and HTTP STATUS conservatively.
@@ -700,26 +702,31 @@ Both native curl and URL parsers receive request INFO as their last argument."
 (defun mevedel-gptel-retry--transition (original fsm &optional new-state)
   "Gate cancelled transitions and release FSM's owner at terminal NEW-STATE.
 ORIGINAL still owns native transitions and all their handlers."
-  (let ((state (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)))
-    (if (null state)
-        (funcall original fsm new-state)
-      (when (or (not (plist-get state :cancelled)) (eq new-state 'ABRT))
-        (let* ((next (or new-state (gptel--fsm-next fsm)))
-               (terminal (memq next '(DONE ERRS ABRT))))
-          (when (eq next 'TOOL)
-            ;; Tools now own the machine; a recovered tool-only response may
-            ;; deliver no callback to end the retry status.
-            (plist-put state :tools t)
-            (mevedel-gptel-retry--restore-status state))
-          ;; Empty successful responses need no text callback.  Native terminal
-          ;; handlers can still end the request without turning DONE into ABRT.
-          (when terminal
-            (mevedel-gptel-retry--totalize-usage state (gptel-fsm-info fsm))
-            (plist-put state :terminal-callback t))
-          (unwind-protect (funcall original fsm next)
+  (if (and (null new-state) (eq fsm mevedel-gptel-retry--cleanup-header-fsm))
+      ;; Nonzero stream cleanup unconditionally attempts WAIT -> TYPE before
+      ;; its callback.  Headers already did that: keep TYPE until the callback
+      ;; runs, then let cleanup's final transition settle or park the sample.
+      (setq mevedel-gptel-retry--cleanup-header-fsm nil)
+    (let ((state (plist-get (gptel-fsm-info fsm) :mevedel-retry-state)))
+      (if (null state)
+          (funcall original fsm new-state)
+        (when (or (not (plist-get state :cancelled)) (eq new-state 'ABRT))
+          (let* ((next (or new-state (gptel--fsm-next fsm)))
+                 (terminal (memq next '(DONE ERRS ABRT))))
+            (when (eq next 'TOOL)
+              ;; Tools now own the machine; a recovered tool-only response may
+              ;; deliver no callback to end the retry status.
+              (plist-put state :tools t)
+              (mevedel-gptel-retry--restore-status state))
+            ;; Empty successful responses need no text callback.  Native terminal
+            ;; handlers can still end the request without turning DONE into ABRT.
             (when terminal
-              (plist-put state :terminal-callback nil)
-              (mevedel-gptel-retry--close state))))))))
+              (mevedel-gptel-retry--totalize-usage state (gptel-fsm-info fsm))
+              (plist-put state :terminal-callback t))
+            (unwind-protect (funcall original fsm next)
+              (when terminal
+                (plist-put state :terminal-callback nil)
+                (mevedel-gptel-retry--close state)))))))))
 
 (defun mevedel-gptel-retry--cleanup (original process status)
   "Complete PROCESS via ORIGINAL, detecting truncated HTTP200 streams first."
@@ -752,7 +759,12 @@ ORIGINAL still owns native transitions and all their handlers."
                         (goto-char (point-min))
                         (when (re-search-forward "^retry-after: *\\([^\r\n]+\\)" end t)
                           (plist-put info :mevedel-retry-advice (string-trim (match-string 1)))))))))
-              (funcall original process status))
+              (let ((mevedel-gptel-retry--cleanup-header-fsm
+                     (and (plist-get info :stream)
+                          (not (zerop (process-exit-status process)))
+                          (eq (gptel-fsm-state fsm) 'TYPE)
+                          fsm)))
+                (funcall original process status)))
           ;; Ownership ends at a native terminal transition or the next WAIT,
           ;; not HTTP completion: asynchronous tool callbacks still need it.
           (plist-put state :completing nil))))))
