@@ -24,6 +24,15 @@ research, implementation, debugging, or mixed tasks. Callers select it by omitti
 specializations. Copying parent dialogue is a separate `context` choice and is
 not required to inherit capabilities.
 
+Tool inheritance includes both native request tools and the delegator's effective
+specialist catalog for ToolSearch/ToolCall, including configured and MCP tools.
+Specialist identities are frozen as explicit category/name references. A nested
+default child inherits its immediate parent's catalog, not the root session's;
+an empty or request-restricted catalog does not grant additional tools. Named
+roles still resolve their own tool configuration. Retained follow-ups and cold
+restores reuse the frozen identities rather than the parent's current catalog;
+discovery and calls remain subject to current tool availability and permissions.
+
 `context` defaults to `none`, so the complete initial `message` is the
 child's sole assigned task and no parent dialogue is copied. Explicit `all`
 copies the complete effective parent conversation, and a positive decimal

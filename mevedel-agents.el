@@ -81,6 +81,17 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
+;; `mevedel-tool-ptc'
+(declare-function mevedel-tool-ptc--roster "mevedel-tool-ptc" ())
+(autoload 'mevedel-tool-ptc--roster "mevedel-tool-ptc")
+
+;; `mevedel-tools'
+(declare-function mevedel-tools--ctx-tool-catalog "mevedel-tools" (ctx))
+(declare-function mevedel-tools--current-context "mevedel-tools" ())
+(defvar mevedel-tools--current-engine)
+(autoload 'mevedel-tools--ctx-tool-catalog "mevedel-tools")
+(autoload 'mevedel-tools--current-context "mevedel-tools")
+
 ;;
 ;;; Agent struct and registry
 
@@ -204,19 +215,35 @@ inside the agent can discover them."
 
 Combines `mevedel-agent-tools' with any matching entry in
 `mevedel-agent-extra-tool-specs'.  The agent's own specs come first so
-the built-in set stays stable; user extras are appended."
+the built-in set stays stable; user extras are appended.  An unfrozen
+default role also inherits the caller's effective specialist identities.
+Freezing these explicit specs preserves membership on later invocations."
   (let* ((name (mevedel-agent-name agent))
          (base (mevedel-agent--declared-specs agent)))
-    (if (or (mevedel-agent-frozen-p agent)
-            (equal name "default"))
-        base
+    (cond
+     ((mevedel-agent-frozen-p agent) base)
+     ((equal name "default")
+      ;; Preparation may finish from an async callback during another tool's
+      ;; dispatch.  Inherit from the delegating buffer, like request locals,
+      ;; not from that unrelated dynamic engine binding.
+      (let* ((mevedel-tools--current-engine nil)
+             (owner (mevedel-tools--current-context))
+             (catalog (and owner (mevedel-tools--ctx-tool-catalog owner)))
+             (roster (and catalog (mevedel-tool-ptc--roster))))
+        (append
+         base
+         (cl-loop for (path . _summary) in catalog
+                  for tool = (mevedel-tool-get (cadr path) (car path))
+                  when (and tool (member (mevedel-tool-call-name tool) roster))
+                  collect (list :discoverable (list :tool (copy-tree path)))))))
+     (t
       (cl-delete-duplicates
        (append base
                '((:tool "ToolSearch") (:tool "ToolCall"))
                mevedel-agent--communication-tool-specs
                (when (mevedel-agent--specs-contain-tool-p base "Agent")
                  mevedel-agent--control-tool-specs))
-       :test #'equal))))
+       :test #'equal)))))
 
 (defun mevedel-agent-get (name)
   "Get the `mevedel-agent' struct for NAME (symbol or string)."

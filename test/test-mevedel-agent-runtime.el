@@ -10,6 +10,7 @@
 (require 'gptel-request)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
+(require 'mevedel-agent-persistence)
 (require 'mevedel-claude-code-backend)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
@@ -24,6 +25,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-permission)
+(require 'mevedel-tool-ptc)
+(require 'mevedel-tools)
 (require 'mevedel-turn)
 (require 'helpers
          (file-name-concat
@@ -754,6 +757,373 @@
                                (buffer-string))))))
       (kill-buffer agent-buffer)
       (kill-buffer parent))))
+
+
+;;
+;;; Specialist catalog inheritance
+
+(defvar test-mevedel-agent-runtime--mcp-identity nil
+  "Registered (CATEGORY NAME) of the fixture's wrapped MCP tool.")
+
+(defun test-mevedel-agent-runtime--catalog-identities ()
+  "Return the delegator's specialists.
+They are communication, built-in, configured and MCP tools; the MCP
+identity is the one its wrapper registered."
+  (list '("mevedel" "SendMessage") '("mevedel" "Imenu")
+        '("user-tools" "ConfiguredProbe")
+        test-mevedel-agent-runtime--mcp-identity))
+
+(defun test-mevedel-agent-runtime--mcp-name ()
+  "Return the ToolCall name of the fixture's MCP tool."
+  (mevedel-tool-call-name
+   (mevedel-tool-get (cadr test-mevedel-agent-runtime--mcp-identity)
+                     (car test-mevedel-agent-runtime--mcp-identity))))
+
+(defun test-mevedel-agent-runtime--catalog-names ()
+  "Return the ToolCall names of the delegator's specialists."
+  (list "SendMessage" "Imenu" "user-tools/ConfiguredProbe"
+        (test-mevedel-agent-runtime--mcp-name)))
+
+(defvar test-mevedel-agent-runtime--backend nil
+  "Registered provider backend of the specialist catalog fixture.")
+
+(defvar test-mevedel-agent-runtime--buffers nil
+  "Agent buffers the specialist catalog fixture must kill.")
+
+(defun test-mevedel-agent-runtime--register-catalog-tools ()
+  "Register the delegator fixture's direct and specialist tools."
+  (dolist (name '("Read" "ToolSearch" "ToolCall"
+                  "SendMessage" "ListAgents" "Imenu"))
+    (mevedel-tool-ensure name))
+  ;; A user-configured tool registered in its own category.
+  (mevedel-tool-register
+   (mevedel-tool--create
+    :name "ConfiguredProbe" :category "user-tools"
+    :summary "Configured probe" :description "Configured probe contract"
+    :args '((value string :required "Probe value"))
+    :handler (lambda (callback _args) (funcall callback "probe"))))
+  ;; An MCP tool arrives as a gptel tool in its server's category and is
+  ;; registered through the same wrapper MCP configuration uses.
+  (let ((wrapped
+         (mevedel-tool--register-wrap
+          :source (gptel-make-tool
+                   :name "search_issues" :category "probe-mcp"
+                   :function (lambda (&rest _) "issues")
+                   :description "Search issues on the probe MCP server"
+                   :args (list '(:name "query" :type string
+                                 :description "Issue query")))
+          :summary "Search probe issues" :read-only-p t)))
+    (setq test-mevedel-agent-runtime--mcp-identity
+          (list (mevedel-tool-category wrapped) (mevedel-tool-name wrapped)))))
+
+(defmacro test-mevedel-agent-runtime--with-delegator (identities &rest body)
+  "Run BODY in a root session buffer whose specialist catalog is IDENTITIES.
+The root's direct tools are Read, ToolSearch and ToolCall.  Tool, backend
+and buffer state are confined to BODY."
+  (declare (indent 1))
+  `(let* ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+          (gptel--known-tools (copy-tree gptel--known-tools))
+          (gptel--known-backends (copy-alist gptel--known-backends))
+          (test-mevedel-agent-runtime--backend
+           (gptel--make-backend :name "Agent Catalog Test"))
+          (test-mevedel-agent-runtime--buffers nil)
+          (test-mevedel-agent-runtime--mcp-identity nil)
+          (root (generate-new-buffer " *catalog-root*")))
+     (unwind-protect
+         (progn
+           (setf (gptel-get-backend "Agent Catalog Test")
+                 test-mevedel-agent-runtime--backend)
+           (test-mevedel-agent-runtime--register-catalog-tools)
+           (with-current-buffer root
+             (setq-local mevedel--session
+                         (mevedel-session--create
+                          :name "main"
+                          :tool-catalog
+                          (mapcar (lambda (identity)
+                                    (cons (copy-sequence identity)
+                                          (format "%s summary" (cadr identity))))
+                                  ,identities)))
+             (setq-local gptel-tools
+                         (mapcar (lambda (name)
+                                   (mevedel-tool-gptel-tool (mevedel-tool-get name)))
+                                 '("Read" "ToolSearch" "ToolCall")))
+             ,@body))
+       (dolist (buffer (cons root test-mevedel-agent-runtime--buffers))
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer (set-buffer-modified-p nil))
+           (kill-buffer buffer))))))
+
+(defun test-mevedel-agent-runtime--spawn (agent path &optional configuration)
+  "Dispatch AGENT at PATH from the current buffer and return its buffer.
+With CONFIGURATION, continue a retained conversation from that frozen
+configuration instead, as a follow-up or a cold restore does.  Only
+transcript storage and the provider are stand-ins: invocation creation,
+freezing and buffer configuration are the real ones."
+  (let ((session mevedel--session)
+        (child (and configuration
+                    (generate-new-buffer " *catalog-retained*"))))
+    (when child
+      (push child test-mevedel-agent-runtime--buffers)
+      (with-current-buffer child (setq-local mevedel--session session)))
+    (cl-letf (((symbol-function 'mevedel-agent-conversation-open)
+               (lambda (&rest _)
+                 (setq child (generate-new-buffer " *catalog-child*"))
+                 (push child test-mevedel-agent-runtime--buffers)
+                 (with-current-buffer child (setq-local mevedel--session session))
+                 child))
+              ((symbol-function 'mevedel-agent-runtime--setup-transcript)
+               (lambda (invocation buffer)
+                 (setf (mevedel-agent-invocation-transcript-relative-path
+                        invocation)
+                       "agents/catalog.chat.org")
+                 (with-current-buffer buffer
+                   (setq-local mevedel--agent-invocation invocation))))
+              ((symbol-function 'mevedel-agent-conversation-save)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-agent-exec-run)
+               (lambda (&rest _) 'provider-fsm))
+              ((symbol-function 'mevedel-agent-runtime--execution-live-p)
+               #'ignore)
+              ((symbol-function 'mevedel-view-agent-live-transcript-start)
+               #'ignore)
+              ((symbol-function 'mevedel-telemetry-record) #'ignore))
+      (if configuration
+          (mevedel-agent-runtime-dispatch
+           nil "Continue" "Continue the task."
+           :path path :frozen-configuration configuration
+           :retained-id (format "retained--%s" path)
+           :retained-buffer child
+           :retained-transcript "agents/catalog.chat.org")
+        (mevedel-agent-runtime-dispatch
+         agent "Catalog task" "Report your tools."
+         :path path :prepared-turn '(:prompt "Report your tools.")
+         :model-policy (list :backend test-mevedel-agent-runtime--backend
+                             :model 'catalog-test-model :effort nil))))
+    child))
+
+(defun test-mevedel-agent-runtime--discovery (buffer names)
+  "Return what BUFFER's agent finds for NAMES through ToolSearch and ToolCall.
+Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
+  (with-current-buffer buffer
+    (let (roster)
+      (cl-letf (((symbol-function 'mevedel-ptc-driver-run)
+                 (lambda (_callback _expression names &optional _standalone)
+                   (setq roster names))))
+        (mevedel-tool-ptc--handler #'ignore '(:expression "nil")))
+      (mapcar (lambda (name)
+                (let (result)
+                  (mevedel-tools--tool-search
+                   (lambda (value) (setq result value)) name)
+                  (list name result (and (member name roster) t))))
+              names))))
+
+(defun test-mevedel-agent-runtime--should-discover (buffer names)
+  "Assert BUFFER's agent retrieves contracts for and can call every NAMES."
+  (dolist (found (test-mevedel-agent-runtime--discovery buffer names))
+    (ert-info ((format "discover %s" (car found)))
+      (should (string-prefix-p (car found) (nth 1 found)))
+      (should (string-search "Calling signature" (nth 1 found)))
+      (should (nth 2 found)))))
+
+(defun test-mevedel-agent-runtime--should-not-discover (buffer names)
+  "Assert BUFFER's agent can neither find nor call any of NAMES."
+  (dolist (found (test-mevedel-agent-runtime--discovery buffer names))
+    (ert-info ((format "hidden %s" (car found)))
+      (should (string-prefix-p "No matching tools found" (nth 1 found)))
+      (should-not (nth 2 found)))))
+
+(defun test-mevedel-agent-runtime--named-role ()
+  "Return a named role with its own direct and specialist tools."
+  (mevedel-agent--create
+   :name "catalog_named" :description "Named catalog role"
+   :tools '((:tool "Read") (:discoverable (:tool "Imenu")))
+   :system-prompt "Named role."))
+
+(mevedel-deftest mevedel-agent-runtime-dispatch/specialist-catalog
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a default agent finds and can call every delegator specialist"
+  (test-mevedel-agent-runtime--with-delegator
+      (test-mevedel-agent-runtime--catalog-identities)
+    ;; The fixture is valid only if the delegator itself can use them all.
+    (test-mevedel-agent-runtime--should-discover
+     (current-buffer) (test-mevedel-agent-runtime--catalog-names))
+    (let ((child (test-mevedel-agent-runtime--spawn
+                  (mevedel-agent-default) "/root/helper")))
+      (test-mevedel-agent-runtime--should-discover
+       child (test-mevedel-agent-runtime--catalog-names))
+      ;; The inherited catalog is frozen with the agent, not read live.
+      (push (cons (list "mevedel" "ListAgents") "late")
+            (mevedel-session-tool-catalog mevedel--session))
+      (test-mevedel-agent-runtime--should-not-discover child '("ListAgents"))))
+
+  :doc "a default agent of a default agent inherits the same catalog"
+  (test-mevedel-agent-runtime--with-delegator
+      (test-mevedel-agent-runtime--catalog-identities)
+    (let* ((child (test-mevedel-agent-runtime--spawn
+                   (mevedel-agent-default) "/root/helper"))
+           (grandchild (with-current-buffer child
+                         (test-mevedel-agent-runtime--spawn
+                          (mevedel-agent-default) "/root/helper/sub"))))
+      (test-mevedel-agent-runtime--should-discover
+       grandchild (test-mevedel-agent-runtime--catalog-names))))
+
+  :doc "a retained follow-up and a cold restore keep the inherited catalog"
+  (test-mevedel-agent-runtime--with-delegator
+      (test-mevedel-agent-runtime--catalog-identities)
+    (let* ((child (test-mevedel-agent-runtime--spawn
+                   (mevedel-agent-default) "/root/helper"))
+           (configuration
+            (mevedel-agent-invocation-frozen-configuration
+             (buffer-local-value 'mevedel--agent-invocation child)))
+           (restored
+            (mevedel-agent-persistence--decode-configuration
+             (car (read-from-string
+                   (prin1-to-string
+                    (mevedel-agent-persistence--encode-configuration
+                     configuration))))
+             "default")))
+      ;; Neither continuation may fall back to the delegator's live catalog.
+      (setf (mevedel-session-tool-catalog mevedel--session) nil)
+      ;; Nor may a specialist registered and catalogued after freezing appear.
+      (mevedel-tool-register
+       (mevedel-tool--create :name "LateProbe" :category "user-tools"
+                             :summary "Late probe" :description "Late contract"))
+      (push (cons (list "user-tools" "LateProbe") "late")
+            (mevedel-session-tool-catalog mevedel--session))
+      (test-mevedel-agent-runtime--should-discover
+       (test-mevedel-agent-runtime--spawn nil "/root/helper" configuration)
+       (test-mevedel-agent-runtime--catalog-names))
+      (test-mevedel-agent-runtime--should-discover
+       (test-mevedel-agent-runtime--spawn nil "/root/helper" restored)
+       (test-mevedel-agent-runtime--catalog-names))
+      (dolist (continued
+               (list (test-mevedel-agent-runtime--spawn
+                      nil "/root/helper" configuration)
+                     (test-mevedel-agent-runtime--spawn
+                      nil "/root/helper" restored)))
+        (test-mevedel-agent-runtime--should-not-discover
+         continued '("user-tools/LateProbe")))))
+
+  :doc "a named role keeps its own specialists, not its delegator's"
+  (test-mevedel-agent-runtime--with-delegator
+      (test-mevedel-agent-runtime--catalog-identities)
+    (let ((child (test-mevedel-agent-runtime--spawn
+                  (test-mevedel-agent-runtime--named-role) "/root/named")))
+      (test-mevedel-agent-runtime--should-discover
+       child '("SendMessage" "ListAgents" "Imenu"))
+      (test-mevedel-agent-runtime--should-not-discover
+       child (list "user-tools/ConfiguredProbe"
+                    (test-mevedel-agent-runtime--mcp-name)))))
+
+  :doc "a default agent of a narrower delegator never gains the root catalog"
+  (test-mevedel-agent-runtime--with-delegator
+      (test-mevedel-agent-runtime--catalog-identities)
+    (let* ((named (test-mevedel-agent-runtime--spawn
+                   (test-mevedel-agent-runtime--named-role) "/root/named"))
+           (grandchild (with-current-buffer named
+                         (test-mevedel-agent-runtime--spawn
+                          (mevedel-agent-default) "/root/named/helper"))))
+      (test-mevedel-agent-runtime--should-discover
+       grandchild '("SendMessage" "ListAgents" "Imenu"))
+      (test-mevedel-agent-runtime--should-not-discover
+       grandchild (list "user-tools/ConfiguredProbe"
+                    (test-mevedel-agent-runtime--mcp-name)))))
+
+  :doc "a default agent inherits only what its delegator's request may call"
+  (dolist (restricted '(some none))
+    (ert-info ((format "request allows %s" restricted))
+      (test-mevedel-agent-runtime--with-delegator
+          (test-mevedel-agent-runtime--catalog-identities)
+        (let ((allowed (and (eq restricted 'some)
+                            (list "SendMessage"
+                                  (test-mevedel-agent-runtime--mcp-name)))))
+        ;; A skill's allowed-tools restricts the request, not the catalog.
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :ptc-primitives allowed))
+        (let ((child (test-mevedel-agent-runtime--spawn
+                      (mevedel-agent-default) "/root/helper")))
+          (test-mevedel-agent-runtime--should-discover child allowed)
+          (test-mevedel-agent-runtime--should-not-discover
+           child (cl-set-difference (test-mevedel-agent-runtime--catalog-names)
+                                    allowed :test #'equal)))))))
+
+  :doc "a default agent inherits its delegator's catalog, not a bound sibling's"
+  ;; Asynchronous hook callbacks restore the delegator's buffer while another
+  ;; agent's engine may still be dynamically bound.
+  (dolist (shape '(empty-sibling broader-sibling))
+    (ert-info ((format "%s" shape))
+      (test-mevedel-agent-runtime--with-delegator
+          (if (eq shape 'empty-sibling)
+              (test-mevedel-agent-runtime--catalog-identities)
+            (list '("mevedel" "SendMessage")))
+        (let* ((sibling
+                (mevedel-agent-invocation--create
+                 :path "/root/sibling"
+                 :tool-catalog
+                 (and (eq shape 'broader-sibling)
+                      (mapcar (lambda (identity) (cons identity "sibling"))
+                              (cons '("mevedel" "ListAgents")
+                                    (test-mevedel-agent-runtime--catalog-identities))))))
+               (child
+                (let ((mevedel-tools--current-engine
+                       (gptel-make-fsm
+                        :info (list :mevedel-agent-invocation sibling))))
+                  (test-mevedel-agent-runtime--spawn
+                   (mevedel-agent-default) "/root/helper"))))
+          (if (eq shape 'empty-sibling)
+              (test-mevedel-agent-runtime--should-discover
+               child (test-mevedel-agent-runtime--catalog-names))
+            (test-mevedel-agent-runtime--should-discover child '("SendMessage"))
+            (test-mevedel-agent-runtime--should-not-discover
+             child (cons "ListAgents"
+                         (cdr (test-mevedel-agent-runtime--catalog-names)))))))))
+
+  :doc "an agent delegator's own catalog and request decide, not a bound sibling's"
+  (test-mevedel-agent-runtime--with-delegator
+      (test-mevedel-agent-runtime--catalog-identities)
+    (let* ((child (test-mevedel-agent-runtime--spawn
+                   (mevedel-agent-default) "/root/helper"))
+           (allowed (list "SendMessage" (test-mevedel-agent-runtime--mcp-name)))
+           (sibling
+            (mevedel-agent-invocation--create
+             :path "/root/sibling"
+             :tool-catalog
+             (mapcar (lambda (identity) (cons identity "sibling"))
+                     (cons '("mevedel" "ListAgents")
+                           (test-mevedel-agent-runtime--catalog-identities)))))
+           (grandchild
+            (with-current-buffer child
+              ;; The delegating agent's own request restricts what it may call.
+              ;; It also allows ListAgents, which only the sibling has, so a
+              ;; sibling leak would show.
+              (setq-local mevedel--current-request
+                          (mevedel-request--create
+                           :ptc-primitives (cons "ListAgents" allowed)))
+              (let ((mevedel-tools--current-engine
+                     (gptel-make-fsm
+                      :info (list :mevedel-agent-invocation sibling))))
+                (test-mevedel-agent-runtime--spawn
+                 (mevedel-agent-default) "/root/helper/sub")))))
+      (test-mevedel-agent-runtime--should-discover grandchild allowed)
+      (test-mevedel-agent-runtime--should-not-discover
+       grandchild '("ListAgents" "Imenu" "user-tools/ConfiguredProbe"))))
+
+  :doc "a default agent of an empty delegator stays empty as the root grows"
+  (test-mevedel-agent-runtime--with-delegator nil
+    (let ((child (test-mevedel-agent-runtime--spawn
+                  (mevedel-agent-default) "/root/helper")))
+      (setf (mevedel-session-tool-catalog mevedel--session)
+            (mapcar (lambda (identity) (cons identity "late"))
+                    (test-mevedel-agent-runtime--catalog-identities)))
+      (let ((grandchild (with-current-buffer child
+                          (test-mevedel-agent-runtime--spawn
+                           (mevedel-agent-default) "/root/helper/sub"))))
+        (dolist (buffer (list child grandchild))
+          (test-mevedel-agent-runtime--should-not-discover
+           buffer (cons "ListAgents"
+                        (test-mevedel-agent-runtime--catalog-names))))))))
 
 (mevedel-deftest mevedel-agent-runtime-queue-execution-completion
   ()
