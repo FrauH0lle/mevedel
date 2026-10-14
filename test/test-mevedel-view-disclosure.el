@@ -120,6 +120,48 @@
          (goto-char body-start)
          (should (looking-at-p "full content here"))))))
 
+  :doc "ordinary tool toggles and refreshes preserve following independent deliveries"
+  (dolist (name '("Read" "Bash"))
+    (let ((mevedel-view-tool-group-collapse-threshold 0))
+      (mevedel-view-test--with-buffers
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "#+begin_tool\n(:name %S :args nil)\n\ntool output\n#+end_tool\n" name)
+         '(tool . "preceding-call"))
+        (mevedel-view-test--insert-data
+         data-buf
+         (concat "<agent-result sender=\"/root/failed\" recipient=\"/root\" outcome=\"errored\">\n"
+                 "Provider unavailable\n</agent-result>\n"
+                 "<agent-result sender=\"/root/done\" recipient=\"/root\" outcome=\"completed\">\n"
+                 "Finished work\n</agent-result>\n")
+         nil)
+        (mevedel-view-test--insert-data data-buf "Following prose.\n" 'response)
+        (with-current-buffer view-buf
+          (mevedel-view--full-rerender)
+          (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+          (dolist (header '("Failed /root/failed" "Finished /root/done"))
+            (goto-char (point-min))
+            (should (search-forward header mevedel-view--input-marker t)))
+          (dotimes (_ 3)
+            (mevedel-view--full-rerender)
+            (dolist (action '(refresh toggle toggle))
+              (goto-char (text-property-any (point-min) mevedel-view--input-marker
+                                            'mevedel-view-type 'tool-summary))
+              (if (eq action 'refresh)
+                  (should (mevedel-view--refresh-tool-row data-buf "preceding-call"))
+                (mevedel-view-toggle-section))
+              (dolist (header '("Failed /root/failed" "Finished /root/done"))
+                (goto-char (point-min))
+                (should (search-forward header mevedel-view--input-marker t))
+                (should-not (invisible-p (match-beginning 0)))
+                (should (get-text-property (point) 'mevedel-view-collapsed))
+                (should (= 1 (mevedel-view-test--count-substring header (buffer-string)))))
+              (should (string-search "Following prose." (buffer-string)))
+              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))))
+          (mevedel-view--full-rerender)
+          (should (= 1 (mevedel-view-test--count-substring
+                        "Failed /root/failed" (buffer-string))))))))
+
   :doc "fallback prompt disclosure keeps its header when expanded"
   (mevedel-view-test--with-buffers
    (with-current-buffer data-buf

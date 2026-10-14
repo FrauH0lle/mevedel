@@ -322,6 +322,8 @@ disclosure actions retain source identity and the requested expanded/collapsed
 state, not an old view position or a second blind toggle. Internal full-render
 restoration composes within the current owner. These operations preserve
 composer text and point, source-backed reader anchors, and adjacent disclosures.
+Tool replacement includes only child rows within the owning transcript source
+span, never a neighboring independent agent delivery with the same row type.
 Agent transcript inspection uses the same projection ownership rather than a
 second renderer.
 

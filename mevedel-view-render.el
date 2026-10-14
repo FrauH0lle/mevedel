@@ -2664,15 +2664,19 @@ body of the block that ran them."
       (mevedel-view--insert-child-call-block
        child source 'derive (pop prefixes)))))
 
-(defun mevedel-view-render-child-calls-end (start limit &optional parent-depth)
+(defun mevedel-view-render-child-calls-end (start limit source &optional parent-depth)
   "Return the end of the nested call rows that begin at START, before LIMIT.
-Return START when no row begins there.  Nested rows always follow the
-body of the block that ran them, so a run starting at START belongs to
-the section that ends there.  With PARENT-DEPTH, stop before any row at
-that depth or shallower, preserving siblings of a nested compound call."
+Return START when no owned row begins there.  Only rows contained in SOURCE
+belong to the section: an independent mailbox delivery can also have the
+`tool-child' type.  With PARENT-DEPTH, stop before any row at that depth or
+shallower, preserving siblings of a nested compound call."
   (let ((pos start))
     (while (and (< pos limit)
                 (eq (get-text-property pos 'mevedel-view-type) 'tool-child)
+                (let ((child-source (get-text-property pos 'mevedel-view-source)))
+                  (and (consp child-source)
+                       (<= (car source) (car child-source))
+                       (<= (cdr child-source) (cdr source))))
                 (or (null parent-depth)
                     (> (get-text-property pos 'mevedel-view-child-depth)
                        parent-depth)))
@@ -2710,7 +2714,7 @@ does not overwrite the identity of the rows it owns."
       (save-excursion
         (goto-char start)
         (delete-region start (mevedel-view-render-child-calls-end
-                              (cdr bounds) (point-max) depth))
+                              (cdr bounds) (point-max) source depth))
         (let ((mevedel-view--child-call-depth (1- depth)))
           (mevedel-view--insert-child-call-block
            child source (not collapsed) indent))
@@ -3125,7 +3129,7 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
             ;; Replace the whole parent section, not just its text up to the
             ;; first child, or every progress refresh duplicates the children.
             (setq found (list pos (mevedel-view-render-child-calls-end
-                                   next limit)
+                                   next limit source)
                               bounds)))
           (setq pos next)))
       found)))

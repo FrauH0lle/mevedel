@@ -48,7 +48,7 @@
 (declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
 (declare-function mevedel-view-render-child-calls-end
-                  "mevedel-view-render" (start limit &optional parent-depth))
+                  "mevedel-view-render" (start limit source &optional parent-depth))
 (declare-function mevedel-view-render-collapsed-disclosure
                   "mevedel-view-render" (data-buf source vtype))
 (declare-function mevedel-view-render-insert-expanded-disclosure
@@ -908,7 +908,7 @@ from signalling `args-out-of-range' on stale source coordinates."
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
              (view-end (mevedel-view-render-child-calls-end
-                        (cdr bounds) (point-max)))
+                        (cdr bounds) (point-max) source))
              (turn-id (get-text-property view-start 'mevedel-view-turn-id))
              (source-key
               (get-text-property view-start 'mevedel-view-source-key))

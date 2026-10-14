@@ -489,6 +489,15 @@ Stamping now stops at that body's boundary; row depth bounds subtree deletion.
 Regression coverage checks repeated toggles, independent child disclosure,
 neighboring rows, and composer preservation.
 
+An October 2026 live report exposed a remaining ownership ambiguity: an
+independent agent delivery immediately after a tool also uses `tool-child` and
+the same depth as genuine compound children. Expanding and collapsing the tool
+deleted that delivery until the next projection rebuilt it. Subtree deletion
+now requires containment in the parent's transcript source range as well as
+the existing depth bound. Targeted tool-row refresh uses the same ownership
+check; regressions retain neighboring failed and completed deliveries before
+any redraw can mask their removal.
+
 ### September 2026: compiled agent observer isolation
 
 A production replay scheduled an agent's transcript into its parent view,
