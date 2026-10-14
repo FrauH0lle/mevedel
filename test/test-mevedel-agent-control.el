@@ -792,6 +792,28 @@
                   (mevedel-agent-record-settled-outcome record)))
       (should-not (plist-member result :usage))))
 
+  :doc "rolling back settlement restores the retained provider snapshot"
+  (let* ((session (mevedel-agent-control-test--session))
+         (old '(:backend "Old" :model "old" :effort nil))
+         (invocation (mevedel-agent-invocation--create
+                      :frozen-configuration
+                      (mevedel-agent-configuration--create
+                       :request-locals
+                       `((gptel-backend . ,(gptel--make-backend :name "New"))
+                         (gptel-model . new)))))
+         (record (mevedel-agent-record--create
+                  :path "/root/work" :parent-path "/root"
+                  :activity 'running :invocation invocation
+                  :model-metadata old))
+         (transaction (mevedel-agent-control--settle
+                       session record invocation "answer")))
+    (should (equal '(:backend "New" :model "new" :effort nil)
+                   (mevedel-agent-record-model-metadata record)))
+    (funcall (car transaction))
+    (should (eq old (mevedel-agent-record-model-metadata record)))
+    (should (eq invocation (mevedel-agent-record-invocation record)))
+    (should-not (mevedel-session-messages session)))
+
   :doc "reports the child's normalized token usage while its FSM is attached"
   (let* ((session (mevedel-agent-control-test--session))
          (invocation (mevedel-agent-invocation-create (mevedel-agent-default)))
@@ -862,11 +884,18 @@
   (let* ((session (mevedel-agent-control-test--session))
          (invocation (mevedel-agent-invocation-create
                       (mevedel-agent-default)))
+         (metadata '(:backend "Launch" :model "requested" :effort "high"))
          (record (mevedel-agent-record--create
                   :path "/root/work" :parent-path "/root"
                   :activity 'running :invocation invocation
+                  :model-metadata metadata
                   :blockers '((waiting live))))
          reasons)
+    (setf (mevedel-agent-invocation-frozen-configuration invocation)
+          (mevedel-agent-configuration--create
+           :request-locals
+           `((gptel-backend . ,(gptel--make-backend :name "Served"))
+             (gptel-model . served) (gptel-reasoning-effort . nil))))
     (setf (mevedel-session-save-path session) temporary-file-directory
           (mevedel-session-agent-root-waiter session)
           (mevedel-agent-waiter--create
@@ -885,12 +914,22 @@
           session record invocation "retryable result")))
       (should (eq 'running (mevedel-agent-record-activity record)))
       (should (eq invocation (mevedel-agent-record-invocation record)))
+      (should (eq metadata (mevedel-agent-record-model-metadata record)))
+      (should (equal '(:backend "Served" :model "served" :effort nil)
+                     (mevedel-agent-control-record-model-metadata record)))
       (should (equal '((waiting live))
                      (mevedel-agent-record-blockers record)))
       (should-not (mevedel-agent-record-settled-result record))
       (should-not (mevedel-session-messages session))
       (should-not reasons)
-      (should (mevedel-session-agent-root-waiter session)))))
+      (should (mevedel-session-agent-root-waiter session)))
+    ;; A later successful publication retains the effective nil effort.
+    (let ((mevedel-agent-control-suppress-persistence t))
+      (mevedel-agent-control-test--settle
+       session record invocation "retryable result"))
+    (should (eq 'idle (mevedel-agent-record-activity record)))
+    (should (equal '(:backend "Served" :model "served" :effort nil)
+                   (mevedel-agent-record-model-metadata record)))))
 
 (mevedel-deftest mevedel-agent-control-settled-result ()
   ,test

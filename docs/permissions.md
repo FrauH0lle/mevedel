@@ -256,7 +256,12 @@ and validation. These directory boundaries cover future artifact ids and missing
 bookkeeping files too. Authored files under `.mevedel/artifacts/ID/` stay writable,
 including file creation and atomic replacement. Before a confined launch, missing
 protected state directories and their parents are created; only the protected
-leaf is mounted read-only. These directories and their parents remain after
+leaf is mounted read-only. Missing-directory creation and mode changes run
+through pinned target-side parents using the writable roots' captured canonical
+spellings, so an ancestor replacement during preparation cannot redirect them.
+All missing directories share one parent-before-child program; a creation
+conflict refuses preparation before changing the conflicting directory's mode.
+Existing directories need no creation program. These directories and their parents remain after
 execution, since removing an empty directory could detach another running
 sandbox's protection and allow it to recreate that path as writable. If a prepared state
 directory disappears before launch, confinement refuses to start the command.
@@ -950,7 +955,9 @@ and canonical targets become concrete mounts; `.git` pointer files also protect
 their Git directory target. Read-only paths remain visible but immutable, while
 inaccessible directories are replaced by empty read-only mounts. Determinable
 missing directory roots receive identity-checked temporary mount targets that
-are removed after settlement. A protected path crossing a symlink that the
+are removed after settlement through their captured physical parents. Cleanup
+does not change their modes, retains nonempty targets, and refuses a substituted
+parent instead of following it. A protected path crossing a symlink that the
 child could rewrite fails closed instead of relying on a racy canonical-path
 snapshot.
 

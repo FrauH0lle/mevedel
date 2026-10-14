@@ -692,76 +692,84 @@
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
-      (delete-file path))))
+      (delete-file path)))
 
-(mevedel-deftest mevedel-execution-transcript--root-buffer ()
-  ,test
-  (test)
-  :doc "returns a root buffer itself and follows nested agents to the root"
-  (let* ((root (generate-new-buffer " *exec root*"))
-         (child (generate-new-buffer " *exec child*"))
-         (grandchild (generate-new-buffer " *exec grandchild*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer child
-            (setq-local mevedel--agent-invocation
-                        (mevedel-agent-invocation--create
-                         :parent-data-buffer root)))
-          (with-current-buffer grandchild
-            (setq-local mevedel--agent-invocation
-                        (mevedel-agent-invocation--create
-                         :parent-data-buffer child)))
-          (should (eq root (mevedel-execution-transcript--root-buffer root)))
-          (should (eq root (mevedel-execution-transcript--root-buffer child)))
-          (should (eq root (mevedel-execution-transcript--root-buffer
-                            grandchild))))
-      (mapc #'kill-buffer (list root child grandchild))))
-  :doc "publishes a nested agent's breadcrumb against the session root"
-  (let* ((dir (make-temp-file "mevedel-execution-nested-root-" t))
-         (path (expand-file-name "agents/grandchild.chat.org" dir))
-         (session (mevedel-session--create :name "nested root"))
-         (root (generate-new-buffer " *exec root*"))
-         (child (generate-new-buffer " *exec child*"))
-         (grandchild (generate-new-buffer " *exec grandchild*"))
-         published-root)
-    (unwind-protect
-        (progn
-          (setf (mevedel-session-save-path session) dir)
-          (with-current-buffer child
-            (setq-local mevedel--session session)
-            (setq-local mevedel--agent-invocation
-                        (mevedel-agent-invocation--create
-                         :parent-data-buffer root)))
-          (with-current-buffer grandchild
-            (setq-local mevedel--session session)
-            (setq-local mevedel--agent-invocation
-                        (mevedel-agent-invocation--create
-                         :parent-data-buffer child))
-            (setq buffer-file-name path))
-          (cl-letf (((symbol-function
-                      'mevedel-session-codec-portable-authority-p)
-                     #'always)
-                    ((symbol-function
-                      'mevedel-session-artifacts-artifact-present-p)
-                     #'always)
-                    ((symbol-function 'mevedel-session-artifacts-read-artifact)
-                     (lambda (&rest _)
-                       ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"))
-                    ((symbol-function
-                      'mevedel-session-artifacts-publish-transcript-state)
-                     (lambda (_session root-buffer &rest _)
-                       (setq published-root root-buffer)))
-                    ((symbol-function 'set-visited-file-modtime) #'ignore))
+  :doc "publishes nested completion and archive after the intermediate conversation is closed"
+  (mevedel-test--with-captured-diagnostics nil
+    (mevedel-engine-test--with-session
+      (insert "Saved root input\n")
+      (mevedel-session-artifacts-save session buffer)
+      (let* ((child (generate-new-buffer " *closed exec parent*"))
+             (grandchild (generate-new-buffer " *retained exec descendant*"))
+             (logical "agents/descendant.chat.org")
+             (path (file-name-concat (mevedel-session-save-path session) logical)))
+        (unwind-protect
+            (progn
+              (with-current-buffer child
+                (setq-local mevedel--agent-invocation
+                            (mevedel-agent-invocation--create
+                             :parent-data-buffer buffer)))
+              (with-current-buffer grandchild
+                (org-mode)
+                (setq-local mevedel--session session
+                            mevedel--agent-invocation
+                            (mevedel-agent-invocation--create
+                             :parent-data-buffer child))
+                (insert "Saved child input\n"
+                        (mevedel--format-hook-audit-record
+                         '(:type execution-archive :tool-use-id "archived-call"
+                           :owner "/root/parent/child")))
+                (mevedel-session-artifacts-stabilize-gptel-bounds)
+                (setq buffer-file-name path)
+                (mevedel-session-artifacts-publish-text
+                 session path (buffer-string) 'utf-8-unix)
+                (kill-buffer child)
+                (insert "Unsent child draft\n")
+                (should
+                 (mevedel-execution-transcript--persist-terminal-record
+                  '(:type execution-breadcrumb :execution-id "nested-exec"
+                    :tool-use-id "nested-call" :owner "/root/parent/child")))
+                ;; Even malformed ancestry cannot loop or change authority.
+                (setf (mevedel-agent-invocation-parent-data-buffer
+                       mevedel--agent-invocation) grandchild)
+                (mevedel-execution-transcript--record-archived-terminal
+                 grandchild '(:tool-use-id "archived-call" :owner "/root/parent/child")
+                 '(:state completed :outcome success))
+                (should (string-search "Unsent child draft" (buffer-string))))
+              (let ((published
+                     (decode-coding-string
+                      (mevedel-session-artifacts-read-artifact session logical t)
+                      'utf-8-unix)))
+                (should-not (string-search "Unsent child draft" published))
+                (should (= 1 (length
+                              (mevedel-execution-transcript-test--restored-audit-records
+                               published 'execution-breadcrumb))))
+                (should (= 1 (length
+                              (mevedel-execution-transcript-test--restored-audit-records
+                               published 'execution-completion))))
+                (should-not
+                 (mevedel-execution-transcript-test--restored-audit-records
+                  published 'execution-archive))
+                ;; A stale root must fail before committing any new bytes.
+                (setf (mevedel-session-root-buffer session) child)
+                (unwind-protect
+                    (with-current-buffer grandchild
+                      (should-error
+                       (mevedel-execution-transcript--persist-terminal-record
+                        '(:type execution-breadcrumb :execution-id "retired-root"
+                          :tool-use-id "late-call" :owner "/root/parent/child")))
+                      (should (equal published
+                                     (decode-coding-string
+                                      (mevedel-session-artifacts-read-artifact
+                                       session logical t)
+                                      'utf-8-unix))))
+                  (setf (mevedel-session-root-buffer session) buffer))))
+          (when (buffer-live-p grandchild)
             (with-current-buffer grandchild
-              (should (mevedel-execution-transcript--persist-terminal-record
-                       (list :type 'execution-breadcrumb
-                             :execution-id "exec-nested-root"
-                             :tool-use-id "call-nested-root" :owner "/a/b"
-                             :command "true")))))
-          (should (eq root published-root)))
-      (with-current-buffer grandchild (setq buffer-file-name nil))
-      (mapc #'kill-buffer (list root child grandchild))
-      (delete-directory dir t))))
+              (setq buffer-file-name nil)
+              (set-buffer-modified-p nil))
+            (kill-buffer grandchild))
+          (when (buffer-live-p child) (kill-buffer child)))))))
 
 (mevedel-deftest mevedel-execution-transcript-prepare-archive ()
   ,test
@@ -1241,6 +1249,7 @@
                                                  (mevedel-session-durability-lease-acquire
                                                   session-dir "*archived terminal*" session))
                                                 (setq root-buffer (generate-new-buffer " *archived root*"))
+                                                (mevedel-session-set-root-buffer session root-buffer)
                                                 (with-current-buffer root-buffer
                                                   (setq-local mevedel--session session)
                                                   (setq buffer-file-name root-segment)

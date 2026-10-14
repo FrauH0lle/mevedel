@@ -673,6 +673,243 @@ a disabled transport cleans immediately instead of dropping work"
             (mevedel-sandbox-cleanup
              (list :cleanup-paths (list (list :path path :inode inode)))))
           (should-not (file-exists-p path)))
+      (delete-directory root t)))
+  :doc "owned mount target cleanup: retains nonempty directories without changing modes"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-cleanup-nonempty-" t)))
+         (path (file-name-concat root "synthetic")))
+    (unwind-protect
+        (progn
+          (make-directory path)
+          (write-region "Keep" nil (file-name-concat path "user-file") nil 'silent)
+          (set-file-modes path #o750)
+          (mevedel-sandbox-cleanup
+           (list :cleanup-paths
+                 (list (list :path path :inode (file-attribute-inode-number (file-attributes path))))))
+          (should (file-exists-p (file-name-concat path "user-file")))
+          (should (= #o750 (file-modes path))))
+      (delete-directory root t)))
+  :doc "owned mount target cleanup: parent replacement after identity check cannot redirect removal"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-cleanup-parent-" t)))
+         (outside (make-temp-file "mevedel-sandbox-cleanup-foreign-" t))
+         (branch (file-name-concat root "branch"))
+         (path (file-name-concat branch "synthetic"))
+         (foreign (file-name-concat outside "synthetic"))
+         (directory-p (symbol-function 'file-directory-p))
+         swapped diagnostics)
+    (unwind-protect
+        (progn
+          (make-directory path t)
+          (make-directory foreign)
+          (set-file-modes foreign #o750)
+          (let ((preparation
+                 (list :cleanup-paths
+                       (list (list :path path :inode (file-attribute-inode-number (file-attributes path)))))))
+            (cl-letf (((symbol-function 'file-directory-p)
+                       (lambda (file)
+                         (prog1 (funcall directory-p file)
+                           (when (and (equal file path) (not swapped))
+                             (setq swapped t)
+                             (rename-file branch (file-name-concat root "moved"))
+                             (make-symbolic-link outside branch))))))
+              (mevedel-test--with-captured-diagnostics diagnostics
+                (mevedel-sandbox-cleanup preparation))))
+          (should swapped)
+          (should (string-match-p "Could not remove sandbox mount target" diagnostics))
+          (should (file-directory-p foreign))
+          (should (= #o750 (file-modes foreign))))
+      (delete-directory root t)
+      (delete-directory outside t))))
+
+(mevedel-deftest mevedel-sandbox--protected-physical-path ()
+  ,test
+  (test)
+  :doc "creates private directories on local and target paths without widening lexical roots"
+  (let ((parent (file-truename (make-temp-file "mevedel-sandbox-pinned-" t))))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("sandbox-pinned")
+          (dolist (prefix '("" "/mevedelmock:sandbox-pinned:"))
+            (let* ((root (file-name-concat parent (if (equal prefix "") "local" "remote")))
+                   (path (file-name-concat root "state"))
+                   (roots (list (cons (concat prefix root) (concat prefix root)))))
+              (make-directory root)
+              (should (equal (concat prefix path)
+                             (mevedel-sandbox--protected-physical-path (concat prefix path) roots)))
+              (mevedel-sandbox--protected-restrictions
+               (concat prefix root) (list (concat prefix root)) nil
+               (list (list (list :path (concat prefix path) :mode 'read-only
+                                 :directory-p t :create-parents t))))
+              (should (file-directory-p path))
+              (should (= #o700 (file-modes path)))
+              (should-error
+               (mevedel-sandbox--protected-physical-path (concat prefix root "-sibling") roots))
+              (should-not (file-exists-p (concat root "-sibling"))))))
+      (delete-directory parent t)))
+  :doc "uses captured canonical root spellings when an immutable ancestor is aliased"
+  (let* ((parent (file-truename (make-temp-file "mevedel-sandbox-pinned-alias-" t)))
+         (real (file-name-concat parent "real"))
+         (alias (file-name-concat parent "alias"))
+         (root (file-name-concat alias "work")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat real "work") t)
+          (make-symbolic-link real alias)
+          (should (equal (file-name-concat real "work/state")
+                         (mevedel-sandbox--protected-physical-path
+                          (file-name-concat root "state")
+                          (list (cons root (file-name-concat real "work"))))))
+          (mevedel-sandbox--protected-restrictions
+           root (list root) nil
+           (list (list (list :path (file-name-concat root "state") :mode 'read-only
+                             :directory-p t :create-parents t))))
+          (should (= #o700 (file-modes (file-name-concat root "state")))))
+      (delete-directory parent t))))
+
+(mevedel-deftest mevedel-sandbox--protected-restrictions-batches ()
+  ,test
+  (test)
+  :doc "a fresh helper's five private directories use one creation and one cleanup program"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-helper-batch-" t)))
+         (names '(".git" ".mevedel" ".mevedel/artifacts" ".mevedel/artifacts/.state" ".mevedel/leases"))
+         (candidates (list (list :path (file-name-concat root ".git") :mode 'read-only :directory-p t)
+                           (list :path (file-name-concat root ".mevedel/artifacts/.state")
+                                 :mode 'read-only :directory-p t :create-parents t)
+                           (list :path (file-name-concat root ".mevedel/leases")
+                                 :mode 'read-only :directory-p t :create-parents t)))
+         (run (symbol-function 'mevedel-session-control-fs-run-program))
+         programs preparation)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                   (lambda (operations)
+                     (push (copy-tree operations) programs)
+                     (funcall run operations))))
+          (setq preparation (mevedel-sandbox--protected-restrictions root (list root) nil (list candidates)))
+          (should (= 1 (length programs)))
+          (should (= 10 (length (car programs))))
+          (should (equal (mapcar (lambda (operation) (plist-get operation :path))
+                                (seq-filter (lambda (operation) (eq (plist-get operation :op) 'make-directory))
+                                            (car programs)))
+                         (mapcar (lambda (name) (file-name-concat root name)) names)))
+          (dolist (name names)
+            (should (= #o700 (file-modes (file-name-concat root name)))))
+          (mevedel-sandbox-cleanup preparation)
+          (should (= 2 (length programs)))
+          (should (equal (car programs)
+                         (list (list :op 'delete-empty-directory :path (file-name-concat root ".git") :optional t))))
+          (should-not (file-exists-p (file-name-concat root ".git")))
+          (dolist (name (cdr names))
+            (should (file-directory-p (file-name-concat root name)))))
+      (delete-directory root t)))
+  :doc "planned aliases preserve candidate-order coarsening and promote required ancestors"
+  (let* ((parent (file-truename (make-temp-file "mevedel-sandbox-plan-alias-" t)))
+         (real (file-name-concat parent "real"))
+         (alias (file-name-concat parent "alias"))
+         (root (file-name-concat real "work"))
+         (aliased (file-name-concat alias "work"))
+         (shared (file-name-concat root "shared"))
+         (second (file-name-concat shared "second"))
+         (state (file-name-concat shared "state/leaf"))
+         preparation)
+    (unwind-protect
+        (progn
+          (make-directory root t)
+          (make-symbolic-link real alias)
+          (setq preparation
+                (mevedel-sandbox--protected-restrictions
+                 root (list aliased root real) nil
+                 (list (list (list :path (file-name-concat aliased "shared/first") :mode 'read-only :directory-p t)
+                             (list :path second :mode 'inaccessible :directory-p t)
+                             (list :path state :mode 'read-only :directory-p t :create-parents t)))))
+          ;; First candidate coarsens to shared, but the next sees that planned
+          ;; parent through its other spelling and creates second, not shared.
+          (should-not (file-exists-p (file-name-concat shared "first")))
+          (should (file-directory-p second))
+          (should (file-directory-p state))
+          (should (equal (mapcar (lambda (entry) (plist-get entry :path))
+                                (plist-get preparation :cleanup-paths))
+                         (list second)))
+          (mevedel-sandbox-cleanup preparation)
+          (should-not (file-exists-p second))
+          (should (file-directory-p state)))
+      (delete-directory parent t)))
+  :doc "a mkdir conflict skips chmod and later operations, cleaning only the successful prefix"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-batch-conflict-" t)))
+         (paths (mapcar (lambda (name) (file-name-concat root name)) '("first" "conflict" "skipped")))
+         (run (symbol-function 'mevedel-session-control-fs-run-program))
+         results cleaned)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations)
+                       (if (eq (plist-get (car operations) :op) 'make-directory)
+                           (progn
+                             ;; Both appear after planning.  Neither belongs to
+                             ;; this preparation; skipped mkdir is not ownership.
+                             (dolist (path (cdr paths))
+                               (make-directory path)
+                               (set-file-modes path #o750))
+                             (setq results (funcall run operations)))
+                         (setq cleaned operations)
+                         (funcall run operations)))))
+            (should-error
+             (mevedel-sandbox--protected-restrictions
+              root (list root) nil
+              (list (mapcar (lambda (path) (list :path path :mode 'read-only :directory-p t)) paths)))
+             :type 'mevedel-sandbox-policy-error))
+          (should (equal (mapcar (lambda (result) (plist-get result :status)) results)
+                         '(ok ok conflict skipped skipped skipped)))
+          (should (equal (mapcar (lambda (operation) (plist-get operation :path)) cleaned) (list (car paths))))
+          (should-not (file-exists-p (car paths)))
+          (dolist (path (cdr paths))
+            (should (= #o750 (file-modes path)))))
+      (delete-directory root t)))
+  :doc "a successful synthetic mkdir is cleaned even when its own mode operation fails"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-batch-mode-" t)))
+         (path (file-name-concat root "synthetic"))
+         (run (symbol-function 'mevedel-session-control-fs-run-program)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations)
+                       (funcall run
+                                (mapcar (lambda (operation)
+                                          (if (eq (plist-get operation :op) 'directory-mode)
+                                              (plist-put (copy-sequence operation) :content "invalid-mode")
+                                            operation)) operations)))))
+            (should-error
+             (mevedel-sandbox--protected-restrictions
+              root (list root) nil
+              (list (list (list :path path :mode 'read-only :directory-p t))))
+             :type 'mevedel-sandbox-policy-error))
+          (should-not (file-exists-p path)))
+      (delete-directory root t)))
+  :doc "cleanup batches continue after a nonempty target and do not adopt a replaced inode"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-cleanup-batch-" t)))
+         (empty (file-name-concat root "empty"))
+         (nonempty (file-name-concat root "nonempty"))
+         (replaced (file-name-concat root "replaced"))
+         (run (symbol-function 'mevedel-session-control-fs-run-program))
+         targets programs)
+    (unwind-protect
+        (progn
+          (dolist (path (list empty replaced nonempty))
+            (make-directory path)
+            (push (list :path path :inode (file-attribute-inode-number (file-attributes path))) targets))
+          (rename-file replaced (file-name-concat root "old"))
+          (make-directory replaced)
+          (set-file-modes nonempty #o750)
+          (write-region "Keep" nil (file-name-concat nonempty "user-file") nil 'silent)
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations)
+                       (push operations programs)
+                       (funcall run operations))))
+            (mevedel-sandbox-cleanup (list :cleanup-paths (nreverse targets))))
+          (should (= 1 (length programs)))
+          (should (equal (mapcar (lambda (op) (plist-get op :path)) (car programs)) (list nonempty empty)))
+          (should (cl-every (lambda (op) (plist-get op :optional)) (car programs)))
+          (should-not (file-exists-p empty))
+          (should (file-directory-p replaced))
+          (should (= #o750 (file-modes nonempty)))
+          (should (file-exists-p (file-name-concat nonempty "user-file"))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-sandbox--protected-restrictions ()
@@ -826,6 +1063,66 @@ a disabled transport cleans immediately instead of dropping work"
           (should-not (file-exists-p (file-name-concat outside ".state"))))
       (delete-directory root t)
       (delete-directory outside t)))
+  :doc "state creation cannot follow an ancestor swapped during parent discovery"
+  (dolist (swap-at '(1 2))
+    (let* ((root (file-truename (make-temp-file "mevedel-sandbox-mkdir-race-" t)))
+           (outside (make-temp-file "mevedel-sandbox-mkdir-outside-" t))
+           (branch (file-name-concat root "branch"))
+           (state (file-name-concat branch "nested/.state"))
+           (candidate (list :path state :mode 'read-only :directory-p t
+                            :create-parents t))
+           (first-missing (symbol-function 'mevedel-sandbox--first-missing-path))
+           (calls 0))
+      (unwind-protect
+          (progn
+            (make-directory branch)
+            (when (= swap-at 2)
+              (make-directory (file-name-concat outside "nested")))
+            (cl-letf (((symbol-function 'mevedel-sandbox--first-missing-path)
+                       (lambda (path &optional planned)
+                         (prog1 (funcall first-missing path planned)
+                           (when (= (cl-incf calls) swap-at)
+                             (rename-file branch (file-name-concat root "moved"))
+                             (make-symbolic-link outside branch))))))
+              (should-error
+               (mevedel-sandbox--protected-restrictions
+                root (list root) nil (list (list candidate)))
+               :type 'mevedel-sandbox-policy-error))
+            (should-not (file-exists-p (file-name-concat outside "nested/.state")))
+            (when (= swap-at 1)
+              (should-not (file-exists-p (file-name-concat outside "nested")))))
+        (delete-directory root t)
+        (delete-directory outside t))))
+  :doc "synthetic cleanup cannot adopt an outside directory after creation"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-cleanup-race-" t)))
+         (outside (make-temp-file "mevedel-sandbox-cleanup-outside-" t))
+         (branch (file-name-concat root "branch"))
+         (path (file-name-concat branch "secret"))
+         (foreign (file-name-concat outside "secret"))
+         (candidate (list :path path :mode 'inaccessible :directory-p t))
+         (run (symbol-function 'mevedel-session-control-fs-run-program))
+         diagnostics)
+    (unwind-protect
+        (progn
+          (make-directory branch)
+          (make-directory foreign)
+          (set-file-modes foreign #o750)
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations)
+                       (prog1 (funcall run operations)
+                         (when (eq (plist-get (car operations) :op) 'make-directory)
+                           (rename-file branch (file-name-concat root "moved"))
+                           (make-symbolic-link outside branch))))))
+            (mevedel-test--with-captured-diagnostics diagnostics
+              (should-error
+               (mevedel-sandbox--protected-restrictions
+                root (list root) nil (list (list candidate)))
+               :type 'mevedel-sandbox-policy-error)))
+          (should (string-match-p "Could not remove sandbox mount target" diagnostics))
+          (should (file-directory-p foreign))
+          (should (= #o750 (file-modes foreign))))
+      (delete-directory root t)
+      (delete-directory outside t)))
   :doc "missing state roots mount only the protected leaf and retain permanent parents"
   (let* ((root (make-temp-file "mevedel-sandbox-state-roots-" t))
          (state (file-name-concat root ".mevedel/artifacts/.state"))
@@ -847,14 +1144,20 @@ a disabled transport cleans immediately instead of dropping work"
   (let* ((root (make-temp-file "mevedel-sandbox-state-failure-" t))
          (state (file-name-concat root ".mevedel/artifacts/.state"))
          (mevedel-protected-paths '(("**/.mevedel/artifacts/.state/**" . read-only)))
-         (mkdir (symbol-function 'make-directory)))
+         (run (symbol-function 'mevedel-session-control-fs-run-program)))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'make-directory)
-                     (lambda (directory &optional parents)
-                       (if (equal directory state)
-                           (error "Injected directory creation failure")
-                         (funcall mkdir directory parents)))))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations)
+                       ;; A real target-side failure after successful parents,
+                       ;; leaving subsequent operations skipped as in production.
+                       (funcall run
+                                (mapcar (lambda (operation)
+                                          (if (and (eq (plist-get operation :op) 'make-directory)
+                                                   (equal (plist-get operation :path) state))
+                                              (list :op 'verify :path state :content "missing")
+                                            operation))
+                                        operations)))))
             (should-error (mevedel-sandbox--protected-restrictions root (list root))
                           :type 'mevedel-sandbox-policy-error))
           (should (file-directory-p (file-name-concat root ".mevedel/artifacts")))
@@ -862,7 +1165,7 @@ a disabled transport cleans immediately instead of dropping work"
             (should (file-directory-p state))
             (should-not (plist-get preparation :cleanup-paths))))
       (delete-directory root t)))
-  :doc "fresh validation passes still share prefix proofs across candidates"
+  :doc "fresh validation passes share prefix proofs without spawning creation programs"
   (let* ((root (file-truename (make-temp-file "mevedel-sandbox-proof-count-" t)))
          (paths (mapcar (lambda (index)
                           (file-name-concat root "runs" (number-to-string index) ".git"))
@@ -877,7 +1180,9 @@ a disabled transport cleans immediately instead of dropping work"
     (unwind-protect
         (progn
           (dolist (path paths) (make-directory path t))
-          (cl-letf (((symbol-function 'mevedel-sandbox--writable-symlink-component)
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (&rest _) (ert-fail "Existing targets must not launch a creation program")))
+                    ((symbol-function 'mevedel-sandbox--writable-symlink-component)
                      (lambda (&rest args)
                        (unwind-protect
                            (progn (setq checking t) (apply check args))

@@ -5208,6 +5208,10 @@ hint.  Searches that region."
                             (when (eq (char-before) ?\n)
                               (backward-char))
                             (insert hint)
+                            ;; The header inset predates the hint; a wrapped
+                            ;; hint in a nested row must keep it too.
+                            (mevedel-view--apply-rendering-indent
+                             (- (point) hint-len) (point))
                             (setq body-start (+ body-start hint-len)
                                   body-end (+ body-end hint-len)
                                   close-end (+ close-end hint-len)))

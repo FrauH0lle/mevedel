@@ -309,7 +309,30 @@
         (let ((header (mevedel-view--agent-transcript-header-line)))
           (should (<= (string-width header) (window-body-width)))
           (should (string-search "opus:high" header))
-          (should-not (string-search "Claude Code" header)))))))
+          (should-not (string-search "Claude Code" header))))))
+
+  :doc "truncated paths keep full identity and model details on hover"
+  (save-window-excursion
+    (delete-other-windows)
+    (split-window-right 40)
+    (let ((parent (current-buffer))
+          (path "/root/long_ancestor/another_ancestor/worker"))
+      (with-temp-buffer
+        (switch-to-buffer (current-buffer))
+        (setq-local mevedel-view--agent-transcript-parent-view parent
+                    mevedel-view--agent-path path
+                    mevedel-view--agent-transcript-info
+                    '(:status running :session-label "session-7"
+                      :model-metadata (:backend "Claude Code" :model "opus" :effort "high")))
+        (let* ((header (mevedel-view--agent-transcript-header-line))
+               (pos (string-search "worker" header))
+               (help (get-text-property pos 'help-echo header)))
+          (should-not (string-search path header))
+          (should (equal (concat path "\nSession session-7\n"
+                                 "Provider  Claude Code\nModel     opus\nEffort    high")
+                         (if (functionp help)
+                             (funcall help (selected-window) header pos)
+                           help))))))))
 
 (mevedel-deftest mevedel-view--agent-status-row-rendering
   (:doc "roster metadata refresh preserves a multiline leading-> composer draft")

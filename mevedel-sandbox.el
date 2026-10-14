@@ -51,6 +51,14 @@
 (autoload 'mevedel-sandbox--resolve-filesystem-permissions
   "mevedel-sandbox-grants")
 
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-program-value
+                  "mevedel-session-control-fs" (result))
+(declare-function mevedel-session-control-fs-run-program
+                  "mevedel-session-control-fs" (operations &optional lock-directory))
+(autoload 'mevedel-session-control-fs-program-value "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session--set-sandbox-mode
                   "mevedel-structs" (session mode))
@@ -348,11 +356,13 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                (file-truename (expand-file-name root)))))
           roots))))
 
-(defun mevedel-sandbox--first-missing-path (path)
-  "Return the first nonexistent component of absolute PATH, or nil."
+(defun mevedel-sandbox--first-missing-path (path &optional planned)
+  "Return the first nonexistent component of absolute PATH, or nil.
+PLANNED is a hash table of directories an earlier candidate will create."
   (let ((current (directory-file-name (expand-file-name path)))
         missing)
-    (while (and current (not (file-exists-p current)))
+    (while (and current (not (and planned (gethash current planned)))
+                (not (file-exists-p current)))
       (setq missing current)
       (let* ((directory (file-name-directory current))
              (parent (and directory (directory-file-name directory))))
@@ -658,26 +668,60 @@ the targets behind."
 
 (defun mevedel-sandbox--cleanup-now (preparation)
   "Remove unchanged synthetic mount targets owned by PREPARATION."
-  (dolist (target (reverse (plist-get preparation :cleanup-paths)))
-    (let* ((path (plist-get target :path))
-           (attributes (and (file-exists-p path)
-                            (file-attributes path 'string)))
-           (inode (and attributes
-                       (file-attribute-inode-number attributes))))
-      (when (and (equal inode (plist-get target :inode))
-                 (file-directory-p path))
-        (condition-case err
-            (progn
-              (set-file-modes path #o700)
-              (when (null (directory-files
-                           path nil directory-files-no-dot-files-regexp))
-                (delete-directory path)))
-          (error
-           (display-warning
-            'mevedel
-            (format "Could not remove sandbox mount target %s: %s"
-                    path (error-message-string err))
-            :warning)))))))
+  (let (operations)
+    (dolist (target (reverse (plist-get preparation :cleanup-paths)))
+      (let* ((path (plist-get target :path))
+             (attributes (and (file-exists-p path)
+                              (file-attributes path 'string)))
+             (inode (and attributes
+                         (file-attribute-inode-number attributes))))
+        (when (and (equal inode (plist-get target :inode))
+                   (file-directory-p path))
+          ;; A nonempty target must not suppress cleanup of the others.
+          (push (list :op 'delete-empty-directory :path path :optional t)
+                operations))))
+    (when operations
+      (setq operations (nreverse operations))
+      (condition-case err
+          (cl-mapc
+           (lambda (operation result)
+             (condition-case err
+                 ;; rmdir needs no mode change or directory read.  A nonempty
+                 ;; target is retained; a replaced parent cannot redirect it.
+                 (unless (eq (plist-get result :status) 'mismatch)
+                   (mevedel-session-control-fs-program-value result))
+               (error
+                (display-warning
+                 'mevedel
+                 (format "Could not remove sandbox mount target %s: %s"
+                         (plist-get operation :path) (error-message-string err))
+                 :warning))))
+           operations (mevedel-session-control-fs-run-program operations))
+        (error
+         (display-warning
+          'mevedel
+          (format "Could not remove sandbox mount targets %s: %s"
+                  (mapcar (lambda (operation) (plist-get operation :path)) operations)
+                  (error-message-string err))
+          :warning))))))
+
+(defun mevedel-sandbox--protected-physical-path (path physical-roots)
+  "Return the captured physical spelling of protected PATH.
+PHYSICAL-ROOTS maps writable root spellings to their canonical paths captured
+before candidate processing.  Do not resolve PATH again: an intervening
+symlink replacement must not redirect this host mutation."
+  (let* ((root (cl-find-if
+                (lambda (root)
+                  (or (string-equal (car root) path)
+                      (string-prefix-p (file-name-as-directory (car root)) path)))
+                physical-roots))
+         (physical
+          (and root (expand-file-name
+                     (file-relative-name path (file-name-as-directory (car root)))
+                     (file-name-as-directory (cdr root))))))
+    (unless physical
+      (error "Missing protected parent is outside writable roots: %s" path))
+    physical))
 
 (defun mevedel-sandbox--protected-restrictions
     (workdir writable-roots &optional temporary-root candidates)
@@ -691,15 +735,20 @@ parents persist; their mounts carry `:required', refusing launch if the
 source disappears.
 CANDIDATES, when supplied, wraps the invocation's discovered candidates in
 a one-element list; path and symlink checks still happen here."
-  (let ((checked (make-hash-table :test #'equal))
-        ;; Roots that are already canonical.  Below one, a path whose every
-        ;; component was just proved not to be a symlink is its own truename.
-        (canonical-roots
-         (seq-filter (lambda (root)
-                       (let ((root (file-name-as-directory (expand-file-name root))))
-                         (string-equal root (file-name-as-directory (file-truename root)))))
-                     writable-roots))
-        restrictions cleanup-paths git-common-directories)
+  (let* ((checked (make-hash-table :test #'equal))
+         (physical-roots
+          (mapcar (lambda (root)
+                    (let ((root (directory-file-name (expand-file-name root))))
+                      (cons root (directory-file-name (file-truename root)))))
+                  writable-roots))
+         ;; Roots that are already canonical.  Below one, a path whose every
+         ;; component was just proved not to be a symlink is its own truename.
+         (canonical-roots
+          (mapcar #'car
+                  (seq-filter (lambda (root) (string-equal (car root) (cdr root)))
+                              physical-roots)))
+         (planned (make-hash-table :test #'equal))
+         pending resolved-candidates restrictions cleanup-paths git-common-directories)
     (condition-case err
         (progn
           (dolist (candidate
@@ -707,7 +756,6 @@ a one-element list; path and symlink checks still happen here."
                      (mevedel-sandbox--protected-candidates
                       workdir writable-roots temporary-root)))
             (let* ((path (plist-get candidate :path))
-                   (mode (plist-get candidate :mode))
                    (directory-p (plist-get candidate :directory-p))
                    (exists-p (file-exists-p path))
                    (symlink
@@ -736,21 +784,64 @@ a one-element list; path and symlink checks still happen here."
                             writable-roots))
                   (let ((destination path))
                     (unless (plist-get candidate :create-parents)
-                      (setq path (or (mevedel-sandbox--first-missing-path path)
+                      (setq path (or (mevedel-sandbox--first-missing-path path planned)
                                      path)
                             destination path))
-                    (while (not (file-exists-p destination))
-                      (let ((missing (or (mevedel-sandbox--first-missing-path destination)
-                                         destination)))
-                        (make-directory missing)
-                        (set-file-modes missing #o700)
-                        ;; Removing a state root could detach another running
-                        ;; sandbox's mount and let it recreate a writable root.
-                        (unless (plist-get candidate :create-parents)
-                          (let ((attributes (file-attributes missing 'string)))
-                            (push (list :path missing
-                                        :inode (file-attribute-inode-number attributes))
-                                  cleanup-paths))))))))
+                    (while-let ((missing (mevedel-sandbox--first-missing-path
+                                          destination planned)))
+                      (let ((entry
+                             (list :path (mevedel-sandbox--protected-physical-path
+                                          missing physical-roots)
+                                   :synthetic (not (plist-get candidate :create-parents)))))
+                        (puthash missing entry planned)
+                        ;; Overlapping roots and immutable aliases may name the
+                        ;; same directory.  Later candidates see its planned
+                        ;; existence through every captured root spelling.
+                        (dolist (root physical-roots)
+                          (let ((physical (plist-get entry :path)))
+                            (when (or (equal physical (cdr root))
+                                      (string-prefix-p (file-name-as-directory (cdr root)) physical))
+                              (puthash (expand-file-name
+                                        (file-relative-name physical (file-name-as-directory (cdr root)))
+                                        (file-name-as-directory (car root)))
+                                       entry planned))))
+                        (push entry pending))))))
+              ;; A prior synthetic parent may now support a permanent state
+              ;; root.  Retain it even if this program fails partway through.
+              (when (plist-get candidate :create-parents)
+                (let ((ancestor path))
+                  (while ancestor
+                    (when-let* ((entry (gethash ancestor planned)))
+                      (plist-put entry :synthetic nil))
+                    (let ((parent (directory-file-name (file-name-directory ancestor))))
+                      (setq ancestor (unless (equal parent ancestor) parent))))))
+              (push (plist-put (copy-sequence candidate) :path path) resolved-candidates)))
+          (when pending
+            (setq pending (nreverse pending))
+            (let* ((operations
+                    (mapcan (lambda (entry)
+                              (let ((path (plist-get entry :path)))
+                                ;; Mandatory mkdir stops before chmod on conflict.
+                                (list (list :op 'make-directory :path path)
+                                      (list :op 'directory-mode :path path :content "700"))))
+                            pending))
+                   (results (mevedel-session-control-fs-run-program operations)))
+              ;; Record every successful synthetic mkdir before propagating a
+              ;; later failure, including failure of its own mode operation.
+              (cl-loop for entry in pending for tail on results by #'cddr
+                       when (and (plist-get entry :synthetic)
+                                 (eq (plist-get (car tail) :status) 'ok))
+                       do (let* ((path (plist-get entry :path))
+                                 (attributes (file-attributes path 'string)))
+                            (when attributes
+                              (push (list :path path
+                                          :inode (file-attribute-inode-number attributes))
+                                    cleanup-paths))))
+              (dolist (result results)
+                (mevedel-session-control-fs-program-value result))))
+          (dolist (candidate (nreverse resolved-candidates))
+            (let ((path (plist-get candidate :path))
+                  (mode (plist-get candidate :mode)))
               (when (file-exists-p path)
                 (push (append (list :path path
                                     :mode mode

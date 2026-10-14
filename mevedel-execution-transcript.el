@@ -14,10 +14,6 @@
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
 
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x))
-
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
                   "mevedel-execution-telemetry" (summary))
@@ -61,8 +57,8 @@
   "mevedel-session-persistence")
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(defvar mevedel--agent-invocation)
 (defvar mevedel--session)
 
 ;; `mevedel-tool-render-data'
@@ -175,19 +171,6 @@ the new segment of the same transcript."
                       (when (present older) (throw 'found t))
                     (kill-buffer older))))))))))
 
-(defun mevedel-execution-transcript--root-buffer (buffer)
-  "Return the session root data buffer owning transcript BUFFER.
-A nested agent's parent is another agent's buffer, so follow the
-invocation chain until a buffer without an agent invocation remains."
-  (let ((seen nil) invocation)
-    (while (and (buffer-live-p buffer)
-                (not (memq buffer seen))
-                (setq invocation
-                      (buffer-local-value 'mevedel--agent-invocation buffer)))
-      (push buffer seen)
-      (setq buffer (mevedel-agent-invocation-parent-data-buffer invocation)))
-    buffer))
-
 (defun mevedel-execution-transcript--persist-terminal-record
     (record &optional terminal-data)
   "Persist RECORD beside the current transcript without saving unsent edits.
@@ -199,8 +182,7 @@ the matching original Bash row; do not publish an unsent in-memory draft."
                         (error "Transcript has no session")))
            (portable (mevedel-session-codec-portable-authority-p session))
            (root-buffer
-            (and portable
-                 (mevedel-execution-transcript--root-buffer (current-buffer))))
+            (and portable (mevedel-session-root-buffer session)))
            (coding (or buffer-file-coding-system 'utf-8-unix)))
       (when (if portable
                 (mevedel-session-artifacts-artifact-present-p
@@ -394,9 +376,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
                    (portable
                     (mevedel-session-codec-portable-authority-p session))
                    (root-buffer
-                    (and portable
-                         (mevedel-execution-transcript--root-buffer
-                          data-buffer)))
+                    (and portable (mevedel-session-root-buffer session)))
                    (coding (or buffer-file-coding-system 'utf-8-unix)))
               (with-temp-buffer
                 (if portable

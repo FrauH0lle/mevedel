@@ -125,7 +125,53 @@
                 (should (equal wrap (get-text-property (match-beginning 0) 'wrap-prefix)))
                 (mevedel-view-toggle-section)
                 (mevedel-view-toggle-section))
-              (should (equal "> keep\nsecond line" (mevedel-view--input-text))))))))))
+              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))))))))
+
+  :doc "collapsed hints keep the nested header inset across decoration and toggles"
+  (dolist (tag '("agent-message" "agent-result"))
+    (dolist (indent '("" "  " "┌ "))
+      (mevedel-view-test--with-buffers
+        (with-current-buffer data-buf (insert "source\n"))
+        (with-current-buffer view-buf
+          (let* ((source (cons 1 8))
+                 (text (format "<%s sender=\"/root/test\" outcome=\"completed\">\nPayload line.\n</%s>\n"
+                               tag tag))
+                 (child (list :kind 'mailbox :source source
+                              :rendering (list :mailbox-text text)))
+                 (wrap (unless (string-empty-p indent)
+                         (make-string (string-width indent) ?\s))))
+            (let ((inhibit-read-only t))
+              (goto-char mevedel-view--input-marker)
+              (if (string-empty-p indent)
+                  (let ((mevedel-view-mailbox-collapse-line-threshold 0))
+                    (insert text)
+                    (mevedel-view--decorate-agent-message-blocks (point-min) (point))
+                    (mevedel-view--decorate-agent-result-blocks (point-min) (point)))
+                (mevedel-view--insert-child-call-block child source t indent)))
+            (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+            (let ((draft-point (point)))
+              (cl-flet ((check-hint ()
+                          (goto-char (point-min))
+                          (should (search-forward "[1 line collapsed]"
+                                                  mevedel-view--input-marker t))
+                          (let ((hint (match-beginning 0)))
+                            (should (equal (unless (string-empty-p indent) indent)
+                                           (get-text-property hint 'line-prefix)))
+                            (should (equal wrap (get-text-property hint 'wrap-prefix)))
+                            (should-not (invisible-p hint)))))
+                ;; Initial decoration, then interactive re-collapse.
+                (dotimes (_ 3)
+                  (save-excursion
+                    (check-hint)
+                    (mevedel-view-toggle-section)
+                    (goto-char (point-min))
+                    (should-not (search-forward "collapsed]"
+                                                mevedel-view--input-marker t))
+                    (search-forward "/root/test")
+                    (mevedel-view-toggle-section)
+                    (check-hint))))
+              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
+              (should (= draft-point (point))))))))))
 
 (mevedel-deftest mevedel-view-render-mailbox-boundaries ()
   ,test

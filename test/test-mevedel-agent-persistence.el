@@ -164,6 +164,38 @@
     (should-error
      (mevedel-agent-persistence--serialize-record entry paths ids)))
 
+  :doc "persists a running turn's acknowledged provider without changing its frozen identity"
+  (let* ((record (mevedel-agent-persistence-test--record
+                  nil nil nil 'running))
+         (frozen (mevedel-agent-record-configuration record))
+         (effective (copy-mevedel-agent-configuration frozen))
+         (locals (copy-tree (mevedel-agent-configuration-request-locals frozen)))
+         launch)
+    (setf (alist-get 'gptel-reasoning-effort
+                    (mevedel-agent-configuration-request-locals frozen)) 'high)
+    (setq launch (mevedel-agent-configuration-model-metadata frozen))
+    (setf (alist-get 'gptel-model locals) 'served-model
+          (alist-get 'gptel-reasoning-effort locals) nil
+          (mevedel-agent-configuration-request-locals effective) locals
+          (mevedel-agent-record-model-metadata record) launch
+          (mevedel-agent-record-invocation record)
+          (mevedel-agent-invocation--create :frozen-configuration effective))
+    (let* ((encoded (mevedel-agent-persistence--serialize-record
+                     (cons "/root/task" record)
+                     (make-hash-table :test #'equal)
+                     (make-hash-table :test #'equal)))
+           (restored (cdr (mevedel-agent-persistence--deserialize-record
+                           (car (read-from-string (prin1-to-string encoded)))
+                           (make-hash-table :test #'equal)
+                           (make-hash-table :test #'equal)))))
+      (should (equal (mevedel-agent-configuration-model-metadata effective)
+                     (mevedel-agent-control-record-model-metadata restored)))
+      (should (equal launch (mevedel-agent-record-model-metadata record)))
+      (should (eq 'test-model
+                  (alist-get 'gptel-model
+                             (plist-get (plist-get encoded :configuration)
+                                        :request-locals))))))
+
   :doc "retains the last served provider metadata across a restore"
   (let* ((record (mevedel-agent-persistence-test--record))
          (metadata '(:backend "Served" :model "served-model" :effort nil)))

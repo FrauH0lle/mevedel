@@ -733,7 +733,20 @@ ORIGINAL still owns native transitions and all their handlers."
   (let* ((fsm (car (alist-get process gptel--request-alist)))
          (info (or (process-get process 'mevedel-retry-info)
                    (and fsm (gptel-fsm-info fsm))))
-         (state (plist-get info :mevedel-retry-state)))
+         (state (plist-get info :mevedel-retry-state))
+         (mevedel-gptel-retry--cleanup-header-fsm
+          (and fsm (plist-get info :stream)
+               (not (zerop (process-exit-status process)))
+               (eq (gptel-fsm-state fsm) 'TYPE)
+               ;; Callback ordering also matters when retries are disabled.
+               ;; Leave unrelated native gptel requests unchanged.
+               (or state
+                   (when-let* ((buffer (plist-get info :buffer))
+                               ((buffer-live-p buffer))
+                               (request (buffer-local-value
+                                         'mevedel--current-request buffer)))
+                     (eq fsm (mevedel-request-fsm request))))
+               fsm)))
     (if (not state)
         (funcall original process status)
       (when (and (not (memq (process-status process) '(stop run)))
@@ -759,12 +772,7 @@ ORIGINAL still owns native transitions and all their handlers."
                         (goto-char (point-min))
                         (when (re-search-forward "^retry-after: *\\([^\r\n]+\\)" end t)
                           (plist-put info :mevedel-retry-advice (string-trim (match-string 1)))))))))
-              (let ((mevedel-gptel-retry--cleanup-header-fsm
-                     (and (plist-get info :stream)
-                          (not (zerop (process-exit-status process)))
-                          (eq (gptel-fsm-state fsm) 'TYPE)
-                          fsm)))
-                (funcall original process status)))
+              (funcall original process status))
           ;; Ownership ends at a native terminal transition or the next WAIT,
           ;; not HTTP completion: asynchronous tool callbacks still need it.
           (plist-put state :completing nil))))))

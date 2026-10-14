@@ -102,6 +102,30 @@ Later attempts use real curl against the fixture's local server."
                 (should-not gptel--request-alist)
                 (should-not mevedel-gptel-retry--states)))))))))
 
+(ert-deftest mevedel-gptel-retry-dispatch/curl-92-disabled ()
+  "Disabling retries still delivers the callback before terminal settlement."
+  (mevedel-test--with-captured-diagnostics nil
+    (dolist (prefix '("" "HTTP/2 200 OK\r\n\r\n"))
+      (let ((mevedel-gptel-retry-max-retries 0)
+            callbacks)
+        (mevedel-retry-test--with-http nil
+          (plist-put (gptel-fsm-info fsm) :callback
+                     (lambda (response _info)
+                       (when (null response)
+                         (push (list (gptel-fsm-state fsm) failed) callbacks))))
+          (mevedel-retry-transport-test--with-exit 1 prefix
+            (gptel--fsm-transition fsm)
+            (mevedel-test--await 5 "Curl cleanup did not finish"
+              (null gptel--request-alist))
+            (should (equal '((TYPE 0)) callbacks))
+            (should (eq 'ERRS (gptel-fsm-state fsm)))
+            (should (= 1 failed))
+            (should (= 0 finished))
+            (should-not requests)
+            (should-not scheduled)
+            (should-not gptel--request-alist)
+            (should-not mevedel-gptel-retry--states)))))))
+
 (ert-deftest mevedel-gptel-retry-dispatch/curl-92-before-headers-keeps-type-transition ()
   "Before headers, cleanup must still perform the real WAIT -> TYPE step."
   (mevedel-test--with-captured-diagnostics nil

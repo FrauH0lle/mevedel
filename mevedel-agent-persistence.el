@@ -241,7 +241,7 @@ have no result yet, but a stored result always includes both fields."
          (settled-outcome
           (and id (mevedel-agent-record-settled-outcome record)))
          (model-metadata
-          (and id (mevedel-agent-record-model-metadata record))))
+          (and id (mevedel-agent-control-record-model-metadata record))))
     (unless
         (and (equal (car entry) path)
              (mevedel-agent-persistence--identity-p

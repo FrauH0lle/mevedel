@@ -1689,7 +1689,20 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
           (file-name-concat
            test-mevedel-execution-remote--directory
            "test-mevedel-execution-remote-client.el"))
-         (common (list "npx" "@emacs-eask/cli" "test" "ert" client-file))
+         ;; Dependencies are already provisioned.  `test ert' refreshes remote
+         ;; package archives before loading this fixture; use installed packages
+         ;; while explicitly retaining the project's per-child HOME/XDG hook.
+         (common (list "npx" "@emacs-eask/cli" "emacs" "--batch"
+                       "--eval"
+                       (prin1-to-string
+                        '(progn
+                           (unless (and (boundp 'eask-before-test/ert-hook)
+                                        (memq 'mevedel-eask--isolate-test-home
+                                              eask-before-test/ert-hook)
+                                        (fboundp 'mevedel-eask--isolate-test-home))
+                             (error "Eask test isolation hook is unavailable"))
+                           (run-hooks 'eask-before-test/ert-hook)))
+                       "-l" client-file "-f" "ert-run-tests-batch-and-exit"))
          (owner-log (generate-new-buffer " *mevedel-remote-owner-log*"))
          (requester-log
           (generate-new-buffer " *mevedel-remote-requester-log*"))

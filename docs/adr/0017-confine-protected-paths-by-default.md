@@ -45,6 +45,20 @@ writable root, and each validation pass tests each shared prefix once. Candidate
 processing can yield during filesystem I/O, so the final validation pass clears
 the earlier prefix observations before rechecking the completed restrictions.
 Missing targets also receive an uncached check before host directory creation.
+Creation and mode changes use the existing target-side pinned-parent filesystem
+program, with canonical writable-root spellings captured before candidate
+processing. An ancestor replaced while discovering missing parents cannot
+redirect these host mutations. A candidate-order planning pass batches missing
+directories into one parent-before-child program, sharing planned existence
+across captured aliases. A mkdir conflict stops the program before chmod;
+successful synthetic creations acquire cleanup ownership before later failures
+propagate. Ancestors needed by permanent state roots are retained. Existing
+targets do not start this program.
+Synthetic cleanup retains the captured physical spelling and its inode check,
+then uses pinned-parent empty-directory removal rather than changing modes and
+walking the target. Eligible targets share one reverse-order program whose
+optional deletions let cleanup continue after a refusal. A changed parent refuses
+cleanup visibly; nonempty targets remain quietly.
 Below an already canonical writable root, a path whose every component that check proved
 is not a symlink is its own canonical spelling and is not resolved again; other
 paths still resolve through `file-truename`. Restriction sorting computes each
@@ -145,3 +159,39 @@ showed that final refusal alone was too late for a later missing state root:
 cached ancestors let its preparation create a directory through the new symlink.
 Missing targets now recheck their full writable path before creation. The earlier
 timing above predates these additional fresh checks.
+
+A further real-filesystem probe replaced an ancestor during missing-parent
+discovery, after that uncached check. Final validation refused launch but the
+parent-creation loop had already created state outside the writable root.
+Creation now reuses descriptor-pinned filesystem operations instead of adding
+another pathname precheck. Captured root spellings retain support for immutable
+symlinked ancestors without resolving a newly substituted writable symlink.
+Only missing directories incur this target-side program; the common existing
+restriction path retains its two shared-prefix proof passes.
+
+The initial pinned repair used one program per missing directory, on the
+assumption that creation was a rare cold path. Repeated history queries disproved
+that assumption: each fresh helper scratch created five directories and removed
+one synthetic target, paying for six programs on every query. Creation and
+cleanup now batch separately through the existing filesystem program. History
+regressions retain the original saved-session publication limits (three PID or
+six portable programs) and separately require two helper programs, all six
+search canaries, and fresh scratch cleanup on each of three queries.
+
+A seven-round alternating local replay with compiled preparation and filesystem
+program functions measured 128 existing candidates at median 7.82 ms before the
+pinned repair and 7.88 ms after batching, with identical restrictions and no
+target programs. Fresh helper-shaped preparation plus cleanup measured 1.15 ms
+before pinning, 36.20 ms with per-directory pinning, and 25.75 ms with batching;
+the latter two used six and two programs respectively. Batching reduces the
+recurring security cost but does not erase it. These measurements preload the
+modules and exclude helper execution; they are not package cold-start or
+end-to-end query timings.
+
+The corresponding teardown probe swapped a synthetic target's ancestor after
+creation or after the editor's identity check. Lexical cleanup could then change
+modes and remove an outside directory. Cleanup now uses the existing pinned
+empty-directory operation on the captured physical path, without a mode change.
+The inode precheck remains an ownership check, not atomic compare-and-unlink:
+an independent writer can still replace an empty leaf within the same pinned
+parent between that check and removal.

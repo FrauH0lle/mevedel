@@ -422,7 +422,10 @@ running in the UI."
      (t entry-status))))
 
 (defun mevedel-view--agent-transcript-header-line ()
-  "Return the header-line string for a transcript inspection view."
+  "Return the header-line string for a transcript inspection view.
+The header line evaluates this on every redisplay of the view.  Optional
+fields therefore fit against a running width instead of remeasuring the
+growing header, and hover details are built only when shown."
   (let* ((info (mevedel-view--agent-transcript-current-info))
          (agent-path (or mevedel-view--agent-path
                          (plist-get info :agent-path)))
@@ -455,42 +458,50 @@ running in the UI."
                                'local-map mevedel-view--agent-parent-map)))
          (width (when-let* ((window (get-buffer-window (current-buffer))))
                   (window-body-width window)))
-         (path (or agent-path "unknown")))
+         (path (or agent-path "unknown"))
+         (parent-width (if parent (string-width parent) 0)))
     ;; Keep the return action, agent identity and state ahead of optional
     ;; metadata.  Favor the agent's leaf name when truncating long paths.
     (when width
-      (setq badge (truncate-string-to-width
-                   badge (max 8 (- width (string-width (or parent "")) 14)) nil nil "…"))
-      (let ((budget (max 4 (- width (string-width (or parent ""))
-                             (string-width badge) (if parent 6 3)))))
-        (when (> (string-width path) budget)
+      (let ((limit (max 8 (- width parent-width 14))))
+        (when (> (string-width badge) limit)
+          (setq badge (truncate-string-to-width badge limit nil nil "…"))))
+      (let ((budget (max 4 (- width parent-width (string-width badge)
+                             (if parent 6 3))))
+            (path-width (string-width path)))
+        (when (> path-width budget)
           (setq path (concat "…" (truncate-string-to-width
-                                  path (string-width path)
-                                  (- (string-width path) (1- budget))))))))
-    (let ((header (string-join
-                   (delq nil
-                         (list parent
-                               (propertize path 'help-echo
-                                           (string-join
-                                            (delq nil
-                                                  (list agent-path
-                                                        (format "Session %s" session-label)
-                                                        (mevedel-view-agent-model-details metadata)))
-                                            "\n"))
-                               (unless (string-empty-p badge) badge)))
-                   " · ")))
-      (cl-labels ((fits (text)
-                    (or (null width) (<= (+ (string-width header) 3
-                                           (string-width text)) width))))
-        (dolist (text (list (cl-find-if #'fits
-                                       (delq nil (list (mevedel-view-agent-model-label metadata t)
-                                                       (mevedel-view-agent-model-label metadata))))
-                           (when (integerp calls) (format "%d calls" calls))
-                           (when (numberp elapsed) (mevedel--duration-label elapsed))
-                           (format "session %s" session-label)))
-          (when (and text (fits text))
-            (setq header (concat header " · " (propertize text 'face 'shadow))))))
-      header)))
+                                  path path-width
+                                  (- path-width (1- budget))))))))
+    (let* ((parts (delq nil
+                        (list parent
+                              (propertize
+                               path 'help-echo
+                               (lambda (&rest _)
+                                 (string-join
+                                  (delq nil
+                                        (list agent-path
+                                              (format "Session %s" session-label)
+                                              (mevedel-view-agent-model-details
+                                               metadata)))
+                                  "\n")))
+                              (unless (string-empty-p badge) badge))))
+           (used (+ (* 3 (1- (length parts)))
+                    (apply #'+ (mapcar #'string-width parts))))
+           extras)
+      ;; Append each optional field that still fits after a separator.
+      (cl-flet ((add (text)
+                  (when text
+                    (let ((text-width (string-width text)))
+                      (when (or (null width) (<= (+ used 3 text-width) width))
+                        (setq used (+ used 3 text-width))
+                        (push (propertize text 'face 'shadow) extras))))))
+        (or (add (mevedel-view-agent-model-label metadata t))
+            (add (mevedel-view-agent-model-label metadata)))
+        (when (integerp calls) (add (format "%d calls" calls)))
+        (when (numberp elapsed) (add (mevedel--duration-label elapsed)))
+        (add (format "session %s" session-label)))
+      (string-join (nconc parts (nreverse extras)) " · "))))
 
 (defun mevedel-view--agent-transcript-current-info ()
   "Return transcript metadata refreshed from the live invocation."

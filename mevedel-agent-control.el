@@ -969,6 +969,7 @@ Return rollback and post-commit delivery closures for INVOCATION."
            (previous-blockers (mevedel-agent-record-blockers record))
            (previous-result (mevedel-agent-record-settled-result record))
            (previous-outcome (mevedel-agent-record-settled-outcome record))
+           (previous-metadata (mevedel-agent-record-model-metadata record))
            ;; Completions of the agent's own Bash it never read go to the
            ;; caller with the result.
            (own-path (mevedel-agent-record-path record))
@@ -995,7 +996,9 @@ Return rollback and post-commit delivery closures for INVOCATION."
                    (mevedel-agent-record-settled-result record)
                    previous-result
                    (mevedel-agent-record-settled-outcome record)
-                   previous-outcome)
+                   previous-outcome
+                   (mevedel-agent-record-model-metadata record)
+                   previous-metadata)
              (mevedel-agent-control--set-mailbox-queue
               session recipient previous-queue)
              (setf (mevedel-agent-record-mailbox record) own-queue))

@@ -10,6 +10,82 @@
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-history-test-helpers"))
 
+(defun test-mevedel-history-search--program-paths (operations lock-directory)
+  "Return every target path named by control OPERATIONS or LOCK-DIRECTORY."
+  (let ((paths (and lock-directory (list lock-directory))))
+    (dolist (operation operations paths)
+      (dolist (key '(:path :source :source-file))
+        (when (stringp (plist-get operation key))
+          (push (plist-get operation key) paths))))))
+
+(defun test-mevedel-history-search--path-under-p (path root)
+  "Return non-nil when PATH is ROOT or lies beneath it."
+  (string-prefix-p (file-name-as-directory (expand-file-name root))
+                   (file-name-as-directory (expand-file-name path))))
+
+(defun test-mevedel-history-search--count-programs (sessions-directory thunk)
+  "Call THUNK, classifying each control program by the paths it names.
+Source programs name only SESSIONS-DIRECTORY paths.  Helper programs name
+only paths in the scratch root the external helper most recently allocated.
+Return a plist with `:source' and `:helper' counts, allocated `:scratches',
+`:other' operations for any program outside both or mixing them, and THUNK's
+`:value'.  The classification is by location, so publication writes in the
+source sessions count against the source budget whatever their verb."
+  (let ((native-program (symbol-function 'mevedel-session-control-fs-run-program))
+        (native-temp (symbol-function 'make-temp-file))
+        (source 0)
+        (helper 0)
+        scratches other value)
+    (cl-letf (((symbol-function 'make-temp-file)
+               (lambda (prefix &optional dir-flag suffix text)
+                 (let ((file (funcall native-temp prefix dir-flag suffix text)))
+                   (when (and dir-flag (equal prefix "mevedel-helper-"))
+                     (push file scratches))
+                   file)))
+              ((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &optional lock-directory)
+                 (let ((paths (test-mevedel-history-search--program-paths
+                               operations lock-directory)))
+                   (cond
+                    ((and paths
+                          (cl-every (lambda (path)
+                                      (test-mevedel-history-search--path-under-p
+                                       path sessions-directory))
+                                    paths))
+                     (cl-incf source))
+                    ((and paths scratches
+                          (cl-every (lambda (path)
+                                      (test-mevedel-history-search--path-under-p
+                                       path (car scratches)))
+                                    paths))
+                     (cl-incf helper))
+                    (t (push operations other))))
+                 (funcall native-program operations lock-directory))))
+      (setq value (funcall thunk)))
+    (list :source source :helper helper :scratches (nreverse scratches)
+          :other (nreverse other) :value value)))
+
+(defun test-mevedel-history-search--check-batched-query
+    (sessions-directory query source-budget seen-scratches)
+  "Run QUERY once and check its programs against SOURCE-BUDGET.
+QUERY returns the search result text.  Each query must find every canary,
+stay within the source budget and pay for one fresh helper scratch root not
+in SEEN-SCRATCHES: one creation program and one cleanup program.  Return
+SEEN-SCRATCHES extended with this query's root."
+  (let* ((counts (test-mevedel-history-search--count-programs
+                  sessions-directory query))
+         (text (plist-get counts :value))
+         (scratches (plist-get counts :scratches)))
+    (dotimes (index 6)
+      (should (string-search (format "canary-%d" index) text)))
+    (should-not (plist-get counts :other))
+    (should (<= (plist-get counts :source) source-budget))
+    (should (= 1 (length scratches)))
+    (should-not (member (car scratches) seen-scratches))
+    (should-not (file-exists-p (car scratches)))
+    (should (= 2 (plist-get counts :helper)))
+    (append seen-scratches scratches)))
+
 (mevedel-deftest mevedel-history-search-start (:quiet t)
   ,test
   (test)
@@ -365,28 +441,29 @@
          (workspace (test-mevedel-session-persistence--make-workspace root))
          (mevedel-history-search--cache (make-hash-table :test #'equal))
          (mevedel-history-search--cache-bytes 0)
-         (native (symbol-function 'mevedel-session-control-fs-run-program))
-         (programs 0)
-         pairs)
+         pairs scratches)
     (unwind-protect
         (progn
           (dotimes (index 6)
             (push (test-mevedel-history-search--source
                    workspace (format "source-%d" index)
                    (format "Batch evidence canary-%d\n" index)) pairs))
-          (let ((result
-                 (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                            (lambda (&rest args)
-                              (cl-incf programs)
-                              (apply native args))))
-                          (test-mevedel-history-search--query
-                           workspace 'grep
-                           '(:path "history://saved" :pattern "Batch evidence" :output_mode "content")))))
-            (dotimes (index 6)
-              (should (string-search (format "canary-%d" index) (plist-get result :result))))
-            ;; Two discovery programs, three publication stages, one pinned
-            ;; transcript batch. Helper admission and binary probes are separate.
-            (should (<= programs 6))))
+          ;; Two discovery programs, three publication stages, one pinned
+          ;; transcript batch: every query, including the cold first one.
+          (dotimes (_ 3)
+            (setq scratches
+                  (test-mevedel-history-search--check-batched-query
+                   (file-name-directory
+                    (directory-file-name
+                     (mevedel-session-save-path (caar pairs))))
+                   (lambda ()
+                     (plist-get
+                      (test-mevedel-history-search--query
+                       workspace 'grep
+                       '(:path "history://saved" :pattern "Batch evidence"
+                               :output_mode "content"))
+                      :result))
+                   6 scratches))))
       (dolist (pair pairs)
         (when (buffer-live-p (cdr pair))
           (with-current-buffer (cdr pair) (set-buffer-modified-p nil))
@@ -651,28 +728,28 @@
          (workspace (test-mevedel-session-persistence--make-file-workspace root))
          (mevedel-history-search--cache (make-hash-table :test #'equal))
          (mevedel-history-search--cache-bytes 0)
-         (native (symbol-function 'mevedel-session-control-fs-run-program))
-         (programs 0)
-         sources)
+         sources scratches)
     (unwind-protect
         (progn
           (dotimes (index 6)
             (push (test-mevedel-history-search--source
                    workspace (format "source-%d" index)
                    (format "Batch evidence canary-%d\n" index)) sources))
-          (let ((text
-                 (plist-get
-                  (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                             (lambda (&rest args)
-                               (cl-incf programs)
-                               (apply native args))))
-                           (test-mevedel-history-search--query
-                            workspace 'grep '(:path "history://saved" :pattern "Batch evidence"
-                                                    :output_mode "content"))) :result)))
-            (dotimes (index 6)
-              (should (string-search (format "canary-%d" index) text)))
-            ;; Control probes, sidecars and transcripts; helper admission is separate.
-            (should (<= programs 3)))
+          ;; Control probes, sidecars and transcripts: every query, including
+          ;; the cold first one.
+          (dotimes (_ 3)
+            (setq scratches
+                  (test-mevedel-history-search--check-batched-query
+                   (file-name-directory
+                    (directory-file-name
+                     (mevedel-session-save-path (caar sources))))
+                   (lambda ()
+                     (plist-get
+                      (test-mevedel-history-search--query
+                       workspace 'grep '(:path "history://saved" :pattern "Batch evidence"
+                                               :output_mode "content"))
+                      :result))
+                   3 scratches)))
           (let* ((path (file-name-concat (mevedel-session-save-path (caar sources))
                                          "session.meta.el"))
                  (attributes (file-attributes path))
