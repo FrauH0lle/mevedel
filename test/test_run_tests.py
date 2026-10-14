@@ -1,11 +1,15 @@
 """Checks for complete-suite partitioning and measurement reporting."""
 
 import csv
+import contextlib
+import io
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import run_tests
@@ -78,6 +82,47 @@ class RunnerTests(unittest.TestCase):
         for observed in [[], ['a'], ['a', 'a'], ['a', 'b', 'extra']]:
             with self.assertRaises(ValueError):
                 run_tests.check_results(['a', 'b'], [{'test': name} for name in observed])
+
+    def test_crashed_worker_keeps_summary_and_identifies_its_log(self):
+        for broken, exit_code in ((None, 1), ('{', 0), ('{"tests": []}', 0)):
+            with self.subTest(results=broken), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                output = path / 'reports'
+                history = path / 'latest-durations.csv'
+                history.write_text('previous successful timings\n')
+
+                def run(command, log, env=None):
+                    log.write_text('error in process filter: No match data\n')
+                    if log.name == 'inventory.log':
+                        Path(env['MEVEDEL_TEST_RESULTS']).write_text('["a", "b"]')
+                    elif log.name == '0.log':
+                        Path(env['MEVEDEL_TEST_RESULTS']).write_text(json.dumps({
+                            'ert_seconds': 1,
+                            'tests': [dict(test='a', seconds=1,
+                                           status='ert-test-passed', expected=True)]}))
+                    elif log.name == '1.log':
+                        if broken is not None:
+                            Path(env['MEVEDEL_TEST_RESULTS']).write_text(broken)
+                        return exit_code, 1
+                    return 0, 1
+
+                console = io.StringIO()
+                with patch.object(sys, 'argv', ['run_tests.py', '--jobs', '2',
+                                               '--output', str(output), '--durations',
+                                               str(path / 'absent.csv')]), \
+                     patch.object(run_tests, 'REPORTS', path), \
+                     patch.object(run_tests, 'run_logged', side_effect=run), \
+                     contextlib.redirect_stdout(console):
+                    self.assertEqual(run_tests.main(), 1)
+                summary = json.loads((output / 'summary.json').read_text())
+                self.assertEqual(summary['count'], 1)
+                self.assertEqual(summary['expected_count'], 2)
+                self.assertEqual(summary['workers'][1]['exit_code'], exit_code)
+                self.assertTrue(summary['workers'][1]['error'])
+                self.assertIn(str(output / '1.log'), console.getvalue())
+                self.assertEqual(history.read_text(), 'previous successful timings\n')
+                with (output / 'durations.csv').open() as stream:
+                    self.assertEqual([row['test'] for row in csv.DictReader(stream)], ['a'])
 
     def test_report_and_subprocess_failure_remain_observable(self):
         with tempfile.TemporaryDirectory() as directory:

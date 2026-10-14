@@ -456,6 +456,64 @@ Bind `delays' to the actual delays requested by retry scheduling."
                     (apply schedule seconds function args))))
          ,@body))))
 
+(ert-deftest mevedel-gptel-retry--parse-stream/native-gemini-header-only-filter ()
+  "A fresh process filter can receive Gemini headers before any JSON."
+  (mevedel-retry-test--with-http nil
+    (let ((spec (nth 2 mevedel-retry-backends-test--wire-cases))
+          done caught results)
+      (mevedel-retry-backends-test--configure
+       (plist-get spec :constructor) (plist-get spec :data) t)
+      (let ((process
+             (make-process
+              :name "gemini-header-only" :noquery t :connection-type 'pipe
+              :command '("printf" "HTTP/1.1 200 OK\r\n\r\n")
+              :sentinel #'ignore
+              :filter
+              (lambda (_process headers)
+                (condition-case err
+                    (with-temp-buffer
+                      (insert headers)
+                      (goto-char (point-min))
+                      (push (gptel-curl--parse-stream backend (gptel-fsm-info fsm)) results)
+                      (push (point) results)
+                      (save-excursion
+                        (goto-char (point-max))
+                        (insert (plist-get spec :stream-success)))
+                      (push (gptel-curl--parse-stream backend (gptel-fsm-info fsm)) results))
+                  (error (setq caught err)))
+                (setq done t)))))
+        (unwind-protect
+            (progn
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (not done) (< (float-time) deadline))
+                  (accept-process-output nil 0.01)))
+              (should done)
+              (should-not caught)
+              (should (equal '("Recovered answer" 1 "") results)))
+          (delete-process process))))))
+
+(ert-deftest mevedel-gptel-retry-dispatch/native-gemini-fragmented-prefix ()
+  "Gemini headers and array prefixes may arrive before the first object."
+  (dolist (limit '(0 2))
+    (dolist (prefix '("" "["))
+      (let* ((mevedel-gptel-retry-max-retries limit)
+             (spec (nth 2 mevedel-retry-backends-test--wire-cases))
+             (success (plist-get spec :stream-success)))
+        (mevedel-retry-test--with-http
+            (list (list prefix (substring success (length prefix))))
+          (mevedel-retry-backends-test--configure
+           (plist-get spec :constructor) (plist-get spec :data) t)
+          (gptel--fsm-transition fsm)
+          (mevedel-retry-test--drain-native)
+          (should (= 1 (length requests)))
+          (should (= 1 finished))
+          (should (= 0 failed))
+          (should-not scheduled)
+          (should-not gptel--request-alist)
+          (should-not mevedel-gptel-retry--states)
+          (with-current-buffer data-buf
+            (should (equal "Recovered answer" (string-trim (buffer-string))))))))))
+
 (ert-deftest mevedel-gptel-retry-dispatch/native-http-transient-status-matrix ()
   "Real HTTP 429 and 503 retry once on native streaming, curl and URL paths."
   (mevedel-test--with-captured-diagnostics nil

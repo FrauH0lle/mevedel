@@ -25,6 +25,7 @@
 (declare-function gptel--openai-responses-update-tokens "ext:gptel-openai-responses" (usage info))
 (declare-function gptel--stream-convert-markdown->org "ext:gptel-org" (start-marker))
 (declare-function gptel-curl--stream-insert-response "ext:gptel" (response info &optional raw))
+(declare-function gptel-gemini-p "ext:gptel-gemini" (object))
 (defvar gptel-post-response-functions)
 (defvar gptel-post-stream-hook)
 
@@ -569,8 +570,19 @@ invocation has settled, aborts instead: its owner no longer accepts output."
   "Use ORIGINAL's native parsing, retaining stream errors and completion.
 Inspect complete SSE or JSON-line envelopes, not provider text or tool data."
   (let ((start (point)) (state (plist-get info :mevedel-retry-state)))
-    (if (not state)
-        (funcall original backend info)
+    (cond
+     ;; Gemini rewinds using match data even when no object was found.  A
+     ;; header-only first chunk has neither an object nor prior match data.
+     ((and (fboundp 'gptel-gemini-p) (gptel-gemini-p backend)
+           (or state
+               (when-let* ((buffer (plist-get info :buffer))
+                           ((buffer-live-p buffer)))
+                 (buffer-local-value 'mevedel--current-request buffer)))
+           (not (save-excursion
+                  (save-match-data (search-forward "{" nil t)))))
+      "")
+     ((not state) (funcall original backend info))
+     (t
       (when (mevedel-gptel-retry--live-p state info)
         (let ((text (funcall original backend info)))
           ;; Some native parsers leave in-band errors unread.  Scan complete
@@ -643,7 +655,7 @@ Inspect complete SSE or JSON-line envelopes, not provider text or tool data."
                          (or (plist-get headers :retry-after)
                              (plist-get headers :Retry-After)
                              (and (listp error-data) (plist-get error-data :retry_after))))))
-          text)))))
+          text))))))
 
 (defun mevedel-gptel-retry--converter (original marker)
   "Retain ORIGINAL's converter cleanup for MARKER on a failed attempt."

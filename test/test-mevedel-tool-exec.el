@@ -1182,7 +1182,10 @@ the execution boundary owns the session's single unavailable warning"
                 tool '(:expression "(+ 1 2)" :mode "bogus")))
           :kind)))))
 
-(mevedel-deftest mevedel-tool-exec--eval ()
+(mevedel-deftest mevedel-tool-exec--eval
+  (:vars* ((eval-directory (make-temp-file "mevedel-eval-test-" t))
+           (default-directory (file-name-as-directory eval-directory)))
+   :after-each (delete-directory eval-directory t))
   ,test
   (test)
   :doc "errors on missing expression"
@@ -1335,6 +1338,9 @@ the execution boundary owns the session's single unavailable warning"
     (cl-letf (((symbol-function 'mevedel-execution-start-one-shot)
                (lambda (&rest args)
                  (cl-incf child-starts)
+                 (should (file-in-directory-p
+                          (plist-get (cdr args) :workdir)
+                          temporary-file-directory))
                  (apply original-start args))))
       (mevedel-tool-exec--eval
        (lambda (r)

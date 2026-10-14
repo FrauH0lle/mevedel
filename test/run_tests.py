@@ -117,30 +117,43 @@ def main():
         code, seconds = run_logged(command, output / f'{index}.log',
                                    {**env, 'MEVEDEL_TEST_PARTITION': str(request),
                                     'MEVEDEL_TEST_RESULTS': str(results)})
-        data = json.loads(results.read_text()) if results.exists() else {}
-        # Validate each assignment, not just the merged set.
-        check_results(groups[index], data.get('tests', []))
-        print(f'Worker {index}: exit {code}, {seconds:.2f}s', flush=True)
+        error = None
+        try:
+            data = json.loads(results.read_text())
+            # Validate each assignment, not just the merged set.
+            check_results(groups[index], data['tests'])
+            ert_seconds = data['ert_seconds']
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            error = str(exc)
+            data = {'tests': []}
+            ert_seconds = None
+        print(f'Worker {index}: exit {code}, {seconds:.2f}s; '
+              f'log: {output / f"{index}.log"}'
+              + (f'; invalid results: {error}' if error else ''), flush=True)
         return dict(worker=index, exit_code=code, wall_seconds=seconds,
-                    ert_seconds=data['ert_seconds'], tests=data['tests'])
+                    ert_seconds=ert_seconds, tests=data['tests'], error=error)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
         workers = list(pool.map(run, range(len(groups))))
     rows = [row for worker in workers for row in worker.pop('tests')]
-    check_results(names, rows)
+    incomplete = any(worker['error'] for worker in workers)
+    if not incomplete:
+        check_results(names, rows)
     seconds = time.monotonic() - start
     unexpected = sum(not row['expected'] for row in rows)
-    failed = unexpected or any(worker['exit_code'] for worker in workers)
+    failed = incomplete or unexpected or any(worker['exit_code'] for worker in workers)
     summary = dict(command=command, files=files, wall_seconds=seconds,
                    clean_seconds=clean_seconds, discovery_seconds=discovery_seconds,
-                   workers=workers, count=len(rows), unexpected=unexpected,
+                   workers=workers, count=len(rows), expected_count=len(names),
+                   unexpected=unexpected,
                    skipped=sum(row['status'] == 'ert-test-skipped' for row in rows))
     (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     write_durations(output / 'durations.csv', rows, seconds)
     if not failed:
         REPORTS.mkdir(parents=True, exist_ok=True)
         write_durations(REPORTS / 'latest-durations.csv', rows, seconds)
-    print(f'{seconds:.2f}s; {unexpected} unexpected; {summary["skipped"]} skipped', flush=True)
+    print(f'{seconds:.2f}s; {len(rows)}/{len(names)} results; '
+          f'{unexpected} unexpected; {summary["skipped"]} skipped', flush=True)
     return int(bool(failed))
 
 

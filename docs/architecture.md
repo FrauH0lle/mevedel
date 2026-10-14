@@ -513,7 +513,11 @@ Truncated recognized streams recover; unknown extension formats retain gptel's
 native end-of-stream policy rather than acquiring a Responses completion rule.
 Parser adapters
 forward native optional arguments, including Gemini's `include-text`, without
-changing provider parsing. Admission across all native gptel backends is the
+changing provider parsing. For admitted Gemini streams, headers and array
+prefixes wait for the first JSON object before entering the native parser,
+which otherwise rewinds using nonexistent match data. This guard also applies
+with retries disabled and preserves the cursor for the next chunk.
+Admission across all native gptel backends is the
 recovery scope, not a claim that every provider's paid service or every error
 shape has been tested.
 

@@ -123,7 +123,11 @@ through `npx` makes that Eask executable available to its workers too. Direct
 `python3 test/run_tests.py` invocation falls back to cached `npx` Eask when
 `eask` is absent from `PATH`. Dependency installation is a separate setup step.
 GitHub CI also checks the runner itself and uploads the report directory,
-including worker logs on failure. The runner's own checks are:
+including worker logs on failure. A crashed worker or invalid result file fails
+the run with its worker log path; the summary and timings for other completed
+workers are still written. The summary distinguishes the reported count from
+the expected inventory, and incomplete runs never replace the balancing history.
+The runner's own checks are:
 
 ```bash
 python3 test/test_run_tests.py
