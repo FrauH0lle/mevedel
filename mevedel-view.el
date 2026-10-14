@@ -34,6 +34,10 @@
 (require 'mevedel-view-animation)
 (require 'mevedel-view-zone)
 
+;; `adaptive-wrap'
+(declare-function adaptive-wrap-prefix-mode "ext:adaptive-wrap" (&optional arg))
+(defvar adaptive-wrap-prefix-mode)
+
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
 
@@ -309,6 +313,10 @@
 
 ;; `org'
 (declare-function org-mode "ext:org" ())
+
+;; `visual-wrap'
+(declare-function visual-wrap-prefix-mode "visual-wrap" (&optional arg))
+(defvar visual-wrap-prefix-mode)
 
 
 ;;
@@ -754,6 +762,14 @@ request progress row, and input zone.  The input zone starts at
 the editable composer body.
 
 \\{mevedel-view-mode-map}"
+  :after-hook
+  (progn
+    ;; Text-mode hooks can enable these after the mode body.  The renderer
+    ;; owns continuation prefixes; automatic filling would overwrite them.
+    (when (bound-and-true-p adaptive-wrap-prefix-mode)
+      (adaptive-wrap-prefix-mode -1))
+    (when (bound-and-true-p visual-wrap-prefix-mode)
+      (visual-wrap-prefix-mode -1)))
   ;; Stock PGTK presents the whole frame for each redisplay.
   (mevedel-present-ensure (selected-frame))
   ;; View projection uses several independent symbolic invisibility categories.

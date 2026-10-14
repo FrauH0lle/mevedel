@@ -508,6 +508,8 @@ knows the freshly rendered span was rewritten after insertion."
                         (mevedel-view-render-toggle-turn collapsed))
                        ((eq vtype 'mailbox-delivery)
                         (mevedel-view-disclosure--toggle-mailbox))
+                       ((eq vtype 'hook-context)
+                        (mevedel-view-render-toggle-hook-context))
                        ((eq vtype 'hook-audit)
                         (mevedel-view-audit-toggle-hook-audit))
                        ((eq vtype 'tool-child)
@@ -533,6 +535,14 @@ knows the freshly rendered span was rewritten after insertion."
 
 ;;
 ;;; Expand/collapse
+
+(defun mevedel-view-disclosure-indent-text (text width)
+  "Return TEXT with a display-only WIDTH-column line and wrap inset."
+  (let ((prefix (make-string width ?\s)))
+    (propertize text
+                'line-prefix prefix
+                'wrap-prefix prefix
+                'rear-nonsticky '(line-prefix wrap-prefix))))
 
 (defun mevedel-view-disclosure-truncate-line (text limit)
   "Return TEXT truncated to LIMIT characters with a trailing `...'."
@@ -723,6 +733,21 @@ section only."
                 (goto-char next)))))
       (set-marker end-marker nil))))
 
+(defun mevedel-view-disclosure-collapse-mailbox-body (start end)
+  "Hide mailbox payload from START to END without joining following rows.
+Keep the final payload newline visible, hiding the header separator instead.
+The display iterator must encounter a visible newline before the next row
+to apply that row's own line prefix.  Do not change payload ownership or bytes."
+  (let* ((terminator (and (< start end) (eq (char-before end) ?\n)))
+         (hide-start (if (and terminator (eq (char-before start) ?\n))
+                         (1- start)
+                       start))
+         (hide-end (if terminator (1- end) end)))
+    (put-text-property hide-start hide-end
+                       'invisible 'mevedel-view-mailbox-collapsed)
+    (when terminator
+      (remove-text-properties hide-end end '(invisible nil)))))
+
 (defun mevedel-view-disclosure--toggle-mailbox ()
   "Toggle a mailbox delivery card without consulting source text."
   (let* ((bounds (mevedel-view-disclosure--mailbox-bounds))
@@ -758,27 +783,28 @@ section only."
                   (user-error "No collapsible section at point"))
                 (mevedel-view-disclosure--delete-mailbox-hints
                  start (marker-position end-marker))
-                (dolist (range (mevedel-view-disclosure--mailbox-body-ranges
-                                start (marker-position end-marker)))
-                  (add-text-properties
-                   (car range) (cdr range)
-                   '(invisible mevedel-view-mailbox-collapsed)))
+                (setq ranges (mevedel-view-disclosure--mailbox-body-ranges
+                              start (marker-position end-marker)))
                 (goto-char (caar ranges))
                 (when (eq (char-before) ?\n)
                   (backward-char))
-                (insert
-                 (propertize
-                  (mevedel-view-disclosure-mailbox-hint line-count)
-                  'font-lock-face 'mevedel-view-attribution
-                  'mevedel-view-mailbox-hint t
-                  'mevedel-view-mailbox-card
-                  (get-text-property start 'mevedel-view-mailbox-card)
-                  'mevedel-view-type 'mailbox-delivery
-                  'mevedel-view-collapsed t
-                  'read-only t
-                  'keymap mevedel-view--display-map
-                  'front-sticky '(read-only keymap)
-                  'rear-nonsticky '(read-only keymap)))
+                (let ((hint
+                       (propertize
+                        (mevedel-view-disclosure-mailbox-hint line-count)
+                        'font-lock-face 'mevedel-view-attribution
+                        'mevedel-view-mailbox-hint t
+                        'mevedel-view-mailbox-card
+                        (get-text-property start 'mevedel-view-mailbox-card)
+                        'mevedel-view-type 'mailbox-delivery
+                        'mevedel-view-collapsed t
+                        'read-only t
+                        'keymap mevedel-view--display-map
+                        'front-sticky '(read-only keymap)
+                        'rear-nonsticky '(read-only keymap))))
+                  (insert hint)
+                  (mevedel-view-disclosure-collapse-mailbox-body
+                   (+ (caar ranges) (length hint))
+                   (+ (cdr (car (last ranges))) (length hint))))
                 (put-text-property
                  start (marker-position end-marker)
                  'mevedel-view-collapsed t))))

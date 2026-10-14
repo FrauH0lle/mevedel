@@ -26,6 +26,19 @@
 ;;
 ;;; Disclosure
 
+(mevedel-deftest mevedel-view-disclosure-indent-text ()
+  ,test
+  (test)
+  :doc "display insets preserve authored whitespace on every payload line"
+  (dolist (width '(0 4 6 9))
+    (let* ((text "  authored indent\nnext line")
+           (indented (mevedel-view-disclosure-indent-text text width))
+           (prefix (make-string width ?\s)))
+      (should (equal text (substring-no-properties indented)))
+      (dotimes (pos (length text))
+        (should (equal prefix (get-text-property pos 'line-prefix indented)))
+        (should (equal prefix (get-text-property pos 'wrap-prefix indented)))))))
+
 (mevedel-deftest mevedel-view-disclosure-state-key ()
   ,test
   (test)
@@ -1239,6 +1252,26 @@ the preceding header."
         (mevedel-view-toggle-section)
         (should (= section-start
                    (mevedel-view-stream-in-flight-turn-start-position)))))))
+
+(mevedel-deftest mevedel-view-disclosure-collapse-mailbox-body ()
+  ,test
+  (test)
+  :doc "visibility boundaries keep one terminator without changing payload bytes"
+  (dolist (payload '("\nBody.\n" "\n  Authored.\nSecond.\n\n" "\n" ""))
+    (with-temp-buffer
+      (insert "Card\n")
+      (let ((start (point)))
+        (insert (propertize payload 'mevedel-view-mailbox-body t))
+        (let ((end (point)))
+          (insert "Following\n")
+          (mevedel-view-disclosure-collapse-mailbox-body start end)
+          (should (equal payload (buffer-substring-no-properties start end)))
+          (when (< start end)
+            (should (invisible-p (1- start)))
+            (should-not (invisible-p (1- end)))
+            (should-not (get-text-property (1- start) 'mevedel-view-mailbox-body))
+            (should (get-text-property (1- end) 'mevedel-view-mailbox-body)))
+          (should-not (invisible-p end)))))))
 
 (provide 'test-mevedel-view-disclosure)
 ;;; test-mevedel-view-disclosure.el ends here

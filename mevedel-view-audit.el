@@ -88,6 +88,8 @@
 (declare-function mevedel-view-disclosure-data-substring
                   "mevedel-view-disclosure"
                   (data-buf start end &optional properties))
+(declare-function mevedel-view-disclosure-indent-text
+                  "mevedel-view-disclosure" (text width))
 (declare-function mevedel-view-disclosure-record-state
                   "mevedel-view-disclosure" (source vtype collapsed))
 (declare-function mevedel-view-disclosure-section-bounds
@@ -177,10 +179,8 @@ PRIMARY records usually have source metadata and are preferred."
     records))
 
 (defun mevedel-view--indent-hook-audit-text (text)
-  "Return TEXT indented for an expanded hook audit disclosure."
-  (mapconcat (lambda (line) (concat "      " line))
-             (split-string (or text "") "\n")
-             "\n"))
+  "Return TEXT with a display-only expanded audit payload inset."
+  (mevedel-view-disclosure-indent-text (or text "") 6))
 
 (defun mevedel-view--hook-audit-value-text (value)
   "Return VALUE as stable text for expanded hook audit details."
@@ -206,32 +206,37 @@ When EXPANDED is non-nil, include ordered handler details."
         (lambda (handler)
           (setq index (1+ index))
           (concat
-           (format
-            "    %d. %s\n" index
-            (pcase (plist-get handler :source)
-              ('plugin (if-let* ((name (plist-get handler :plugin-name)))
-                           (format "%s plugin" name)
-                         "plugin hook"))
-              ('project-file "project hook")
-              ('user-file "user hook")
-              ('native "native hook")
-              (_ "configured hook")))
-           "       Handler: "
-           (mevedel-view--hook-audit-value-text
-            (or (plist-get handler :description)
-                (plist-get handler :function)
-                (plist-get handler :command)
-                "unknown"))
-           "\n"
+           (mevedel-view-disclosure-indent-text
+            (format
+             "%d. %s\n" index
+             (pcase (plist-get handler :source)
+               ('plugin (if-let* ((name (plist-get handler :plugin-name)))
+                            (format "%s plugin" name)
+                          "plugin hook"))
+               ('project-file "project hook")
+               ('user-file "user hook")
+               ('native "native hook")
+               (_ "configured hook")))
+            4)
+           (mevedel-view-disclosure-indent-text
+            (concat
+             "Handler: "
+             (mevedel-view--hook-audit-value-text
+              (or (plist-get handler :description)
+                  (plist-get handler :function)
+                  (plist-get handler :command)
+                  "unknown"))
+             "\n")
+            7)
            (when-let* ((reason (plist-get handler :reason)))
-             (concat "       Reason: " reason "\n"))
+             (mevedel-view-disclosure-indent-text
+              (concat "Reason: " reason "\n") 7))
            (when-let* ((contexts (plist-get handler :contexts)))
              (concat
-              "       Context:\n"
+              (mevedel-view-disclosure-indent-text "Context:\n" 7)
               (mapconcat
                (lambda (context)
-                 (mapconcat (lambda (line) (concat "         " line))
-                            (split-string (format "%s" context) "\n") "\n"))
+                 (mevedel-view-disclosure-indent-text (format "%s" context) 9))
                contexts "\n\n")
               "\n"))))
         handlers "\n")))))
@@ -277,8 +282,10 @@ When EXPANDED is non-nil, include each reminder's full body."
         (lambda (item)
           (setq index (1+ index))
           (concat
-           (format "    %d. %s\n" index
-                   (mevedel-reminders--entry-label (plist-get item :type)))
+           (mevedel-view-disclosure-indent-text
+            (format "%d. %s\n" index
+                    (mevedel-reminders--entry-label (plist-get item :type)))
+            4)
            (mevedel-view--indent-hook-audit-text (plist-get item :body))
            "\n"))
         items "\n")))))
@@ -300,15 +307,17 @@ When EXPANDED is non-nil, include record details."
               (when expanded
                 (mapconcat
                  (lambda (repair)
-                   (concat
-                    "    Rule: " (symbol-name (plist-get repair :rule)) "\n"
-                    "    Path"
-                    (if (= 1 (length (plist-get repair :paths))) ": " "s: ")
-                    (mapconcat #'mevedel-tool-repair-format-path
-                               (plist-get repair :paths) ", ")
-                    "\n    Shape: "
-                    (symbol-name (plist-get repair :before))
-                    " -> " (symbol-name (plist-get repair :after)) "\n"))
+                   (mevedel-view-disclosure-indent-text
+                    (concat
+                     "Rule: " (symbol-name (plist-get repair :rule)) "\n"
+                     "Path"
+                     (if (= 1 (length (plist-get repair :paths))) ": " "s: ")
+                     (mapconcat #'mevedel-tool-repair-format-path
+                                (plist-get repair :paths) ", ")
+                     "\nShape: "
+                     (symbol-name (plist-get repair :before))
+                     " -> " (symbol-name (plist-get repair :after)) "\n")
+                    4))
                  (plist-get audit :repairs)
                  "")))
            "  ◇ tool input repair audit unavailable\n")
@@ -323,14 +332,17 @@ When EXPANDED is non-nil, include record details."
       "  \u25c7 hook changed prompt\n"
       (when expanded
         (concat
-         "    Event: " (or (plist-get record :event) "UserPromptSubmit") "\n"
-         (when-let* ((reason (plist-get record :reason)))
-           (concat "    Reason: " reason "\n"))
-         "    Original prompt:\n"
+         (mevedel-view-disclosure-indent-text
+          (concat
+           "Event: " (or (plist-get record :event) "UserPromptSubmit") "\n"
+           (when-let* ((reason (plist-get record :reason)))
+             (concat "Reason: " reason "\n"))
+           "Original prompt:\n")
+          4)
          (mevedel-view--indent-hook-audit-text
           (plist-get record :original))
          "\n"
-         "    Submitted prompt:\n"
+         (mevedel-view-disclosure-indent-text "Submitted prompt:\n" 4)
          (mevedel-view--indent-hook-audit-text
           (plist-get record :submitted))
          "\n"))))
@@ -338,11 +350,13 @@ When EXPANDED is non-nil, include record details."
      (concat
       "  \u25c7 hook changed tool permission\n"
       (when expanded
-        (concat
-         "    Event: " (or (plist-get record :event) "PreToolUse") "\n"
-         "    Outcome: " (or (plist-get record :outcome) "unknown") "\n"
-         (when-let* ((reason (plist-get record :reason)))
-           (concat "    Reason: " reason "\n"))))))
+        (mevedel-view-disclosure-indent-text
+         (concat
+          "Event: " (or (plist-get record :event) "PreToolUse") "\n"
+          "Outcome: " (or (plist-get record :outcome) "unknown") "\n"
+          (when-let* ((reason (plist-get record :reason)))
+            (concat "Reason: " reason "\n")))
+         4))))
     ((or 'tool-context 'subagent-context 'compact-context)
      (mevedel-view--format-hook-context-audit record expanded))
     ('tool-input-rewrite
@@ -350,15 +364,18 @@ When EXPANDED is non-nil, include record details."
       "  \u25c7 hook changed tool input\n"
       (when expanded
         (concat
-         "    Event: " (or (plist-get record :event) "PreToolUse") "\n"
-         (when-let* ((reason (plist-get record :reason)))
-           (concat "    Reason: " reason "\n"))
-         "    Original input:\n"
+         (mevedel-view-disclosure-indent-text
+          (concat
+           "Event: " (or (plist-get record :event) "PreToolUse") "\n"
+           (when-let* ((reason (plist-get record :reason)))
+             (concat "Reason: " reason "\n"))
+           "Original input:\n")
+          4)
          (mevedel-view--indent-hook-audit-text
           (mevedel-view--hook-audit-value-text
            (plist-get record :original-input)))
          "\n"
-         "    Updated input:\n"
+         (mevedel-view-disclosure-indent-text "Updated input:\n" 4)
          (mevedel-view--indent-hook-audit-text
           (mevedel-view--hook-audit-value-text
            (plist-get record :updated-input)))
@@ -368,14 +385,17 @@ When EXPANDED is non-nil, include record details."
       "  \u25c7 hook changed tool result\n"
       (when expanded
         (concat
-         "    Event: " (or (plist-get record :event) "PostToolUse") "\n"
-         (when-let* ((reason (plist-get record :reason)))
-           (concat "    Reason: " reason "\n"))
-         "    Original result:\n"
+         (mevedel-view-disclosure-indent-text
+          (concat
+           "Event: " (or (plist-get record :event) "PostToolUse") "\n"
+           (when-let* ((reason (plist-get record :reason)))
+             (concat "Reason: " reason "\n"))
+           "Original result:\n")
+          4)
          (mevedel-view--indent-hook-audit-text
           (plist-get record :original-result))
          "\n"
-         "    Updated result:\n"
+         (mevedel-view-disclosure-indent-text "Updated result:\n" 4)
          (mevedel-view--indent-hook-audit-text
           (plist-get record :updated-result))
          "\n"))))
@@ -385,7 +405,7 @@ When EXPANDED is non-nil, include record details."
      (concat
       "  \u25c7 hook audit\n"
       (when expanded
-        (format "    %S\n" record))))))
+        (mevedel-view-disclosure-indent-text (format "%S\n" record) 4))))))
 
 (defun mevedel-view-audit--hook-audit-state-key (record source)
   "Return the disclosure key for hook audit RECORD at SOURCE."

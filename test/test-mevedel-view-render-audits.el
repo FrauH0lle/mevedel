@@ -25,6 +25,93 @@
 (require 'mevedel-tool-ptc)
 (require 'mevedel-execution-transcript)
 
+(mevedel-deftest mevedel-view--insert-hook-audit-block/display-insets ()
+  ,test
+  (test)
+  :doc "prompt and grouped-context audit insets survive toggles and canonical redraws"
+  (let ((long-line (concat "  Authored payload " (make-string 160 ?x))))
+    (dolist
+        (spec
+         (list
+          (list
+           (list :type 'prompt-rewrite :event "UserPromptSubmit"
+                 :reason "Rewrite explanation\ncontinued explanation"
+                 :original "  Original prompt\n    Authored continuation"
+                 :submitted long-line)
+           "  ◇ hook changed prompt\n"
+           (list '(4 . "Event: UserPromptSubmit")
+                 '(4 . "Reason: Rewrite explanation")
+                 '(4 . "continued explanation")
+                 '(4 . "Original prompt:")
+                 '(6 . "  Original prompt")
+                 '(6 . "    Authored continuation")
+                 '(4 . "Submitted prompt:")
+                 (cons 6 long-line)))
+          (list
+           (list :type 'tool-context :event "PreToolUse"
+                 :handlers
+                 (list (list :source 'project-file
+                             :description "Project handler\ncontinued handler"
+                             :reason "Context explanation"
+                             :contexts
+                             (list (concat long-line "\n    Authored context")))))
+           "  ◇ PreToolUse hook added context · 1 handler\n"
+           (list '(4 . "1. project hook")
+                 '(7 . "Handler: Project handler")
+                 '(7 . "continued handler")
+                 '(7 . "Reason: Context explanation")
+                 '(7 . "Context:")
+                 (cons 9 long-line)
+                 '(9 . "    Authored context")))))
+      (mevedel-view-test--with-buffers
+        (mevedel-view-test--insert-data data-buf "Continue\n" nil)
+        (mevedel-view-test--insert-data
+         data-buf (mevedel--format-hook-audit-record (car spec))
+         'mevedel-hook-audit)
+        (mevedel-view-test--insert-data data-buf "Continuing.\n" 'response)
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+          (mevedel-view--full-rerender)
+          (save-excursion
+            (goto-char (point-min))
+            (search-forward (cadr spec))
+            (goto-char (match-beginning 0))
+            (mevedel-view-toggle-section))
+          (dotimes (phase 3)
+            (when (> phase 0)
+              (mevedel-view--full-rerender))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+            (should (= (point) (+ (mevedel-view--input-start) 4)))
+            (save-excursion
+              (goto-char (point-min))
+              (search-forward (cadr spec))
+              (goto-char (match-beginning 0))
+              (should (= 1 (mevedel-view-test--count-substring
+                            (cadr spec) (buffer-string))))
+              (should-not (get-text-property (point) 'mevedel-view-collapsed))
+              (should-not (get-text-property (point) 'line-prefix))
+              (should-not (get-text-property (point) 'wrap-prefix))
+              (let ((end (cdr (mevedel-view-disclosure-section-bounds))))
+                (forward-line 1)
+                (let* ((body-start (point))
+                       (rows (caddr spec))
+                       (expected (concat (mapconcat #'cdr rows "\n") "\n")))
+                  ;; Copying removes no authored indentation and adds no padding.
+                  (should (equal expected
+                                 (substring-no-properties
+                                  (mevedel-view--buffer-substring-filter
+                                   body-start end))))
+                  (dolist (row rows)
+                    (let ((inset (make-string (car row) ?\s)))
+                      (should (equal (cdr row)
+                                     (buffer-substring-no-properties
+                                      (line-beginning-position) (line-end-position))))
+                      (should (equal inset (get-text-property (point) 'line-prefix)))
+                      (should (equal inset (get-text-property (point) 'wrap-prefix)))
+                      (should (eq 'mevedel-view-hook-audit
+                                  (get-text-property (point) 'font-lock-face))))
+                    (forward-line 1)))))))))))
+
 (mevedel-deftest mevedel-view-audit--history-render-data-owner ()
   ,test
   (test)

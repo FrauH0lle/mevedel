@@ -6691,7 +6691,28 @@
         (should (string-match-p "Startup context" text))
         (should (string-match-p "UserPromptSubmit" text))
         (should (string-match-p "Prompt context" text))
-        (should-not (string-match-p "<hook-event" text)))))
+        (should-not (string-match-p "<hook-event" text)))
+      (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+      (mevedel-view--full-rerender)
+      (should (= 1 (mevedel-view-test--count-substring
+                    "hook context added" (buffer-string))))
+      (let ((draft-point (copy-marker (point))))
+        (unwind-protect
+            (dotimes (_ 3)
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward "Prompt context")
+                (let ((body-start (match-beginning 0)))
+                  (should (equal "    " (get-text-property body-start 'line-prefix)))
+                  (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+                  (beginning-of-line)
+                  (should (looking-at-p "Prompt context"))))
+              (mevedel-view--full-rerender)
+              (should (= 1 (mevedel-view-test--count-substring
+                            "hook context added" (buffer-string))))
+              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
+              (should (= draft-point (point))))
+          (set-marker draft-point nil)))))
 
   :doc "attributed hook context preserves escaped text and the composer draft"
   (mevedel-view-test--with-buffers
@@ -7082,7 +7103,7 @@
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "^  ✓ Finished /root/worker" text))
-        (should (string-match-p "│ result" text))
+        (should-not (string-match-p "│" text))
         (should (string-match-p "result" text))
         (should (string-match-p "Assistant\n" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))
@@ -7097,14 +7118,15 @@
         (should (eq 'unspecified
                     (face-attribute 'mevedel-view-mailbox-header :weight))))
       (goto-char (point-min))
-      (search-forward "│")
-      (should (eq (get-text-property
-                   (match-beginning 0) 'font-lock-face)
-                  'mevedel-view-mailbox-gutter))
       (search-forward "result")
-      (should (eq (get-text-property
-                   (match-beginning 0) 'font-lock-face)
-                  'mevedel-view-mailbox-body))))
+      (let* ((pos (match-beginning 0))
+             (prefix (get-text-property pos 'line-prefix)))
+        (should (equal "    │ " prefix))
+        (should (equal "      " (get-text-property pos 'wrap-prefix)))
+        (should (eq (get-text-property 4 'font-lock-face prefix)
+                    'mevedel-view-mailbox-gutter))
+        (should (eq (get-text-property pos 'font-lock-face)
+                    'mevedel-view-mailbox-body)))))
 
   :doc "incomplete agent-result opener stays ordinary response text"
   (mevedel-view-test--with-buffers
@@ -7208,9 +7230,16 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
-                   "✓ Finished /root/worker\n\n    │ first"
+                   "✓ Finished /root/worker\n\nfirst"
                    text))
-          (should (string-match-p "│ first\n    │ \n    │ second" text))))))
+          (should (string-match-p "first\n\nsecond" text)))
+        (goto-char (point-min))
+        (search-forward "first")
+        (beginning-of-line)
+        (dotimes (_ 3)
+          (should (equal "    │ " (get-text-property (point) 'line-prefix)))
+          (should (equal "      " (get-text-property (point) 'wrap-prefix)))
+          (forward-line 1)))))
 
   :doc "long agent-result delivery expands to the final response body"
   (mevedel-view-test--with-buffers

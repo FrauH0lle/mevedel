@@ -655,6 +655,17 @@ its authoritative text without presentation padding.
 Grouped thinking rows keep the same muted thinking marker and summary face as
 standalone rows. Nested row toggles retain the complete parent inset immediately;
 their header and body indentation do not wait for a later transcript redraw.
+Expanded ordinary tool text aligns with its parent's text label. View mode
+disables `adaptive-wrap-prefix-mode` and `visual-wrap-prefix-mode` after major-mode
+hooks: their automatic fill-prefix calculation would overwrite the renderer's
+continuation insets. This is local to the view, not a change to other text buffers.
+Delivered-message gutters are display-only too; continuation text aligns after
+the gutter instead of crossing it, and copying preserves the original payload.
+Collapsed delivery cards hide the header separator and retain the final payload
+newline as their visible terminator. This gives the following row its own display
+line and inset, without adding a blank row or changing payload ownership.
+Hook-context expansion restores through the same renderer as interactive toggles,
+so redraws retain one heading and the same body inset.
 Restoring an expanded system-reminder audit uses its ordinary disclosure renderer:
 one summary header and the same audit face survive both full and live redraws.
 Agent paths in launch handles and delivery cards use link highlighting.

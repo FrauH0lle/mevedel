@@ -296,9 +296,14 @@
                   "mevedel-view-disclosure" (rendering source))
 (declare-function mevedel-view-disclosure-capture-state
                   "mevedel-view-disclosure" (from to))
+(declare-function mevedel-view-disclosure-collapse-mailbox-body
+                  "mevedel-view-disclosure" (start end))
 (declare-function mevedel-view-disclosure-data-substring
                   "mevedel-view-disclosure"
                   (data-buf start end &optional properties))
+(declare-function mevedel-view-disclosure-indent-text
+                  "mevedel-view-disclosure" (text width))
+(autoload 'mevedel-view-disclosure-indent-text "mevedel-view-disclosure")
 (declare-function mevedel-view-disclosure-initialize
                   "mevedel-view-disclosure" ())
 (declare-function mevedel-view-disclosure-mailbox-hint
@@ -2642,8 +2647,7 @@ body of the block that ran them."
              start (point)
              `(mevedel-view-type tool-child
                                  mevedel-view-source ,source
-                                 mevedel-view-collapsed ,collapsed))
-            (mevedel-view--apply-rendering-indent start (point))))
+                                 mevedel-view-collapsed ,collapsed))))
        (collapsed
         (mevedel-view--render-collapsed-header rendering source))
        (t
@@ -4905,19 +4909,18 @@ When EXPANDED is non-nil, include each event name and body."
        (mapconcat
         (lambda (entry)
           (let ((body (plist-get entry :body)))
-            (concat
-             "    " (plist-get entry :event) "\n"
-             (mapconcat
-              (lambda (field)
-                (when-let* ((value (plist-get entry (car field))))
-                  (format "    %s: %s\n" (cdr field) value)))
-              '((:source . "source") (:source-file . "file")
-                (:plugin-name . "plugin"))
-              "")
-             (mapconcat (lambda (line) (concat "    " line))
-                        (split-string body "\n")
-                        "\n")
-             "\n")))
+            (mevedel-view-disclosure-indent-text
+             (concat
+              (plist-get entry :event) "\n"
+              (mapconcat
+               (lambda (field)
+                 (when-let* ((value (plist-get entry (car field))))
+                   (format "%s: %s\n" (cdr field) value)))
+               '((:source . "source") (:source-file . "file")
+                 (:plugin-name . "plugin"))
+               "")
+              body "\n")
+             4)))
         events
         "")))))
 
@@ -5016,8 +5019,8 @@ EXPANDED means insert the disclosure body expanded."
 
 (defun mevedel-view--style-mailbox-body (start end)
   "Style mailbox body text between START and END.
-Adds a small gutter to payload lines and returns the adjusted end
-position after insertions.  Leading/trailing blank structural lines
+Adds a display-only gutter to payload lines and returns END.
+Wrapped text aligns after the gutter.  Leading/trailing blank structural lines
 are left bare, while blank lines between payload lines keep the gutter."
   (let ((end-marker (copy-marker end t))
         lines
@@ -5049,9 +5052,15 @@ are left bare, while blank lines between payload lines keep the gutter."
                  when (and (>= n first) (<= n last))
                  do
                  (goto-char (car line))
-                 (insert (propertize "    │ "
-                                     'font-lock-face
-                                     'mevedel-view-mailbox-gutter))
+                 (add-text-properties
+                  (point) (min (1+ (line-end-position)) end)
+                  `(line-prefix
+                    ,(concat (mevedel-view--rendering-indent-blank)
+                             (propertize "    │ " 'font-lock-face
+                                         'mevedel-view-mailbox-gutter))
+                    wrap-prefix
+                    ,(concat (mevedel-view--rendering-indent-blank) "      ")
+                    rear-nonsticky (line-prefix wrap-prefix)))
                  (when (cdr line)
                    (put-text-property
                     (point) (line-end-position)
@@ -5150,6 +5159,7 @@ hint.  Searches that region."
                                          (+ label-start (length "from ")))))
                     (insert attribution))
                   (insert "\n")
+                  (mevedel-view--apply-rendering-indent card-start (point))
                   (let ((body-start (point)))
                     (when-let* ((close
                                  (mevedel-transcript--mailbox-find-close
@@ -5203,10 +5213,11 @@ hint.  Searches that region."
                                   close-end (+ close-end hint-len)))
                           (add-text-properties
                            body-start body-end
-                           (list 'invisible 'mevedel-view-mailbox-collapsed
-                                 'mevedel-view-mailbox-body t
+                           (list 'mevedel-view-mailbox-body t
                                  'mevedel-view-type 'mailbox-delivery
-                                 'mevedel-view-collapsed t)))
+                                 'mevedel-view-collapsed t))
+                          (mevedel-view-disclosure-collapse-mailbox-body
+                           body-start body-end))
                         (unless long-body
                           (add-text-properties
                            body-start body-end
