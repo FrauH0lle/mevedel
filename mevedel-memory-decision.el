@@ -497,9 +497,11 @@ only when every dependency still matches its recorded before or after state."
 (defun mevedel-memory-decision--recover-writes (workspace &optional ids)
   "Reconcile WORKSPACE's marked writes against current roots and live buffers.
 This phase stays in the editor; publication recovery must precede it.
-IDS restricts reconciliation to those write identities."
-  (let (results)
-    (dolist (row (mevedel-memory-write-list workspace ids))
+IDS restricts reconciliation to those write identities; without IDS, only
+`mevedel-memory-write-recovery-candidates' are inspected."
+  (let ((ids (or ids (mevedel-memory-write-recovery-candidates workspace)))
+        results)
+    (dolist (row (and ids (mevedel-memory-write-list workspace ids)))
       (cond
        ((plist-get row :error)
         (push (list :write-id (plist-get row :id) :status 'unavailable :reason (plist-get row :error)) results))
@@ -569,10 +571,7 @@ and unsaved buffers.  JOB remains registered until all inspections finish."
                   (setf (mevedel-workspace-journal-observation workspace) nil
                         (mevedel-workspace-memory-observation workspace) nil)
                   (plist-put job :writes
-                             (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
-                                     (mevedel-session-control-fs-list-directory
-                                      (mevedel-memory-write--directory workspace)
-                                      mevedel-memory-write-intent-file-regexp)))
+                             (mevedel-memory-write-recovery-candidates workspace))
                   (when (eq job (gethash key mevedel-memory-decision--recovery-workers))
                     (plist-put job :timer
                                (run-at-time .01 nil #'mevedel-memory-decision--recover-next-write workspace job))

@@ -38,6 +38,13 @@
   (concat "\\`" mevedel-journal-store-hash-regexp "\\.el\\'")
   "Exact private write-intent and decision record filename spelling.")
 
+(defvar mevedel-memory-write--inspected (make-hash-table :test #'eq :weakness 'key)
+  "Per-workspace table of inspected write identities and their markers.
+Each value maps a write identity to its original-root marker path, or to
+`retired' when its source pass was durably retired.  Intent records are
+created once and never rewritten, so neither fact changes; whether the
+marker exists is still observed afresh on every inspection.")
+
 (defun mevedel-memory-write-scope (intent)
   "Return the captured memory scope of write INTENT's source pass."
   (plist-get (plist-get (plist-get intent :accepted) :prepared) :scope))
@@ -404,8 +411,13 @@ Each row has :id, and readable rows have :hash and :intent. Check original root
 authority before reporting :marked. Preserve unreadable or unavailable records
 with :error instead of dropping them or rebinding their target. Private intent
 bodies require a separate original-root authority check before presentation.
-IDS restricts inspection to those write identities, still reading each afresh."
-  (let (records)
+IDS restricts inspection to those write identities, still reading each afresh.
+Remember each readable identity's marker path for
+`mevedel-memory-write-recovery-candidates'."
+  (let ((inspected (or (gethash workspace mevedel-memory-write--inspected)
+                       (puthash workspace (make-hash-table :test #'equal)
+                                mevedel-memory-write--inspected)))
+        records)
     (dolist (id (or ids
                     (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
                             (mevedel-session-control-fs-list-directory
@@ -417,15 +429,52 @@ IDS restricts inspection to those write identities, still reading each afresh."
             (let* ((text (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ mevedel-memory-store--max-bytes)))
                    (hash (secure-hash 'sha256 text))
                    (intent (mevedel-memory-write-read workspace (plist-get row :id) hash)))
-              (if (not intent) (setq row nil)
+              (if (not intent)
+                  (progn (puthash id 'retired inspected)
+                         (setq row nil))
                 (setq row (append row (list :hash hash :intent intent)))
                 (let ((pin (mevedel-memory-write--pin intent)))
+                  (puthash id pin inspected)
                   (when (mevedel-session-control-fs-path-exists-p pin)
                     (unless (equal hash (mevedel-session-control-fs-read-file pin)) (error "Memory root marker changed"))
                     (setq row (append row (list :marked t)))))))
           (error (setq row (append row (list :error (error-message-string err))))))
         (when row (push row records))))
     (nreverse records)))
+
+(defun mevedel-memory-write-recovery-candidates (workspace)
+  "Return WORKSPACE write identities whose recovery needs a full inspection.
+An identity `mevedel-memory-write-list' already read is a candidate only while
+its marker exists, observed in one program per target; a retired one never is.
+Every identity not yet read successfully remains a candidate, so unreadable
+records keep reporting their error.  Order follows the directory listing."
+  (let* ((ids (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
+                      (mevedel-session-control-fs-list-directory
+                       (mevedel-memory-write--directory workspace)
+                       mevedel-memory-write-intent-file-regexp)))
+         (inspected (gethash workspace mevedel-memory-write--inspected))
+         (marked (make-hash-table :test #'equal))
+         groups)
+    (when inspected
+      ;; Forget identities whose records collection removed.
+      (let (gone)
+        (maphash (lambda (id _) (unless (member id ids) (push id gone))) inspected)
+        (dolist (id gone) (remhash id inspected))))
+    (dolist (id ids)
+      (let ((pin (and inspected (gethash id inspected))))
+        (cond ((null pin) (puthash id t marked))
+              ((stringp pin)
+               (push (cons id pin) (alist-get (file-remote-p pin) groups nil nil #'equal))))))
+    (dolist (group groups)
+      (let ((entries (cdr group)))
+        (condition-case nil
+            (let ((exists (mevedel-session-control-fs-paths-exist (mapcar #'cdr entries))))
+              (dolist (entry entries)
+                (when (pop exists) (puthash (car entry) t marked))))
+          ;; An unobservable target leaves its writes to the full inspection,
+          ;; which reports why it is unavailable.
+          (error (dolist (entry entries) (puthash (car entry) t marked))))))
+    (seq-filter (lambda (id) (gethash id marked)) ids)))
 
 (defun mevedel-memory-write-pending (workspace proposal)
   "Return unresolved write intents for PROPOSAL in WORKSPACE.

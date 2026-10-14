@@ -92,6 +92,11 @@ writes, rollback, claim settlement, and marker retirement share a target-side
 marker. Reconciliation compares exact before/after states; it does not infer a
 successful write from an unmarked intent. Reversal is a separate accepted intent
 and decision, preserving the original application as evidence.
+Scheduled and synchronous recovery fully inspect only records whose marker
+exists, plus any record this client has not yet read successfully; markers are
+observed afresh in one program per target. A record's marker path and pass
+retirement are immutable facts remembered per workspace object, never whether
+the marker exists.
 
 Index freshness is checked per affected destination: the proposal's topic and
 merge sources must retain their captured entries or absence. Unrelated manual
@@ -535,8 +540,9 @@ from 157 to 90 ms and 306 to 152 ms respectively. Existing path proofs, byte
 limits, expiry checks and schema validation remain in force.
 
 Scheduled recovery now checks one retained write per callback after settling the
-publication claim. Every record still gets fresh original-root and live-buffer
-checks; no child classifies unsaved editor state. The job retains cancellation
+publication claim. Every inspected record still gets fresh original-root and
+live-buffer checks (since 2026-10-14 only marked or unread records are
+inspected); no child classifies unsaved editor state. The job retains cancellation
 ownership and its deadline until inspections finish. Quit and late replies cannot
 strand or restart it. Explicit synchronous recovery remains synchronous. The
 individual marked-write reconciliation can still be expensive; splitting records
@@ -651,3 +657,30 @@ for approval. That made the mode only partly automatic. Instruction proposals
 already use the checked decision path, with exact before-state, a durable intent
 marker and checked reversal, so `auto` now applies them like memory proposals.
 `propose` remains the default for users who want to approve every change.
+
+### 2026-10-14: inspect only marked retained writes
+
+Event-loop telemetry attributed recurring post-turn input lag partly to memory
+recovery, which every durably saved root turn schedules. A live profile put the
+retained-write inspection at 24% of editor allocation during an ordinary gpt6
+session. This workspace retained 32 settled intents for reversal; none carried a
+marker, yet each recovery read, hashed and validated all of them through about
+eleven control programs apiece: 50 ms per callback and 1.56 s per recovery in
+the live editor (1,665 ms in a compiled batch replay).
+
+Only a marked record can produce a reconciliation. A record's marker path comes
+from its immutable intent, which is created once under its claim identity and
+never rewritten, and a write identity is never marked twice. Recovery therefore
+remembers each successfully read identity's marker path, and `retired` for a
+durably retired pass, and asks one batched existence program per target which
+of those markers exist. Marked records, and records not yet read by this client,
+get the unchanged full inspection with fresh authority and live-buffer checks.
+An unreadable record is never remembered, so it keeps reporting its error.
+Nothing about recovery completion is cached; the 2026-09-22 rejection of a
+completed-recovery cache still holds. The trade is that an unmarked record whose
+original root later became unavailable no longer yields an `unavailable` row
+during recovery; no recovery caller consumes those rows, and the Memory table
+still inspects every record.
+
+The same replay now checks the 32 records in 29-31 ms: one listing and one
+batched marker program.

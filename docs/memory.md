@@ -642,7 +642,10 @@ coalesce and wait for idle transport. On local Linux workspaces, accepted
 publication recovery runs in a batch child under the workspace claim. The editor
 then inspects one retained write per event-loop callback and reconciles marked
 attempts against current target authority and live buffers; unsaved edits cannot
-be classified by the child. Each record is read afresh. Cancellation stops the
+be classified by the child. Only records whose target marker exists, or that
+this client has not yet read, are inspected: one batched program per target
+observes the markers of records already read, whose marker paths never change.
+Each inspected record is read afresh. Cancellation stops the
 remaining checks, and the original deadline also bounds this inspection phase.
 Root-turn automatic consolidation is offered after recovery finishes, so it does
 not race that recovery claim. A queued offer refused by a busy claim does not

@@ -125,6 +125,47 @@
       (should-not (plist-get (car rows) :marked)))
     (should (equal "(broken state" (mevedel-session-control-fs-read-file path)))))
 
+(mevedel-deftest mevedel-memory-write-recovery-candidates
+    (:vars* ((root (make-temp-file "mevedel-memory-write-candidates-" t))
+             (workspace (mevedel-workspace--create :root root))
+             (directory (mevedel-memory-write--directory workspace))
+             (pending (file-name-concat root "pending"))
+             (ids (mapcar (lambda (char) (make-string 64 char)) '(?a ?b ?c ?d)))
+             (inspected (make-hash-table :test #'equal)))
+     :before-each ((make-directory directory t)
+                   (make-directory pending t)
+                   (dolist (id ids)
+                     (write-region "(record)" nil (file-name-concat directory (concat id ".el")) nil 'silent))
+                   (puthash workspace inspected mevedel-memory-write--inspected))
+     :after-each ((remhash workspace mevedel-memory-write--inspected)
+                  (delete-directory root t)))
+  ,test
+  (test)
+  :doc "inspects unread records and known ones only while their marker exists"
+  (let ((marked (file-name-concat pending (concat (nth 1 ids) ".pin"))))
+    (puthash (nth 1 ids) marked inspected)
+    (puthash (nth 2 ids) (file-name-concat pending (concat (nth 2 ids) ".pin")) inspected)
+    (puthash (nth 3 ids) 'retired inspected)
+    (write-region "hash" nil marked nil 'silent)
+    (should (equal (list (nth 0 ids) (nth 1 ids))
+                   (mevedel-memory-write-recovery-candidates workspace)))
+    (delete-file marked)
+    (should (equal (list (nth 0 ids))
+                   (mevedel-memory-write-recovery-candidates workspace))))
+  :doc "forgets identities whose records were collected"
+  (progn
+    (puthash (nth 2 ids) 'retired inspected)
+    (delete-file (file-name-concat directory (concat (nth 2 ids) ".el")))
+    (mevedel-memory-write-recovery-candidates workspace)
+    (should-not (gethash (nth 2 ids) inspected)))
+  :doc "leaves writes on an unobservable target to the full inspection"
+  (progn
+    (dolist (id ids)
+      (puthash id (file-name-concat pending (concat id ".pin")) inspected))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-paths-exist)
+               (lambda (_) (error "Target unavailable"))))
+      (should (equal ids (mevedel-memory-write-recovery-candidates workspace))))))
+
 (mevedel-deftest mevedel-memory-write--mutate ()
   ,test
   (test)

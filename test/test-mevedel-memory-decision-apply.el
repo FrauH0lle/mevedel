@@ -148,8 +148,13 @@
                                                    (plist-get input :proposal) (plist-get input :scope))))
        (mevedel-memory-write-run workspace claim target intent)))
     (mevedel-journal-claim-settle claim 'cancelled "")
+    (should (equal (list (plist-get intent :id)) (mevedel-memory-write-recovery-candidates workspace)))
     (should (eq 'applied (plist-get (car (mevedel-memory-decision-recover-pending workspace)) :status)))
     (should-not (file-exists-p (mevedel-memory-write--pin intent)))
+    ;; The settled intent stays retained for reversal but needs no inspection.
+    (should (member (concat (plist-get intent :id) ".el")
+                    (directory-files (mevedel-memory-write--directory workspace))))
+    (should-not (mevedel-memory-write-recovery-candidates workspace))
     (should-not (mevedel-memory-decision-recover-pending workspace))
     (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :status)))
     (should (equal manual (mevedel-session-control-fs-read-file (file-name-concat memory "MEMORY.md")))))
