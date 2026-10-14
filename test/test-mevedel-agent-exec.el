@@ -20,6 +20,10 @@
 (require 'mevedel-skills-prompt)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
+(require 'mevedel-view)
+(require 'mevedel-view-agent)
+(require 'mevedel-view-zone)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -612,6 +616,84 @@ fire-count and payload."
     (should (equal "1/frozen-model" prompt))
     (should (equal prompt (mevedel-agent-system-prompt frozen-agent)))))
 
+
+(mevedel-deftest mevedel-agent-exec-acknowledge-provider ()
+  ,test
+  (test)
+  :doc "replaces only the invocation's copy with the acknowledged provider"
+  (let* ((backend (gptel--make-backend :name "Acknowledging Provider"))
+         (locals `((gptel-backend . ,backend) (gptel-model . requested-model)
+                   (gptel-reasoning-effort . high)))
+         (frozen (mevedel-agent-configuration--create
+                  :agent (mevedel-agent-default) :request-locals locals))
+         (invocation (mevedel-agent-invocation--create
+                      :frozen-configuration frozen)))
+    (mevedel-agent-exec-acknowledge-provider invocation 'served-model nil)
+    (should (equal '(:backend "Acknowledging Provider" :model "served-model"
+                     :effort nil)
+                   (mevedel-agent-configuration-model-metadata
+                    (mevedel-agent-invocation-frozen-configuration invocation))))
+    ;; The record's frozen identity keeps the request.
+    (should (eq 'requested-model (alist-get 'gptel-model locals)))
+    (should (eq 'high (alist-get 'gptel-reasoning-effort locals))))
+  :doc "keeps the same configuration object when nothing changed"
+  (let* ((frozen (mevedel-agent-configuration--create
+                  :agent (mevedel-agent-default)
+                  :request-locals '((gptel-model . same-model)
+                                    (gptel-reasoning-effort . low))))
+         (invocation (mevedel-agent-invocation--create
+                      :frozen-configuration frozen)))
+    (mevedel-agent-exec-acknowledge-provider invocation "same-model" 'low)
+    (should (eq frozen (mevedel-agent-invocation-frozen-configuration
+                        invocation))))
+  :doc "a changed acknowledgement refreshes the parent roster once, keeping the draft"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session-create
+                     "main" (mevedel-workspace--create
+                             :type 'project :id "ack-view" :name "ack-view"
+                             :root temporary-file-directory)))
+           (invocation
+            (mevedel-agent-invocation--create
+             :path "/root/partner" :agent-id "storage-partner"
+             :parent-session session :parent-data-buffer data-buf
+             :frozen-configuration
+             (mevedel-agent-configuration--create
+              :agent (mevedel-agent-default)
+              :request-locals
+              `((gptel-backend . ,(gptel--make-backend :name "Claude Code"))
+                (gptel-model . opus) (gptel-reasoning-effort . high)))))
+           (record (mevedel-agent-record--create
+                    :id "storage-partner" :path "/root/partner"
+                    :parent-path "/root" :role "default" :activity 'running
+                    :invocation invocation))
+           (mevedel-view-agent-refresh-delay 0)
+           (refresh (symbol-function 'mevedel-agent-conversation-refresh))
+           (refreshes 0))
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/partner" record)))
+      (with-current-buffer data-buf (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+        (mevedel-view-zone-set-collapse-state
+         mevedel-view--status-agent-collapse-key nil)
+        (mevedel-view--render-agent-status)
+        (should (string-search "Running /root/partner · opus:high"
+                               (buffer-string))))
+      (cl-letf (((symbol-function 'mevedel-agent-conversation-refresh)
+                 (lambda (value)
+                   (cl-incf refreshes)
+                   (funcall refresh value))))
+        ;; Claude confirming the requested selection changes nothing.
+        (mevedel-agent-exec-acknowledge-provider invocation 'opus 'high)
+        (should (= 0 refreshes))
+        ;; Its default effort replaces the launch selection in the roster.
+        (mevedel-agent-exec-acknowledge-provider invocation "opus" nil)
+        (should (= 1 refreshes)))
+      (with-current-buffer view-buf
+        (should (string-search "Running /root/partner · opus" (buffer-string)))
+        (should-not (string-search "opus:high" (buffer-string)))
+        (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 3)))))))
 
 (mevedel-deftest mevedel-agent-exec-run ()
 		 ,test

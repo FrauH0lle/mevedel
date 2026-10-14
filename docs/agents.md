@@ -70,6 +70,17 @@ policy, not part of the frozen role configuration. An accepted implementation
 permission-mode override is inherited by the invocation that it starts, not
 saved as the retained agent's default; see permission propagation below.
 
+Agent model metadata (`:backend`, `:model` and `:effort` names) describes what
+serves the child, never the delegator's or session's model. A nil effort means
+the provider default. Spawn reports a launch snapshot taken from the resolved
+frozen configuration. A running turn reports its invocation's effective
+configuration: a replaced gptel backend recovered by name, or the model and
+effort Claude Code acknowledged while preparing its ACP session. These
+corrections apply to the invocation's copy; the frozen identity is unchanged.
+Each turn's effective metadata is retained on the agent record and in the
+session sidecar, so idle and cold agents report the provider that last served
+them.
+
 Children on every mevedel-admitted native gptel backend use the
 [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery)
 controller, with an independent allowance of 10 retries plus the initial

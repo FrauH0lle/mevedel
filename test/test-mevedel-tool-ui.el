@@ -249,7 +249,10 @@
                                   (json-parse-string
                                    (plist-get launch :result)))))
               (should (equal "/root/task_0" path))
-              (should (equal "Started /root/task_0"
+              (should (equal "mevedel-test-model"
+                             (plist-get (plist-get (plist-get launch :render-data)
+                                                   :model-metadata) :model)))
+              (should (equal "Started /root/task_0 · mevedel-test-model"
                              (substring-no-properties
                               (plist-get
                                (mevedel-tool-ui--render-agent
@@ -952,6 +955,28 @@
                    (plist-get rendering :header)))
     (should-not (plist-get rendering :expandable-p)))
 
+  :doc "distinguishes launch model identity from summary-generation metadata"
+  (let ((rendering
+         (mevedel-tool-ui--render-agent
+          "Agent" '(:task_name "partner") "{\"path\":\"/root/partner\"}"
+          '(:kind collaboration-event :event started :path "/root/partner"
+            :status running
+            :model-metadata (:backend "Claude Code" :model "opus" :effort "high")
+            :summary-metadata (:backend "openai" :model gpt-5 :effort high)))))
+    (should (equal "Started /root/partner · opus:high · summary openai/gpt-5 (high)"
+                   (plist-get rendering :header)))
+    (should (string-search "At launch\nProvider  Claude Code\nModel     opus\nEffort    high"
+                           (plist-get rendering :body))))
+
+  :doc "omits unavailable effort instead of showing an inherited default"
+  (let ((rendering
+         (mevedel-tool-ui--render-agent
+          "Agent" nil "result"
+          '(:kind collaboration-event :event started :path "/root/partner"
+            :model-metadata (:backend "provider" :model "mistral")))))
+    (should (equal "Started /root/partner · mistral" (plist-get rendering :header)))
+    (should-not (string-search "Effort" (plist-get rendering :body))))
+
   :doc "shows privacy-safe summary metadata without summary content"
   (let ((rendering
          (mevedel-tool-ui--render-agent
@@ -979,6 +1004,7 @@
                   :event started
                   :path "/root/spec_review"
                   :agent-id "default--internal"
+                  :model-metadata (:backend "Claude Code" :model "opus" :effort "high")
                   :status running))))
           (mevedel-tool-ui-test--insert-rendering rendering)
           (should (string= draft (mevedel-view--input-text)))))))

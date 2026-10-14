@@ -30,6 +30,9 @@
 
 ;; `gptel-request'
 (declare-function gptel--copy-tool "ext:gptel-request" (arg))
+(declare-function gptel--model-name "ext:gptel-request" (model))
+(declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
+(declare-function gptel-backend-p "ext:gptel-request" (cl-x))
 (declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
 (defvar gptel-tools)
 
@@ -153,6 +156,32 @@ When COMPLETE is non-nil, require every request-local key exactly once."
        (or (not complete)
            (= (length locals)
               (length mevedel-agent-request-local-symbols)))))
+
+(defun mevedel-agent-configuration-model-metadata (configuration)
+  "Return the provider, model and effort CONFIGURATION sends, or nil.
+The value is (:backend NAME :model NAME :effort NAME), all strings.  A nil
+effort means none was selected, so the provider's default applies.  Return
+nil unless CONFIGURATION names both a backend and a model."
+  (when (mevedel-agent-configuration-p configuration)
+    (let* ((locals (mevedel-agent-configuration-request-locals configuration))
+           (backend (alist-get 'gptel-backend locals))
+           (model (alist-get 'gptel-model locals))
+           (effort (alist-get 'gptel-reasoning-effort locals)))
+      (when (and (gptel-backend-p backend) model)
+        (list :backend (gptel-backend-name backend)
+              :model (gptel--model-name model)
+              :effort (and effort (format "%s" effort)))))))
+
+(defun mevedel-agent-model-metadata-p (value)
+  "Return non-nil when VALUE has the provider metadata shape.
+See `mevedel-agent-configuration-model-metadata'."
+  (and (proper-list-p value)
+       (= (length value) 6)
+       (stringp (plist-get value :backend))
+       (stringp (plist-get value :model))
+       (plist-member value :effort)
+       (or (null (plist-get value :effort))
+           (stringp (plist-get value :effort)))))
 
 (defvar mevedel-agent--registry nil
   "Alist mapping agent name strings to `mevedel-agent' structs.")

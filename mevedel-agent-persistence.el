@@ -239,7 +239,9 @@ have no result yet, but a stored result always includes both fields."
          (settled-result
           (and id (mevedel-agent-record-settled-result record)))
          (settled-outcome
-          (and id (mevedel-agent-record-settled-outcome record))))
+          (and id (mevedel-agent-record-settled-outcome record)))
+         (model-metadata
+          (and id (mevedel-agent-record-model-metadata record))))
     (unless
         (and (equal (car entry) path)
              (mevedel-agent-persistence--identity-p
@@ -247,7 +249,9 @@ have no result yet, but a stored result always includes both fields."
              (proper-list-p hook-context)
              (mevedel--plain-data-p hook-context)
              (mevedel-agent-persistence--settled-result-p
-              settled-result settled-outcome activity))
+              settled-result settled-outcome activity)
+             (or (null model-metadata)
+                 (mevedel-agent-model-metadata-p model-metadata)))
       (error "Invalid live agent registry entry"))
     (let ((encoded
            (list :id id
@@ -261,6 +265,7 @@ have no result yet, but a stored result always includes both fields."
                  :settled-result (and settled-result
                                       (copy-sequence settled-result))
                  :settled-outcome settled-outcome
+                 :model-metadata (copy-sequence model-metadata)
                  :conversation-location location
                  :hook-context-pending (copy-tree hook-context)
                  :mailbox
@@ -412,13 +417,16 @@ succeed after silently losing an addressable agent."
          (location (and id (plist-get entry :conversation-location)))
          (hook-context (and id (plist-get entry :hook-context-pending)))
          (settled-result (and id (plist-get entry :settled-result)))
-         (settled-outcome (and id (plist-get entry :settled-outcome))))
+         (settled-outcome (and id (plist-get entry :settled-outcome)))
+         (model-metadata (and id (plist-get entry :model-metadata))))
     (unless (and (mevedel-agent-persistence--identity-p
                   id path parent role activity location seen-paths seen-ids)
                  (proper-list-p hook-context)
                  (mevedel--plain-data-p hook-context)
                  (mevedel-agent-persistence--settled-result-p
-                  settled-result settled-outcome activity))
+                  settled-result settled-outcome activity)
+                 (or (null model-metadata)
+                     (mevedel-agent-model-metadata-p model-metadata)))
       (mevedel-agent-persistence--invalid
        "Invalid persisted agent identity"))
     (let ((record
@@ -434,6 +442,7 @@ succeed after silently losing an addressable agent."
             :settled-result (and settled-result
                                  (copy-sequence settled-result))
             :settled-outcome settled-outcome
+            :model-metadata (copy-sequence model-metadata)
             :conversation-location location
             :hook-context-pending (copy-tree hook-context)
             :mailbox

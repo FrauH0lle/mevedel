@@ -34,6 +34,14 @@
 (declare-function mevedel-tools--tool-search
                   "mevedel-tools" (callback query))
 
+;; `mevedel-view-agent'
+(declare-function mevedel-view-agent-model-details
+                  "mevedel-view-agent" (metadata))
+(declare-function mevedel-view-agent-model-label
+                  "mevedel-view-agent" (metadata &optional full))
+(autoload 'mevedel-view-agent-model-details "mevedel-view-agent")
+(autoload 'mevedel-view-agent-model-label "mevedel-view-agent")
+
 
 ;;
 ;;; Agent tool
@@ -75,6 +83,8 @@
                            (mevedel-agent-record-conversation-location record)
                            :summary-metadata
                            (plist-get outcome :summary-metadata)
+                           :model-metadata
+                           (copy-tree (plist-get outcome :model-metadata))
                            :status 'running)))))
                 ('error
                  (mevedel-tool-ui--deliver-result
@@ -203,10 +213,13 @@
          (eq 'started (plist-get render-data :event))
          (stringp (plist-get render-data :path)))
     (let* ((path (plist-get render-data :path))
+           (metadata (plist-get render-data :model-metadata))
+           (model (mevedel-view-agent-model-label metadata))
            (summary (plist-get render-data :summary-metadata))
            (header
             (concat
              (format "Started %s" path)
+             (when model (concat " · " model))
              (when summary
                (format " · summary %s/%s%s"
                        (plist-get summary :backend)
@@ -215,7 +228,11 @@
                            (format " (%s)" effort)
                          ""))))))
       (list :header header
-            :body result
+            :body (string-join
+                   (delq nil (list (when-let* ((details (mevedel-view-agent-model-details metadata)))
+                                     (concat "At launch\n" details))
+                                   result))
+                   "\n\n")
             :body-mode nil
             :vtype 'agent-handle
             :agent-path path

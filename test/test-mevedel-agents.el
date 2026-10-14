@@ -141,6 +141,52 @@
     (should-not
      (mevedel-agent-request-locals-p (cdr complete) t))))
 
+(mevedel-deftest mevedel-agent-configuration-model-metadata ()
+  ,test
+  (test)
+  :doc "reports the frozen backend, model and effort as strings"
+  (let ((backend (gptel--make-backend :name "Metadata Provider")))
+    (should (equal '(:backend "Metadata Provider" :model "metadata-model"
+                    :effort "high")
+                   (mevedel-agent-configuration-model-metadata
+                    (mevedel-agent-configuration--create
+                     :request-locals `((gptel-backend . ,backend)
+                                       (gptel-model . metadata-model)
+                                       (gptel-reasoning-effort . high))))))
+    ;; No selected effort means the provider default, which is unknown here.
+    (should (equal '(:backend "Metadata Provider" :model "metadata-model"
+                    :effort nil)
+                   (mevedel-agent-configuration-model-metadata
+                    (mevedel-agent-configuration--create
+                     :request-locals `((gptel-backend . ,backend)
+                                       (gptel-model . "metadata-model")))))))
+  :doc "reports nothing without a frozen backend and model"
+  (let ((backend (gptel--make-backend :name "Metadata Provider")))
+    (should-not (mevedel-agent-configuration-model-metadata nil))
+    (should-not (mevedel-agent-configuration-model-metadata
+                 (mevedel-agent-configuration--create
+                  :request-locals '((gptel-model . metadata-model)))))
+    (should-not (mevedel-agent-configuration-model-metadata
+                 (mevedel-agent-configuration--create
+                  :request-locals `((gptel-backend . ,backend)))))))
+
+(mevedel-deftest mevedel-agent-model-metadata-p ()
+  ,test
+  (test)
+  :doc "accepts complete metadata with or without a known effort"
+  (progn
+    (should (mevedel-agent-model-metadata-p
+             '(:backend "B" :model "m" :effort "low")))
+    (should (mevedel-agent-model-metadata-p
+             '(:backend "B" :model "m" :effort nil))))
+  :doc "rejects partial, extra and non-string fields"
+  (dolist (value '(nil (:backend "B" :model "m")
+                   (:backend "B" :model m :effort nil)
+                   (:backend "B" :model "m" :effort low)
+                   (:backend "B" :model "m" :effort nil :extra t)
+                   (:backend "B" :model "m" . "x")))
+    (should-not (mevedel-agent-model-metadata-p value))))
+
 (mevedel-deftest mevedel-agent--effective-specs/test
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test

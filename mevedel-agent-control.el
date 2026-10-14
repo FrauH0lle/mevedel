@@ -55,6 +55,8 @@
 
 ;; `mevedel-agents'
 (declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-configuration-model-metadata
+                  "mevedel-agents" (configuration))
 (declare-function mevedel-agent-configuration-p
                   "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-hook-rules "mevedel-agents" (cl-x) t)
@@ -82,6 +84,7 @@
 (declare-function mevedel-plan-read-only-p "mevedel-agents"
                   (&optional session))
 (autoload 'copy-mevedel-agent "mevedel-agents")
+(autoload 'mevedel-agent-configuration-model-metadata "mevedel-agents")
 (autoload 'mevedel-agent-configuration-p "mevedel-agents")
 (autoload 'mevedel-agent-hook-rules "mevedel-agents")
 (autoload 'mevedel-agent-invocation-agent-id "mevedel-agents")
@@ -234,7 +237,41 @@
   waiter
   result-handler
   settled-result
-  settled-outcome)
+  settled-outcome
+  ;; Display-only provider metadata of the latest turn, as
+  ;; `mevedel-agent-configuration-model-metadata' returns it.  Runtime
+  ;; provider recovery never rewrites CONFIGURATION, so this retains what
+  ;; actually served the agent across settlement and cold restore.
+  model-metadata)
+
+(defun mevedel-agent-control--capture-model-metadata (record)
+  "Retain the provider metadata of RECORD's current invocation, if any."
+  (when-let* ((invocation (mevedel-agent-record-invocation record))
+              (metadata (mevedel-agent-configuration-model-metadata
+                         (mevedel-agent-invocation-frozen-configuration
+                          invocation))))
+    (setf (mevedel-agent-record-model-metadata record) metadata)))
+
+(defun mevedel-agent-control-record-model-metadata (record)
+  "Return the provider metadata currently describing retained RECORD, or nil.
+A running turn reports its invocation's effective configuration, including
+provider recovery and external acknowledgement.  Otherwise report the latest
+turn's retained metadata, then the frozen configuration.  The value has the
+shape of `mevedel-agent-configuration-model-metadata'.  No buffer or file is
+read, so redraws may call this per record."
+  (or (when-let* ((invocation (mevedel-agent-record-invocation record)))
+        (mevedel-agent-configuration-model-metadata
+         (mevedel-agent-invocation-frozen-configuration invocation)))
+      (mevedel-agent-record-model-metadata record)
+      (mevedel-agent-configuration-model-metadata
+       (mevedel-agent-record-configuration record))))
+
+(defun mevedel-agent-control-model-metadata (session path)
+  "Return provider metadata for SESSION's retained agent at PATH, or nil.
+See `mevedel-agent-control-record-model-metadata'."
+  (when-let* ((record (cdr (assoc path (mevedel-session-agent-registry
+                                        session)))))
+    (mevedel-agent-control-record-model-metadata record)))
 
 (defun mevedel-agent-control--active-p (record)
   "Return non-nil when RECORD owns one active-turn slot."
@@ -752,6 +789,7 @@ rewrite after the complete registry has been repaired."
                  (mevedel-agent-control--recovery-result-text record)))
             (mevedel-agent-control--record-settled-result
              record 'interrupted payload)
+            (mevedel-agent-control--capture-model-metadata record)
             (setf (mevedel-agent-record-activity record) 'idle)
             (setf (mevedel-agent-record-invocation record) nil)
             (setf (mevedel-agent-record-blockers record) nil)
@@ -969,6 +1007,7 @@ Return rollback and post-commit delivery closures for INVOCATION."
         (setq payload
               (mevedel-agent-control--record-settled-result
                record outcome payload))
+        (mevedel-agent-control--capture-model-metadata record)
         (setf (mevedel-agent-record-activity record) 'idle
               (mevedel-agent-record-invocation record) nil
               (mevedel-agent-record-blockers record) nil)
@@ -1027,7 +1066,8 @@ Return rollback and post-commit delivery closures for INVOCATION."
                 (mevedel-agent-record-invocation record)
                 (mevedel-agent-record-blockers record)
                 (mevedel-agent-record-settled-result record)
-                (mevedel-agent-record-settled-outcome record))))
+                (mevedel-agent-record-settled-outcome record)
+                (mevedel-agent-record-model-metadata record))))
     (unless (or reservation (eq (cdr published) record))
       (error "Agent record is not reserved or published: %s" path))
     (setf (mevedel-agent-record-id record)
@@ -1043,6 +1083,7 @@ Return rollback and post-commit delivery closures for INVOCATION."
           (mevedel-agent-record-blockers record) nil
           (mevedel-agent-record-settled-result record) nil
           (mevedel-agent-record-settled-outcome record) nil)
+    (mevedel-agent-control--capture-model-metadata record)
     (when reservation
       (mevedel-session--set-agent-reservations
        session (assoc-delete-all path previous-reservations))
@@ -1064,7 +1105,8 @@ Return rollback and post-commit delivery closures for INVOCATION."
              (mevedel-agent-record-invocation record) (nth 5 previous)
              (mevedel-agent-record-blockers record) (nth 6 previous)
              (mevedel-agent-record-settled-result record) (nth 7 previous)
-             (mevedel-agent-record-settled-outcome record) (nth 8 previous))
+             (mevedel-agent-record-settled-outcome record) (nth 8 previous)
+             (mevedel-agent-record-model-metadata record) (nth 9 previous))
        (signal (car err) (cdr err))))))
 
 (defun mevedel-agent-control--set-hook-context (record entries)
@@ -1273,6 +1315,11 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                        (error "Agent conversation could not be persisted"))
                      (settle (list :outcome 'success
                                    :record record
+                                   ;; Launch snapshot: resolved before any
+                                   ;; asynchronous provider acknowledgement.
+                                   :model-metadata
+                                   (mevedel-agent-control-record-model-metadata
+                                    record)
                                    :summary-metadata summary-metadata)))
                  (error (fail (error-message-string err)))))))
          (summarize-then-start (prepared)

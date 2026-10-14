@@ -84,11 +84,18 @@ plan, and other actionable interactions remain exclusively in the parent
 view. A transcript header may report that an agent is blocked, but the
 transcript view never duplicates interaction controls or owns their callbacks.
 
-Each parent view owns at most one agent transcript side window. Opening a
+Each parent view owns at most one agent transcript inspection window. Opening a
 different agent transcript replaces the current inspection view; live refresh
 does not add multi-view window management. Transcript buffer identities include
 the owning session, so equal canonical agent paths in different sessions never
 reuse or repurpose one another's inspection view.
+
+The default is a right-side window. Set `mevedel-agent-view-display-action` to
+`(display-buffer-same-window)` for same-window inspection; this does not change
+the observation-only contract. Close an existing inspector before changing its
+placement. The header's **← Parent** action and `q` close inspection and return
+to the original parent view, including when inspecting another agent from an
+already-open inspector. The parent's draft, point and scroll position survive.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It
@@ -100,9 +107,24 @@ or not it has an open inspection view. Reopening reuses a resident retained
 buffer and otherwise resolves the saved transcript.
 
 The live transcript header updates on the same stream and tool events as the
-body. It reflects running or blocked state, tool-call count, and elapsed time.
+body. It reflects running or blocked state, the agent's effective provider,
+model and known effort, tool-call count, and elapsed time. A narrow window keeps
+the Parent action, agent identity and state first, truncates ancestor paths
+before the leaf name, and omits optional metadata that does not fit. The full
+path, session identity and model details remain available on the path's hover
+text. The session label also appears at the end when space permits.
 Elapsed time has no independent ticking timer; it advances when another live
 event refreshes the view. Terminal status updates immediately.
+
+The parent `Started` row and expanded active-agent roster show compact
+`model:effort` labels. Provider details belong in their expanded disclosures;
+the collapsed roster remains counts and state only. Unknown effort is omitted,
+not inferred from the parent. Summary-preparation metadata stays separate and
+explicitly labeled `summary`. A Started row is a historical snapshot with
+**At launch** details; provider acknowledgement can subsequently change the
+effective configuration shown in the live header and roster. Idle and cold
+inspection uses the retained last-served configuration when available. Metadata
+lookups do not open buffers or read files, and roster collection stays linear.
 
 Live transcript rendering is an observer side effect and cannot alter agent
 execution or the parent view. If a refresh fails, the last good projection

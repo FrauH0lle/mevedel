@@ -20,6 +20,10 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-activity-p
                   "mevedel-agent-control" (activity))
+(declare-function mevedel-agent-control-model-metadata
+                  "mevedel-agent-control" (session path))
+(declare-function mevedel-agent-control-record-model-metadata
+                  "mevedel-agent-control" (record))
 (declare-function mevedel-agent-control-retained-buffer-p
                   "mevedel-agent-control" (session buffer))
 (declare-function mevedel-agent-record-activity
@@ -36,6 +40,8 @@
                   "mevedel-agent-control" (cl-x) t)
 (declare-function mevedel-agent-record-role
                   "mevedel-agent-control" (cl-x) t)
+(autoload 'mevedel-agent-control-model-metadata "mevedel-agent-control")
+(autoload 'mevedel-agent-control-record-model-metadata "mevedel-agent-control")
 
 ;; `mevedel-agent-conversation'
 (defvar mevedel--agent-invocation)
@@ -198,10 +204,13 @@
 (defcustom mevedel-agent-view-display-action
   '(display-buffer-in-side-window
     (side . right) (slot . 0) (window-width . 0.4))
-  "Action passed to `pop-to-buffer' when opening an agent transcript.
+  "Display action when opening an agent transcript inspection window.
 Consulted by `mevedel-view-open-agent-transcript' so callers do not
 need to set `display-buffer-overriding-action'.  Power users can
-override globally or via `display-buffer-alist'."
+override globally or via `display-buffer-alist'.
+Use `(display-buffer-same-window)' to replace the selected view;
+\\[mevedel-view-close-agent-transcript] returns to the parent.
+An existing inspection window is reused; close it before changing placement."
   :type 'sexp
   :group 'mevedel)
 
@@ -236,6 +245,32 @@ badges promptly."
 
 
 ;;;; Status helpers
+
+(defun mevedel-view-agent-model-label (metadata &optional full)
+  "Return a compact model:effort label from METADATA, or nil.
+FULL includes the provider.  Unknown effort is omitted.  METADATA is
+resolved agent configuration, not the parent or summary-generation model."
+  (when-let* ((model (plist-get metadata :model)))
+    (replace-regexp-in-string
+     "[\n\r\t]+" " "
+     (concat (when-let* ((backend (and full (plist-get metadata :backend))))
+               (concat backend " / "))
+             model
+             (when-let* ((effort (plist-get metadata :effort)))
+               (concat ":" effort))))))
+
+(defun mevedel-view-agent-model-details (metadata)
+  "Return disclosure text for known provider/model/effort in METADATA."
+  (when metadata
+    (string-join
+     (delq nil
+           (list (when-let* ((backend (plist-get metadata :backend)))
+                   (format "Provider  %s" backend))
+                 (when-let* ((model (plist-get metadata :model)))
+                   (format "Model     %s" model))
+                 (when-let* ((effort (plist-get metadata :effort)))
+                   (format "Effort    %s" effort))))
+     "\n")))
 
 (defun mevedel-view-agent--handle-badge (render-data)
   "Return a propertized state badge for RENDER-DATA, or an empty string."
@@ -306,6 +341,18 @@ badges promptly."
 
 (defvar-local mevedel-view--agent-refresh-timer nil
   "Timer draining the view's pending agent refreshes one at a time.")
+
+(defvar mevedel-view--agent-parent-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [header-line mouse-1]
+                (lambda (event)
+                  (interactive "e")
+                  (when-let* ((window (posn-window (event-start event)))
+                              ((window-live-p window)))
+                    (select-window window)
+                    (mevedel-view-close-agent-transcript))))
+    map)
+  "Header-line map for returning from agent inspection to its parent.")
 
 
 (defvar-keymap mevedel-view--agent-handle-map
@@ -381,8 +428,6 @@ running in the UI."
                          (plist-get info :agent-path)))
          (badge (mevedel-view-agent--handle-badge
                  (list :status (plist-get info :status)
-                       :calls (plist-get info :calls)
-                       :elapsed (plist-get info :elapsed)
                        :reason (plist-get info :reason)
                        :blocked-reason
                        (plist-get info :blocked-reason))))
@@ -402,15 +447,50 @@ running in the UI."
                                                        parent-data)))
                 (or (mevedel-session-session-id session)
                     (mevedel-session-name session)))
-              "unknown")))
-    (string-join
-     (delq nil
-           (list (format "Agent %s" agent-path)
-                 (unless (string-empty-p badge) badge)
-                 (when (integerp calls) (format "%d calls" calls))
-                 (when (numberp elapsed) (mevedel--duration-label elapsed))
-                 (format "session %s" session-label)))
-     "  ")))
+              "unknown"))
+         (metadata (plist-get info :model-metadata))
+         (parent (when (buffer-live-p mevedel-view--agent-transcript-parent-view)
+                   (propertize "[← Parent]" 'face 'link 'mouse-face 'highlight
+                               'help-echo "Return to parent view (q)"
+                               'local-map mevedel-view--agent-parent-map)))
+         (width (when-let* ((window (get-buffer-window (current-buffer))))
+                  (window-body-width window)))
+         (path (or agent-path "unknown")))
+    ;; Keep the return action, agent identity and state ahead of optional
+    ;; metadata.  Favor the agent's leaf name when truncating long paths.
+    (when width
+      (setq badge (truncate-string-to-width
+                   badge (max 8 (- width (string-width (or parent "")) 14)) nil nil "…"))
+      (let ((budget (max 4 (- width (string-width (or parent ""))
+                             (string-width badge) (if parent 6 3)))))
+        (when (> (string-width path) budget)
+          (setq path (concat "…" (truncate-string-to-width
+                                  path (string-width path)
+                                  (- (string-width path) (1- budget))))))))
+    (let ((header (string-join
+                   (delq nil
+                         (list parent
+                               (propertize path 'help-echo
+                                           (string-join
+                                            (delq nil
+                                                  (list agent-path
+                                                        (format "Session %s" session-label)
+                                                        (mevedel-view-agent-model-details metadata)))
+                                            "\n"))
+                               (unless (string-empty-p badge) badge)))
+                   " · ")))
+      (cl-labels ((fits (text)
+                    (or (null width) (<= (+ (string-width header) 3
+                                           (string-width text)) width))))
+        (dolist (text (list (cl-find-if #'fits
+                                       (delq nil (list (mevedel-view-agent-model-label metadata t)
+                                                       (mevedel-view-agent-model-label metadata))))
+                           (when (integerp calls) (format "%d calls" calls))
+                           (when (numberp elapsed) (mevedel--duration-label elapsed))
+                           (format "session %s" session-label)))
+          (when (and text (fits text))
+            (setq header (concat header " · " (propertize text 'face 'shadow))))))
+      header)))
 
 (defun mevedel-view--agent-transcript-current-info ()
   "Return transcript metadata refreshed from the live invocation."
@@ -438,6 +518,10 @@ running in the UI."
                        (float-time
                         (time-subtract (current-time) started))))
                info))))
+    (when-let* ((session (plist-get info :session))
+                (path (or mevedel-view--agent-path (plist-get info :agent-path))))
+      (setq info (plist-put info :model-metadata
+                            (mevedel-agent-control-model-metadata session path))))
     info))
 
 (defun mevedel-view--clear-parent-transcript-window ()
@@ -684,13 +768,18 @@ retained projections that can follow another turn."
       views)))
 
 (defun mevedel-view-close-agent-transcript ()
-  "Close the selected transcript side window.
+  "Close the selected transcript inspection and return to its parent view.
 Saved transcript file buffers are killed with the view.  Retained
 conversation buffers are left alone."
   (interactive)
   (unless mevedel-view--agent-transcript-p
     (user-error "Not an agent transcript view"))
-  (mevedel-view--kill-agent-transcript-view (current-buffer)))
+  (let ((parent mevedel-view--agent-transcript-parent-view))
+    (mevedel-view--kill-agent-transcript-view (current-buffer))
+    (when (buffer-live-p parent)
+      (if-let* ((window (get-buffer-window parent)))
+          (select-window window)
+        (switch-to-buffer parent)))))
 
 
 ;;
@@ -821,7 +910,7 @@ Signals `user-error' when no transcript source can be opened."
           (setq win
                 (cond
                  ((and (window-live-p win)
-                       (not (window-dedicated-p win))
+                       (not (eq t (window-dedicated-p win)))
                        (buffer-live-p (window-buffer win))
                        (with-current-buffer (window-buffer win)
                          mevedel-view--agent-transcript-p))
@@ -974,7 +1063,8 @@ buffer whether running or idle."
     (mevedel-agent-persistence-ensure-conversation
      session record data
      (with-current-buffer data (bound-and-true-p mevedel-session--read-only-mode))))
-  (let* ((parent-view (current-buffer))
+  (let* ((parent-view (or mevedel-view--agent-transcript-parent-view
+                          (current-buffer)))
          (info (mevedel-view--resolve-agent-transcript agent-path))
          (agent-view (mevedel-view--ensure-agent-transcript-view
                       agent-path info parent-view)))
@@ -1023,6 +1113,7 @@ buffer whether running or idle."
         (when status
           (push (list :path path
                       :status status
+                      :model-metadata (mevedel-agent-control-record-model-metadata record)
                       :depth (mevedel-view--agent-path-depth path))
                 rows))))
     (sort rows (lambda (left right)
@@ -1091,12 +1182,18 @@ collapsed marker; expanded row content is rendered from Agent handles."
   "Return an Agent-handle rendering plist for aggregate status ROW."
   (let* ((agent-path (plist-get row :path))
          (status (plist-get row :status))
+         (metadata (plist-get row :model-metadata))
+         (model (mevedel-view-agent-model-label metadata))
          (label (pcase status
                   ('blocked "Blocked")
                   ('waiting "Waiting")
                   (_ "Running"))))
-    (list :header (format "%s %s" label agent-path)
-          :body (format "Agent is %s." (downcase label))
+    (list :header (concat (format "%s %s" label agent-path)
+                          (when model (concat " · " model)))
+          :body (string-join
+                 (delq nil (list (format "Agent is %s." (downcase label))
+                                 (mevedel-view-agent-model-details metadata)))
+                 "\n\n")
           :vtype 'agent-handle
           :agent-path agent-path
           :agent-status status

@@ -451,6 +451,29 @@ A changed provider is written to a copy, so the agent record keeps its own."
               (mevedel-agent-invocation-frozen-configuration invocation) frozen)))
     frozen))
 
+(defun mevedel-agent-exec-acknowledge-provider (invocation model effort)
+  "Record that INVOCATION's provider now serves MODEL at EFFORT.
+An external provider can substitute an available model, or its default
+effort, while preparing a session; nil EFFORT means that default.  As in
+`mevedel-agent-exec-refresh-provider', a change is written to a copy, so the
+agent record keeps its own frozen identity.  Only a change refreshes the
+parent presentation; a response can stream without tool events that would
+otherwise refresh it.  Historical launch rows keep their own snapshot."
+  (let* ((frozen (mevedel-agent-invocation-frozen-configuration invocation))
+         (locals (and (mevedel-agent-configuration-p frozen)
+                      (mevedel-agent-configuration-request-locals frozen))))
+    (unless (and (equal (gptel--model-name model)
+                        (gptel--model-name (alist-get 'gptel-model locals)))
+                 (eq effort (alist-get 'gptel-reasoning-effort locals)))
+      (unless locals (error "Agent request configuration is not frozen"))
+      (setq locals (copy-tree locals)
+            frozen (copy-mevedel-agent-configuration frozen))
+      (setf (alist-get 'gptel-model locals) model
+            (alist-get 'gptel-reasoning-effort locals) effort
+            (mevedel-agent-configuration-request-locals frozen) locals
+            (mevedel-agent-invocation-frozen-configuration invocation) frozen)
+      (mevedel-agent-conversation-refresh invocation))))
+
 (cl-defun mevedel-agent-exec-run (main-cb agent-type description
                                           invocation agent-buffer)
   "Dispatch a sub-agent task and route its final response to MAIN-CB.

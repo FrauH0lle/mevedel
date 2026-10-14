@@ -1951,6 +1951,12 @@
             (should (equal '(:backend "test-backend" :model test-model
                              :effort high)
                            (plist-get outcome :summary-metadata)))
+            ;; The launch snapshot describes the child, not the summarizer.
+            (should (plist-get outcome :model-metadata))
+            (should (equal (mevedel-agent-configuration-model-metadata
+                            (mevedel-agent-record-configuration
+                             (plist-get outcome :record)))
+                           (plist-get outcome :model-metadata)))
             (let* ((record (plist-get outcome :record))
                    (initial (mevedel-agent-record-invocation record))
                    (child-buffer (mevedel-agent-invocation-buffer initial))
@@ -1961,6 +1967,10 @@
                   (insert "Initial result.\n")
                   (put-text-property start (point) 'gptel 'response)))
               (funcall (car provider-callbacks) "Initial result.")
+              ;; Settlement retains what served the finished turn.
+              (should-not (mevedel-agent-record-invocation record))
+              (should (equal (plist-get outcome :model-metadata)
+                             (mevedel-agent-record-model-metadata record)))
               (setq followup
                     (mevedel-agent-record-invocation
                      (mevedel-agent-control-followup
@@ -2446,6 +2456,59 @@
       (mevedel-agent-control-wake-root-user session))
     (should (eq 'user reason))
     (should-not (mevedel-agent-control--mailbox session "/root"))))
+
+(defun mevedel-agent-control-test--provider-configuration (model effort)
+  "Return a frozen configuration for MODEL at EFFORT on a test backend."
+  (mevedel-agent-configuration--create
+   :agent (mevedel-agent-default)
+   :request-locals `((gptel-backend . ,(gptel--make-backend :name "Test Provider"))
+                     (gptel-model . ,model)
+                     (gptel-reasoning-effort . ,effort))))
+
+(mevedel-deftest mevedel-agent-control-record-model-metadata ()
+  ,test
+  (test)
+  :doc "a running turn reports its invocation's effective provider"
+  (let ((record (mevedel-agent-record--create
+                 :configuration (mevedel-agent-control-test--provider-configuration
+                                 'requested 'high)
+                 :model-metadata '(:backend "Old" :model "old" :effort nil)
+                 :invocation (mevedel-agent-invocation--create
+                              :frozen-configuration
+                              (mevedel-agent-control-test--provider-configuration
+                               'served nil)))))
+    (should (equal '(:backend "Test Provider" :model "served" :effort nil)
+                   (mevedel-agent-control-record-model-metadata record))))
+  :doc "an idle agent reports the last served provider, then its frozen one"
+  (let ((record (mevedel-agent-record--create
+                 :configuration (mevedel-agent-control-test--provider-configuration
+                                 'requested 'high)
+                 :model-metadata
+                 '(:backend "Test Provider" :model "served" :effort nil))))
+    (should (equal '(:backend "Test Provider" :model "served" :effort nil)
+                   (mevedel-agent-control-record-model-metadata record)))
+    (setf (mevedel-agent-record-model-metadata record) nil)
+    (should (equal '(:backend "Test Provider" :model "requested" :effort "high")
+                   (mevedel-agent-control-record-model-metadata record))))
+  :doc "reports nothing for an agent without a known provider"
+  (should-not (mevedel-agent-control-record-model-metadata
+               (mevedel-agent-record--create))))
+
+(mevedel-deftest mevedel-agent-control-model-metadata ()
+  ,test
+  (test)
+  :doc "looks up a retained agent by path and never another agent's provider"
+  (let ((session (mevedel-agent-control-test--session)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/helper"
+                      (mevedel-agent-record--create
+                       :path "/root/helper"
+                       :configuration (mevedel-agent-control-test--provider-configuration
+                                       'helper-model 'low)))))
+    (should (equal '(:backend "Test Provider" :model "helper-model" :effort "low")
+                   (mevedel-agent-control-model-metadata session "/root/helper")))
+    (should-not (mevedel-agent-control-model-metadata session "/root"))
+    (should-not (mevedel-agent-control-model-metadata session "/root/missing"))))
 
 (provide 'test-mevedel-agent-control)
 

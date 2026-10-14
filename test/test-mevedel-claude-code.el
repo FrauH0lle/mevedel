@@ -7,6 +7,7 @@
 
 (require 'mevedel-claude-code)
 (require 'mevedel-acp)
+(require 'mevedel-agents)
 (require 'mevedel-models)
 (require 'helpers
          (file-name-concat
@@ -335,14 +336,18 @@
           (when cancel (funcall cancel)))))))
 
 (mevedel-deftest mevedel-claude-code--prepare-session (:quiet t)
-  (pcase-dolist (`(,effort ,levels ,behavior ,expected ,mode ,model-name)
+  ;; CHILD rows launch from a retained agent's buffer, not the root buffer.
+  (pcase-dolist (`(,effort ,levels ,behavior ,expected ,mode ,model-name ,child)
                 '((high ["default" "low" "high"] nil "high mode:default" "plan")
                   (high ["default" "low" "high"] nil "high")
+                  (high ["default" "low" "high"] nil "high" nil nil t)
                   ;; An already current effort needs no configuration request.
                   (low ["default" "low" "high"] nil "unset mode:default" "plan")
                   (high ["default" "low"] nil "default")
+                  (high ["default" "low"] nil "default" nil nil t)
                   (nil ["default" "low" "high"] nil "default")
                   (high nil nil "unset")
+                  (high nil nil "unset" nil nil t)
                   (high ["default" "high"] "mismatch" "acknowledge")
                   (high ["default" "high"] "error" "rejected")
                   (high ["default" "high"] "wait" "closed")
@@ -357,12 +362,25 @@
                (model (plist-get (mevedel-model-resolve-provider
                                   (concat "Claude Code:" model-name)) :model))
                (launch (mevedel-claude-code-launch "Effort fixture" [] model-name effort))
+               (root (if child (generate-new-buffer " *claude-root*") (current-buffer)))
+               (frozen (and child
+                            (mevedel-agent-configuration--create
+                             :agent (mevedel-agent-default)
+                             :request-locals
+                             `((gptel-backend . ,backend) (gptel-model . ,model)
+                               (gptel-reasoning-effort . ,effort)))))
                done response info cancel)
           (setq-local gptel-backend backend gptel-model model)
           (setq-local mevedel--session
-                      (mevedel-session--create :root-buffer (current-buffer)))
+                      (mevedel-session--create :root-buffer root))
+          (when child
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :frozen-configuration frozen)))
           ;; This is the same pre-connection selection used by the model menu.
-          (mevedel-model-set-session-effort mevedel--session effort)
+          (if child
+              (setq-local gptel-reasoning-effort effort)
+            (mevedel-model-set-session-effort mevedel--session effort))
           (plist-put launch :command (executable-find "python3"))
           (plist-put launch :args (list mevedel-test--acp-peer))
           (plist-put launch :meta
@@ -407,11 +425,24 @@
                     (should (equal (cl-loop for value across levels
                                             unless (equal value "default") collect (intern value))
                                    (mevedel-model-supported-efforts model))))
-                  (should (eq (mevedel-session-reasoning-effort mevedel--session)
-                              gptel-reasoning-effort))
+                  (if (not child)
+                      (should (eq (mevedel-session-reasoning-effort mevedel--session)
+                                  gptel-reasoning-effort))
+                    ;; The child reports what Claude acknowledged; its record's
+                    ;; frozen identity keeps the request.
+                    (should (equal (list :backend "Claude Code" :model model-name
+                                         :effort (unless (member expected '("default" "unset"))
+                                                   (symbol-name effort)))
+                                   (mevedel-agent-configuration-model-metadata
+                                    (mevedel-agent-invocation-frozen-configuration
+                                     mevedel--agent-invocation))))
+                    (should (eq effort (alist-get 'gptel-reasoning-effort
+                                                  (mevedel-agent-configuration-request-locals
+                                                   frozen)))))
                   (should (eq gptel-reasoning-effort
                               (unless (member expected '("default" "unset")) effort))))))
-            (when cancel (funcall cancel))))))))
+            (when cancel (funcall cancel))
+            (when (and child (buffer-live-p root)) (kill-buffer root))))))))
 
 (mevedel-deftest mevedel-claude-code--command-output-async ()
   ,test

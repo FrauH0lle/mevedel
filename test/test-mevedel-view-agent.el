@@ -160,6 +160,187 @@
           (mevedel-agent-control-teardown-session session)
           (delete-directory root t))))))
 
+(mevedel-deftest mevedel-view--display-agent-transcript-view
+  (:doc "same-window and side-window inspection return to the original parent")
+  (dolist (action '((display-buffer-same-window)
+                    (display-buffer-in-side-window (side . right)
+                                                   (window-width . 0.4))))
+    (save-window-excursion
+      (mevedel-view-test--with-buffers
+        (let* ((session (mevedel-view-agent-test--session))
+               (mevedel-agent-view-display-action action)
+               (first (generate-new-buffer " *agent-first*"))
+               (second (generate-new-buffer " *agent-second*"))
+               first-view second-view)
+          (unwind-protect
+              (progn
+                (with-current-buffer data-buf (setq-local mevedel--session session))
+                (dolist (entry `(("/root/first" . ,first)
+                                 ("/root/first/second" . ,second)))
+                  (let ((record (mevedel-view-agent-test--record (car entry) 'running)))
+                    (setf (mevedel-agent-record-conversation-buffer record) (cdr entry))
+                    (push (cons (car entry) record) (mevedel-session-agent-registry session)))
+                  (with-current-buffer (cdr entry)
+                    (org-mode)
+                    (setq-local mevedel--session session mevedel--view-buffer view-buf)
+                    (insert (propertize "Agent response\n" 'gptel 'response))))
+                (mevedel-view-test--insert-data
+                 data-buf (apply #'concat (make-list 100 "Parent response\n")) 'response)
+                (switch-to-buffer view-buf)
+                (mevedel-view--full-rerender)
+                (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+                (set-window-start (selected-window)
+                                  (save-excursion (forward-line -10) (point)))
+                (should (> (window-start) (point-min)))
+                (let ((parent-window (selected-window))
+                      (parent-point (point))
+                      (parent-start (window-start))
+                      (before (buffer-string)))
+                  (mevedel-view-open-agent-transcript "/root/first")
+                  (setq first-view (window-buffer (selected-window)))
+                  (should (eq (eq (car action) 'display-buffer-same-window)
+                              (eq parent-window (selected-window))))
+                  (with-current-buffer first-view
+                    (mevedel-view-open-agent-transcript "/root/first/second"))
+                  (setq second-view (window-buffer (selected-window)))
+                  (should-not (buffer-live-p first-view))
+                  (with-current-buffer second-view
+                    (should (eq view-buf mevedel-view--agent-transcript-parent-view))
+                    (if (eq (car action) 'display-buffer-same-window)
+                        (mevedel-view-close-agent-transcript)
+                      (let* ((header (mevedel-view--agent-transcript-header-line))
+                             (map (get-text-property 0 'local-map header))
+                             (window (selected-window)))
+                        (should (string-prefix-p "[← Parent]" header))
+                        ;; A click must use its event window, not the current
+                        ;; buffer, which can still be the parent view.
+                        (select-window parent-window)
+                        (funcall (lookup-key map [header-line mouse-1])
+                                 (list 'mouse-1 (list window 'header-line '(0 . 0) 0))))))
+                  (should (eq parent-window (selected-window)))
+                  (should (eq view-buf (window-buffer parent-window)))
+                  (with-current-buffer view-buf
+                    (should (= parent-point (point)))
+                    (should (= parent-start (window-start parent-window)))
+                    (should (equal before (buffer-string)))
+                    (should (equal "> keep\nsecond line" (mevedel-view--input-text))))))
+            (dolist (buffer (list first-view second-view first second))
+              (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
+
+(mevedel-deftest mevedel-view-agent-model-label
+  (:doc "formats only known model metadata without inventing effort")
+  (progn
+    (should (equal "opus:high"
+                   (mevedel-view-agent-model-label
+                    '(:backend "Claude Code" :model "opus" :effort "high"))))
+    (should (equal "Claude Code / opus:high"
+                   (mevedel-view-agent-model-label
+                    '(:backend "Claude Code" :model "opus" :effort "high") t)))
+    (should (equal "mistral"
+                   (mevedel-view-agent-model-label '(:model "mistral" :effort nil))))
+    (should-not (mevedel-view-agent-model-label nil))
+    (should-not (mevedel-view-agent-model-label '(:backend "provider")))
+    (should (equal "provider / model name:high"
+                   (mevedel-view-agent-model-label
+                    '(:backend "provider" :model "model\nname" :effort "high") t)))))
+
+(mevedel-deftest mevedel-view-agent-model-details
+  (:doc "lists known metadata in disclosure without placeholder values")
+  (progn
+    (should (equal "Provider  Claude Code\nModel     opus\nEffort    high"
+                   (mevedel-view-agent-model-details
+                    '(:backend "Claude Code" :model "opus" :effort "high"))))
+    (should (equal "Model     mistral"
+                   (mevedel-view-agent-model-details '(:model "mistral"))))
+    (should-not (mevedel-view-agent-model-details nil))))
+
+(mevedel-deftest mevedel-view--agent-transcript-header-line
+  ()
+  ,test
+  (test)
+
+  :doc "shows current retained model and known effort without duplicate metrics"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-view-agent-test--session))
+           (path "/root/partner")
+           (record (mevedel-view-agent-test--record path 'running))
+           (metadata '(:backend "Claude Code" :model "opus" :effort "high")))
+      (setf (mevedel-agent-record-model-metadata record) metadata
+            (mevedel-session-agent-registry session) (list (cons path record)))
+      (with-temp-buffer
+        (setq-local mevedel-view--agent-path path
+                    mevedel-view--agent-transcript-parent-view view-buf
+                    mevedel-view--agent-transcript-info
+                    (list :session session :status 'running :calls 12 :elapsed 84))
+        (let ((header (mevedel-view--agent-transcript-header-line)))
+          (should (string-prefix-p "[← Parent] · /root/partner · [running]" header))
+          (should (string-search "Claude Code / opus:high" header))
+          (should (= 2 (length (split-string header "12 calls"))))
+          (should (string-search "12 calls" header)))
+        (setf (mevedel-agent-record-model-metadata record)
+              '(:backend "Claude Code" :model "sonnet" :effort nil))
+        (let ((header (mevedel-view--agent-transcript-header-line)))
+          (should (string-search "Claude Code / sonnet" header))
+          (should-not (string-search "opus" header))
+          (should-not (string-search "sonnet:" header)))
+        (setf (mevedel-agent-record-model-metadata record) nil)
+        (should-not (string-search "Claude Code" (mevedel-view--agent-transcript-header-line))))))
+
+  :doc "narrow windows keep Parent, leaf identity and state before model metadata"
+  (save-window-excursion
+    (delete-other-windows)
+    (split-window-right 40)
+    (let ((parent (current-buffer)))
+      (with-temp-buffer
+        (switch-to-buffer (current-buffer))
+        (setq-local mevedel-view--agent-transcript-parent-view parent
+                    mevedel-view--agent-path "/root/long_ancestor/another_ancestor/worker"
+                    mevedel-view--agent-transcript-info
+                    '(:status running :calls 12 :elapsed 84
+                      :model-metadata (:backend "Claude Code" :model "opus" :effort "high")))
+        (let ((header (mevedel-view--agent-transcript-header-line)))
+          (should (<= (string-width header) (window-body-width)))
+          (should (string-prefix-p "[← Parent]" header))
+          (should (string-search "worker" header))
+          (should (string-search "[running]" header))
+          (should-not (string-search "opus" header)))
+        (window-resize (selected-window) 20 t)
+        (setq mevedel-view--agent-path "/root/worker")
+        (let ((header (mevedel-view--agent-transcript-header-line)))
+          (should (<= (string-width header) (window-body-width)))
+          (should (string-search "opus:high" header))
+          (should-not (string-search "Claude Code" header)))))))
+
+(mevedel-deftest mevedel-view--agent-status-row-rendering
+  (:doc "roster metadata refresh preserves a multiline leading-> composer draft")
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-view-agent-test--session))
+           (record (mevedel-view-agent-test--record "/root/partner" 'running)))
+      (setf (mevedel-session-agent-registry session) (list (cons "/root/partner" record))
+            (mevedel-agent-record-model-metadata record)
+            '(:backend "Claude Code" :model "opus" :effort "high"))
+      (with-current-buffer data-buf (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> keep this\nand this" 4)
+        (mevedel-view-zone-set-collapse-state mevedel-view--status-agent-collapse-key nil)
+        (mevedel-view--render-agent-status)
+        (should (string-search "Running /root/partner · opus:high" (buffer-string)))
+        (setf (mevedel-agent-record-model-metadata record)
+              '(:backend "Claude Code" :model "sonnet"))
+        (mevedel-view--render-agent-status)
+        (should (string-search "Running /root/partner · sonnet" (buffer-string)))
+        (should-not (string-search "opus:high" (buffer-string)))
+        (should (equal "> keep this\nand this" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (let ((rendering (mevedel-view--agent-status-row-rendering
+                          (car (mevedel-view--agent-status-collect)))))
+          (should (string-search "Provider  Claude Code" (plist-get rendering :body))))
+        (mevedel-view-zone-set-collapse-state mevedel-view--status-agent-collapse-key t)
+        (mevedel-view--render-agent-status)
+        (should (string-search "1 agent: 1 running" (buffer-string)))
+        (should-not (string-search "sonnet" (buffer-string)))
+        (should (equal "> keep this\nand this" (mevedel-view--input-text)))))))
+
 (mevedel-deftest mevedel-view-agent--handle-badge
   (:doc "maps :status + :calls/:elapsed/:reason to a state badge string")
   ,test

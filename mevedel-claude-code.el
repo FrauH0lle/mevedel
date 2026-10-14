@@ -36,6 +36,11 @@
                   (launch prompt tools callback before-tool boundary))
 (autoload 'mevedel-acp-workload-request "mevedel-acp-workload")
 
+;; `mevedel-agent-exec'
+(declare-function mevedel-agent-exec-acknowledge-provider "mevedel-agent-exec"
+                  (invocation model effort))
+(autoload 'mevedel-agent-exec-acknowledge-provider "mevedel-agent-exec")
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
 
@@ -69,6 +74,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
+(defvar mevedel--agent-invocation)
 (defvar mevedel--session)
 
 (defun mevedel-claude-code-request-text (prompt system callback &optional stream ready)
@@ -181,6 +187,13 @@ the user's Claude settings is reset to `default': mevedel owns permissions."
                                                 "Claude reset unsupported reasoning effort to its default" nil)
                        (mevedel-model-set-session-effort mevedel--session nil buffer)))))
                (message "mevedel: Claude %s does not support effort %s; using its default" model effort))
+             ;; A retained child reports what Claude acknowledged, including a
+             ;; recovered model or its default effort, not what it requested.
+             (when-let* ((invocation
+                          (and (buffer-live-p buffer)
+                               (buffer-local-value 'mevedel--agent-invocation buffer))))
+               (mevedel-agent-exec-acknowledge-provider
+                invocation (intern model) (unless (equal value "default") effort)))
              (funcall ready session)))
          (configure (row value failure next)
            (mevedel-acp--send

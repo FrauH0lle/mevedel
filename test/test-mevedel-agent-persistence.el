@@ -162,7 +162,32 @@
     (should (gethash "/root/task" paths))
     (should (gethash "opaque-id" ids))
     (should-error
-     (mevedel-agent-persistence--serialize-record entry paths ids))))
+     (mevedel-agent-persistence--serialize-record entry paths ids)))
+
+  :doc "retains the last served provider metadata across a restore"
+  (let* ((record (mevedel-agent-persistence-test--record))
+         (metadata '(:backend "Served" :model "served-model" :effort nil)))
+    (setf (mevedel-agent-record-model-metadata record) metadata)
+    (let* ((encoded (mevedel-agent-persistence--serialize-record
+                     (cons "/root/task" record)
+                     (make-hash-table :test #'equal)
+                     (make-hash-table :test #'equal)))
+           (restored (cdr (mevedel-agent-persistence--deserialize-record
+                           (car (read-from-string (prin1-to-string encoded)))
+                           (make-hash-table :test #'equal)
+                           (make-hash-table :test #'equal)))))
+      (should (equal metadata (plist-get encoded :model-metadata)))
+      (should (equal metadata (mevedel-agent-record-model-metadata restored)))
+      (should-error
+       (mevedel-agent-persistence--deserialize-record
+        (plist-put (copy-sequence encoded) :model-metadata '(:model "m"))
+        (make-hash-table :test #'equal) (make-hash-table :test #'equal))
+       :type 'mevedel-agent-persistence-invalid-data)
+      (setf (mevedel-agent-record-model-metadata record) '(:model "m"))
+      (should-error
+       (mevedel-agent-persistence--serialize-record
+        (cons "/root/task" record)
+        (make-hash-table :test #'equal) (make-hash-table :test #'equal))))))
 
 (mevedel-deftest mevedel-agent-persistence--identity-p ()
   ,test
