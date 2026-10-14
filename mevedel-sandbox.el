@@ -359,8 +359,11 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
         (setq current (unless (equal parent current) parent))))
     missing))
 
-(defun mevedel-sandbox--writable-symlink-component (path writable-roots)
-  "Return the first symlink crossing in PATH under WRITABLE-ROOTS."
+(defun mevedel-sandbox--writable-symlink-component (path writable-roots &optional checked)
+  "Return the first symlink crossing in PATH under WRITABLE-ROOTS.
+CHECKED, when non-nil, is a hash table of prefixes already found not to be
+symlinks during the same preparation.  Protected candidates share most of
+their prefixes, so one preparation tests each prefix once."
   (let* ((path (directory-file-name (expand-file-name path)))
          (path-length (length path))
          start found)
@@ -373,7 +376,10 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
           (setq start (min (or start (length root)) (length root))))))
     (while (and start (not found))
       (let ((prefix (substring path 0 start)))
-        (when (file-symlink-p prefix) (setq found prefix)))
+        (unless (and checked (gethash prefix checked))
+          (if (file-symlink-p prefix)
+              (setq found prefix)
+            (when checked (puthash prefix t checked)))))
       (setq start (and (< start path-length)
                        (or (string-match "/" path (1+ start)) path-length))))
     found))
@@ -685,7 +691,15 @@ parents persist; their mounts carry `:required', refusing launch if the
 source disappears.
 CANDIDATES, when supplied, wraps the invocation's discovered candidates in
 a one-element list; path and symlink checks still happen here."
-  (let (restrictions cleanup-paths git-common-directories)
+  (let ((checked (make-hash-table :test #'equal))
+        ;; Roots that are already canonical.  Below one, a path whose every
+        ;; component was just proved not to be a symlink is its own truename.
+        (canonical-roots
+         (seq-filter (lambda (root)
+                       (let ((root (file-name-as-directory (expand-file-name root))))
+                         (string-equal root (file-name-as-directory (file-truename root)))))
+                     writable-roots))
+        restrictions cleanup-paths git-common-directories)
     (condition-case err
         (progn
           (dolist (candidate
@@ -697,7 +711,7 @@ a one-element list; path and symlink checks still happen here."
                    (directory-p (plist-get candidate :directory-p))
                    (symlink
                     (mevedel-sandbox--writable-symlink-component
-                     path writable-roots)))
+                     path writable-roots checked)))
               (when symlink
                 (signal
                  'mevedel-sandbox-policy-error
@@ -750,7 +764,15 @@ a one-element list; path and symlink checks still happen here."
                                   :mode mode
                                   :directory-p (file-directory-p target))
                             restrictions))))
-                (let ((canonical (file-truename path)))
+                (let ((canonical
+                       (if (seq-some
+                            (lambda (root)
+                              (let ((root (directory-file-name (expand-file-name root))))
+                                (or (string-equal root path)
+                                    (string-prefix-p (file-name-as-directory root) path))))
+                            canonical-roots)
+                           path
+                         (file-truename path))))
                   (unless (string-equal canonical path)
                     (push (append (list :path canonical
                                         :mode mode
@@ -764,7 +786,7 @@ a one-element list; path and symlink checks still happen here."
                      (existing (assoc path resolved)))
                 (when-let* ((symlink
                             (mevedel-sandbox--writable-symlink-component
-                             path writable-roots)))
+                             path writable-roots checked)))
                   (signal
                    'mevedel-sandbox-policy-error
                    (list

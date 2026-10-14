@@ -41,7 +41,11 @@ Native resource-grant semantics are independent and unchanged.
 
 Final path validation remains in the editor and checks the filesystem afresh.
 Writable-symlink checks inspect only prefixes inside the shallowest covering
-writable root. Restriction sorting computes each depth once. Git pointer files
+writable root, and one preparation tests each shared prefix once. Below an
+already canonical writable root, a path whose every component that check proved
+is not a symlink is its own canonical spelling and is not resolved again; other
+paths still resolve through `file-truename`. Restriction sorting computes each
+depth once. Git pointer files
 skip editor coding-detection hooks such as EditorConfig; they still use ordinary
 text decoding. These optimizations do not cache path or permission observations
 across preparations or remove canonical-target validation.
@@ -112,3 +116,19 @@ marker. Marker detection and removal now scan for exact, case-sensitive lines.
 A 6.4-MB, 100,000-line replay reduced this phase from about 40 to 14 ms and from
 29.9 to 12.8 MB of allocation. Output separators and result metadata are preserved;
 case differences and embedded marker-shaped text remain ordinary output.
+
+### 2026-10-14: derive canonical spellings from the symlink proof
+
+Event-loop telemetry still attributed recurring input lag around confined Bash
+calls to this foreground step: 317 protected candidates in this repository, 285
+of them fixture `.git` directories nested under `.scratch`, cost about 100 ms in
+the live editor. `file-truename` was 48% of its self time and `file-symlink-p`
+22%; every candidate re-tested the same shared prefixes, twice. The preparation
+now remembers the prefixes it already proved are not symlinks, and skips
+`file-truename` where that same proof already establishes the canonical
+spelling. A root reached through a symlinked ancestor is not canonical, so its
+paths still resolve and keep their canonical alias. Three alternating compiled
+replays over the same candidates reduced the median from about 160 to 43 ms with
+byte-identical restrictions. Discovery itself and the protected set are
+unchanged; excluding ignored trees from discovery was rejected because a nested
+`.git` there remains a real write target.

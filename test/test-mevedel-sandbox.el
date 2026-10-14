@@ -352,6 +352,28 @@
                          (mevedel-sandbox--writable-symlink-component
                           (file-name-concat link "missing") (list root)))))
       (delete-directory root t)))
+  :doc "a shared table tests each prefix once and still finds a new symlink"
+  (let* ((root (make-temp-file "mevedel-sandbox-checked-" t))
+         (deep (file-name-concat root "a" "b" "c"))
+         (checked (make-hash-table :test #'equal))
+         (probes 0)
+         (symlink-p (symbol-function 'file-symlink-p)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'file-symlink-p)
+                   (lambda (file) (cl-incf probes) (funcall symlink-p file))))
+          (make-directory deep t)
+          (should-not (mevedel-sandbox--writable-symlink-component
+                       (file-name-concat deep "one") (list root) checked))
+          (let ((first probes))
+            (should-not (mevedel-sandbox--writable-symlink-component
+                         (file-name-concat deep "two") (list root) checked))
+            ;; Only the new leaf is tested again.
+            (should (= 1 (- probes first))))
+          (make-symbolic-link deep (file-name-concat deep "link"))
+          (should (equal (file-name-concat deep "link")
+                         (mevedel-sandbox--writable-symlink-component
+                          (file-name-concat deep "link" "x") (list root) checked))))
+      (delete-directory root t)))
   :doc "writable symlink checks preserve the remote path domain"
   (let* ((root (make-temp-file "mevedel-sandbox-remote-link-" t))
          (target (file-name-concat root "target"))
@@ -792,7 +814,43 @@ a disabled transport cleans immediately instead of dropping work"
           (let ((preparation (mevedel-sandbox--protected-restrictions root (list root))))
             (should (file-directory-p state))
             (should-not (plist-get preparation :cleanup-paths))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+  :doc "paths under a canonical root keep their spelling without resolving it again"
+  (let* ((root (file-truename (make-temp-file "mevedel-sandbox-canonical-" t)))
+         (dot-gits (mapcar (lambda (name) (file-name-concat root "runs" name ".git"))
+                           '("one" "two")))
+         (mevedel-protected-paths '(("**/.git/**" . read-only)))
+         (resolved nil)
+         (truename (symbol-function 'file-truename)))
+    (unwind-protect
+        (progn
+          (dolist (dot-git dot-gits) (make-directory dot-git t))
+          (cl-letf (((symbol-function 'file-truename)
+                     (lambda (file &rest args)
+                       (when (member (directory-file-name file) dot-gits) (push file resolved))
+                       (apply truename file args))))
+            (let ((paths (mapcar (lambda (restriction) (plist-get restriction :path))
+                                 (plist-get (mevedel-sandbox--protected-restrictions root (list root))
+                                            :restrictions))))
+              (dolist (dot-git dot-gits) (should (member dot-git paths)))))
+          (should-not resolved))
+      (delete-directory root t)))
+  :doc "a root reached through a symlinked ancestor also protects the canonical spelling"
+  (let* ((parent (file-truename (make-temp-file "mevedel-sandbox-alias-" t)))
+         (real (file-name-concat parent "real"))
+         (alias (file-name-concat parent "alias"))
+         (root (file-name-concat alias "work"))
+         (mevedel-protected-paths '(("**/.git/**" . read-only))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat real "work" ".git") t)
+          (make-symbolic-link real alias)
+          (let ((paths (mapcar (lambda (restriction) (plist-get restriction :path))
+                               (plist-get (mevedel-sandbox--protected-restrictions root (list root))
+                                          :restrictions))))
+            (should (member (file-name-concat root ".git") paths))
+            (should (member (file-name-concat real "work" ".git") paths))))
+      (delete-directory parent t))))
 
 (mevedel-deftest mevedel-sandbox--unrestricted-facts ()
   ,test
