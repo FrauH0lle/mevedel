@@ -630,6 +630,9 @@ may indent further to express their hierarchy. Ordinary response prose and
 whole-turn headers or folds remain flush-left. Body insets are display-only,
 including on wrapped continuation lines, so copied disclosure content retains
 its authoritative text without presentation padding.
+Grouped thinking rows keep the same muted thinking marker and summary face as
+standalone rows. Nested row toggles retain the complete parent inset immediately;
+their header and body indentation do not wait for a later transcript redraw.
 Restoring an expanded system-reminder audit uses its ordinary disclosure renderer:
 one summary header and the same audit face survive both full and live redraws.
 Agent paths in launch handles and delivery cards use link highlighting.

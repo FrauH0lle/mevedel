@@ -2155,7 +2155,8 @@ Execution outcome remains independent of lifecycle and disclosure state."
          (tool-split
           (and (not agent-p)
                (mevedel-view--split-rendering-tool-header header))))
-    (if (eq vtype 'system-reminder-summary)
+    (if (or (eq vtype 'system-reminder-summary)
+            (plist-get rendering :reasoning-p))
         header
       (let ((line
              (if tool-split
@@ -2496,6 +2497,8 @@ folding a run into a group does not lose the boundary it ran with."
                  name args result nil render-data)))))
     (when rendering
       (setq rendering (copy-sequence rendering))
+      (when (eq (plist-get child :kind) 'reasoning)
+        (setq rendering (plist-put rendering :reasoning-p t)))
       (dolist (cell (list (cons :vtype 'tool-child)
                           (cons :expandable-p t)
                           (cons :coalesce-key nil)
@@ -2647,10 +2650,11 @@ body of the block that ran them."
         (mevedel-view--render-expanded-body rendering source)))
       ;; Descendants have their own source identity and disclosure state.
       ;; Stamp only this row's body, even when it contains a compound call.
+      ;; Retain the full prefix so a row-local toggle keeps its parent inset.
       (add-text-properties
        start (next-single-property-change start 'mevedel-view-source nil (point))
        `(mevedel-view-tool-child ,child
-         mevedel-view-child-indent ,indent
+         mevedel-view-child-indent ,mevedel-view--rendering-indent
          mevedel-view-child-depth ,mevedel-view--child-call-depth
          mevedel-view-source-key ,key))
       (mevedel-view-render-add-display-properties start (point) 'tool-child)
@@ -2715,7 +2719,8 @@ does not overwrite the identity of the rows it owns."
         (goto-char start)
         (delete-region start (mevedel-view-render-child-calls-end
                               (cdr bounds) (point-max) source depth))
-        (let ((mevedel-view--child-call-depth (1- depth)))
+        (let ((mevedel-view--child-call-depth (1- depth))
+              (mevedel-view--rendering-indent ""))
           (mevedel-view--insert-child-call-block
            child source (not collapsed) indent))
         (when turn-id
