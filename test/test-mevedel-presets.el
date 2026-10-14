@@ -48,6 +48,23 @@
 ;;
 ;;; FSM handler chain builder
 
+(defun mevedel-presets-test--payload-agent-roles ()
+  "Return the Agent role enum a dry-run request from this buffer would send."
+  (let* ((data (plist-get (gptel-fsm-info (gptel-request "probe" :dry-run t))
+                          :data))
+         (agent (cl-find "Agent" (append (plist-get data :tools) nil)
+                         :key (lambda (tool)
+                                (or (plist-get tool :name)
+                                    (plist-get (plist-get tool :function) :name)))
+                         :test #'equal))
+         (parameters (or (plist-get agent :parameters)
+                         (plist-get (plist-get agent :function) :parameters))))
+    (should agent)
+    ;; gptel names schema properties with uninterned keywords.
+    (cl-loop for (key value) on (plist-get parameters :properties) by #'cddr
+             when (equal (symbol-name key) ":role")
+             return (plist-get value :enum))))
+
 (defun mevedel-presets-test--guarded-wait-handlers (handlers)
   "Inspect WAIT HANDLERS behind their single preparation gate."
   (let ((fsm (gptel-make-fsm))
@@ -463,8 +480,10 @@
     (mevedel-tools-register)
     (mevedel--define-presets)
     (with-temp-buffer
+      ;; A preset that offers Agent directly gets a schema for its roster.
+      (setq-local gptel-tools (list (gptel-get-tool '("mevedel" "Agent"))))
       (mevedel-agents--setup-for-request 'mevedel-implement)
-      (let* ((tool (gptel-get-tool '("mevedel" "Agent")))
+      (let* ((tool (car gptel-tools))
              (validation-tool (mevedel-tool-get "Agent"))
              (role-arg
               (cl-find-if
@@ -799,7 +818,8 @@
                (lambda (_) (push 'extras calls))))
       (mevedel-preset--post 'test-preset
                             (lambda () (push 'user calls))))
-    (should (equal '(user settings tools agents deferred extras)
+    ;; The roster comes last so its Agent schema sees the final tools.
+    (should (equal '(user settings tools deferred extras agents)
                    (nreverse calls)))))
 
 (mevedel-deftest mevedel-preset--setup-catalog ()
@@ -1062,7 +1082,66 @@
       (should (equal '(:tier strong)
                      (alist-get 'review mevedel-model-workloads)))
       (should (eq 'test-child
-                  (mevedel-session-preset-name mevedel--session))))))
+                  (mevedel-session-preset-name mevedel--session)))))
+  :doc "each session's direct Agent schema advertises its own roster"
+  (let ((gptel--known-backends nil)
+        (gptel-use-tools t)
+        (mevedel-agent--registry
+         (mapcar (lambda (name)
+                   (cons name (mevedel-agent--create
+                               :name name :description "Probe role."
+                               :system-prompt "Probe.")))
+                 '("alpha" "beta")))
+        ;; A native Agent extra lands after the preset's own tools.
+        (mevedel-preset-extra-tool-specs
+         '((test-session-a (:tool "Agent") (:tool "Glob"))))
+        (buffer-a (generate-new-buffer " *preset-agent-a*"))
+        (buffer-b (generate-new-buffer " *preset-agent-b*"))
+        (agent-count (lambda ()
+                       (cl-count (mevedel-tool-get "Agent") gptel-tools
+                                 :key #'mevedel-tool-for-gptel))))
+    (unwind-protect
+        (let ((gptel-backend (gptel-make-openai "Preset probe" :key "unused"))
+              (gptel-model 'gpt-4o-mini))
+          (mevedel-tools-register)
+          (mevedel-define-preset test-session-a
+            :tools ((:tool "Read") (:tool "Agent"))
+            :agents (alpha beta))
+          (mevedel-define-preset test-session-b
+            :tools ((:tool "Read") (:tool "Agent"))
+            :agents ())
+          (mevedel-preset-apply 'test-session-a buffer-a)
+          (with-current-buffer buffer-a
+            (should (= 1 (funcall agent-count)))
+            (should (equal ["alpha" "beta"]
+                           (mevedel-presets-test--payload-agent-roles))))
+          (mevedel-preset-apply 'test-session-b buffer-b)
+          (with-current-buffer buffer-b
+            (should (equal [] (mevedel-presets-test--payload-agent-roles))))
+          (with-current-buffer buffer-a
+            (should (equal ["alpha" "beta"]
+                           (mevedel-presets-test--payload-agent-roles)))
+            ;; Reapplying the preset and repeating setup leave one Agent,
+            ;; extras included, and the other tools as registered.
+            (mevedel-preset-apply 'test-session-a)
+            (should (= 1 (funcall agent-count)))
+            (mevedel-agents--setup-for-request 'test-session-a)
+            (should (= 1 (funcall agent-count)))
+            (dolist (name '("Read" "Glob"))
+              (should (memq (mevedel-tool-gptel-tool (mevedel-tool-get name))
+                            gptel-tools)))
+            (should (equal ["alpha" "beta"]
+                           (mevedel-presets-test--payload-agent-roles))))
+          (should (equal [] (plist-get
+                             (cl-find "role"
+                                      (gptel-tool-args
+                                       (mevedel-tool-gptel-tool
+                                        (mevedel-tool-get "Agent")))
+                                      :key (lambda (arg) (plist-get arg :name))
+                                      :test #'equal)
+                             :enum))))
+      (kill-buffer buffer-a)
+      (kill-buffer buffer-b))))
 
 (mevedel-deftest mevedel-preset-restore-session
   (:doc "reapplies trusted gptel and mevedel preset settings from its name")

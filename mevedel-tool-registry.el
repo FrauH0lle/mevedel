@@ -213,6 +213,24 @@ Keyed by (CATEGORY NAME).  Overwrites any existing entry."
              mevedel-tool--registry)
     tools))
 
+(defun mevedel-tool-for-gptel (provider)
+  "Return the registered `mevedel-tool' that gptel PROVIDER implements, or nil.
+PROVIDER is the registered provider tool itself or a copy carrying a
+request-local schema: the same category and name and the same provider
+function, which runs the registered tool through the pipeline.  Any
+other implementation under a registered name is foreign."
+  (when-let* (((gptel-tool-p provider))
+              ;; An exact key: without a category the lookup would search
+              ;; every category.
+              (category (gptel-tool-category provider))
+              (tool (mevedel-tool-get (gptel-tool-name provider) category))
+              (registered (mevedel-tool-gptel-tool tool)))
+    (and (or (eq provider registered)
+             (and (gptel-tool-function provider)
+                  (eq (gptel-tool-function provider)
+                      (gptel-tool-function registered))))
+         tool)))
+
 (defun mevedel-tool-clear-registry ()
   "Remove all tools from the registry.
 
@@ -900,7 +918,11 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
                            (mevedel-tool--positional-to-plist
                             raw-args ',(or args nil))))
               :description resolved-prompt
-              :args ',(when args (mevedel-tool--args-to-gptel args))
+              ;; Each registration owns its provider schema.  The expansion's
+              ;; quoted schema is shared by every evaluation, while gptel
+              ;; preprocesses it destructively and per-request updates edit
+              ;; it in place.
+              :args (copy-tree ',(when args (mevedel-tool--args-to-gptel args)) t)
               ;; Always async: the pipeline wrapper uses continuations
               ;; (permission prompts, async handlers).  The handler's
               ;; own async nature is tracked in mevedel-tool :async-p

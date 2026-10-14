@@ -24,6 +24,13 @@ research, implementation, debugging, or mixed tasks. Callers select it by omitti
 specializations. Copying parent dialogue is a separate `context` choice and is
 not required to inherit capabilities.
 
+Each chat buffer has its own role roster: its preset's `:agents`, or the parent's
+roster for a child. When a buffer offers `Agent` as a direct provider tool, its
+schema lists that roster's roles and model tiers in the buffer's own copy of the
+tool. The registered tool is shared and never edited, so sessions with different
+presets do not advertise each other's roles. A discoverable `Agent` is described
+by its ToolSearch contract instead.
+
 Tool inheritance includes both native request tools and the delegator's effective
 specialist catalog for ToolSearch/ToolCall, including configured and MCP tools.
 Specialist identities are frozen as explicit category/name references. A nested

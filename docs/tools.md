@@ -400,6 +400,10 @@ Important tool metadata:
 
 Native and wrapped registrations preserve the same permission metadata.
 `mevedel-define-tool` rejects unrecognized keywords during macro expansion.
+Every registration builds its own provider schema. Per-request updates to a
+registered schema, such as the Agent tool's role and model enums, therefore
+never carry into a later registration, and the authored `:args` stay as
+declared.
 
 `:snapshot-p` is an explicit declaration for file-mutating tools whose
 before-state participates in the final patch. `ApplyPatch` declares it and

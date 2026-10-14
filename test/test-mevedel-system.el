@@ -219,6 +219,29 @@
       (mevedel-tool-clear-registry)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-system--tool-prompt-source
+  (:doc "Local schema copies keep native provenance without claiming unrelated tools")
+  (let* ((gptel--known-tools nil)
+         (provider (gptel-make-tool :name "ProvenanceProbe" :category "mevedel"
+                                    :function #'ignore :description "Probe"))
+         (native (mevedel-tool--create
+                  :name "ProvenanceProbe" :category "mevedel"
+                  :prompt-source '(:kind file :path "/prompts/probe.md")
+                  :gptel-tool provider))
+         (local (gptel--copy-tool provider)))
+    (mevedel-tool-register native)
+    (should (equal "prompt file /prompts/probe.md"
+                   (mevedel-system--tool-prompt-source provider)))
+    (should (equal "prompt file /prompts/probe.md"
+                   (mevedel-system--tool-prompt-source local)))
+    (setf (gptel-tool-function local) #'identity)
+    (should (equal "external gptel tool"
+                   (mevedel-system--tool-prompt-source local)))
+    (setf (gptel-tool-function local) #'ignore
+          (gptel-tool-category local) "external")
+    (should (equal "external gptel tool"
+                   (mevedel-system--tool-prompt-source local)))))
+
 (mevedel-deftest mevedel-system--resource-metadata
   (:before-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory

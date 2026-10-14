@@ -321,10 +321,11 @@ without a cycle check of its own."
 (defun mevedel-preset--setup-scope (name)
   "Install preset NAME's agent roster and tool catalog in the current buffer.
 They live in buffer, session, and tool state that no preset application
-can let-bind."
-  (mevedel-agents--setup-for-request name)
+can let-bind.  The roster comes last: its Agent schema replaces the Agent
+in the final `gptel-tools', extras included."
   (mevedel-preset--setup-catalog name)
-  (mevedel-preset--setup-extras name))
+  (mevedel-preset--setup-extras name)
+  (mevedel-agents--setup-for-request name))
 
 (defun mevedel-preset--restore-scope-at-request-end ()
   "Reinstall the session preset's scope when the current request ends.

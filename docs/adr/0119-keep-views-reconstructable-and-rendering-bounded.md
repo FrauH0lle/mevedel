@@ -235,7 +235,11 @@ their rest) and no frame is
 scheduled. A shared battery
 observer consumes existing notifications and uses a deferred, at-most-minute
 fallback query while subscribed views exist; animation callbacks never query
-power. TRAMP temporarily binds Emacs's timer list to nil, so a fallback
+power. The observer loads `battery.el` only inside that deferred query's error
+boundary; loading views or restoring browser sessions never initializes the
+optional battery/D-Bus backend. Initialization failures use the same unknown
+state and retry interval as failed queries. TRAMP temporarily binds Emacs's
+timer list to nil, so a fallback
 scheduled on that list can be discarded, while `cancel-timer` there cannot
 remove an older timer from the hidden outer list. The observer instead arms
 its single poll on the UI host's top-level list and removes it there on final
@@ -350,6 +354,16 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 2026: defer battery initialization out of cold browser restore
+
+The observer originally loaded `battery.el` eagerly with the stream view.
+Loading it can initialize D-Bus and wait for events, which raises
+`inhibited-interaction` during a lobby open. Failed loads leave the feature
+unprovided, so later opens of an unlocked session repeat the same refusal.
+Initialization now belongs to the guarded deferred power poll, not view loading.
+The fresh-process lobby regression covers source and byte-compiled modules,
+with a deterministic event wait so bus-less hosts exercise the same boundary.
 
 ### October 2026: copied response properties cannot extend history into the composer
 

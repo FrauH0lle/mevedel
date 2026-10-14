@@ -635,6 +635,45 @@
       (should (= 2 (length args)))
       (should (equal "name" (plist-get (car args) :name)))))
 
+  :doc "each evaluation of one declaration owns its provider schema"
+  ;; Per-request updates such as the Agent tool's role and model enums edit
+  ;; the registered provider schema in place.  Re-registering the same
+  ;; expanded declaration must not inherit them.
+  (let ((gptel--known-tools nil)
+        (declaration
+         (macroexpand-all
+          '(mevedel-define-tool
+            :name "TestSchemaOwnership"
+            :handler #'ignore
+            :description "Tool with nested schema"
+            :args ((mode string :optional "Mode" :enum [])
+                   (tasks array :required "Tasks"
+                          :items (:type object :required ["id"])))))))
+    (cl-flet ((provider-args ()
+                (gptel-tool-args
+                 (mevedel-tool-gptel-tool
+                  (mevedel-tool-get "TestSchemaOwnership" "mevedel")))))
+      (eval declaration t)
+      (let* ((first (provider-args))
+             (mode (car first))
+             (items (plist-get (cadr first) :items)))
+        (setf (plist-get mode :enum) ["fast" "safe"]
+              (plist-get mode :description) "Changed")
+        (aset (plist-get items :required) 0 "changed")
+        (setf (plist-get items :type) "changed")
+        (eval declaration t)
+        (let ((second (provider-args)))
+          (should-not (eq first second))
+          (should (equal [] (plist-get (car second) :enum)))
+          (should (equal "Mode" (plist-get (car second) :description)))
+          (should (equal '(:type "object" :required ["id"])
+                         (plist-get (cadr second) :items)))
+          ;; The authored mevedel schema stays as declared too.
+          (should (equal '(mode string :optional "Mode" :enum [])
+                         (assq 'mode (mevedel-tool-args
+                                      (mevedel-tool-get "TestSchemaOwnership"
+                                                        "mevedel")))))))))
+
   :doc "function-valued :prompt resolves to string at register time"
   (progn
     (mevedel-define-tool
@@ -1034,6 +1073,34 @@
     (should-not (mevedel-tool-arg-access '(source path-or-resource :required "S")))
     (should-not (mevedel-tool-arg-access
                  '(source path-or-resource :optional "S" :enum ["a"])))))
+
+(mevedel-deftest mevedel-tool-for-gptel ()
+  ,test
+  (test)
+  :doc "resolves the registered provider and its request-local copies only"
+  (progn
+    (mevedel-define-tool
+     :name "TestProvider"
+     :handler #'ignore
+     :description "Provider identity"
+     :args ((mode string :optional "Mode" :enum [])))
+    (let* ((tool (mevedel-tool-get "TestProvider" "mevedel"))
+           (registered (mevedel-tool-gptel-tool tool))
+           (copy (gptel--copy-tool registered))
+           (foreign (gptel--copy-tool registered))
+           (elsewhere (gptel--copy-tool registered))
+           (uncategorized (gptel--copy-tool registered)))
+      (setf (gptel-tool-args copy) nil
+            (gptel-tool-function foreign) #'ignore
+            (gptel-tool-category elsewhere) "other"
+            (gptel-tool-category uncategorized) nil)
+      (should (eq tool (mevedel-tool-for-gptel registered)))
+      (should (eq tool (mevedel-tool-for-gptel copy)))
+      (should-not (mevedel-tool-for-gptel foreign))
+      (should-not (mevedel-tool-for-gptel elsewhere))
+      (should-not (mevedel-tool-for-gptel uncategorized))
+      (should-not (mevedel-tool-for-gptel "TestProvider"))
+      (should-not (mevedel-tool-for-gptel nil)))))
 
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here

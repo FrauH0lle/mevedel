@@ -403,7 +403,9 @@ BUFFER defaults to INVOCATION's retained conversation buffer."
                  (and (boundp 'mevedel--workspace) mevedel--workspace)))
           (dolist (symbol mevedel-agent-request-local-symbols)
             (when-let* ((entry (assq symbol locals)))
-              (set (make-local-variable symbol) (cdr entry)))))))))
+              (set (make-local-variable symbol) (cdr entry))))
+          ;; A direct Agent advertises the roster this child inherited.
+          (mevedel-agents-install-agent-schema))))))
 
 
 ;;

@@ -467,7 +467,70 @@ temporary one."
                  (mevedel-collaboration-lobby-restore)
                  (should (= opened 1))
                  (mevedel-collaboration-lobby-stop)
-                 (should-not (mevedel-collaboration-lobby--intended)))))))
+                 (should-not (mevedel-collaboration-lobby--intended)))))
+            ('lobby-open
+             ;; A lobby restored at startup opens a session saved by an
+             ;; earlier Emacs for a browser guest.  Nothing has loaded the
+             ;; chat view yet, so the open is its first load, inside the
+             ;; lobby's `inhibit-interaction'.  Initializing D-Bus waits for
+             ;; events; a host without a system bus skips that wait.  Make it
+             ;; wait everywhere, as on a desktop, without contacting a real bus.
+             (advice-add 'dbus-init-bus :override
+                         (lambda (&rest _)
+                           (when inhibit-interaction (read-event nil nil 0.001))
+                           (signal 'dbus-error '("No fixture bus"))))
+             (mevedel-install)
+             (should-not (featurep 'mevedel-view-stream))
+             (should-not (featurep 'dbus))
+             (let* ((workspace (mevedel-workspace))
+                    (id (plist-get (plist-get (car (mevedel-session-persistence-list-sessions
+                                                    workspace))
+                                              :summary)
+                                   :session-id))
+                    sent)
+               (should (stringp id))
+               (autoload 'mevedel-collaboration--transport-open "mevedel-collaboration-transport")
+               (advice-add 'mevedel-collaboration--transport-open :override
+                           (lambda (&rest _) (list :state 'down)))
+               (advice-add 'mevedel-collaboration--transport-stop :override #'ignore)
+               (advice-add 'mevedel-collaboration--transport-send :override
+                           (lambda (_transport peer frame) (push (cons peer frame) sent) t))
+               (require 'mevedel-collaboration-lobby)
+               (mevedel-collaboration-lobby--set-intended default-directory t)
+               (mevedel-collaboration-lobby-restore)
+               (let ((lobby (mevedel-collaboration-lobby--find workspace)))
+                 (should lobby)
+                 (puthash 2 '(:name "Writer" :writable t) (plist-get lobby :guests))
+                 (mevedel-collaboration-lobby--on-frame
+                  (mevedel-workspace-root workspace) 2
+                  (list :t "open-session" :reqId 7 :id id)))
+               (let ((reply (cdr (seq-find (lambda (entry)
+                                             (equal "open-session" (plist-get (cdr entry) :t)))
+                                           sent))))
+                 ;; A refusal's message is the useful failure output.
+                 (should (equal nil (plist-get reply :message)))
+                 (should (eq t (plist-get reply :ok)))
+                 (should (stringp (plist-get reply :link))))
+               (should (mevedel-test-loading--session))
+               ;; Power policy belongs to animation, not to restoring a view.
+               (should-not (featurep 'battery))
+               (should-not (featurep 'dbus))
+               (mevedel-collaboration-lobby-stop))
+             ;; The first animation's deferred poll, outside the guest frame,
+             ;; loads the power backend and samples it.
+             (let ((view (buffer-local-value 'mevedel--view-buffer
+                                             (mevedel-test-loading--session)))
+                   (queries 0) (refreshes 0))
+               (setq battery-status-function
+                     (lambda () (cl-incf queries) '((?L . "AC") (?B . "charging"))))
+               (mevedel-view-power-watch view (lambda () (cl-incf refreshes)))
+               (should-not (featurep 'battery))
+               (mevedel-test-loading--await (lambda () (> queries 0)))
+               (should (featurep 'battery))
+               (should (= 1 queries))
+               (should (= 1 refreshes))
+               (should (= 60 (mevedel-view-power-framerate 60 15 'auto t)))
+               (mevedel-view-power-unwatch view)))))
       (dolist (buffer (buffer-list))
         (when (buffer-local-value 'mevedel--session buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))

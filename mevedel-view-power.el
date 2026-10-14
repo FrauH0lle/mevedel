@@ -11,9 +11,11 @@
 
 ;;; Code:
 
-(require 'battery)
 (require 'mevedel-utilities)
 (require 'subr-x)
+
+;; `battery'
+(defvar battery-status-function)
 
 (defconst mevedel-view-power--interval 60
   "Minimum seconds between fallback queries and maximum cache lifetime.")
@@ -148,6 +150,10 @@ the views' own scheduling callbacks so visibility policy stays in the view."
           (setq mevedel-view-power--last-query now)
           (let ((data (condition-case nil
                           (let ((default-directory temporary-file-directory))
+                            ;; Loading battery.el can initialize D-Bus.  Keep
+                            ;; that optional work inside the deferred poll,
+                            ;; never in view loading or browser restoration.
+                            (require 'battery)
                             (and battery-status-function
                                  (funcall battery-status-function)))
                         (error nil))))

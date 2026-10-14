@@ -25,13 +25,13 @@
 
 ;; `cl-seq'
 (declare-function cl-delete-duplicates "cl-seq" (cl-seq &rest cl-keys))
-(declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-some "cl-seq" (cl-pred cl-seq &rest cl-rest))
 
 ;; `gptel-request'
-(declare-function gptel-get-tool "ext:gptel-request" (name))
+(declare-function gptel--copy-tool "ext:gptel-request" (arg))
 (declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
+(defvar gptel-tools)
 
 ;; `mevedel-agent-conversation'
 (defvar mevedel--agent-invocation)
@@ -693,8 +693,8 @@ explicit empty declaration registers none, which is what a preset like
 `mevedel-discuss' means by `:agents ()'.  A preset with no `:agents'
 key at all registers the whole registry.
 
-Populates the request-local role roster and updates the Agent tool's role and
-model enums.  Must be called in the chat buffer."
+Populates the request-local role roster and installs its Agent schema.  Must
+be called in the chat buffer."
   (let* ((meta (and preset-name
                     (mevedel-preset--resolved-metadata preset-name)))
          (declared (plist-member meta :agents))
@@ -709,26 +709,46 @@ model enums.  Must be called in the chat buffer."
                        mevedel-agent--registry)
                     mevedel-agent--registry))))
     (mevedel-agents-set-specs mevedel-specs))
-  ;; Update Agent tool enums to list available role and model names.
-  (when-let* ((agent-tool (gptel-get-tool '("mevedel" "Agent")))
-              (args (gptel-tool-args agent-tool)))
-    (when-let* ((role-arg
-                 (cl-find-if (lambda (arg)
-                               (equal (plist-get arg :name) "role"))
-                             args)))
-      (setf (plist-get role-arg :enum)
-            (vconcat (mapcar #'car (mevedel-agents-specs)))))
-    (when-let* ((model-arg
-                 (cl-find-if (lambda (arg)
-                               (equal (plist-get arg :name) "model"))
-                             args)))
-      (setf (plist-get model-arg :enum)
-            (vconcat (mapcar (lambda (entry)
-                               (symbol-name (car entry)))
-                             mevedel-model-tiers)))
-      (setf (plist-get model-arg :description)
-            (mevedel-model-agent-tool-description))))
+  (mevedel-agents-install-agent-schema)
   nil)
+
+(defun mevedel-agents-install-agent-schema ()
+  "Give the current buffer its own Agent schema for its role roster.
+When `gptel-tools' offers the native Agent tool directly, replace it with a
+copy of the registered schema whose role and model enums list this buffer's
+roles and model tiers.  The registered tool is shared by every buffer, so it
+is never edited.  A copy from an earlier call still resolves to the native
+tool, so it is replaced rather than duplicated; a foreign tool of the same
+name is left alone.  Other tools keep their order and identity.  Call this
+once the buffer's `gptel-tools' are final; a discoverable Agent needs no
+schema here."
+  (when-let* ((native (mevedel-tool-get "Agent" "mevedel"))
+              (registered (mevedel-tool-gptel-tool native))
+              (agent-p (lambda (tool)
+                         (eq native (mevedel-tool-for-gptel tool))))
+              ((cl-some agent-p gptel-tools)))
+    (let ((roles (vconcat (mapcar #'car (mevedel-agents-specs))))
+          (models (vconcat (mapcar (lambda (entry) (symbol-name (car entry)))
+                                   mevedel-model-tiers)))
+          (local (gptel--copy-tool registered))
+          installed)
+      (setf (gptel-tool-args local)
+            (mapcar (lambda (arg)
+                      (pcase (plist-get arg :name)
+                        ("role" (plist-put (copy-sequence arg) :enum roles))
+                        ("model"
+                         (plist-put (plist-put (copy-sequence arg) :enum models)
+                                    :description
+                                    (mevedel-model-agent-tool-description)))
+                        (_ arg)))
+                    (gptel-tool-args registered)))
+      (setq-local gptel-tools
+                  (delq nil
+                        (mapcar (lambda (tool)
+                                  (cond ((not (funcall agent-p tool)) tool)
+                                        (installed nil)
+                                        (t (setq installed local))))
+                                gptel-tools))))))
 
 (provide 'mevedel-agents)
 ;;; mevedel-agents.el ends here

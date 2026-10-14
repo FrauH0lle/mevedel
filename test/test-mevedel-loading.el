@@ -70,6 +70,8 @@ A child that outlives two minutes is killed and fails the test."
               ;; The first send saves a session that a second Emacs resumes.
               (run entry 'send state)
               (run entry 'resume state)
+              ;; A restored lobby opens that saved session for a guest.
+              (run entry 'lobby-open state)
               (delete-directory state t)
               (make-directory state)))
         (delete-directory compiled t)

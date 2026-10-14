@@ -81,11 +81,9 @@
 (defvar mevedel--session)
 
 ;; `mevedel-tool-registry'
-(declare-function mevedel-tool-all "mevedel-tool-registry" ())
-(declare-function mevedel-tool-gptel-tool "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-for-gptel "mevedel-tool-registry" (provider))
 (declare-function mevedel-tool-prompt-source "mevedel-tool-registry" (cl-x) t)
-(autoload 'mevedel-tool-all "mevedel-tool-registry")
-(autoload 'mevedel-tool-gptel-tool "mevedel-tool-registry")
+(autoload 'mevedel-tool-for-gptel "mevedel-tool-registry")
 (autoload 'mevedel-tool-prompt-source "mevedel-tool-registry")
 
 ;; `mevedel-tools'
@@ -976,9 +974,7 @@ to conversation delivery, leaving only the stable system contract."
 
 (defun mevedel-system--tool-prompt-source (tool)
   "Return a human-readable prompt provenance label for gptel TOOL."
-  (if-let* ((native
-             (cl-find tool (mevedel-tool-all)
-                      :key #'mevedel-tool-gptel-tool :test #'eq)))
+  (if-let* ((native (mevedel-tool-for-gptel tool)))
       (let ((source (mevedel-tool-prompt-source native)))
         (pcase (plist-get source :kind)
           ('file (format "prompt file %s" (plist-get source :path)))

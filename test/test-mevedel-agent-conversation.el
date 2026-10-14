@@ -17,6 +17,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-structs)
+(require 'mevedel-tool-ui)
 (require 'mevedel-tool-repair)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tools)
@@ -165,7 +166,38 @@
 				     (buffer-local-value 'gptel-model buffer)))
 			 (should-not
 			  (local-variable-p 'kill-buffer-hook buffer)))
-		     (kill-buffer buffer))))
+		     (kill-buffer buffer)))
+
+  :doc "a direct Agent advertises the roster the child inherited"
+  (progn
+    (mevedel-tool-ui--register)
+    (let* ((buffer (generate-new-buffer " *agent-conversation-roster*"))
+           (registered (mevedel-tool-gptel-tool (mevedel-tool-get "Agent")))
+           (frozen-tools (list registered))
+           (agent (mevedel-agent--create :name "default"))
+           (invocation (mevedel-agent-invocation-create agent))
+           (roles (lambda (tool)
+                    (plist-get (cl-find "role" (gptel-tool-args tool)
+                                        :key (lambda (arg) (plist-get arg :name))
+                                        :test #'equal)
+                               :enum))))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (mevedel-agents-set-specs '(("alpha") ("beta"))))
+            (setf (mevedel-agent-invocation-frozen-configuration invocation)
+                  (mevedel-agent-configuration--create
+                   :agent agent
+                   :request-locals `((gptel-tools . ,frozen-tools))))
+            (mevedel-agent-conversation-configure invocation buffer)
+            (let ((installed (car (buffer-local-value 'gptel-tools buffer))))
+              (should (= 1 (length (buffer-local-value 'gptel-tools buffer))))
+              (should-not (eq registered installed))
+              (should (equal ["alpha" "beta"] (funcall roles installed))))
+            ;; The frozen configuration and the shared tool stay as they were.
+            (should (eq registered (car frozen-tools)))
+            (should (equal [] (funcall roles registered))))
+        (kill-buffer buffer)))))
 
 (mevedel-deftest mevedel-agent-conversation--reject-terminal-tool-call ()
 		 ,test

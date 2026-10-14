@@ -1392,6 +1392,21 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                  (gptel-tools (list tool)))
             (mevedel-tool-register registered)
             (should (equal (list registered) (mevedel-tools-native-roster (cdr owner))))))
+      (kill-buffer (car owner))))
+
+  :doc "local schema copies retain native authority but foreign implementations do not"
+  (let* ((session (mevedel-tools-test--make-session))
+         (owner (mevedel-tools-test--native-owner session))
+         (registered (mevedel-tool-get "Read" "mevedel"))
+         (local (gptel--copy-tool (mevedel-tool-gptel-tool registered)))
+         (gptel-tools (list local)))
+    (unwind-protect
+        (progn
+          (setf (gptel-tool-args local) (copy-tree (gptel-tool-args local) t))
+          (should (equal (list registered)
+                         (mevedel-tools-native-roster (cdr owner))))
+          (setf (gptel-tool-function local) #'ignore)
+          (should-error (mevedel-tools-native-roster (cdr owner))))
       (kill-buffer (car owner)))))
 
 

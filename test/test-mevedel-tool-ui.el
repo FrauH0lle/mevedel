@@ -12,6 +12,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
+(require 'mevedel-agents)
 (require 'mevedel-compact)
 (require 'mevedel-compact-evidence)
 (require 'mevedel-compact-target)
@@ -115,6 +116,33 @@
                               (plist-get role-arg :description)))
       (should (string-match-p "Select a named role for its specialization"
                               (plist-get role-arg :description)))))
+
+  :doc "a request's role and model rosters never reach the shared schema"
+  (let ((gptel--known-tools nil)
+        (mevedel-agent--registry
+         (list (cons "probe" (mevedel-agent--create
+                              :name "probe" :description "Probe role."
+                              :system-prompt "Probe.")))))
+    (cl-flet ((arg (name &optional provider)
+                (cl-find name (gptel-tool-args
+                               (or provider
+                                   (mevedel-tool-gptel-tool (mevedel-tool-get "Agent"))))
+                         :key (lambda (arg) (plist-get arg :name))
+                         :test #'equal)))
+      (mevedel-tool-ui--register)
+      (let ((model-description (plist-get (arg "model") :description)))
+        (with-temp-buffer
+          (setq-local gptel-tools
+                      (list (mevedel-tool-gptel-tool (mevedel-tool-get "Agent"))))
+          (mevedel-agents--setup-for-request)
+          (should (equal ["probe"] (plist-get (arg "role" (car gptel-tools)) :enum)))
+          (should (equal [] (plist-get (arg "role") :enum))))
+        (mevedel-tool-clear-registry)
+        (mevedel-tool-ui--register)
+        (should (equal [] (plist-get (arg "role") :enum)))
+        (should-not (plist-member (arg "model") :enum))
+        (should (equal model-description
+                       (plist-get (arg "model") :description))))))
 
   :doc "blocked and failed retained agents keep their transcript handles"
   (progn

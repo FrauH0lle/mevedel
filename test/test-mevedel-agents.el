@@ -14,6 +14,7 @@
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
 (require 'mevedel-system)
+(require 'mevedel-tool-ui)
 (require 'mevedel-tools)
 (require 'mevedel-workspace)
 (require 'helpers
@@ -443,6 +444,61 @@
             (assoc-delete-all name mevedel-agent--registry))
       (delete-directory root t))))
 
+
+(mevedel-deftest mevedel-agents-install-agent-schema ()
+  ,test
+  (test)
+  :doc "replaces the direct Agent with one roster copy, keeping other tools"
+  (progn
+    (mevedel-tool-ui--register)
+    (let* ((registered (mevedel-tool-gptel-tool (mevedel-tool-get "Agent")))
+           (list-agents (mevedel-tool-gptel-tool (mevedel-tool-get "ListAgents")))
+           (roles (lambda (tool)
+                    (plist-get (cl-find "role" (gptel-tool-args tool)
+                                        :key (lambda (arg) (plist-get arg :name))
+                                        :test #'equal)
+                               :enum)))
+           (agents (lambda ()
+                     (cl-remove-if-not (lambda (tool)
+                                         (equal "Agent" (gptel-tool-name tool)))
+                                       gptel-tools))))
+      (with-temp-buffer
+        (setq-local gptel-tools (list list-agents registered))
+        (mevedel-agents-set-specs '(("alpha")))
+        (mevedel-agents-install-agent-schema)
+        (let ((first (car (funcall agents))))
+          (should (= 1 (length (funcall agents))))
+          (should (eq list-agents (car gptel-tools)))
+          (should (eq first (cadr gptel-tools)))
+          (should-not (eq registered first))
+          (should (eq (gptel-tool-function registered) (gptel-tool-function first)))
+          (should (equal ["alpha"] (funcall roles first)))
+          ;; A later roster replaces the earlier copy instead of adding one.
+          (mevedel-agents-set-specs '(("beta") ("gamma")))
+          (mevedel-agents-install-agent-schema)
+          (should (= 2 (length gptel-tools)))
+          (should (= 1 (length (funcall agents))))
+          (should-not (eq first (car (funcall agents))))
+          (should (equal ["beta" "gamma"] (funcall roles (car (funcall agents)))))))
+      ;; The registered tool every buffer shares never changes.
+      (should (equal [] (funcall roles registered)))))
+
+  :doc "leaves a foreign same-named tool and a discoverable Agent alone"
+  (progn
+    (mevedel-tool-ui--register)
+    (let ((foreign (gptel--copy-tool
+                    (mevedel-tool-gptel-tool (mevedel-tool-get "Agent")))))
+      (setf (gptel-tool-function foreign) #'ignore)
+      (with-temp-buffer
+        (mevedel-agents-set-specs '(("alpha")))
+        (let ((tools (list foreign)))
+          (setq-local gptel-tools tools)
+          (mevedel-agents-install-agent-schema)
+          (should (eq tools gptel-tools))
+          (should (eq foreign (car gptel-tools))))
+        (setq-local gptel-tools nil)
+        (mevedel-agents-install-agent-schema)
+        (should-not gptel-tools)))))
 
 (provide 'test-mevedel-agents)
 

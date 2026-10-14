@@ -14,19 +14,39 @@
 (require 'mevedel-view-power)
 (eval-when-compile (require 'tramp))
 
+;; `battery'
+(defvar battery-status-function)
+(defvar battery-update-functions)
+
+(defmacro mevedel-view-power-test--without-battery-load (&rest body)
+  "Run BODY with `battery' treated as loaded and other features delegated.
+A poll requires `battery'; loading it for real initializes D-Bus and
+selects the host's backend, so cases bind `battery-status-function'
+instead."
+  (declare (indent 0))
+  (let ((original (make-symbol "require")))
+    `(let ((,original (symbol-function 'require)))
+       (cl-letf (((symbol-function 'require)
+                  (lambda (feature &rest args)
+                    (if (eq feature 'battery) 'battery
+                      (apply ,original feature args)))))
+         ,@body))))
+
 (defmacro mevedel-view-power-test--isolated (&rest body)
-  "Run BODY with isolated power observation state and cancel its timer."
+  "Run BODY with isolated power observation state and cancel its timer.
+BODY never loads `battery'."
   (declare (indent 0))
   `(let ((mevedel-view-power--watchers (make-hash-table :test #'eq))
          (mevedel-view-power--state 'unknown)
          (mevedel-view-power--sample-time nil)
          (mevedel-view-power--last-query nil)
          (mevedel-view-power--timer nil)
-         (battery-update-functions (copy-sequence battery-update-functions))
+         (battery-update-functions
+          (copy-sequence (bound-and-true-p battery-update-functions)))
          (window-state-change-functions
           (copy-sequence window-state-change-functions)))
      (unwind-protect
-         (progn ,@body)
+         (mevedel-view-power-test--without-battery-load ,@body)
        (maphash (lambda (view _callback)
                   (mevedel-view-power-unwatch view))
                 (copy-hash-table mevedel-view-power--watchers))
@@ -279,7 +299,10 @@
         (when (buffer-live-p two) (kill-buffer two))))))
 
 (mevedel-deftest mevedel-view-power--poll
-  (:doc "Failed and missing providers back off without warnings or hot-path reads")
+  ()
+  ,test
+  (test)
+  :doc "Failed and missing providers back off without warnings or hot-path reads"
   (mevedel-view-power-test--isolated
     (let* ((now 1000.0) (queries 0) (calls 0)
           (view (generate-new-buffer " *power-errors*"))
@@ -301,6 +324,43 @@
             (mevedel-view-power-test--fire-poll)
             (should (= 2 queries))
             (should (= 0 calls)))
+        (kill-buffer view))))
+
+  :doc "Initialization failures stay deferred, back off, and recover on a later poll"
+  (mevedel-view-power-test--isolated
+    (let* ((now 1000.0) (loads 0) (queries 0)
+           (view (generate-new-buffer " *power-init-errors*"))
+           ;; The isolated stand-in: it never loads the real `battery'.
+           (load-battery (symbol-function 'require))
+           (battery-status-function
+            (lambda ()
+              (cl-incf queries)
+              '((?L . "AC") (?B . "high")))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now))
+                    ((symbol-function 'require)
+                     (lambda (feature &rest args)
+                       (when (eq feature 'battery)
+                         (cl-incf loads)
+                         (when (= loads 1)
+                           (signal 'inhibited-interaction '("Power initialization"))))
+                       (apply load-battery feature args))))
+            (mevedel-view-power-watch view #'ignore)
+            (should (= 0 loads))
+            (let ((inhibit-interaction t))
+              (mevedel-view-power-test--fire-poll))
+            (should (= 1 loads))
+            (should (= 0 queries))
+            (should (= 15 (mevedel-view-power-framerate 60 15 'auto t)))
+            (should (mevedel--ui-timer-pending-p mevedel-view-power--timer))
+            (setq now 1059.0)
+            (mevedel-view-power-test--fire-poll)
+            (should (= 1 loads))
+            (setq now 1060.0)
+            (mevedel-view-power-test--fire-poll)
+            (should (= 2 loads))
+            (should (= 1 queries))
+            (should (= 60 (mevedel-view-power-framerate 60 15 'auto t))))
         (kill-buffer view)))))
 
 (mevedel-deftest mevedel-view-power--current-state

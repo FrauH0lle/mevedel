@@ -31,6 +31,24 @@
 (require 'mevedel-view-zone)
 (eval-when-compile (require 'tramp))
 
+;; `battery'
+(defvar battery-status-function)
+(defvar battery-update-functions)
+
+(defmacro mevedel-view-stream-test--without-battery-load (&rest body)
+  "Run BODY with `battery' treated as loaded and other features delegated.
+A power poll requires `battery'; loading it for real initializes D-Bus
+and selects the host's backend, so cases bind `battery-status-function'
+instead."
+  (declare (indent 0) (debug t))
+  (let ((original (make-symbol "require")))
+    `(let ((,original (symbol-function 'require)))
+       (cl-letf (((symbol-function 'require)
+                  (lambda (feature &rest args)
+                    (if (eq feature 'battery) 'battery
+                      (apply ,original feature args)))))
+         ,@body))))
+
 (defmacro mevedel-view-stream-test--with-buffers (&rest body)
   "Create paired data and view buffers, then evaluate BODY."
   (declare (indent 0) (debug t))
@@ -5830,74 +5848,76 @@ turn's later text, live and after reconstruction."
         (mevedel-view-power--state 'unknown)
         (mevedel-view-power--sample-time nil)
         (mevedel-view-power--last-query nil)
-        (battery-update-functions (copy-sequence battery-update-functions))
+        (battery-update-functions
+         (copy-sequence (bound-and-true-p battery-update-functions)))
         (window-state-change-functions
          (copy-sequence window-state-change-functions))
         (mevedel-view-spinner-power-policy 'auto)
         (mevedel-view-spinner-battery-framerate 0))
     (unwind-protect
-        (mevedel-view-stream-test--with-buffers
-          (save-window-excursion
-            (delete-other-windows)
-            (switch-to-buffer view-buf)
-            (redisplay t)
-            (with-current-buffer view-buf
-              (setq mevedel-view--pending-tool-calls
-                    '(("call-1" "Read" nil)))
-              (mevedel-view-stream-test--draw-running-rows)
-              (should (gethash view-buf mevedel-view-power--watchers))
-              (should (timerp mevedel-view-power--timer))
-              (should-not mevedel-view--spinner-timer))
-            ;; The first departure must not unsubscribe while a second window
-            ;; still displays the target.
-            (let ((other (split-window-right))
-                  (last-power mevedel-view-power--timer))
-              (set-window-buffer other view-buf)
-              (redisplay t)
-              (switch-to-buffer data-buf)
-              (redisplay t)
-              ;; Batch Emacs has no live redisplay loop; deliver the departing
-              ;; buffer's local callback with that buffer current.
-              (with-current-buffer view-buf
-                (should (memq #'mevedel-view--resume-on-window-change
-                              window-buffer-change-functions))
-                (run-hook-with-args 'window-buffer-change-functions
-                                    (selected-window)))
-              (should (gethash view-buf mevedel-view-power--watchers))
-              (set-window-buffer other data-buf)
+        (mevedel-view-stream-test--without-battery-load
+          (mevedel-view-stream-test--with-buffers
+            (save-window-excursion
+              (delete-other-windows)
+              (switch-to-buffer view-buf)
               (redisplay t)
               (with-current-buffer view-buf
-                (run-hook-with-args 'window-buffer-change-functions other))
-              (should-not (gethash view-buf mevedel-view-power--watchers))
-              (should-not mevedel-view-power--timer)
-              (should-not (memq #'mevedel-view-power--sample
-                                battery-update-functions))
-              (mevedel-view-power--poll last-power)
-              (mevedel-view-power--poll last-power)
-              (should (zerop queries))
-              (should-not mevedel-view-power--timer)
-              ;; Reopening the same view restores its observer without
-              ;; restarting or changing the pending tool call.
-              (set-window-buffer other view-buf)
-              (redisplay t)
-              (with-current-buffer view-buf
-                (run-hook-with-args 'window-buffer-change-functions other))
-              (should (gethash view-buf mevedel-view-power--watchers))
-              (should (equal (with-current-buffer view-buf
-                               mevedel-view--pending-tool-calls)
-                             '(("call-1" "Read" nil))))
-              ;; Deleting the last view window has no departing buffer-local
-              ;; callback.  A shared window-state observer must do the cleanup.
-              (delete-window other)
-              (run-hook-with-args 'window-state-change-functions
-                                  (selected-frame))
-              (should-not (gethash view-buf mevedel-view-power--watchers))
-              (should-not mevedel-view-power--timer)
-              (should-not (memq #'mevedel-view-power--sample
-                                battery-update-functions))
-              (should-not (memq #'mevedel-view-power--on-window-state-change
-                                window-state-change-functions)))))
-      (when mevedel-view-power--timer
+                (setq mevedel-view--pending-tool-calls
+                      '(("call-1" "Read" nil)))
+                (mevedel-view-stream-test--draw-running-rows)
+                (should (gethash view-buf mevedel-view-power--watchers))
+                (should (timerp mevedel-view-power--timer))
+                (should-not mevedel-view--spinner-timer))
+              ;; The first departure must not unsubscribe while a second window
+              ;; still displays the target.
+              (let ((other (split-window-right))
+                    (last-power mevedel-view-power--timer))
+                (set-window-buffer other view-buf)
+                (redisplay t)
+                (switch-to-buffer data-buf)
+                (redisplay t)
+                ;; Batch Emacs has no live redisplay loop; deliver the departing
+                ;; buffer's local callback with that buffer current.
+                (with-current-buffer view-buf
+                  (should (memq #'mevedel-view--resume-on-window-change
+                                window-buffer-change-functions))
+                  (run-hook-with-args 'window-buffer-change-functions
+                                      (selected-window)))
+                (should (gethash view-buf mevedel-view-power--watchers))
+                (set-window-buffer other data-buf)
+                (redisplay t)
+                (with-current-buffer view-buf
+                  (run-hook-with-args 'window-buffer-change-functions other))
+                (should-not (gethash view-buf mevedel-view-power--watchers))
+                (should-not mevedel-view-power--timer)
+                (should-not (memq #'mevedel-view-power--sample
+                                  battery-update-functions))
+                (mevedel-view-power--poll last-power)
+                (mevedel-view-power--poll last-power)
+                (should (zerop queries))
+                (should-not mevedel-view-power--timer)
+                ;; Reopening the same view restores its observer without
+                ;; restarting or changing the pending tool call.
+                (set-window-buffer other view-buf)
+                (redisplay t)
+                (with-current-buffer view-buf
+                  (run-hook-with-args 'window-buffer-change-functions other))
+                (should (gethash view-buf mevedel-view-power--watchers))
+                (should (equal (with-current-buffer view-buf
+                                 mevedel-view--pending-tool-calls)
+                               '(("call-1" "Read" nil))))
+                ;; Deleting the last view window has no departing buffer-local
+                ;; callback.  A shared window-state observer must do the cleanup.
+                (delete-window other)
+                (run-hook-with-args 'window-state-change-functions
+                                    (selected-frame))
+                (should-not (gethash view-buf mevedel-view-power--watchers))
+                (should-not mevedel-view-power--timer)
+                (should-not (memq #'mevedel-view-power--sample
+                                  battery-update-functions))
+                (should-not (memq #'mevedel-view-power--on-window-state-change
+                                  window-state-change-functions))))))
+        (when mevedel-view-power--timer
         (cancel-timer mevedel-view-power--timer)))))
 
 (mevedel-deftest mevedel-view-animation-power-cadence
@@ -6047,7 +6067,8 @@ turn's later text, live and after reconstruction."
          (mevedel-view-power--sample-time nil)
          (mevedel-view-power--last-query nil)
          (mevedel-view-power--timer nil)
-         (battery-update-functions (copy-sequence battery-update-functions))
+         (battery-update-functions
+          (copy-sequence (bound-and-true-p battery-update-functions)))
          (window-state-change-functions
           (copy-sequence window-state-change-functions))
          (queries 0)
@@ -6055,37 +6076,38 @@ turn's later text, live and after reconstruction."
           (lambda ()
             (cl-incf queries)
             '((?L . "AC") (?B . "high")))))
-    (mevedel-view-stream-test--with-buffers
-      (mevedel-view-stream-test--with-visible-view
-        (let ((mevedel-view-spinner-style 'ascii)
-              (mevedel-view-spinner-power-policy 'auto)
-              (mevedel-view-spinner-battery-framerate 0))
-          ;; Both UI-host timers survive TRAMP's disposable binding.
-          (let ((timer-list nil) (timer-idle-list nil))
-            (mevedel-view--start-spinner "Working...")
-            (should (= 1.0 mevedel-view--spinner-timer-period))
-            (should (mevedel--ui-timer-pending-p mevedel-view--spinner-timer))
-            (should (memq mevedel--coalesced-timer
-                          (default-toplevel-value 'timer-list)))
-            (should (memq mevedel-view-power--timer
-                          (default-toplevel-value 'timer-list))))
-          (let ((original mevedel-view-power--timer)
-                (phase mevedel-view--spinner-phase-start))
-            (should (mevedel--timer-pending-p original))
-            (mevedel-view--resume-render-if-attended view-buf)
-            (should (mevedel--timer-pending-p mevedel-view-power--timer))
-            (should (eq original mevedel-view-power--timer))
-            (should (= 0 queries))
-            (should (= 1.0 mevedel-view--spinner-timer-period))
-            (mevedel--ui-timer-cancel original)
-            (mevedel-view-power--poll original)
-            (should (= 1 queries))
-            (should (= 60 (mevedel-view-power-framerate 60 0 'auto t)))
-            (should (= 0.24 mevedel-view--spinner-timer-period))
-            (should (= phase mevedel-view--spinner-phase-start))
-            (mevedel-view-stream-stop)
-            (should (zerop (hash-table-count mevedel-view-power--watchers)))
-            (should-not mevedel-view-power--timer)))))))
+    (mevedel-view-stream-test--without-battery-load
+      (mevedel-view-stream-test--with-buffers
+        (mevedel-view-stream-test--with-visible-view
+          (let ((mevedel-view-spinner-style 'ascii)
+                (mevedel-view-spinner-power-policy 'auto)
+                (mevedel-view-spinner-battery-framerate 0))
+            ;; Both UI-host timers survive TRAMP's disposable binding.
+            (let ((timer-list nil) (timer-idle-list nil))
+              (mevedel-view--start-spinner "Working...")
+              (should (= 1.0 mevedel-view--spinner-timer-period))
+              (should (mevedel--ui-timer-pending-p mevedel-view--spinner-timer))
+              (should (memq mevedel--coalesced-timer
+                            (default-toplevel-value 'timer-list)))
+              (should (memq mevedel-view-power--timer
+                            (default-toplevel-value 'timer-list))))
+            (let ((original mevedel-view-power--timer)
+                  (phase mevedel-view--spinner-phase-start))
+              (should (mevedel--timer-pending-p original))
+              (mevedel-view--resume-render-if-attended view-buf)
+              (should (mevedel--timer-pending-p mevedel-view-power--timer))
+              (should (eq original mevedel-view-power--timer))
+              (should (= 0 queries))
+              (should (= 1.0 mevedel-view--spinner-timer-period))
+              (mevedel--ui-timer-cancel original)
+              (mevedel-view-power--poll original)
+              (should (= 1 queries))
+              (should (= 60 (mevedel-view-power-framerate 60 0 'auto t)))
+              (should (= 0.24 mevedel-view--spinner-timer-period))
+              (should (= phase mevedel-view--spinner-phase-start))
+              (mevedel-view-stream-stop)
+              (should (zerop (hash-table-count mevedel-view-power--watchers)))
+              (should-not mevedel-view-power--timer))))))))
 
 (mevedel-deftest mevedel-view-animation-overdue-timer
   (:doc "An overdue one-shot does not replay missed callbacks or allocate timers.")
@@ -6151,36 +6173,38 @@ turn's later text, live and after reconstruction."
         (mevedel-view-power--state 'unknown)
         (mevedel-view-power--sample-time nil)
         (mevedel-view-power--last-query nil)
-        (battery-update-functions (copy-sequence battery-update-functions))
+        (battery-update-functions
+         (copy-sequence (bound-and-true-p battery-update-functions)))
         (window-state-change-functions
          (copy-sequence window-state-change-functions))
         (now 1000.5)
         (queries 0))
     (let ((battery-status-function (lambda () (cl-incf queries) nil)))
-      (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now)))
-        (mevedel-view-stream-test--with-buffers
-          (mevedel-view-stream-test--with-visible-view
-            (let ((mevedel-view-spinner-style 'ascii)
-                  (mevedel-view-spinner-power-policy 'auto)
-                  (mevedel-view-spinner-framerate 60)
-                  (mevedel-view-spinner-battery-framerate 1))
-              (mevedel-view--start-spinner "Working...")
-              (mevedel-view-power--sample '((?L . "AC") (?B . "high")))
-              (should (= 0.24 mevedel-view--spinner-timer-period))
-              (let ((fast mevedel-view--spinner-timer)
-                    (phase mevedel-view--spinner-phase-start))
-                (setq now 1060.5)
-                (should (eq 'unknown (mevedel-view-power--current-state)))
-                (should (mevedel--ui-timer-pending-p fast))
-                (run-hook-with-args 'battery-update-functions
-                                    '((?L . "N/A") (?B . "N/A") (?p . "N/A")))
-                (should (= 1.0 mevedel-view--spinner-timer-period))
-                (should-not (eq fast mevedel-view--spinner-timer))
-                (should-not (mevedel--ui-timer-pending-p fast))
-                (should (mevedel--ui-timer-pending-p
-                         mevedel-view--spinner-timer))
-                (should (= phase mevedel-view--spinner-phase-start))
-                (should (= 0 queries))))))))))
+      (mevedel-view-stream-test--without-battery-load
+        (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now)))
+          (mevedel-view-stream-test--with-buffers
+            (mevedel-view-stream-test--with-visible-view
+              (let ((mevedel-view-spinner-style 'ascii)
+                    (mevedel-view-spinner-power-policy 'auto)
+                    (mevedel-view-spinner-framerate 60)
+                    (mevedel-view-spinner-battery-framerate 1))
+                (mevedel-view--start-spinner "Working...")
+                (mevedel-view-power--sample '((?L . "AC") (?B . "high")))
+                (should (= 0.24 mevedel-view--spinner-timer-period))
+                (let ((fast mevedel-view--spinner-timer)
+                      (phase mevedel-view--spinner-phase-start))
+                  (setq now 1060.5)
+                  (should (eq 'unknown (mevedel-view-power--current-state)))
+                  (should (mevedel--ui-timer-pending-p fast))
+                  (run-hook-with-args 'battery-update-functions
+                                      '((?L . "N/A") (?B . "N/A") (?p . "N/A")))
+                  (should (= 1.0 mevedel-view--spinner-timer-period))
+                  (should-not (eq fast mevedel-view--spinner-timer))
+                  (should-not (mevedel--ui-timer-pending-p fast))
+                  (should (mevedel--ui-timer-pending-p
+                           mevedel-view--spinner-timer))
+                  (should (= phase mevedel-view--spinner-phase-start))
+                  (should (= 0 queries)))))))))))
 
 (mevedel-deftest mevedel-view-animation-expired-external
   (:doc "An expired AC reading with a failed backend drops the actual timer rate.")
@@ -6192,24 +6216,25 @@ turn's later text, live and after reconstruction."
           (mevedel-view-power--sample-time nil)
           (mevedel-view-power--last-query nil)
           (battery-status-function (lambda () (error "Battery backend unavailable"))))
-      (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now)))
-        (mevedel-view-stream-test--with-buffers
-          (mevedel-view-stream-test--with-visible-view
-            (let ((mevedel-view-spinner-style 'shimmer)
-                  (mevedel-view-spinner-power-policy 'auto)
-                  (mevedel-view-spinner-framerate 60)
-                  (mevedel-view-spinner-battery-framerate 0))
-              (mevedel-view--start-spinner "Working...")
-              (mevedel-view-power--sample '((?L . "AC") (?B . "high")))
-              (should (< (abs (- mevedel-view--spinner-timer-period
-                                 (/ 1.0 60))) 1e-7))
-              (let ((fast mevedel-view--spinner-timer))
-                (setq now 1060.0)
-                (when mevedel-view-power--timer
-                  (mevedel--ui-timer-cancel mevedel-view-power--timer))
-                (mevedel-view-power--poll mevedel-view-power--timer)
-                (should-not (mevedel--timer-pending-p fast))
-                (should (= 1.0 mevedel-view--spinner-timer-period))))))))))
+      (mevedel-view-stream-test--without-battery-load
+        (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now)))
+          (mevedel-view-stream-test--with-buffers
+            (mevedel-view-stream-test--with-visible-view
+              (let ((mevedel-view-spinner-style 'shimmer)
+                    (mevedel-view-spinner-power-policy 'auto)
+                    (mevedel-view-spinner-framerate 60)
+                    (mevedel-view-spinner-battery-framerate 0))
+                (mevedel-view--start-spinner "Working...")
+                (mevedel-view-power--sample '((?L . "AC") (?B . "high")))
+                (should (< (abs (- mevedel-view--spinner-timer-period
+                                   (/ 1.0 60))) 1e-7))
+                (let ((fast mevedel-view--spinner-timer))
+                  (setq now 1060.0)
+                  (when mevedel-view-power--timer
+                    (mevedel--ui-timer-cancel mevedel-view-power--timer))
+                  (mevedel-view-power--poll mevedel-view-power--timer)
+                  (should-not (mevedel--timer-pending-p fast))
+                  (should (= 1.0 mevedel-view--spinner-timer-period)))))))))))
 
 (mevedel-deftest mevedel-view-animation-tool-display-frame
   (:doc "Tool frames use portable initial glyphs and their own target frame.")

@@ -428,7 +428,9 @@ out. The listing is sent on join and on request; the browser asks again on
 Refresh and whenever the lobby tab returns to the foreground.
 
 Guests act while nobody may be at the keyboard, so lobby frames run with
-`inhibit-interaction`. Opening a file-workspace session automatically reclaims
+`inhibit-interaction`. Cold session restoration does not initialize optional
+view power monitoring or its battery/D-Bus backend. Opening a file-workspace
+session automatically reclaims
 a same-host PID lock when the host proves its PID is dead or its process
 identity proves PID reuse. Replacement checks that the observed holder has not
 changed; a competing replacement refuses the open. Live, foreign-host,

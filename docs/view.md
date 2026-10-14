@@ -487,7 +487,11 @@ freezes decorative motion for both indicator types, while the global
 semantic status or elapsed updates. The policy reads the Emacs UI host, not a
 remote workspace. One shared `battery.el` observer consumes existing battery
 notifications without enabling battery mode; when subscribed automatic views
-are visible it queries at most once per 60 seconds. The shared fallback timer
+are visible it queries at most once per 60 seconds. Loading views and restoring
+browser sessions do not load `battery.el` or initialize its D-Bus backend:
+that optional initialization belongs to the first deferred power poll and
+uses the same conservative fallback on failure as later queries. The shared
+fallback timer
 is installed on the UI host's top-level timer list even when TRAMP temporarily
 binds that list away, and final unsubscription removes it from that list before
 the binding is restored. A stale timer callback cannot replace its successor.
