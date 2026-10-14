@@ -26,6 +26,14 @@ def chunk(text, session=None):
                                          "content": {"type": "text", "text": text}}}}), flush=True)
 
 
+def announce(tool_id):
+    # The Claude adapter announces each tool use on stdout, after the text
+    # streamed before it; the CLI calls the tool on the MCP bridge.
+    print(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": session_id, "update": {"sessionUpdate": "tool_call",
+                                            "toolCallId": tool_id}}}), flush=True)
+
+
 def compact():
     for update in compaction_events:
         print(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
@@ -50,6 +58,7 @@ compact_before_batch = None
 compact_acknowledgement = True
 crash_after_tool = False
 drop_bridge = False
+late_announcement = False
 hook_timeout = None
 suppress_response_on_stop = False
 expected_image = None
@@ -120,6 +129,7 @@ for line in sys.stdin:
                 prompt_acknowledgement = params.get("_meta", {}).get("promptAcknowledgement", True)
                 compaction_events = params.get("_meta", {}).get("compactionEvents", [])
                 compaction_before_batch = params.get("_meta", {}).get("compactionBeforeBatch")
+                late_announcement = params.get("_meta", {}).get("lateAnnouncement", False)
                 if compaction_events and not client_compaction:
                     print(json.dumps({"jsonrpc": "2.0", "id": request_id,
                                       "error": {"code": -32000, "message": "Compaction capability was not advertised"}}), flush=True)
@@ -306,7 +316,18 @@ for line in sys.stdin:
                                 bridge.wait(timeout=5)
                                 stopped = True
                                 break
-                            call(request)
+                            if late_announcement:
+                                # The bridge delivers the call while the text before
+                                # it and its announcement are still in the adapter.
+                                bridge.stdin.write(json.dumps(request) + "\n")
+                                bridge.stdin.flush()
+                                time.sleep(0.3)
+                                chunk("Text streamed before " + tool["id"] + ".")
+                                announce(tool["id"])
+                                json.loads(bridge.stdout.readline())
+                            else:
+                                announce(tool["id"])
+                                call(request)
                             next_id += 1
                             if crash_after_tool:
                                 sys.exit(7)
@@ -332,6 +353,7 @@ for line in sys.stdin:
                             # A model call racing the hook receipt; Claude makes
                             # none after the hook stops the turn.
                             if after_hook_tool and json.loads(output.stdout).get("continue") is not False:
+                                announce("after-hook")
                                 call({"jsonrpc": "2.0", "id": next_id, "method": "tools/call",
                                       "params": {"name": after_hook_tool["name"],
                                                  "arguments": after_hook_tool["args"],

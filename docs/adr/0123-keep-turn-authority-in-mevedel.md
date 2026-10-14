@@ -96,9 +96,13 @@ queues behind the drain that output armed. Every ACP frame Emacs can read when
 a socket message is handled is therefore processed first, whichever descriptor
 Emacs happened to read first. The receipt and the call reach Emacs through
 different relays (the adapter's stdout and the MCP bridge), so a receipt still
-inside the adapter is not ordered; Claude emits the receipt and then runs a
-model sample before its next call, which leaves that gap theoretical rather
-than guaranteed. Queued work waits for idle target transport, and reentrant
+inside the adapter is not ordered by that read alone. Claude's adapter announces
+every tool use with an ACP `tool_call` whose `toolCallId` is the MCP call's
+`claudecode/toolUseId`, after the text streamed before it, so a Claude MCP call
+waits until its announcement has been queued, for at most two seconds, reading
+and continuing the paced adapter meanwhile. Text and receipts the adapter
+wrote before the call are then processed first. Queued work waits for idle
+target transport, and reentrant
 arrivals cannot overtake an in-progress segment publication. An interrupted
 request still consumes events the agent already reported, such as completed
 compaction, and its owned terminal acknowledgement for usage and settlement,
@@ -313,6 +317,15 @@ through later compaction.
   ready descriptors in no fixed order) failed the turn the same way. The runner
   now first reads ACP output already available, so the receipt's drain is armed
   before the socket work's timer.
+- **Text overtaken by a tool call:** a transcript showed a sentence cut in two
+  around a tool row: the sentence's remaining chunk was written after the row.
+  The adapter had been paused for text pacing; the CLI's MCP call reached the
+  bridge while that chunk was still in the adapter, and the 50-ms wake-up read
+  only its first output. A live probe confirmed the adapter announces each MCP
+  call on stdout, with the same tool-use ID, normally 20-360 ms before the
+  call. The call now waits for that announcement. A fixture writing the call
+  before its preceding text and announcement reproduces the split without the
+  wait and keeps the text ahead of the row with it.
 - **Lost MCP client:** a native turn ended with "Process mevedel-mcp <N> no
   longer connected to pipe; closed it". A reply was written to a client whose
   peer had closed while Emacs had not yet read its end; Emacs then signals that

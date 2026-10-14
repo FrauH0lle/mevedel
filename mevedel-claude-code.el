@@ -612,6 +612,7 @@ Return the generic ACP launch plist; no model request is made here."
             (lambda (connection session ready)
               (mevedel-claude-code--prepare-session backend model effort buffer connection session ready))
             :tool-id-field :claudecode/toolUseId
+            :announces-tool-calls t
             :normalize-outcome #'mevedel-claude-code--outcome
             :prompt-retry-delay #'mevedel-claude-code--prompt-retry-delay
             :complete-prompt #'mevedel-claude-code--complete-prompt

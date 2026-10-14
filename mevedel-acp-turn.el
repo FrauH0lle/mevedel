@@ -27,6 +27,11 @@
 (defconst mevedel-acp-turn--lost-reply-limit 8
   "Lost MCP replies one turn records for diagnosis.")
 
+(defconst mevedel-acp-turn--announce-wait 2.0
+  "Seconds an MCP call waits for its ACP `tool_call' announcement.
+The call reaches Emacs through the MCP bridge, the text before it through
+the adapter's stdout; the announcement follows that text there.")
+
 (defun mevedel-acp-turn--close-reasoning (request)
   "Close REQUEST's displayed reasoning block, if one is open."
   (let ((info (mevedel-engine-info request))
@@ -162,6 +167,10 @@ the session, allowing the conversation owner to record its last known state.
 REQUEST may also be a retained-agent invocation; SETTLE then receives its
 terminal status and owns the child terminal transaction.  Root requests use
 ordinary request settlement.  No gptel state machine is created.
+When the launch's :announces-tool-calls is non-nil, the adapter announces
+each MCP call with an ACP `tool_call' whose toolCallId is the call's native
+identity; a call then runs only after its announcement, or after
+`mevedel-acp-turn--announce-wait', so text streamed before it stays before it.
 PREPARE, when non-nil, receives a zero-argument continuation.  Startup waits
 for it; duplicate or late continuations cannot start a cancelled turn."
   (let* ((info (mevedel-engine-info request))
@@ -176,6 +185,8 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                (mevedel-transport-target
                                 (buffer-local-value 'default-directory buffer))))
          (event-key (list 'acp-events dispatch-key))
+         ;; Native identities of calls the adapter announced on stdout.
+         (announced (make-hash-table :test #'equal))
          pending draining server connection configuration finished cancellation-held started terminal-pending)
     (unless (and (buffer-live-p buffer)
                  (if root-p
@@ -215,10 +226,10 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                         event-key dispatch-target #'drain
                         (lambda () (finish '(:status interrupted))))
                  (kill-owner)))))
-         (enqueue-later (operation &optional terminal reject)
+         (read-available ()
            ;; Socket work is handled synchronously while ACP frames wait for
            ;; the library's drain timer.  Read ACP output that is already
-           ;; available first, so its drain is armed before this timer.
+           ;; available first, so its drain is armed before the caller's timer.
            (when-let* ((process (and connection
                                      (alist-get :process (mevedel-acp-client connection))))
                        ((process-live-p process)))
@@ -231,7 +242,9 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                (let ((deadline (+ (float-time) 0.05)))
                  (while (and (< (float-time) deadline)
                              (not (accept-process-output
-                                   process (- deadline (float-time)) nil 1)))))))
+                                   process (- deadline (float-time)) nil 1))))))))
+         (enqueue-later (operation &optional terminal reject)
+           (read-available)
            (mevedel-transport-run-at-time
             0 (lambda () (enqueue operation terminal reject))))
          (drain ()
@@ -258,6 +271,10 @@ for it; duplicate or late continuations cannot start a cancelled turn."
            (mevedel-acp-prompt
             connection input
             (lambda (event)
+              (let ((update (alist-get 'update (alist-get 'params event))))
+                (when (equal "tool_call" (alist-get 'sessionUpdate update))
+                  (when-let* ((id (alist-get 'toolCallId update)))
+                    (puthash id t announced))))
               ;; Events describe native history that already happened, so
               ;; they survive cancellation; only new work is rejected.
               (enqueue
@@ -363,21 +380,38 @@ for it; duplicate or late continuations cannot start a cancelled turn."
              (when admission (mevedel-request-cancel admission)))
            (finish '(:status interrupted)))
          (dispatch (name args metadata complete)
-           (let (cancel-call cancelled-call)
-             (enqueue-later
-              (lambda ()
-                (unless cancelled-call
-                  (condition-case err
-                      (setq cancel-call (dispatch-now name args metadata complete))
-                    (error
-                     (funcall complete
-                              (list :isError t :content
-                                    (vector (list :type "text" :text (error-message-string err)))))))))
-              nil
-              (lambda ()
-                (funcall complete
-                         (list :isError t :content
-                               (vector (list :type "text" :text "The owning turn was cancelled"))))))
+           (let ((id (plist-get metadata (plist-get configuration :tool-id-field)))
+                 (deadline (+ (float-time) mevedel-acp-turn--announce-wait))
+                 cancel-call cancelled-call)
+             (cl-labels
+                 ((queue ()
+                    (enqueue-later
+                     (lambda ()
+                       (unless cancelled-call
+                         (condition-case err
+                             (setq cancel-call (dispatch-now name args metadata complete))
+                           (error
+                            (funcall complete
+                                     (list :isError t :content
+                                           (vector (list :type "text" :text (error-message-string err)))))))))
+                     nil
+                     (lambda ()
+                       (funcall complete
+                                (list :isError t :content
+                                      (vector (list :type "text" :text "The owning turn was cancelled")))))))
+                  (attempt ()
+                    ;; The announcement is queued behind the text the adapter
+                    ;; streamed before the call, so queuing after it keeps
+                    ;; that text ahead of the tool row.
+                    (if (or finished cancelled-call
+                            (not (plist-get configuration :announces-tool-calls))
+                            (not (stringp id))
+                            (gethash id announced)
+                            (>= (float-time) deadline))
+                        (queue)
+                      (read-available)
+                      (mevedel-transport-run-at-time 0.01 #'attempt))))
+               (attempt))
              (lambda ()
                (setq cancelled-call t)
                (when (functionp cancel-call) (funcall cancel-call)))))

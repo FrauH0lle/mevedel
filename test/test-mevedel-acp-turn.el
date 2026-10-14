@@ -313,8 +313,10 @@ BODY delivers the receipt and a Read call through `connection', `content' and
            (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                       (mevedel-engine-test--claude-launch
                        (lambda (_system _mcp _model _effort &optional _id hook)
-                         (list :meta `((hookCommand . ,hook)
-                                       (promptAcknowledgement . ,,acknowledgement)))))))
+                        ;; The test dispatches its call itself, unannounced.
+                        (list :announces-tool-calls nil
+                              :meta `((hookCommand . ,hook)
+                                      (promptAcknowledgement . ,,acknowledgement)))))))
              (mevedel-session-enqueue-pending-reminder session "ORDER PENDING EVENT")
              (mevedel-session-ensure-reminder session (mevedel-reminders-make-pending-events))
              (mevedel--insert-user-turn "wait")
@@ -357,7 +359,28 @@ BODY delivers the receipt and a Read call through `connection', `content' and
     (let ((end (+ (float-time) 0.5))) (while (< (float-time) end)))
     (funcall dispatch "Read" (list :file_path file)
              (list :claudecode/toolUseId "order-1")
-             (lambda (result) (setq tool-result result)))))
+             (lambda (result) (setq tool-result result))))
+
+  :doc "a tool call that overtakes its announcement keeps earlier text before its row"
+  (mevedel-engine-test--with-session
+    (let ((path (file-name-concat root "source.txt")))
+      (write-region "evidence" nil path nil 'silent)
+      (mevedel-acp-turn-start
+       request
+       (lambda (mcp _hook)
+         (list :command (executable-find "python3") :args (list mevedel-test--acp-peer)
+               :cwd root :mcp mcp :tool-id-field :claudecode/toolUseId
+               :announces-tool-calls t
+               :meta `((lateAnnouncement . t)
+                       (toolBatches . [[((name . "Read") (args . ((file_path . ,path)))
+                                         (id . "first"))]]))))
+       [((type . "text") (text . "Read once"))] (list (mevedel-tool-ensure "Read")))
+      (mevedel-test--await 5 "Turn did not settle" (not (mevedel-turn-busy-p buffer)))
+      (let ((text (string-search "Text streamed before first." (buffer-string)))
+            (row (string-search "#+begin_tool (Read" (buffer-string))))
+        (should text)
+        (should row)
+        (should (< text row))))))
 
 (mevedel-deftest mevedel-acp-turn-start/tool-hooks (:quiet t)
   ,test
