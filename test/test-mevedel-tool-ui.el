@@ -90,6 +90,32 @@
              (mevedel-tool-description (mevedel-tool-get "WaitAgent"))))
     (should-not (mevedel-tool-get "RequestAccess")))
 
+  :doc "Agent advertises general-purpose omission in both discovery and provider contracts"
+  (progn
+    (mevedel-tool-ui--register)
+    (let* ((tool (mevedel-tool-get "Agent"))
+           (provider-tool (mevedel-tool-gptel-tool tool))
+           (prompt (gptel-tool-description provider-tool))
+           (role-arg (cl-find "role" (gptel-tool-args provider-tool)
+                              :key (lambda (arg) (plist-get arg :name))
+                              :test #'equal)))
+      (should (string-match-p "omit role for general-purpose"
+                              (mevedel-tool-description tool)))
+      (should (equal prompt (mevedel-tool-prompt tool)))
+      (dolist (text '("General-purpose (omit `role`)"
+                      "effective instructions, tools, model policy"
+                      "same permission constraints"
+                      "Choose a named role when its specialization"))
+        (should (string-match-p (regexp-quote text) prompt)))
+      (should (string-match-p
+               "Agent(task_name=\"parser_fix\",[\n ]+message=" prompt))
+      (should (plist-get role-arg :optional))
+      (should (equal [] (plist-get role-arg :enum)))
+      (should (string-match-p "Omit for general-purpose"
+                              (plist-get role-arg :description)))
+      (should (string-match-p "Select a named role for its specialization"
+                              (plist-get role-arg :description)))))
+
   :doc "blocked and failed retained agents keep their transcript handles"
   (progn
     (mevedel-tool-ui--register)

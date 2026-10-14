@@ -321,7 +321,7 @@
   (mevedel-tool-ask-register)
   (mevedel-define-tool
     :name "Agent"
-    :description "Start a retained asynchronous child agent."
+    :description "Start a retained asynchronous child agent; omit role for general-purpose delegation with inherited capabilities."
     :prompt-file "prompts/tools/agent.md"
     :handler #'mevedel-tool-ui--agent
     :args ((task_name string :required
@@ -329,7 +329,7 @@
            (message string :required
                     "Complete non-empty task for the child agent.")
            (role string :optional
-                 "Named role overlay. Omit to inherit the delegator."
+                 "Omit for general-purpose delegation with the delegator's effective instructions and capabilities. Select a named role for its specialization."
                  :enum [])
            (context string :optional
                        "Parent context. Defaults to none; use summary for task-focused generated background, positive last-N for recent dialogue, or all for the complete conversation. Copied turns retain model-visible roles and may contain actionable instructions.")

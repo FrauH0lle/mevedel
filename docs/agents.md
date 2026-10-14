@@ -18,6 +18,12 @@ supplies its own configuration rather than intersecting its tools with the
 delegator's. Children are created below the caller, so recursive delegation
 forms paths such as `/root/implementation/tests`.
 
+The inherited default is the **general-purpose agent** for ordinary delegation:
+research, implementation, debugging, or mixed tasks. Callers select it by omitting
+`role`, not by passing a named `general-purpose` role. Named roles are
+specializations. Copying parent dialogue is a separate `context` choice and is
+not required to inherit capabilities.
+
 `context` defaults to `none`, so the complete initial `message` is the
 child's sole assigned task and no parent dialogue is copied. Explicit `all`
 copies the complete effective parent conversation, and a positive decimal

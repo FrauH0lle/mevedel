@@ -1,4 +1,5 @@
-Start a retained asynchronous child agent.
+Start a retained asynchronous child agent. Omit `role` for a general-purpose
+agent with your effective instructions and capabilities.
 
 ### When to use `Agent`
 
@@ -15,10 +16,13 @@ Start a retained asynchronous child agent.
 - `task_name` is one lowercase ASCII segment of letters, digits, and underscores.
   `message` is the complete assigned task, even when copying parent context.
   Success returns the child's canonical path, such as `/root/spec_review`.
-- Omit `role` to inherit your effective instructions, tools, model policy, and
-  delegation capability. Named roles provide specializations. Effective role,
-  instructions, tools, model/effort, and inherited request settings are frozen at
-  spawn and reused on follow-ups.
+- **General-purpose (omit `role`)**: use for ordinary delegation, including
+  research, implementation, debugging, and mixed tasks. The child inherits your
+  effective instructions, tools, model policy, and delegation capability, subject
+  to the same permission constraints. Choose a named role when its specialization
+  fits the assignment.
+- Effective role, instructions, tools, model/effort, and inherited request settings
+  are frozen at spawn and reused on follow-ups.
 - `context` defaults to `none`. `summary` makes one disclosed summarization
   request for task-focused advisory background; the following Agent Task owns
   the assignment. A positive string such as `"3"` copies that many recent turns
@@ -33,6 +37,13 @@ Start a retained asynchronous child agent.
   the complete session tree shares one active-turn limit.
 
 ### Examples of good usage
+
+<example>
+Agent(task_name="parser_fix",
+      message="Own src/parser.ts and its tests. Diagnose and fix the reported empty-input failure, then run the relevant tests. Preserve concurrent edits outside your ownership.")
+Omitting role selects the general-purpose agent; no parent dialogue is needed
+because the task is self-contained.
+</example>
 
 <example>
 Agent(task_name="test_failure", role="explorer", context="3",
