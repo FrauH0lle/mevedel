@@ -19,6 +19,8 @@ the reviewer judges that disclosed scope. Direct saved rules related to the
 operation arrive as candidates with their capability coverage. They inform the
 judgment of current intent but grant nothing and do not change deterministic
 matching.
+Provider evidence and freshness snapshots use one complete, fixed serialization;
+callback printer settings and equal-value sharing are not changes in authority.
 
 Errors, timeout, missing evidence and uncertainty display the ordinary card.
 Cancellation owns provider cleanup; late/duplicate responses cannot settle twice.
@@ -71,3 +73,8 @@ accepted decisions needed a common outcome seam to survive failure and nested
 execution. Cleanup now distinguishes terminal completion from cancellation;
 provenance is recorded only after final approval validation and retained outside
 model-visible values. No historical approval is inferred or migrated.
+
+October 2026 offline review probes reproduced false evidence changes under ACP's
+callback printer bindings and after equal strings stopped sharing identity.
+Freshness and provider input now use fixed printer settings without reference
+labels, preserving value changes without rejecting unchanged evidence.

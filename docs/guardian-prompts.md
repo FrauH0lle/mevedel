@@ -93,6 +93,8 @@ collection or approval validation prevents a provider request from starting.
 Review cancellation owns provider cleanup and ignores late or duplicate callbacks. Before approval, the harness
 rechecks current policy, evidence, resource selection and session ownership.
 Changed evidence defers to the user; a newly applicable hard deny blocks it.
+Provider input and freshness snapshots use the same complete representation,
+independent of callback printer settings and sharing between equal values.
 Execution rechecks use Bash/Eval policy even for generic hook cards, including
 segment and requested-capability denies when switching to Full Access.
 Changing mode or cancelling the owning request invalidates pending review.

@@ -73,6 +73,25 @@
                       (error "Missing cold warning")))))))
         (delete-directory compiled t)))))
 
+(mevedel-deftest mevedel-permission-review--serialize ()
+  ,test
+  (test)
+  :doc "snapshots preserve complete values regardless of printing and sharing"
+  (let* ((text (concat "line\n\t" (string #xe4)))
+         (facts (list :operation (list text text)
+                      :resources (number-sequence 0 250)))
+         (snapshot (mevedel-permission-review--serialize facts)))
+    (let ((print-circle t) (print-length 2) (print-level 1)
+          (print-quoted nil) (print-escape-newlines nil)
+          (print-escape-control-characters nil)
+          (print-escape-nonascii t) (print-escape-multibyte t))
+      (should (equal snapshot (mevedel-permission-review--serialize facts))))
+    (should (equal facts (read snapshot)))
+    (setcar (plist-get facts :operation) (copy-sequence text))
+    (should (equal snapshot (mevedel-permission-review--serialize facts)))
+    (aset text 0 ?X)
+    (should-not (equal snapshot (mevedel-permission-review--serialize facts)))))
+
 (mevedel-deftest mevedel-permission-review--parse ()
   ,test
   (test)
@@ -327,6 +346,22 @@
     (should (= 1 (length (plist-get result :candidates))))
     (should (= 1 (plist-get result :omitted))))
 
+  :doc "candidate budget boundaries do not depend on callback printer settings"
+  (let* ((operation (concat "(list \"" (make-string 7955 ?a) "\")"))
+         (buckets (list (list :session
+                              (list "Eval" :action 'allow :expression operation
+                                    :file-system
+                                    '((:path "/tmp/reviewer-offline-file" :access read)))))))
+    (let* ((print-circle nil) (print-length nil) (print-level nil)
+           (plain (mevedel-permission-review--rule-candidates
+                   "Eval" operation buckets nil nil))
+           (acp (let ((print-circle t) (print-length 200) (print-level 25))
+                  (mevedel-permission-review--rule-candidates
+                   "Eval" operation buckets nil nil))))
+      (should-not (plist-get plain :candidates))
+      (should (= 1 (plist-get plain :omitted)))
+      (should (equal plain acp))))
+
   :doc "omitted candidates do not perform filesystem coverage checks"
   (let* ((path "/ssh:review.invalid:/cache")
          (grant (list :path path :access 'write :recursive t))
@@ -373,8 +408,12 @@
                  (list :model gptel-model :backend gptel-backend))))
       (unwind-protect
           (progn
-            (setq cancel (mevedel-permission-review--model '(:command "injected evidence") #'ignore))
+            (let ((print-length 1) (print-level 1) (print-circle t))
+              (setq cancel (mevedel-permission-review--model
+                            '(:command "injected evidence" :tail "complete evidence")
+                            #'ignore)))
             (should (string-match-p "injected evidence" (car captured)))
+            (should (string-match-p "complete evidence" (car captured)))
             (should-not (string-match-p "injected evidence" (plist-get (cdr captured) :system)))
             (should-not (plist-get (cdr captured) :stream))
             (should-not (eq (current-buffer) (plist-get (cdr captured) :buffer)))
@@ -493,6 +532,43 @@
   (should-not (mevedel-session-permission-rules session))
   (should-not (mevedel-session-resource-grants session))
   (should-not mevedel-permission-review--pending))
+
+  :doc "callback printer settings do not invalidate unchanged evidence"
+  (let* ((expression (copy-sequence "(+ 1 2)"))
+         (args (list :expression expression :mode "live"))
+         source)
+    (setq entry (plist-put entry :expression expression)
+          entry (plist-put entry :args args))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--log)
+               (lambda (_event _entry _session &rest fields)
+                 (setq source (plist-get fields :review-source)))))
+      (dolist (acp-first '(nil t))
+        (let ((print-circle acp-first)
+              (print-length (and acp-first 200))
+              (print-level (and acp-first 25)))
+          (mevedel-permission-review-start entry #'ignore))
+        (let ((print-circle (not acp-first))
+              (print-length (unless acp-first 200))
+              (print-level (unless acp-first 25)))
+          (funcall provider-callback
+                   "{\"decision\":\"ask\",\"reason\":\"Offline decision\"}"))
+        (should (eq 'reviewer source)))))
+
+  :doc "equal expression strings need not retain their sharing topology"
+  (let* ((expression (copy-sequence "(+ 1 2)"))
+         (args (list :expression expression :mode "live"))
+         (print-circle t)
+         source)
+    (setq entry (plist-put entry :expression expression)
+          entry (plist-put entry :args args))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--log)
+               (lambda (_event _entry _session &rest fields)
+                 (setq source (plist-get fields :review-source)))))
+      (mevedel-permission-review-start entry #'ignore)
+      (plist-put args :expression (copy-sequence expression))
+      (funcall provider-callback
+               "{\"decision\":\"ask\",\"reason\":\"Offline decision\"}")
+      (should (eq 'reviewer source))))
 
   :doc "review follows the requesting buffer's streaming choice"
   (dolist (stream '(t nil))
