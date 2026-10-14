@@ -77,12 +77,14 @@
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-forwarded-audit-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
+(autoload 'mevedel-telemetry-forwarded-audit-p "mevedel-telemetry")
 (autoload 'mevedel-telemetry-record-audit "mevedel-telemetry")
 
 ;; `mevedel-tool-registry'
@@ -1415,19 +1417,26 @@ EVENT labels each generated hook event block."
                   (not (mevedel-hooks--persist-log-entry session entry)))
           (setf (mevedel-session-hook-log-pending session)
                 (append pending (list entry))))))
-    (let ((handler (plist-get entry :handler)))
-      (mevedel-telemetry-record-audit
-       session 'hook-handler
-       :hook-event (plist-get entry :event)
-       :handler-id (and handler
-                        (mevedel-hooks--telemetry-handler-id handler))
-       :handler-type (and (listp handler) (plist-get handler :type))
-       :handler-source (and (listp handler)
-                            (plist-get handler :source))
-       :status (plist-get entry :status)
-       :duration-ms (and (numberp (plist-get entry :elapsed))
-                         (round (* 1000 (plist-get entry :elapsed))))
-       :exit-status (plist-get entry :exit-status)))))
+    ;; A persisted hook log already keeps every handler run of a durable
+    ;; session.  Telemetry repeats it only during a profiler run, or as the
+    ;; value-free audit of a side conversation, whose own log is transient.
+    (when (or (not mevedel-hooks-persist-log)
+              (mevedel-telemetry-forwarded-audit-p session)
+              (and (fboundp 'mevedel-telemetry-detailed-p)
+                   (mevedel-telemetry-detailed-p session)))
+      (let ((handler (plist-get entry :handler)))
+        (mevedel-telemetry-record-audit
+         session 'hook-handler
+         :hook-event (plist-get entry :event)
+         :handler-id (and handler
+                          (mevedel-hooks--telemetry-handler-id handler))
+         :handler-type (and (listp handler) (plist-get handler :type))
+         :handler-source (and (listp handler)
+                              (plist-get handler :source))
+         :status (plist-get entry :status)
+         :duration-ms (and (numberp (plist-get entry :elapsed))
+                           (round (* 1000 (plist-get entry :elapsed))))
+         :exit-status (plist-get entry :exit-status))))))
 
 (defun mevedel-hooks--telemetry-handler-id (handler)
   "Return a stable non-payload identifier for declarative HANDLER."

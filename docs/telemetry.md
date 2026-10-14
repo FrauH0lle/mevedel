@@ -84,7 +84,11 @@ Normal sessions keep tool-, request-, interaction-, execution-, agent-, Goal-,
 and other outcome-level events. They omit routine per-pipeline-step spans,
 per-hook-handler lifecycle spans, and hook-event spans with no matching
 handlers. Hook events that actually run handlers and nontrivial repair
-outcomes remain visible. A compaction attempt refused before admission is not
+outcomes remain visible. Per-handler `hook-handler` outcomes repeat the
+session's persisted hook log, so a durable session records them only during a
+profiler run or with `mevedel-hooks-persist-log` disabled; a side
+conversation, whose hook log is transient, still forwards them as its
+value-free audit. A compaction attempt refused before admission is not
 measured at all; one rejected after measurement starts closes its span as
 rejected, so every recorded start has a finish.
 

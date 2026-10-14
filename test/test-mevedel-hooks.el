@@ -342,6 +342,28 @@
        (string-match-p
         (regexp-opt '("private-command" "private-output" "private-reason"))
         (prin1-to-string props)))))
+  :doc "a durable session repeats its hook log in telemetry only while profiled"
+  (let* ((session (mevedel-session--create :name "main"))
+         (entry '(:event PostToolUse
+                  :handler (:type command :source project :command "check")
+                  :status allowed :elapsed 0.01 :exit-status 0))
+         (mevedel-hooks-persist-log t)
+         (profiled nil)
+         calls)
+    (cl-letf (((symbol-function 'mevedel-telemetry-record)
+               (lambda (_session event &rest _props) (push event calls)))
+              ((symbol-function 'mevedel-telemetry-detailed-p)
+               (lambda (candidate) (and profiled (eq candidate session)))))
+      (mevedel-hooks--log session entry)
+      (should-not calls)
+      (setq profiled t)
+      (mevedel-hooks--log session entry)
+      (setq profiled nil)
+      ;; Without a persisted hook log, telemetry is the durable record.
+      (let ((mevedel-hooks-persist-log nil))
+        (mevedel-hooks--log session entry)))
+    (should (equal '(hook-handler hook-handler) calls))
+    (should (= 3 (length (mevedel-session-hook-log session)))))
   :doc "defers a materialized remote append until session settlement"
   (let* ((root (make-temp-file "mevedel-hook-log-remote-" t))
          (target
