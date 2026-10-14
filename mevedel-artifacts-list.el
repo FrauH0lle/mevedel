@@ -147,7 +147,7 @@
   "Return WORKSPACE's store artifacts as rows, marking SESSION's attached."
   (let ((attached (and session (mevedel-session-attached-artifacts session))))
     (mapcar (lambda (row)
-              (append (list :name (plist-get row :id)
+              (append (list :name (plist-get row :title)
                             :row (plist-get row :id)
                             :attached (and (member (plist-get row :id) attached) t))
                       ;; A whiteboard or document is edited live, not as a file.

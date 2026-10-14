@@ -79,6 +79,7 @@
                  (substring-no-properties
                   (mevedel-cockpit-surface-header-line))))
         (let ((row (cadr (assoc "mockup" tabulated-list-entries))))
+          (should (equal "mockup" (aref row 0)))
           (should (equal "html" (aref row 1)))
           (should (equal "✓" (aref row 2)))
           (should (equal "1" (aref row 3))))
@@ -91,6 +92,41 @@
                    "Path +.*artifacts/mockup/index.html"
                    (mevedel-report-test-text
                     (mevedel-artifacts-list--details item nil))))))))
+
+  :doc "shows titles for files and shared items while selecting by stable id"
+  (mevedel-artifacts-list-test--with-store
+    (let ((board-id (make-string 64 ?a))
+          (document-id (make-string 64 ?b))
+          (file-id (make-string 64 ?c)))
+      (mevedel-artifact-store-create-meta
+       workspace board-id "state.json" 'whiteboard "Project plan")
+      (mevedel-artifact-store-create-meta
+       workspace document-id "state.json" 'document "Project plan")
+      (mevedel-artifact-store-create-meta
+       workspace file-id "index.html" 'html "Preview")
+      (mevedel-artifacts-list-test--artifact
+       session store file-id "index.html" "<h1>Preview</h1>")
+      (with-current-buffer (mevedel-artifacts-list-open
+                            (mevedel-artifacts-list-test--context session view data))
+        (dolist (id (list board-id document-id file-id))
+          (should (equal (if (equal id file-id) "Preview" "Project plan")
+                         (aref (cadr (assoc id tabulated-list-entries)) 0)))
+          (should-not (string-match-p id (buffer-string)))
+          (mevedel-cockpit-goto-id id)
+          (should (equal id (tabulated-list-get-id)))
+          (should (equal id (plist-get (mevedel-cockpit-surface-selected) :id)))
+          (mevedel-cockpit-surface-refresh id)
+          (should (equal id (tabulated-list-get-id))))
+        (should (string-match-p "Project plan" (buffer-string)))
+        (should (string-match-p "Preview" (buffer-string)))
+        (mevedel-cockpit-goto-id board-id)
+        (should (equal board-id
+                       (plist-get (mevedel-cockpit-surface-selected) :item)))
+        (should (string-match-p
+                 (concat "Id +" board-id)
+                 (mevedel-report-test-text
+                  (mevedel-artifacts-list--details
+                   (mevedel-cockpit-surface-selected) nil)))))))
 
   :doc "opens from a plain project buffer without a session"
   (mevedel-artifacts-list-test--with-store

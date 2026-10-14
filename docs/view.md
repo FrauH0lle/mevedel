@@ -1448,10 +1448,11 @@ directory at invocation. Whether the store is committed to Git is the
 project's choice; mevedel adds no ignore rule for it.
 
 In Emacs, the artifacts cockpit (cockpit `A`, or `M-x mevedel-artifacts` from
-any project buffer) lists the store with each artifact's kind, attachment to
+any project buffer) lists the store by title, with each artifact's kind, attachment to
 the current session, version count, modification time and size, sorting
 versions and sizes by their numbers; `t` toggles between all and attached
-artifacts. It opens an artifact locally (`o`, `e`),
+artifacts. Stable ids remain in the details report and identify rows even when
+titles are identical. It opens an artifact locally (`o`, `e`),
 attaches it to the current session (`a`), views or restores a version (`v`),
 duplicates it into an independent artifact (`D`), opens its dedicated session
 (`c`), and deletes it with its versions, discussions and dedicated session (`d`).
