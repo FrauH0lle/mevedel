@@ -162,6 +162,44 @@
           (should (= 1 (mevedel-view-test--count-substring
                         "Failed /root/failed" (buffer-string))))))))
 
+  :doc "generic tool identity survives toggles and targeted result refresh"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "#+begin_tool\n(:name \"GenericIdentityTool\" :args (:value \"x\"))\n\ninitial result\n#+end_tool\n"
+     '(tool . "identity-call"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+      (let ((tick (with-current-buffer data-buf (buffer-modified-tick))))
+        (dotimes (_ 2)
+          (let ((region (mevedel-view--tool-row-region data-buf "identity-call")))
+            (should region)
+            (goto-char (car region))
+            (should (get-text-property (point) 'mevedel-view-collapsed))
+            (mevedel-view-toggle-section)
+            (should-not (get-text-property (point) 'mevedel-view-collapsed))
+            (mevedel-view-toggle-section)
+            (should (get-text-property (point) 'mevedel-view-collapsed))
+            (should (equal "identity-call"
+                           (get-text-property (point) 'mevedel-view-tool-use-id)))
+            (should (mevedel-view--refresh-tool-row data-buf "identity-call"))))
+        (should (= tick (with-current-buffer data-buf (buffer-modified-tick)))))
+      (with-current-buffer data-buf
+        (goto-char (point-min))
+        (search-forward "initial result")
+        (let ((start (match-beginning 0)))
+          (replace-match "updated result" t t)
+          (put-text-property start (point) 'gptel '(tool . "identity-call"))))
+      (should (mevedel-view--refresh-tool-row data-buf "identity-call"))
+      (goto-char (car (mevedel-view--tool-row-region data-buf "identity-call")))
+      (should (get-text-property (point) 'mevedel-view-collapsed))
+      (should-not (search-forward "updated result" mevedel-view--input-marker t))
+      (goto-char (car (mevedel-view--tool-row-region data-buf "identity-call")))
+      (mevedel-view-toggle-section)
+      (should (search-forward "updated result" mevedel-view--input-marker t))
+      (should (equal "> keep\nsecond line" (mevedel-view--input-text)))))
+
   :doc "fallback prompt disclosure keeps its header when expanded"
   (mevedel-view-test--with-buffers
    (with-current-buffer data-buf

@@ -136,6 +136,8 @@ Rendered source ranges use data-buffer markers so a length-changing update to
 one tool's hidden render data cannot retarget an adjacent tool disclosure.
 Single-tool progress refreshes preserve that marker-backed range, so expanding
 the refreshed row still reads the same tool after another tool's metadata grows.
+Expanding and collapsing a tool also retains its tool-use identity, so targeted
+refreshes can still find the row and preserve its disclosure choice.
 
 Agent transcript views open only through explicit user action on an agent
 handle or status surface. Agent start, progress, and blocked events never

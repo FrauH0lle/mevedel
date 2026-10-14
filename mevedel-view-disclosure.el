@@ -910,6 +910,8 @@ from signalling `args-out-of-range' on stale source coordinates."
              (view-end (mevedel-view-render-child-calls-end
                         (cdr bounds) (point-max) source))
              (turn-id (get-text-property view-start 'mevedel-view-turn-id))
+             (tool-use-id
+              (get-text-property view-start 'mevedel-view-tool-use-id))
              (source-key
               (get-text-property view-start 'mevedel-view-source-key))
              (in-flight-pos
@@ -936,6 +938,9 @@ from signalling `args-out-of-range' on stale source coordinates."
                   (mevedel-view-render-add-display-properties
                    ins-start (point) vtype)
                   (mevedel-view-disclosure-record-state source vtype t)
+                  (when tool-use-id
+                    (put-text-property
+                     ins-start (point) 'mevedel-view-tool-use-id tool-use-id))
                   (when turn-id
                     (put-text-property
                      ins-start (point) 'mevedel-view-turn-id turn-id))
