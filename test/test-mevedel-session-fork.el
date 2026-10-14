@@ -469,6 +469,74 @@
 (mevedel-deftest mevedel-session-fork--stage-fork ()
   ,test
   (test)
+  :doc "bare staging persists shifted bounds after lost-execution-only repairs"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (session (plist-get fixture :session))
+         (staging-path (file-name-as-directory
+                        (make-temp-file
+                         (expand-file-name ".stage-bounds-"
+                                           (plist-get fixture :sessions-dir)) t)))
+         (child (mevedel-session-fork-clone-session
+                 session 'fork :save-path staging-path :session-id "bounds-child"
+                 :created-at "now" :updated-at "now" :current-segment 2
+                 :forked-from-session-id (plist-get fixture :parent-id)
+                 :forked-from-turn 2))
+         (staging (generate-new-buffer " *fork-bounds-stage*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer staging
+            (org-mode)
+            (should-not (bound-and-true-p gptel-mode))
+            (insert "Prompt\n")
+            (insert (propertize
+                     (concat "#+begin_tool\n(:name \"Bash\" :args (:command \"true\"))\n\noutput\n"
+                             (mevedel-tool-render-data-format
+                              '(:kind bash :state running :execution-id "bounds-exec"
+                                      :live-execution-p t :execution-output "output")
+                              "bounds-bash")
+                             "#+end_tool\n")
+                     'gptel '(tool . "bounds-bash")))
+            (insert (mevedel--format-hook-audit-record
+                     '(:type tool-result-rewrite :event "PostToolUse"
+                             :tool-name "Bash" :reason "retained audit evidence")))
+            (insert (propertize
+                     "#+begin_tool\n(:name \"ToolSearch\" :args (:query \"agents\"))\n\nfound\n#+end_tool\n"
+                     'gptel '(tool . "bounds-search")))
+            (insert (propertize "Following response.\n" 'gptel 'response))
+            (mevedel-session-artifacts-stabilize-gptel-bounds))
+          (mevedel-session-fork--stage-fork
+           child (plist-get fixture :buffer) staging (plist-get fixture :parent-path)
+           staging-path 2 2)
+          (with-current-buffer staging
+            (should (equal (alist-get 'tool
+                                      (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
+                           (alist-get 'tool (gptel--get-buffer-bounds)))))
+          (with-temp-buffer
+            (insert-file-contents
+             (mevedel-session-artifacts-segment-path staging-path 2))
+            (org-mode)
+            (mevedel-transcript-restore-properties)
+            (should (eq 'lost (plist-get
+                              (mevedel-tool-render-data-for-tool
+                               (current-buffer) "bounds-bash") :state)))
+            (let ((ranges (alist-get 'tool
+                                    (read (org-entry-get (point-min) "GPTEL_BOUNDS")))))
+              (dolist (range ranges)
+                (goto-char (car range))
+                (should (looking-at-p "(:name "))))
+            (should (= 1 (length (mevedel-transcript-audit-records (buffer-string)))))
+            (let ((gptel--known-backends nil)
+                  (gptel-model 'gpt-4o))
+              (goto-char (point-max))
+              (should (gptel--parse-buffer
+                       (gptel-make-openai "fork-bounds" :key "unused") nil)))))
+      (when (buffer-live-p staging)
+        (with-current-buffer staging
+          (set-buffer-modified-p nil)
+          (setq-local kill-buffer-hook nil))
+        (kill-buffer staging))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+
   :doc "materializes and validates a complete child in staging"
   (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
          (session (plist-get fixture :session))

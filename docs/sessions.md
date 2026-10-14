@@ -1639,7 +1639,11 @@ before rendering the view. The scan proceeds newest to oldest: a later
 `execution-archive` or `execution-completion` record marks an older copy as
 archived/superseded. Structured execution rows in later segments provide the
 same successor evidence, including rows retained in a compacted tail; a row
-with no successor becomes `lost`.
+with no successor becomes `lost`. Reconciliation can change transcript length;
+both fork staging and restored-buffer hydration reserialize `GPTEL_BOUNDS`
+before saving or publishing repaired text, even when no ToolCall checkpoint
+inserted anything. This keeps later tool and hidden-audit spans aligned after
+reload, including staging buffers without gptel save hooks.
 
 After acquiring a PID lock, resume reconciles the sidecar segment counter with
 the files on disk and finalizes the predecessor when recovering a newer segment.

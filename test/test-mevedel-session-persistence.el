@@ -4938,8 +4938,77 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (delete-directory root t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
 
+  :doc "lost-only hydration persists current bounds for local and artifact writes"
+  (dolist (callback-p '(nil t))
+    (let* ((root (file-name-as-directory (make-temp-file "hydrate-bounds-" t)))
+           (workspace (test-mevedel-session-persistence--make-file-workspace root))
+           (session (mevedel-session-create "main" workspace root))
+           (buffer (generate-new-buffer " *hydrate-bounds*"))
+           (path (file-name-concat root "segment-0001.chat.org"))
+           artifact)
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (org-mode)
+              (insert "Prompt\n")
+              (insert (propertize
+                       (concat "#+begin_tool\n(:name \"Bash\" :args (:command \"true\"))\n\noutput\n"
+                               (mevedel-tool-render-data-format
+                                '(:kind bash :state running :execution-id "hydrate-exec"
+                                        :live-execution-p t :execution-output "output")
+                                "hydrate-bash")
+                               "#+end_tool\n")
+                       'gptel '(tool . "hydrate-bash")))
+              (insert (mevedel--format-hook-audit-record
+                       '(:type tool-result-rewrite :event "PostToolUse"
+                               :tool-name "Bash" :reason "retained audit evidence")))
+              (insert (propertize
+                       "#+begin_tool\n(:name \"ToolSearch\" :args (:query \"agents\"))\n\nfound\n#+end_tool\n"
+                       'gptel '(tool . "hydrate-search")))
+              (insert (propertize "Following response.\n" 'gptel 'response))
+              (mevedel-session-artifacts-stabilize-gptel-bounds)
+              (write-region nil nil path nil 'silent)
+              (setq buffer-file-name path))
+            (cl-letf (((symbol-function 'mevedel-session-artifacts-check-target-incarnation)
+                       #'ignore)
+                      ((symbol-function 'mevedel-ptc-checkpoint-reconcile)
+                       (lambda (_session) '(0 . 0)))
+                      ((symbol-function 'mevedel--chat-buffer-init-common) #'ignore)
+                      ((symbol-function 'mevedel-agent-persistence-restore-tree)
+                       (lambda (&rest _) 0))
+                      ((symbol-function 'mevedel-session-artifacts-load-instructions) #'ignore))
+              (mevedel-session-persistence--hydrate-restored-buffer
+               buffer session workspace path t nil "resume"
+               (and callback-p (lambda (value) (setq artifact value)))))
+            (with-current-buffer buffer
+              (should (equal (alist-get 'tool
+                                        (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
+                             (alist-get 'tool (gptel--get-buffer-bounds)))))
+            (with-temp-buffer
+              (if callback-p (insert (plist-get artifact :content))
+                (insert-file-contents path))
+              (org-mode)
+              (mevedel-transcript-restore-properties)
+              (should (eq 'lost (plist-get
+                                (mevedel-tool-render-data-for-tool
+                                 (current-buffer) "hydrate-bash") :state)))
+              (dolist (range (alist-get 'tool
+                                       (read (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+                (goto-char (car range))
+                (should (looking-at-p "(:name ")))
+              (should (= 1 (length (mevedel-transcript-audit-records (buffer-string)))))
+              (let ((gptel--known-backends nil)
+                    (gptel-model 'gpt-4o))
+                (goto-char (point-max))
+                (should (gptel--parse-buffer
+                         (gptel-make-openai "hydrate-bounds" :key "unused") nil)))))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer))
+        (delete-directory root t)
+        (mevedel-workspace-clear-registry)))))
 
 (mevedel-deftest mevedel-session-persistence--finish-restored-buffer ()
   ,test

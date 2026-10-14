@@ -1530,6 +1530,9 @@ ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
           (when (> transcript-repairs 0)
             (when (> ptc-insertions 0)
               (gptel--save-state))
+            ;; Lost-execution repairs can also change transcript length without
+            ;; a PTC insertion.  Both publication paths need current offsets.
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
             (if artifact-callback
                 (funcall
                  artifact-callback

@@ -42,6 +42,7 @@
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
+(declare-function mevedel-session-artifacts-stabilize-gptel-bounds "mevedel-session-artifacts" ())
 (autoload 'mevedel-session-artifacts-artifact-present-p
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-assert-mutation-authority
@@ -59,6 +60,8 @@
 (autoload 'mevedel-session-artifacts-sessions-dir
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-sidecar-path
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
   "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
@@ -547,7 +550,10 @@ caches never become fork authority."
             (mevedel-session-artifacts-segment-path
              staging-path picked-segment)
             buffer-file-truename nil)
-      (mevedel-tool-render-data-reconcile-lost-executions staging-buffer)
+      (when (> (mevedel-tool-render-data-reconcile-lost-executions staging-buffer) 0)
+        ;; This bare Org staging buffer has no gptel save hook.  Repairs can
+        ;; change text length, so serialize its moved properties before saving.
+        (mevedel-session-artifacts-stabilize-gptel-bounds))
       (set-buffer-modified-p t)
       (mevedel-session-artifacts-save-buffer-silently))
     (mevedel-session-persistence-reconcile-lost-execution-segments
