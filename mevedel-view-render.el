@@ -6653,8 +6653,15 @@ stay with their nested row inside the group."
   "Insert grouped activity ENTRIES as one expandable row for DATA-BUF.
 PENDING in-flight tool entries join the group as running calls.
 Return non-nil when the group row was inserted."
-  (let* ((group-start (plist-get (car entries) :start))
-         (group-end (plist-get (car (last entries)) :end))
+  ;; A split breadcrumb entry follows its call but ends inside the call's
+  ;; segment, so the last entry need not reach the group's end.  Collapse
+  ;; removes only rows contained in this range.
+  (let* ((group-start (apply #'min (mapcar (lambda (entry)
+                                             (plist-get entry :start))
+                                           entries)))
+         (group-end (apply #'max (mapcar (lambda (entry)
+                                           (plist-get entry :end))
+                                         entries)))
          (rendering (mevedel-view--tool-group-rendering
                      entries data-buf t pending))
          (source (and rendering

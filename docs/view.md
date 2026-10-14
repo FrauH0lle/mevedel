@@ -691,7 +691,9 @@ without a verb mapping — MCP tools included — appear as `NAME ×N`. The
 expanded group reuses the compound-tool nested-row machinery: each tool call
 and substantive reasoning occurrence is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
-with it. Nested compound calls retain each descendant's row identity and
+with it. Collapse removes only rows whose source the group's source range
+contains, so that range spans every member, including a call that ends after
+its split-out completion breadcrumb. Nested compound calls retain each descendant's row identity and
 nesting depth: toggling one removes its descendants with it while preserving
 sibling rows, so repeated expansion never accumulates copies.
 Delivered agent messages and agent results inside an activity run join the

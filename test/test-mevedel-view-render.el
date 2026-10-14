@@ -8137,7 +8137,46 @@
         (mevedel-view-toggle-section)
         (should-not (string-match-p
                      "↳" (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker)))))))
+                          (point-min) mevedel-view--input-marker))))))
+
+  :doc "collapsing a group removes a last call whose breadcrumb ends before it"
+  ;; The breadcrumb's own source ends at its audit block, inside the call's
+  ;; segment.  The group's source must still cover the whole call, or the
+  ;; collapse leaves the call and its breadcrumb under the folded header.
+  (mevedel-view-test--with-buffers
+    (dotimes (i 4)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+               i i)
+       `(tool . ,(format "call_%d" i))))
+    (with-current-buffer data-buf
+      (goto-char (point-max))
+      (insert (mevedel--format-hook-audit-record
+               (list :type 'execution-breadcrumb :execution-id "last"
+                     :tool-use-id "call_3" :owner "/root" :command "make last"
+                     :facts (list :outcome 'success :termination 'exited
+                                  :exit-code 0)))
+              "\n"))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((folded (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+        (goto-char (point-min))
+        (search-forward "Read 4 files")
+        (mevedel-view-toggle-section)
+        (should (string-match-p "f3.el" (buffer-substring-no-properties
+                                         (point-min) mevedel-view--input-marker)))
+        (goto-char (point-min))
+        (search-forward "Read 4 files")
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should-not (string-match-p "f3.el" text))
+          (should-not (string-match-p "↳" text))
+          (should (equal folded text)))))))
 
 (mevedel-deftest mevedel-view--rendering-header-line/running ()
   ,test
