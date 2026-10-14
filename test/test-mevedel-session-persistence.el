@@ -3191,13 +3191,16 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
 (mevedel-deftest mevedel-session-persistence-choose-entry ()
   ,test
   (test)
-  :doc "offers safe new-session disclosure and restores the chosen session"
+  :doc "acknowledges shared-files disclosure once across workspaces and restores"
   (let* ((root (make-temp-file "mevedel-entry-choice-" t))
          (workspace
           (test-mevedel-session-persistence--make-workspace root))
          (entry '(:save-path "/session/" :summary (:session-name "main")))
          (choice "Start new session")
-         (warned nil)
+         (warned 0)
+         (accepted nil)
+         (quit-p nil)
+         (mevedel-session-persistence--shared-files-accepted-p nil)
          (authority '(:action "Join" :detail "held by desktop" :held t))
          (restored (generate-new-buffer " *mevedel-entry-restored*")))
     (unwind-protect
@@ -3222,15 +3225,43 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
              ((symbol-function 'completing-read)
               (lambda (&rest _) choice))
              ((symbol-function 'yes-or-no-p)
-              (lambda (&rest _) (setq warned t)))
+              (lambda (prompt)
+                (should (string-match-p "Independent sessions.*Worktree Fork"
+                                        prompt))
+                (cl-incf warned)
+                (when quit-p (signal 'quit nil))
+                accepted))
              ((symbol-function 'mevedel-session-persistence-restore)
               (lambda (path &rest _)
                 (should (equal "/session/" path))
                 restored)))
+          ;; A refusal or quit cancels this attempt, without accepting future
+          ;; starts.  Only a positive acknowledgement suppresses the advisory.
+          (should-error
+           (mevedel-session-persistence-choose-entry workspace)
+           :type 'user-error)
+          (should (= 1 warned))
+          (should-not mevedel-session-persistence--shared-files-accepted-p)
+          (setq quit-p t)
+          (should (eq 'quit
+                      (condition-case nil
+                          (mevedel-session-persistence-choose-entry workspace)
+                        (quit 'quit))))
+          (should (= 2 warned))
+          (should-not mevedel-session-persistence--shared-files-accepted-p)
+          (setq quit-p nil accepted t)
           (should
            (eq 'new
                (mevedel-session-persistence-choose-entry workspace)))
-          (should warned)
+          (should (= 3 warned))
+          (should mevedel-session-persistence--shared-files-accepted-p)
+          (should (eq 'new
+                      (mevedel-session-persistence-choose-entry workspace)))
+          (should (eq 'new
+                      (mevedel-session-persistence-choose-entry
+                       (mevedel-workspace--create :id "another-project"
+                                                 :root root))))
+          (should (= 3 warned))
           (setq choice "Join       main")
           (should
            (eq restored
@@ -3238,16 +3269,18 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
           ;; Nothing holds an unheld session, so starting an independent one
           ;; alongside it needs no warning.  Neither does an expired lease:
           ;; its writer is gone, which is why the row offers a takeover.
+          (setq mevedel-session-persistence--shared-files-accepted-p nil)
           (dolist (unheld '((:action "Resume" :detail nil :held nil)
                             (:action "Take over" :detail "lease expired"
                              :held nil)))
             (setq authority unheld
                   choice "Start new session"
-                  warned nil)
+                  warned 0)
             (should
              (eq 'new
                  (mevedel-session-persistence-choose-entry workspace)))
-            (should-not warned)))
+            (should (= 0 warned))
+            (should-not mevedel-session-persistence--shared-files-accepted-p)))
       (when (buffer-live-p restored)
         (kill-buffer restored))
       (when (file-directory-p root)

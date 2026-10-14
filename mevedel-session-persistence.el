@@ -2438,6 +2438,11 @@ among the user's chats."
                    workspace (plist-get entry :summary)))
                 entries))
 
+(defvar mevedel-session-persistence--shared-files-accepted-p nil
+  "Non-nil after accepting the shared-project-files advisory in this Emacs.
+This acknowledges a general risk, not authority over another session's
+lease or files.  Refusing or quitting the prompt leaves it unacknowledged.")
+
 (defun mevedel-session-persistence-choose-entry (workspace)
   "Choose a persisted WORKSPACE session or return `new'.
 
@@ -2447,7 +2452,8 @@ transcript bytes without becoming a resumable session.  Other rows return
 the restored chat buffer and follow the session's authority: an unheld
 session resumes, one already open in this Emacs is switched to, one another
 client holds is joined read-only and follows the owner from there, and an
-expired lease is taken over."
+expired lease is taken over.  Starting a new session alongside an active
+writer requires accepting the shared-files advisory once per Emacs process."
   ;; Expired sessions and locks left behind by dead Emacsen are swept before
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
@@ -2506,14 +2512,16 @@ expired lease is taken over."
                nil t nil nil (car choices))))
         (if (equal choice new-label)
             (progn
-              (when held-p
+              (when (and held-p
+                         (not mevedel-session-persistence--shared-files-accepted-p))
                 (unless
                     (yes-or-no-p
                      (concat
                       "Another session writer is active. Independent sessions "
                       "can race over project files; use a Worktree Fork for "
                       "isolation. Start anyway? "))
-                  (user-error "New session was not started")))
+                  (user-error "New session was not started"))
+                (setq mevedel-session-persistence--shared-files-accepted-p t))
               'new)
           (let ((entry (cdr (assoc choice candidates))))
             (if (eq (plist-get entry :kind) 'incompatible)

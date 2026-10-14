@@ -1190,9 +1190,12 @@ Joining an active writer opens only its last committed publication and exposes
 `Request control` in the view. Expired takeover still requires the ordinary
 explicit confirmation. Starting an independent session while another one is
 *held* — joined or open here, not merely resumable or expired — warns that both
-share project files and points to a Worktree Fork for isolation. An expired
-lease does not warn: its writer is gone, which is the reason that row offers a
-takeover in the first place.
+share project files and points to a Worktree Fork for isolation. Accepting this
+general advisory suppresses it for the rest of the Emacs process, across
+workspaces; refusing or quitting still cancels the start and leaves the advisory
+unacknowledged. Lease takeover and destructive-action confirmations remain
+per action. An expired lease does not warn: its writer is gone, which is the
+reason that row offers a takeover in the first place.
 
 A failure before the manifest-head compare-and-set retains the current and
 previously retained staged sources as one transient local recovery, surfaces
