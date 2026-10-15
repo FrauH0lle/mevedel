@@ -53,34 +53,6 @@ body:has(.viewer-panel:not([hidden])) #requests {
   pointer-events: auto;
 }
 #editing-panel { pointer-events: auto; }
-.panel-head {
-  display: flex;
-  align-items: center;
-  gap: .8rem;
-  padding: .55rem 1.1rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-}
-.panel-headline {
-  display: flex;
-  align-items: baseline;
-  gap: .6rem;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.panel-title {
-  font-family: var(--font-ui);
-  font-size: .85rem;
-  font-weight: 700;
-  color: var(--accent);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.panel-head .panel-meta {
-  font-size: .74rem;
-  white-space: nowrap;
-}
 .panel-note {
   margin: 0;
   font-size: .8rem;
@@ -89,16 +61,6 @@ body:has(.viewer-panel:not([hidden])) #requests {
 
 #editing-body { flex: 1; min-height: 0; }
 #editing-body iframe { width: 100%; height: 100%; border: 0; }
-#editing-title { flex: 1; }
 .editing-availability { padding: 8px 0; }
 #editing-status { margin: 0 0 6px; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
 #editing-panel { bottom: auto; height: 100dvh; }
-#editing-panel .panel-head { padding: 3px 10px; min-height: 32px; }
-#editing-close { padding: 3px 10px; font-size: 12px; min-height: 28px; }
-
-/* On a phone the actions leave the title no room; a file's path is the
-   one thing worth reading there, so it takes its own line. */
-@media (max-width: 34rem) {
-  #artifact-panel .panel-head { flex-wrap: wrap; row-gap: .35rem; }
-  #artifact-panel .panel-headline { flex-basis: 100%; }
-}

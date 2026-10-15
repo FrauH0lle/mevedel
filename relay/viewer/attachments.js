@@ -106,7 +106,7 @@
           const share = document.createElement('button');
           share.className = 'attachment-share';
           share.type = 'button';
-          share.textContent = item.share ? '✓ project' : '＋ project';
+          share.textContent = item.share ? '✓ project' : '+ project';
           share.setAttribute('aria-pressed', String(item.share));
           share.setAttribute('aria-label', `Also add ${item.label} to the project files`);
           share.title = 'Also add this file to the project, where every session can read it';

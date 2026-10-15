@@ -12,6 +12,10 @@ links can observe and download. Opening an item affects that browser only;
 other participants get a followable entry. Each editor opens in its own
 browser tab, leaving the room and its composer draft in the original tab.
 The editor tab reconnects independently and reopens its item on reload.
+The editor tab's header shows the item's title, editable in place by full and
+owner links, over its save state, such as **Saved on host** or a save failure;
+the editor reports both to the tab over its item port and performs the rename.
+A failed save also marks the editor menu, where **Retry save** then appears.
 **Back to room** shows the session in that tab. The host uses the same editor through
 a browser share link. Browser popup permission is needed to open a new tab.
 An editor tab shows its loading state immediately. If the item cannot be read,

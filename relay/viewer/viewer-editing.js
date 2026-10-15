@@ -5,7 +5,9 @@ window.mevedelEditingView = {
     const box = document.getElementById('editing-box'),
       list = document.getElementById('editing-items');
     const panel = document.getElementById('editing-panel'),
-      holder = document.getElementById('editing-body');
+      holder = document.getElementById('editing-body'),
+      titleInput = document.getElementById('editing-title'),
+      savedLine = document.getElementById('editing-saved');
     const editorTab = new URL(window.location.href).searchParams.has('shared');
     let requestedItem = new URL(window.location.href).searchParams.get('shared');
     const pending = new Map(),
@@ -28,6 +30,28 @@ window.mevedelEditingView = {
     // local recoveries stay listed so they remain reachable.
     let attached = new Set();
     let unavailableReason = 'Checking shared editing on the Emacs host…';
+    // The head shows the open item's title, renamed in place, and its save
+    // state; the editor reports both and performs the rename.
+    function showTitle(title) {
+      if (document.activeElement !== titleInput) titleInput.value = title;
+      if (!panel.hidden) document.title = state.editorTitle = `${title} · mevedel`;
+    }
+    function showState(text, error = false) {
+      savedLine.textContent = text || '';
+      savedLine.dataset.error = String(error);
+    }
+    titleInput.addEventListener('change', () => {
+      const title = titleInput.value.trim();
+      if (title && !titleInput.readOnly) port?.postMessage({ type: 'rename', title });
+      else titleInput.value = catalog.get(current)?.title || '';
+    });
+    titleInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') titleInput.blur();
+      if (event.key === 'Escape') {
+        titleInput.value = catalog.get(current)?.title || titleInput.value;
+        titleInput.blur();
+      }
+    });
     function setAppearance(value) {
       appearance = value;
       port?.postMessage({ type: 'appearance', appearance });
@@ -279,8 +303,7 @@ window.mevedelEditingView = {
       if (current === id && frame && !committed) {
         panel.hidden = false;
         onVisibility(true);
-        document.title =
-          state.editorTitle = `${document.getElementById('editing-title').textContent} · mevedel`;
+        document.title = state.editorTitle = `${titleInput.value} · mevedel`;
         return;
       }
       const draft = readDraft(id);
@@ -300,7 +323,9 @@ window.mevedelEditingView = {
       setConversationHistory(result);
       panel.hidden = false;
       onVisibility(true);
-      document.getElementById('editing-title').textContent = result.title;
+      titleInput.value = result.title;
+      titleInput.readOnly = state.readOnly || recoveryOnly;
+      showState(recoveryOnly ? 'Local recovery' : '');
       document.title = state.editorTitle = `${result.title} · mevedel`;
       frame = el('iframe');
       frame.title = `Shared ${result.kind}: ${result.title}`;
@@ -334,6 +359,11 @@ window.mevedelEditingView = {
               clientId: data.clientId,
               clock: data.clock,
             });
+          return;
+        }
+        if (data.type === 'heading') {
+          if (typeof data.title === 'string') showTitle(data.title);
+          showState(data.status, data.error === true);
           return;
         }
         if (data.type === 'delete') {
@@ -392,7 +422,9 @@ window.mevedelEditingView = {
       if (!requestedItem || current) return;
       panel.hidden = false;
       onVisibility(true);
-      document.getElementById('editing-title').textContent = catalog.get(requestedItem)?.title || 'Shared work';
+      titleInput.value = catalog.get(requestedItem)?.title || '';
+      titleInput.readOnly = true;
+      showState('');
       document.title = state.editorTitle = 'Shared work · mevedel';
       const note = el('p', 'panel-note', message);
       note.setAttribute('role', retry ? 'alert' : 'status');
@@ -475,11 +507,14 @@ window.mevedelEditingView = {
           const result = await request({ action: 'read', id: current });
           setConversationHistory(result);
           if (recovering) await open(current, result);
-          else port?.postMessage({
-            type: 'sync',
-            item: result,
-            readOnly: state.readOnly,
-          });
+          else {
+            titleInput.readOnly = state.readOnly;
+            port?.postMessage({
+              type: 'sync',
+              item: result,
+              readOnly: state.readOnly,
+            });
+          }
         }
       } catch (error) {
         pendingView(error.message, true);
@@ -566,8 +601,7 @@ window.mevedelEditingView = {
         catalog.set(id, { id, kind, title, revision });
         if (!previous || previous.title !== title || previous.kind !== kind) render();
         if (id === current) {
-          document.getElementById('editing-title').textContent = title;
-          if (!panel.hidden) document.title = state.editorTitle = `${title} · mevedel`;
+          showTitle(title);
           port?.postMessage({ type: 'changed', ...value });
         }
       } else {

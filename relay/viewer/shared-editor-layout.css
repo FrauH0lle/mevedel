@@ -5,11 +5,7 @@ body.editor { scrollbar-color:var(--rule-strong) transparent; }
 button,summary { border-radius:4px; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 ::selection { background:var(--accent-soft); color:var(--ink); }
-body.editor > header { min-height:76px; padding:12px 24px; gap:8px; }
-.editor-identity { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
-body.editor #title { width:100%; max-width:36rem; padding:2px 0; font-size:18px; letter-spacing:-.025em; }
-body.editor #saved { font-size:12px; line-height:1.4; color:var(--muted); flex:none; }
-body.editor #saved[data-error="true"] { color:var(--failed); }
+body.editor > header { min-height:52px; padding:8px 24px; gap:8px; justify-content:flex-end; }
 body.editor #menu { order:0; }
 body.editor #menu > summary { min-width:36px; text-align:center; }
 body.editor #menu .menu-body { left:auto; right:0; border-radius:4px; padding:18px; gap:12px; font-size:13px; }
@@ -210,9 +206,7 @@ body.editor[data-kind="whiteboard"].assistant-open .drawing-tools { grid-column:
   body.editor.assistant-open { padding-right:0; }
   body.editor #assistant { width:100%; }
   #discussion-resize { display:none; }
-  body.editor > header { padding:10px 14px; min-height:76px; flex-wrap:nowrap; gap:4px; }
-  body.editor #title { font-size:16px; }
-  body.editor #saved { font-size:11px; order:0; padding:0; flex-basis:auto; }
+  body.editor > header { padding:6px 14px; min-height:48px; flex-wrap:nowrap; gap:4px; }
   body.editor #undo,body.editor #redo { min-width:30px; padding:0 5px; }
   body.editor #ask-toggle { padding:6px 8px; font-size:12px; }
   body.editor #document { padding:18px 12px 32px; }
@@ -292,3 +286,8 @@ body.editor #image-tools { flex-wrap:wrap; }
   .crop-fields { grid-template-columns:repeat(2,minmax(0,1fr)); }
   body.editor #image-tools { padding-inline:12px; }
 }
+
+/* A failed save marks the editor menu, where Retry save then appears. */
+:root:not([data-save-state="error"]) #retry { display:none; }
+:root[data-save-state="error"] #menu > summary { position:relative; color:var(--failed); border-color:var(--failed); }
+:root[data-save-state="error"] #menu > summary::after { content:""; position:absolute; top:3px; right:3px; width:7px; height:7px; border-radius:50%; background:var(--failed); }

@@ -24,7 +24,7 @@ test('shared image transformations', async t => {
       const {content} = await window.apply({action:'read'});
       return kind==='whiteboard' ? content.find(s=>s.type==='image') : content.content.find(n=>n.type==='image').attrs;
     },kind);
-    const saved = () => frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+    const saved = () => frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
     const pixels = async source => page.evaluate(async src => {
       const img = new Image();img.src=src;await img.decode();
       const c=document.createElement('canvas');c.width=img.width;c.height=img.height;
@@ -136,7 +136,7 @@ test('shared image transformations', async t => {
     await image.waitFor();await image.click();
     await frame.locator('#image-tools').waitFor();
     const read = async () => page.evaluate(async () => (await window.apply({action:'read'})).content.find(s=>s.type==='image'));
-    const saved = () => frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+    const saved = () => frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
     // The host's PNG shows what every viewer sees: sample the image's corners.
     const corners = () => page.evaluate(async () => {
       const {data} = await window.apply({action:'export',format:'png'});

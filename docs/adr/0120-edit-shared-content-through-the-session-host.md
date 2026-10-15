@@ -177,6 +177,13 @@ The document uses the selected theme. A real parent/iframe phone test caught
 the taller header consuming typing space with the keyboard open; compact
 short-viewport spacing retains at least 150px of document viewport in that test.
 
+A later review of a live room at 1280 and 390 pixels found the editor tab
+spending two header rows, the room's and the item's, above its toolbars, and
+the room header wrapping to three rows (about 155 pixels) on a phone. Every
+page now uses the room's header: the editor reports the item's title and save
+state over its item port, the tab shows and renames them there, and actions
+that would squeeze the title fold into a **⋯** menu instead of wrapping.
+
 The trial also showed that a contribution row per 300 ms save was unreadable.
 Keep those commits and their exact inverse records; group their presentation
 by participant name and five-second idle gaps. Agent transactions remain

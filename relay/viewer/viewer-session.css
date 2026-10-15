@@ -234,7 +234,7 @@
 
 .invite-entry .invite-open { text-decoration: none; }
 
-.invite-tier.room-entry .room-actions {
+.invite-tier .room-actions {
   grid-column: 2;
   grid-row: 1 / span 2;
   display: flex;
@@ -243,17 +243,14 @@
   gap: .4rem;
 }
 .invite-tier.room-entry .invite-open { text-decoration: none; }
+/* A tier's QR code: dark on white in either theme, for any camera. */
+.invite-qr { margin: .4rem 0 0; display: grid; justify-items: center; gap: .5rem; }
+.invite-qr-code { width: min(240px, 70vw); aspect-ratio: 1; }
+.invite-qr-code svg { display: block; width: 100%; height: 100%; }
+.invite-qr figcaption { font-size: .78rem; color: var(--muted); text-align: center; }
 /* Room names are the host's and keep their case; tier names are capitalized. */
 .invite-tier.room-entry .invite-name { text-transform: none; }
 /* On a phone the actions take their own line, leaving the name its width. */
-@media (max-width: 640px) {
-  .invite-tier.room-entry { grid-template-columns: minmax(0, 1fr); }
-  .invite-tier.room-entry .room-actions {
-    grid-column: 1;
-    grid-row: auto;
-    justify-content: flex-start;
-  }
-}
 
 /* A lobby link opens the project's session list instead of a room: the
    conversation, composer and room menu have nothing to show. */

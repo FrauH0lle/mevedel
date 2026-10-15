@@ -48,7 +48,7 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
     } else if (name === 'menu') {
       res.end((await readFile(new URL('../../relay/viewer/index.html', import.meta.url), 'utf8'))
         .replace(/<script[\s\S]*?<\/script>/g, ''));
-    } else if (/^(?:viewer[\w-]*|transport|notifications|attachments)\.(?:css|js)$/.test(name) || ['shared-editor.html', 'shared-editor.css', 'shared-editor-layout.css', 'shared-editor.js', 'renderer.js'].includes(name)) {
+    } else if (/^(?:viewer[\w-]*|transport|notifications|attachments|qrcode)\.(?:css|js)$/.test(name) || ['shared-editor.html', 'shared-editor.css', 'shared-editor-layout.css', 'shared-editor.js', 'renderer.js'].includes(name)) {
       res.setHeader(
         'Content-Type',
         name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html',
@@ -56,7 +56,8 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
       res.end(await readFile(new URL(`../../relay/viewer/${name}`, import.meta.url)));
     } else
       res.end(
-        '<style>body{margin:0}iframe{width:100vw;height:100dvh;border:0}</style><iframe sandbox="allow-scripts allow-forms" src="/shared-editor.html"></iframe>',
+        // The room's head shows the editor's save state; #saved stands in for it.
+        '<style>body{margin:0}iframe{width:100vw;height:100dvh;border:0}#saved{position:fixed;right:0;bottom:0;font-size:10px}</style><iframe sandbox="allow-scripts allow-forms" src="/shared-editor.html"></iframe><output id="saved"></output>',
       );
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -139,6 +140,10 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
         window.messages = [];
         channel.port1.onmessage = async ({ data }) => {
           window.messages.push(data);
+          if (data.type === 'heading') {
+            document.getElementById('saved').textContent = data.status;
+            document.getElementById('saved').dataset.title = data.title;
+          }
           if (data.type === 'request') {
             try {
               if (window.rejectQuestion && data.args.action === 'discussion' && data.args.op === 'ask')

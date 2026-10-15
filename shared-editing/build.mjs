@@ -28,9 +28,21 @@ const browser = await build({
   legalComments: 'external',
   metafile: true,
 });
-for (const [bundle, file] of [
-  [host, root + 'THIRD-PARTY-NOTICES.txt'],
-  [browser, root + '../relay/viewer/shared-editor.LICENSE.txt'],
+const qr = await build({
+  entryPoints: [root + 'qr.mjs'],
+  outfile: root + '../relay/viewer/qrcode.js',
+  bundle: true,
+  platform: 'browser',
+  format: 'iife',
+  target: 'es2022',
+  minify: true,
+  legalComments: 'external',
+  metafile: true,
+});
+for (const [bundle, file, title] of [
+  [host, root + 'THIRD-PARTY-NOTICES.txt', 'the bundled shared editor'],
+  [browser, root + '../relay/viewer/shared-editor.LICENSE.txt', 'the bundled shared editor'],
+  [qr, root + '../relay/viewer/qrcode.LICENSE.txt', 'the invite QR code'],
 ]) {
   const packages = new Set();
   for (const input of Object.keys(bundle.metafile.inputs)) {
@@ -42,10 +54,15 @@ for (const [bundle, file] of [
       path.slice(0, at + 14) + parts.slice(0, parts[0].startsWith('@') ? 2 : 1).join('/'),
     );
   }
-  let notices = 'Third-party licenses for the bundled shared editor.\n';
+  let notices = `Third-party licenses for ${title}.\n`;
   for (const directory of [...packages].sort()) {
     const pkg = JSON.parse(await readFile(directory + '/package.json', 'utf8'));
     const files = (await readdir(directory)).filter((name) => /^licen[sc]e(?:[.-]|$)/i.test(name));
+    // The package states its MIT license in its source, without a file.
+    if (pkg.name === 'qrcode-generator') {
+      notices += `\n--- ${pkg.name} ${pkg.version} ---\n` + (await readFile(root + 'QRCODE-LICENSE', 'utf8'));
+      continue;
+    }
     if (pkg.name === '@resvg/resvg-wasm') {
       notices += `\n--- ${pkg.name} ${pkg.version} ---\nUnmodified source: https://github.com/yisibl/resvg-js/tree/v${pkg.version}\n`;
       notices += await readFile(root + 'RESVG-LICENSE', 'utf8');
@@ -56,7 +73,7 @@ for (const [bundle, file] of [
     for (const name of files) notices += (await readFile(directory + '/' + name, 'utf8')) + '\n';
   }
   // Ported Excalidraw code, and in the editor bundle its embedded fonts.
-  notices += '\n--- Excalidraw ---\n' + (await readFile(root + 'EXCALIDRAW-LICENSE', 'utf8'));
+  if (bundle !== qr) notices += '\n--- Excalidraw ---\n' + (await readFile(root + 'EXCALIDRAW-LICENSE', 'utf8'));
   if (bundle === browser) notices += '\n--- Fonts ---\n' + (await readFile(root + 'FONT-LICENSE', 'utf8'));
   await writeFile(file, notices.trimEnd() + '\n');
 }

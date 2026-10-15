@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {editorFixture, libraryHost} from './editor-fixture.mjs';
 
 const read = (page) => page.evaluate(async () => (await window.apply({action:'read'})).content);
-const saved = (frame) => frame.locator('#saved').getByText('Saved on host', {exact:true}).waitFor();
+const saved = (frame) => frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
 /* Autoshape strokes settle after a pause, handing the board back to Select. */
 const shaped = async (frame) => {
   await frame.locator('[data-tool="select"][aria-pressed="true"]').waitFor();

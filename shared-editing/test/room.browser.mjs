@@ -296,17 +296,17 @@ test(
           }
         })(),
         (async () => {
-          await frame(pages[1]).locator('#title').fill('Live collaboration');
-          await frame(pages[1]).locator('#title').press('Tab');
-          await until(async () => (await frame(pages[0]).locator('#title').inputValue()) === 'Live collaboration');
+          await pages[1].locator('#editing-title').fill('Live collaboration');
+          await pages[1].locator('#editing-title').press('Tab');
+          await until(async () => (await pages[0].locator('#editing-title').inputValue()) === 'Live collaboration');
         })(),
       ]);
       await pages[0].mouse.move(5, 5);
       await until(async () => (await frame(pages[1]).locator('[data-mode="laser"]').count()) === 0);
       assert.equal(JSON.parse((await agent('ReadShared', {id:boardId})).result).revision, savedBefore + 1);
-      await frame(pages[1]).locator('#title').fill('Whiteboard');
-      await frame(pages[1]).locator('#title').press('Tab');
-      await until(async () => (await frame(pages[0]).locator('#title').inputValue()) === 'Whiteboard');
+      await pages[1].locator('#editing-title').fill('Whiteboard');
+      await pages[1].locator('#editing-title').press('Tab');
+      await until(async () => (await pages[0].locator('#editing-title').inputValue()) === 'Whiteboard');
       // Missing host dependencies leave chat and the catalog usable. A recheck
       // repairs an already-open room without a reload or draft replacement.
       await agent('RuntimeAvailable', { available: false });
@@ -358,7 +358,7 @@ test(
         return a === b && a.length >= 24;
       });
       await until(
-        async () => (await frame(pages[0]).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(pages[0]).locator('html[data-save-state=saved]').count()) === 1,
       );
       let undone = 0;
       while ((await documentText(pages[0])).trim() !== 'Bob writes.' && undone < 14) {
@@ -378,7 +378,7 @@ test(
       }
       await until(async () => (await documentText(pages[1])).includes('Alice writes.'));
       await until(
-        async () => (await frame(pages[0]).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(pages[0]).locator('html[data-save-state=saved]').count()) === 1,
       );
       await frame(pages[0]).locator('.tiptap p').first().click();
       await pages[0].keyboard.press('Home');
@@ -396,7 +396,7 @@ test(
           (await frame(pages[1]).locator('.tiptap strong').count()) > 0,
       );
       await until(
-        async () => (await frame(pages[0]).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(pages[0]).locator('html[data-save-state=saved]').count()) === 1,
       );
       const documentId = JSON.parse((await agent('ReadShared')).result).find(
         (i) => i.kind === 'document',
@@ -474,7 +474,7 @@ test(
       await pages[0].keyboard.press('End');
       await pages[0].keyboard.type(' Human revision.');
       await until(
-        async () => (await frame(pages[0]).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(pages[0]).locator('html[data-save-state=saved]').count()) === 1,
       );
       const stale = await agent('SharedEdit', {
         id: documentId,
@@ -546,7 +546,7 @@ test(
       await pages[0].keyboard.press('End');
       await pages[0].keyboard.type(' Later edit.');
       await until(
-        async () => (await frame(pages[0]).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(pages[0]).locator('html[data-save-state=saved]').count()) === 1,
       );
       assert.equal((await agent('InspectTest')).queue[1], rangeAsk);
       await pages[1].locator('#editing-close').click();
@@ -558,7 +558,7 @@ test(
       await pages[0].keyboard.press('Enter');
       await until(async () => (await frame(pages[1]).locator('.tiptap p').count()) === 3);
       await until(
-        async () => (await frame(pages[0]).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(pages[0]).locator('html[data-save-state=saved]').count()) === 1,
       );
       await Promise.all(pages.slice(0, 2).map((p) => frame(p).locator('.tiptap p').last().click()));
       await Promise.all([
@@ -589,7 +589,7 @@ test(
       await pages[0].keyboard.press('End');
       await pages[0].keyboard.type(' Offline draft.');
       await until(async () =>
-        (await frame(pages[0]).locator('#saved').innerText()).includes('Offline'),
+        (await pages[0].locator('#editing-saved').innerText()).includes('Offline'),
       );
       await frame(pages[1]).locator('.tiptap p').first().click();
       await pages[1].keyboard.press('Home');
@@ -770,7 +770,7 @@ test(
         JSON.stringify(geometry),
       );
       await until(
-        async () => (await frame(phonePage).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(phonePage).locator('html[data-save-state=saved]').count()) === 1,
       );
       await phone.close();
       await Promise.all(contexts.map((c) => c.close()));
@@ -809,7 +809,7 @@ test(
         const started=performance.now();
         await imageWriter.keyboard.press('ArrowRight');
         await until(async()=>(await frame(imageReader).locator('[data-shape="large-image"] > g').getAttribute('transform')).startsWith(`translate(${100+move} 100)`));
-        await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
+        await until(async()=>(await frame(imageWriter).locator('html[data-save-state=saved]').count())===1);
         moveLatencies.push(performance.now()-started);
       }
       const medianMove=moveLatencies.toSorted((a,b)=>a-b)[Math.floor(moveLatencies.length/2)];
@@ -817,7 +817,7 @@ test(
       assert.ok(medianMove<1200,`single moves must not stall in large pipe writes: ${moveLatencies.map(Math.round)}`);
       await rectangle(imageWriter,400,250);
       await until(async()=>await frame(imageReader).locator('#scene [data-shape]').count()===2);
-      await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
+      await until(async()=>(await frame(imageWriter).locator('html[data-save-state=saved]').count())===1);
       const imageState=JSON.parse((await agent('ReadShared',{id:imageBoard.id})).result);
       assert.equal(imageState.content.length,2);
       assert.ok(!JSON.stringify(imageState.transactions).includes('base64'),
@@ -857,7 +857,7 @@ test(
       },1500);
       const previewBox=await watching.boundingBox();
       await imageWriter.mouse.up();
-      await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host');
+      await until(async()=>(await frame(imageWriter).locator('html[data-save-state=saved]').count())===1);
       await until(async()=>await watching.getAttribute('data-live-preview')==='false');
       assert.ok(Math.abs((await watching.boundingBox()).x-previewBox.x)<2,'saved geometry replaces the preview without a jump');
       await frame(imageWriter).locator('#canvas').focus();
@@ -866,7 +866,7 @@ test(
       await imageWriter.keyboard.type('test1234\n3333',{delay:350});
       const typedAt=performance.now();
       await until(async()=>/test1234\s*3333/.test(await frame(imageReader).locator('#scene').textContent()),8000);
-      await until(async()=>await frame(imageWriter).locator('#saved').innerText()==='Saved on host',8000);
+      await until(async()=>(await frame(imageWriter).locator('html[data-save-state=saved]').count())===1,8000);
       console.log(`Image board typing caught up in ${Math.round(performance.now()-typedAt)} ms`);
       await imageReader.close();
       await imageContext.close();
@@ -977,7 +977,7 @@ test(
       await rectangle(ownerPage, 150, 160);
       await until(
         async () =>
-          (await frame(ownerPage).locator('#saved').getAttribute('data-error')) === 'true',
+          (await ownerPage.locator('#editing-saved').getAttribute('data-error')) === 'true',
       );
       assert.equal(
         JSON.parse((await agent('ReadShared', { id: transferred.id })).result).revision,
@@ -1000,7 +1000,7 @@ test(
         .evaluate((e) => (e.open = true));
       await frame(ownerPage).locator('#retry').click();
       await until(
-        async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(ownerPage).locator('html[data-save-state=saved]').count()) === 1,
       );
       await agent('RestartHelper');
       const recovered = JSON.parse((await agent('ReadShared', { id: transferred.id })).result);
@@ -1030,7 +1030,7 @@ test(
         async () => (await frame(ownerPage).locator('#scene [data-shape]').count()) === 3,
       );
       await until(
-        async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(ownerPage).locator('html[data-save-state=saved]').count()) === 1,
       );
       assert.equal(
         JSON.parse((await agent('ReadShared', { id: transferred.id })).result).content.filter(
@@ -1069,7 +1069,7 @@ test(
         async () => (await frame(ownerPage).locator('#scene [data-shape]').count()) === 4,
       );
       await until(
-        async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(ownerPage).locator('html[data-save-state=saved]').count()) === 1,
       );
       // The pen keeps drawing, so the stroke is selected to ask about it.
       await frame(ownerPage).locator('[data-tool="select"]').click();
@@ -1120,11 +1120,11 @@ test(
       });
       await rectangle(ownerPage, 260, 210);
       await until(async () =>
-        (await frame(ownerPage).locator('#saved').innerText()).includes('recovery storage'),
+        (await ownerPage.locator('#editing-saved').innerText()).includes('recovery storage'),
       );
       await delay(700);
       assert.match(
-        await frame(ownerPage).locator('#saved').innerText(),
+        await ownerPage.locator('#editing-saved').innerText(),
         /Download a recovery copy/,
       );
       await ownerPage.evaluate(() => {
@@ -1133,7 +1133,7 @@ test(
       });
       await rectangle(ownerPage, 320, 270);
       await until(
-        async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
+        async () => (await frame(ownerPage).locator('html[data-save-state=saved]').count()) === 1,
       );
       // A board opened in its own conversation's room, as the lobby opens
       // it, can be deleted from there; that room then ends saying so.
@@ -1170,7 +1170,7 @@ test(
       for (const socket of ownerSockets) await socket.close();
       await rectangle(ownerPage, 200, 250);
       await until(async () =>
-        (await frame(ownerPage).locator('#saved').innerText()).includes('Offline'),
+        (await ownerPage.locator('#editing-saved').innerText()).includes('Offline'),
       );
       await agent('EndShare');
       await owner.setOffline(false);

@@ -448,7 +448,8 @@ func TestHealthzAndViewer(t *testing.T) {
 		"/viewer-appearance.js", "/viewer-history.js", "/shared-editor-layout.css",
 		"/viewer-agent.css", "/viewer-artifact.css", "/viewer-session.css",
 		"/viewer-task.css", "/attachments.js", "/attachments.css",
-		"/service-worker.js", "/viewer-store.js",
+		"/service-worker.js", "/viewer-store.js", "/viewer-header.js",
+		"/qrcode.js",
 	} {
 		resp, err = http.Get(srv.URL + path)
 		if err != nil {

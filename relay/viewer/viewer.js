@@ -208,10 +208,7 @@
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
   const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession,
-    onVisibility: visible => {
-      window.mevedelAppearance.editorVisible(visible);
-      presence.report();
-    },
+    onVisibility: () => presence.report(),
     onCatalog: refreshFilter});
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
@@ -1531,6 +1528,7 @@
     }
   }
 
+  window.mevedelHeader.create({shared: [document.getElementById('appearance-menu')]});
   window.mevedelAppearance.bind(value => {
     artifacts.setTheme(value.theme);
     editing.setAppearance(value);

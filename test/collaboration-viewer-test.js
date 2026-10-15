@@ -651,7 +651,7 @@ async function main() {
                'lobby-files', 'files-path', 'files-list',
                'files-status', 'files-upload', 'files-input', 'artifact-ask',
                'editing-status', 'editing-recheck', 'editing-box', 'editing-items', 'editing-panel', 'editing-body',
-               'editing-title', 'editing-file', 'editing-import', 'editing-close'];
+               'editing-title', 'editing-saved', 'editing-file', 'editing-import', 'editing-close'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   // The dock is addressed by class, not id, and its height is what the
   // reading-mode fold threshold is measured against.
@@ -846,6 +846,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-lobby.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-presence.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-header.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
   assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
@@ -1733,7 +1734,8 @@ async function main() {
   const copies = [];
   for (const row of tiers) {
     copied = null;
-    row.children[2].dispatch('click');
+    // Copy is the last of the tier's actions, after its QR code.
+    row.children[2].children.at(-1).dispatch('click');
     await waitFor(() => copied !== null, 'copied link');
     copies.push(copied);
   }

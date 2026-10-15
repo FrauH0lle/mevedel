@@ -53,7 +53,13 @@
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       button.className = `bell${on ? ' on' : ''}${blocked ? ' blocked' : ''}`;
-      button.textContent = 'Notifications';
+      // A bell in the header, struck through when the browser refuses; the
+      // label names the state where the bell sits in the ⋯ menu.
+      button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+        + '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4Z"/><path d="M10 21h4"/>'
+        + (blocked ? '<path d="m4 3 16 18"/>' : '') + '</svg>'
+        + `<span class="bell-label">${blocked ? 'Notifications blocked'
+          : on ? 'Notifications on' : 'Turn on notifications'}</span>`;
     }
 
     function maybeNotify(title, body) {

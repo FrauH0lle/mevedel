@@ -152,8 +152,11 @@ every tier at or below its own by truncating the secret it already holds:
 an owner can offer all three links, a full-control guest two, a view guest
 one, and no one can express a link stronger than their own. Inviting
 therefore involves neither the host nor the relay -- the Invite sheet
-builds the links in the page and copies them. That is also why the tiers
-are a prefix chain rather than three unrelated tokens.
+builds the links in the page and copies them, or shows one as a QR code
+for a phone's camera. A code shows only when its tier's **QR code** button
+is pressed, because a code on screen hands its access to any camera that
+sees it. That is also why the tiers are a prefix chain rather than three
+unrelated tokens.
 
 The room header and the tab title name the shared session. The host's
 `status` frame carries the session's display name, which a joining guest
@@ -164,6 +167,17 @@ names its project instead.
 Invite sits in the room header and remains available to read-only guests.
 Rooms and New session are in **In this room**. Invite disappears when the room
 ends, because the link goes with it.
+
+Every page has the same header: the room, the editor tab, and the agent and
+artifact views. It shows the wordmark, a small line over the page's title, and
+the page's actions; the Appearance menu follows whichever header is on screen.
+The other pages say **Back to room** at the end of their actions. The header
+keeps one line at every width: actions fold into its **⋯** menu, the least
+needed first, while they would squeeze the title below 120 pixels or cut it
+off while it has less than half the header, and come back when there is room
+again. Presence never
+folds. The bell is an icon, struck through while the browser blocks
+notifications, and a labelled row in the **⋯** menu.
 
 ## Room navigation and appearance
 

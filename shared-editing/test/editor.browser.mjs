@@ -35,7 +35,7 @@ test('editor interaction regressions', async (t) => {
       await show();
       await frame.locator('[data-live-preview="true"]').waitFor();
       assert.ok((await shape.boundingBox()).x>before.x+50);
-      assert.equal(await frame.locator('#saved').innerText(),'Live movement · not saved yet');
+      assert.equal(await page.locator('#saved').innerText(),'Live movement · not saved yet');
       const geometry=({x,y,width,height})=>[x,y,width,height];
       assert.deepEqual(geometry((await page.evaluate(()=>window.apply({action:'read'}))).content[0]),[100,100,300,160]);
       const exported=await page.evaluate(()=>window.apply({action:'export',format:'native'}));
@@ -92,7 +92,7 @@ test('editor interaction regressions', async (t) => {
           changes:[{id:'two', after:{type:'rectangle', x:100, y:0, width:50, height:50}}]});
         window.port.postMessage({type:'changed', ...second});
       });
-      await frame.locator('#saved', {hasText: 'reopen this item'}).waitFor();
+      await page.locator('#saved', {hasText: 'reopen this item'}).waitFor();
       // The next change, though contiguous, reads the item again.
       await page.evaluate(async () => {
         const third = await window.apply({action:'patch', opId:'elsewhere-3',
@@ -100,7 +100,7 @@ test('editor interaction regressions', async (t) => {
         window.port.postMessage({type:'changed', ...third});
       });
       await frame.locator('[data-shape="one"]').waitFor();
-      await frame.locator('#saved', {hasText: 'Saved on host'}).waitFor();
+      await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
       await page.close();
     });
     await t.test('failed saves withdraw outgoing movement previews', async () => {
@@ -117,7 +117,7 @@ test('editor interaction regressions', async (t) => {
       await page.waitForFunction(()=>window.messages.some(m=>m.type==='presence' && m.preview?.shapes.length));
       assert.equal(await page.evaluate(()=>window.messages.filter(m=>m.type==='request'&&m.args.action==='update').length),0);
       await page.mouse.up();
-      await frame.locator('#saved').getByText('Save refused',{exact:true}).waitFor();
+      await page.locator('#saved').getByText('Save refused',{exact:true}).waitFor();
       await page.waitForFunction(()=>!window.messages.filter(m=>m.type==='presence').at(-1).preview);
       await page.close();
     });
@@ -146,10 +146,10 @@ test('editor interaction regressions', async (t) => {
       assert.equal(drafts.pending.length,2,'one in-flight save and one merged recoverable follow-up');
       await page.evaluate(()=>window.releaseSave());
       if(loseAck) {
-        await frame.locator('#saved').getByText('No save acknowledgement',{exact:true}).waitFor();
+        await page.locator('#saved').getByText('No save acknowledgement',{exact:true}).waitFor();
         await frame.locator('#retry').evaluate(button=>button.click());
       }
-      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
       assert.equal(await page.evaluate(()=>window.updateCalls),loseAck ? 3 : 2,'no stale keystroke backlog');
       const stored=await page.evaluate(()=>window.apply({action:'read'}));
       assert.equal(stored.content.find(s=>s.containerId==='ellipse').text,'test1234\n3333','the label is a bound text element');
@@ -183,17 +183,17 @@ test('editor interaction regressions', async (t) => {
       await new Promise(resolve=>setTimeout(resolve,200));
       assert.equal(await saves(),1,'one save in flight');
       await page.evaluate(()=>{ window.holdSaves=false; window.releaseSave(); });
-      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
       assert.equal(await saves(),2,'the edits made during the save follow it as one');
       // A fast host's next save waits out the floor since the previous one began.
       await page.clock.runFor(100);
       await text('abcd');
-      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
       await text('abcde');
       await new Promise(resolve=>setTimeout(resolve,200));
       assert.equal(await saves(),3);
       await page.clock.runFor(60);
-      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
       assert.equal(await saves(),4);
       const stored=await page.evaluate(()=>window.apply({action:'read'}));
       assert.equal(stored.content.find(s=>s.containerId==='ellipse').text,'abcde');
@@ -205,14 +205,14 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('[data-shape="ellipse"]').dblclick();
       await frame.locator('#shape-text').fill('Saved');
       await page.clock.runFor(1);
-      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
       await frame.locator('#image-upload').setInputFiles({
         name:'bad.svg',mimeType:'image/svg+xml',buffer:Buffer.from('<svg/>'),
       });
       const message='Use a PNG, JPEG, or WebP image up to 4 MB';
-      await frame.locator('#saved').getByText(message,{exact:true}).waitFor();
+      await page.locator('#saved').getByText(message,{exact:true}).waitFor();
       await page.clock.runFor(100);
-      assert.equal(await frame.locator('#saved').innerText(),message);
+      assert.equal(await page.locator('#saved').innerText(),message);
       await page.close();
     });
     await t.test('save failure remains visible above a recovery-storage warning', async () => {
@@ -224,10 +224,10 @@ test('editor interaction regressions', async (t) => {
       });
       await frame.locator('.tiptap').click();
       await page.keyboard.type('Keep this pending edit');
-      await frame.locator('#saved').getByText('Shared content is too large',{exact:true}).waitFor();
+      await page.locator('#saved').getByText('Shared content is too large',{exact:true}).waitFor();
       await page.evaluate(()=>window.port.postMessage({type:'storage-error',message:'Recovery storage unavailable'}));
       await page.waitForTimeout(350);
-      assert.equal(await frame.locator('#saved').innerText(),'Shared content is too large');
+      assert.equal(await page.locator('#saved').innerText(),'Shared content is too large');
       assert.match(await frame.locator('.tiptap').innerText(),/Keep this pending edit/);
       await page.close();
     });
@@ -313,7 +313,7 @@ test('editor interaction regressions', async (t) => {
           element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));
         },data);
         await images.nth(2).waitFor();
-        await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+        await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
         const saved = await page.evaluate(async()=>window.apply({action:'read'}));
         if (kind === 'document')
           assert.equal((JSON.stringify(saved.content).match(/data:image\/png;base64/g)||[]).length,3);
@@ -327,7 +327,7 @@ test('editor interaction regressions', async (t) => {
           assert.equal(file.files[fileIds[0]].dataURL,`data:image/png;base64,${data}`);
         }
         await frame.locator('#image-upload').setInputFiles({name:'bad.svg',mimeType:'image/svg+xml',buffer:Buffer.from('<svg/>')});
-        await frame.locator('#saved').getByText('Use a PNG, JPEG, or WebP image up to 4 MB',{exact:true}).waitFor();
+        await page.locator('#saved').getByText('Use a PNG, JPEG, or WebP image up to 4 MB',{exact:true}).waitFor();
         assert.equal(await images.count(),3);
         if (kind === 'document') {
           // Ordinary HTML copy/paste must retain numeric image dimensions.
@@ -340,7 +340,7 @@ test('editor interaction regressions', async (t) => {
             element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));
           },data);
           await images.nth(3).waitFor();
-          await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+          await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
           const copied = await page.evaluate(async()=>window.apply({action:'read'}));
           assert.equal(copied.content.content.find(n=>n.type==='image' && n.attrs.alt==='Copied').attrs.width,80);
         }
@@ -746,7 +746,7 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('#scene [data-shape]').count(), 3, 'the ellipse, the rectangle and its label');
       await page.keyboard.press('Control+Enter');
       assert.equal(await frame.locator('#scene text').textContent(), 'Frontend');
-      await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+      await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
       const {content} = await page.evaluate(()=>window.apply({action:'read'}));
       assert.equal(content.find(s=>s.type==='text').containerId, content.find(s=>s.type==='rectangle').id,
         'the typed label is bound to the new rectangle');

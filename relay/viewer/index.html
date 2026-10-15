@@ -25,7 +25,8 @@
       <div class="wordmark">mevedel</div>
       <div class="room-heading"><span class="project-name">Shared workspace</span><h1 id="session-label">Live session</h1></div>
       <div class="header-actions">
-        <details id="appearance-menu">
+        <span class="presence keep" data-presence role="img" hidden></span>
+        <details id="appearance-menu" data-fold="1">
           <summary>Appearance</summary>
           <div class="appearance-body">
             <label>Palette<select id="palette"><option value="cool">Cool</option><option value="warm">Warm</option></select></label>
@@ -34,9 +35,8 @@
             <p>Changes keep your draft and reading position.</p>
           </div>
         </details>
-        <button id="invite-button" class="btn quiet" type="button" hidden title="Copy a link to this room" aria-label="Invite to this room">Invite</button>
-        <button id="notify-button" class="bell" type="button" hidden aria-pressed="false" title="Notifications off" aria-label="Notifications off">Notifications</button>
-        <span class="presence" data-presence role="img" hidden></span>
+        <button id="invite-button" class="btn quiet" type="button" hidden data-fold="3" title="Invite people to this room">Invite</button>
+        <button id="notify-button" class="bell" type="button" hidden data-fold="2" aria-pressed="false" title="Notifications off">Notifications</button>
       </div>
     </header>
     <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
@@ -54,7 +54,7 @@
         </div>
         <div class="lobby-actions">
           <button id="lobby-refresh" class="btn quiet" type="button">Refresh</button>
-          <button id="lobby-new" class="btn" type="button" hidden><span aria-hidden="true">＋</span> New session</button>
+          <button id="lobby-new" class="btn" type="button" hidden><span aria-hidden="true">+</span> New session</button>
           <span id="lobby-store-create" class="lobby-create" hidden></span>
           <button id="files-upload" class="btn" type="button" hidden title="Add files to this folder — or drop them here">Upload</button>
         </div>
@@ -86,46 +86,49 @@
           aria-label="Shared session transcript"></main>
     <section id="agent-panel" class="viewer-panel" hidden
              role="dialog" aria-label="Sub-agent transcript">
-      <header class="panel-head">
-        <div class="panel-headline">
-          <span id="agent-title" class="panel-title"></span>
-          <span id="agent-meta" class="panel-meta"></span>
+      <header class="topbar">
+        <span class="wordmark">mevedel</span>
+        <div class="room-heading"><span id="agent-meta" class="project-name"></span><h2 id="agent-title" class="heading-title"></h2></div>
+        <div class="header-actions">
+          <button id="agent-close" class="btn quiet back" type="button" data-fold="4">Back to room</button>
         </div>
-        <button id="agent-close" class="btn quiet" type="button"
-                title="Close this agent's transcript">Close</button>
       </header>
       <div id="agent-transcript" class="ledger agent-ledger"
            aria-live="polite"></div>
     </section>
     <section id="artifact-panel" class="viewer-panel" hidden
              role="dialog" aria-label="Session artifact">
-      <header class="panel-head">
-        <div class="panel-headline">
-          <span id="artifact-title" class="panel-title"></span>
-          <span id="artifact-meta" class="panel-meta"></span>
+      <header class="topbar">
+        <span class="wordmark">mevedel</span>
+        <div class="room-heading"><span id="artifact-meta" class="project-name"></span><h2 id="artifact-title" class="heading-title"></h2></div>
+        <div class="header-actions">
+          <span class="presence keep" data-presence role="img" hidden></span>
+          <button id="artifact-discussion" class="btn quiet" type="button" hidden data-fold="6"
+                  aria-pressed="false">Discuss</button>
+          <button id="artifact-general" class="btn quiet" type="button" hidden data-fold="5">Whole artifact</button>
+          <button id="artifact-ask" class="btn quiet" type="button" hidden data-fold="3"
+                  title="Start a new session with this file in its first prompt">Ask</button>
+          <button id="artifact-tab" class="btn quiet" type="button" hidden data-fold="2"
+                  title="Open this artifact in its own browser tab, beside the chat">Open in tab</button>
+          <button id="artifact-download" class="btn quiet" type="button" hidden data-fold="2"
+                  title="Save this artifact as a file">Download</button>
+          <button id="artifact-delete" class="btn quiet danger" type="button" hidden data-fold="2"
+                  title="Delete this artifact from the session for everyone">Delete</button>
+          <button id="artifact-close" class="btn quiet back" type="button" data-fold="4">Back to room</button>
         </div>
-        <span class="presence" data-presence role="img" hidden></span>
-        <button id="artifact-discussion" class="btn quiet" type="button" hidden
-                aria-pressed="false">Discuss</button>
-        <button id="artifact-general" class="btn quiet" type="button" hidden>Whole artifact</button>
-        <button id="artifact-ask" class="btn quiet" type="button" hidden
-                title="Start a new session with this file in its first prompt">Ask</button>
-        <button id="artifact-tab" class="btn quiet" type="button" hidden
-                title="Open this artifact in its own browser tab, beside the chat">Open in tab</button>
-        <button id="artifact-download" class="btn quiet" type="button" hidden
-                title="Save this artifact as a file">Download</button>
-        <button id="artifact-delete" class="btn quiet danger" type="button" hidden
-                title="Delete this artifact from the session for everyone">Delete</button>
-        <button id="artifact-close" class="btn quiet" type="button"
-                title="Close this artifact">Close</button>
       </header>
       <div id="artifact-body" class="artifact-body"></div>
     </section>
     <div class="dock">
       <section id="editing-panel" class="viewer-panel" hidden role="dialog" aria-label="Shared editing">
-        <header class="panel-head"><span class="wordmark">mevedel</span><span class="editor-location">Shared work</span><span id="editing-title" class="panel-title editor-title-hidden"></span>
-          <span class="presence" data-presence role="img" hidden></span>
-          <button id="editing-close" class="btn quiet" type="button">Back to room</button></header>
+        <header class="topbar">
+          <span class="wordmark">mevedel</span>
+          <div class="room-heading"><span id="editing-state" class="project-name" role="status">Shared work<span id="editing-saved"></span></span><input id="editing-title" class="heading-title" aria-label="Title" maxlength="200" autocomplete="off" spellcheck="false" readonly></div>
+          <div class="header-actions">
+            <span class="presence keep" data-presence role="img" hidden></span>
+            <button id="editing-close" class="btn quiet back" type="button" data-fold="4">Back to room</button>
+          </div>
+        </header>
         <div id="editing-body"></div>
       </section>
       <div class="live-controls">
@@ -140,8 +143,8 @@
             <nav id="editing-items" aria-label="Shared whiteboards and documents"></nav>
 
             <div class="editing-create" role="group" aria-label="Create shared content">
-              <button class="btn" data-create-editor="whiteboard" type="button" disabled>＋ Whiteboard</button>
-              <button class="btn" data-create-editor="document" type="button" disabled>＋ Document</button>
+              <button class="btn" data-create-editor="whiteboard" type="button" disabled>+ Whiteboard</button>
+              <button class="btn" data-create-editor="document" type="button" disabled>+ Document</button>
               <button id="editing-import" class="btn quiet" type="button" disabled>Import</button>
               <input id="editing-file" type="file" accept=".excalidraw,.json,.md,.txt,image/png,image/jpeg,image/webp" hidden>
             </div>
@@ -222,7 +225,7 @@
           <button id="attach-button" class="btn quiet" type="button"
                   title="Attach files — images, PDFs, logs and patches"
                   aria-label="Attach files">Attach</button>
-          <button id="skills-button" class="btn quiet" type="button" hidden>Skills <span aria-hidden="true">＋</span></button>
+          <button id="skills-button" class="btn quiet" type="button" hidden>Skills <span aria-hidden="true">+</span></button>
           <span class="composer-spacer"></span>
           <button id="stop-button" class="btn danger" type="button"
                   title="Stop the running turn in Emacs">Interrupt</button>
@@ -302,6 +305,10 @@
           <p class="sheet-note">Each link is a bearer credential. You can
           hand out your own level of access or less, never more.</p>
           <div id="invite-tiers" class="invite-tiers"></div>
+          <figure id="invite-qr" class="invite-qr" hidden>
+            <div class="invite-qr-code"></div>
+            <figcaption></figcaption>
+          </figure>
           <menu class="sheet-actions">
             <button value="close" class="btn quiet" type="submit">Done</button>
           </menu>
@@ -363,12 +370,14 @@
     <script src="/viewer-history.js" defer></script>
     <script src="/viewer-agent.js" defer></script>
     <script src="/viewer-task.js" defer></script>
+    <script src="/qrcode.js" defer></script>
     <script src="/viewer-session.js" defer></script>
     <script src="/viewer-files.js" defer></script>
     <script src="/viewer-store.js" defer></script>
     <script src="/viewer-lobby.js" defer></script>
     <script src="/viewer-editing.js" defer></script>
     <script src="/viewer-presence.js" defer></script>
+    <script src="/viewer-header.js" defer></script>
     <script src="/viewer.js" defer></script>
   </body>
 </html>

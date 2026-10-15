@@ -130,7 +130,7 @@ test('approved editor controls on the production bundle', async t => {
     await cell(frame);await frame.getByRole('button',{name:'Delete table',exact:true}).click();
     assert.equal(await frame.locator('.tiptap table').count(),0);
     await frame.locator('#undo').click();await dimensions(frame,4,4);
-    await frame.locator('#saved').getByText('Saved on host',{exact:true}).waitFor();
+    await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
     const persisted=await page.evaluate(()=>window.apply({action:'read'}));
     assert.match(JSON.stringify(persisted.content),/42/);
     await page.close();

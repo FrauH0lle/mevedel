@@ -55,24 +55,6 @@ header {
   /* Above the toolbars below it, so the editor menu drops over them. */
   z-index: 5;
 }
-#title {
-  min-width: 0;
-  width: clamp(9rem, 24vw, 24rem);
-  border: 0;
-  font-weight: 600;
-  padding: 6px;
-  background: transparent;
-  font-size: 16px;
-}
-#saved {
-  font-size: 12px;
-  color: var(--muted);
-  flex: 1;
-  min-width: 0;
-}
-#saved[data-error='true'] {
-  color: var(--failed);
-}
 #undo,
 #redo {
   font-size: 20px;
@@ -604,7 +586,6 @@ footer {
   #assistant-scroll { min-height: 60px; }
   .assistant-compose { max-height: 62%; }
   #question { font-size: 16px; }
-  #title { flex: 1; }
 }
 dialog {
   border: 1px solid var(--line);
@@ -658,12 +639,6 @@ dialog {
   select,
   textarea {
     font-size: 16px;
-  }
-  #title {
-    width: 95px;
-  }
-  #saved {
-    font-size: 11px;
   }
   #formatting {
     gap: 1px;
@@ -730,9 +705,6 @@ dialog {
 .tiptap img.ProseMirror-selectednode { outline: 2px solid var(--accent); }
 .image-drop-target { outline: 2px dashed var(--accent); outline-offset: -4px; }
 
-/* Save failures keep their full message available, including on narrow screens. */
-#title:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-#title:hover { background: var(--surface-2); border-radius: var(--control-radius); }
 #undo, #redo { font-size: 16px; min-height: 36px; min-width: 36px; }
 #question, .reply-form textarea {
   background: var(--surface); border: 1px solid var(--line);
@@ -750,9 +722,7 @@ dialog {
 .tiptap:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 @media (max-width: 600px) {
   header { flex-wrap: wrap; gap: 4px; padding: 8px; }
-  #saved { order: 5; flex-basis: 100%; padding-left: 4px; }
   #tools { top: 96px; }
-  #title { width: 6rem; }
   #ask-toggle { font-size: 12px; }
 }
 @media (max-width: 799px) and (max-height: 500px) {

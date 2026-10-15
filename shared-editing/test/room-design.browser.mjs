@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import {readFile,mkdir} from 'node:fs/promises';
 import {editorFixture} from './editor-fixture.mjs';
 
+// On a phone the header folds Appearance into its ⋯ menu.
+async function openAppearance(page) {
+  // The header refits on the frame after a resize.
+  await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+  if (!await page.locator('#appearance-menu > summary').isVisible())
+    await page.locator('body > .topbar .head-more > summary').click();
+  await page.locator('#appearance-menu > summary').click();
+}
+
 // Exercise the packaged room DOM/renderers; deterministic frames replace the transport only.
 // The real encrypted relay and host are covered by room.browser.mjs.
 test('room appearance, navigation and decisions preserve work', async t => {
@@ -99,7 +108,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
   await page.evaluate(()=>window.receiveTest({t:'status',busy:true,model:'Test model',mode:'ask'}));
   for(const width of [1600,390]) for(const palette of ['cool','warm']) for(const theme of ['light','dark']) {
     await page.setViewportSize({width,height:1000});
-    await page.locator('#appearance-menu > summary').click();
+    await openAppearance(page);
     await page.locator('#palette').selectOption(palette);await page.locator('#appearance').selectOption(theme);
     const menu=await page.locator('.appearance-body').boundingBox();
     assert.ok(menu.x>=0&&menu.x+menu.width<=width,JSON.stringify({width,palette,theme,menu}));
@@ -128,7 +137,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
   assert.equal(await page.locator('#assistant-working').isVisible(),false);
   await page.evaluate(()=>{window.connectionTest('Connected','connected');window.receiveTest({t:'status',busy:false});});
   const other=await context.newPage();await other.goto(`${url}/room`);
-  await page.locator('#appearance-menu > summary').click();await page.locator('#palette').selectOption('cool');
+  await openAppearance(page);await page.locator('#palette').selectOption('cool');
   await other.waitForFunction(()=>document.documentElement.dataset.palette==='cool');
   assert.equal(await page.locator('#composer-input').inputValue(),'Keep this unsent draft');
   await page.locator('#appearance-menu > summary').click();
@@ -188,7 +197,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
   assert.match(await closed.locator('#terminal-message').innerText(),/new invitation/);
   for(const width of [1600,390]) for(const palette of ['cool','warm']) for(const theme of ['light','dark']) {
     await closed.setViewportSize({width,height:900});
-    await closed.locator('#appearance-menu > summary').click();
+    await openAppearance(closed);
     await closed.locator('#palette').selectOption(palette);
     await closed.locator('#appearance').selectOption(theme);
     await closed.keyboard.press('Escape');

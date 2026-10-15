@@ -149,9 +149,23 @@ let participant = 'You',
 const agentTargets = new Map();
 let seenRevision = null, highlightTimer;
 const highlightDuration = 8000;
+/* The room's head shows the item's title and save state; the editor reports
+   both whenever either changes. */
+let heading = { title: '', status: '', error: false };
+function report(next) {
+  const value = { ...heading, ...next };
+  if (value.title === heading.title && value.status === heading.status && value.error === heading.error) return;
+  heading = value;
+  port?.postMessage({ type: 'heading', ...heading });
+}
+/* The save state the root element carries: saving, saved, offline or error.
+   An error shows on the editor menu, whose Retry save then appears. */
+function saveState(value) {
+  document.documentElement.dataset.saveState = value;
+}
 function status(text, error = false) {
-  $('saved').textContent = text;
-  $('saved').dataset.error = String(error);
+  if (error) saveState('error');
+  report({ status: text, error });
 }
 function saved() {
   if (failed) return;
@@ -163,6 +177,7 @@ function saved() {
     status('Some changes from the host could not be loaded; reopen this item', true);
     return;
   }
+  saveState(!online ? 'offline' : pending.length || updates.length ? 'saving' : 'saved');
   status(
     pending.length || updates.length
       ? online
@@ -2287,7 +2302,7 @@ async function start(event) {
       if (online && (missed || data.revision > revision + 1)) resync();
       if (data.update) Y.applyUpdate(doc, bytes(data.update), remote);
       revision = Math.max(revision, data.revision);
-      if (document.activeElement !== $('title')) $('title').value = doc.getMap('meta').get('title');
+      report({ title: doc.getMap('meta').get('title') || item.title });
       if (data.transactions) history(data.transactions);
       if (data.discussions) setDiscussions(data.discussions);
       return;
@@ -2334,6 +2349,17 @@ async function start(event) {
       clearPresence();
       return;
     }
+    if (data.type === 'rename') {
+      if (readOnly) return;
+      request({ action: 'rename', title: String(data.title || ''), opId: crypto.randomUUID() })
+        .catch((e) => {
+          status(e.message, true);
+          // The room's field shows the title the item still has.
+          heading = { ...heading, title: '' };
+          report({ title: doc.getMap('meta').get('title') || item.title });
+        });
+      return;
+    }
     if (data.type === 'presence') showPresence(data);
     if (data.type === 'conversation') assistant?.updateConversation(data);
   };
@@ -2355,19 +2381,7 @@ async function start(event) {
       if (!menu.contains(event.target)) menu.open = false;
     });
   });
-  $('title').value = item.title;
-  $('title').readOnly = readOnly;
-  $('title').onchange = async () => {
-    try {
-      await request({
-        action: 'rename',
-        title: $('title').value,
-        opId: crypto.randomUUID(),
-      });
-    } catch (e) {
-      status(e.message, true);
-    }
-  };
+  report({ title: item.title });
   $('undo').textContent = '↶';
   $('undo').setAttribute('aria-label', 'Undo');
   $('redo').textContent = '↷';

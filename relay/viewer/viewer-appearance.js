@@ -42,11 +42,5 @@ window.mevedelAppearance = (() => {
     });
     apply(read());
   }
-  function editorVisible(visible) {
-    const menu = document.getElementById('appearance-menu');
-    menu.open = false;
-    if (visible) document.getElementById('editing-close').before(menu);
-    else document.querySelector('.header-actions').prepend(menu);
-  }
-  return {bind, editorVisible};
+  return {bind};
 })();

@@ -37,6 +37,7 @@
     const inviteButton = document.getElementById('invite-button');
     const inviteSheet = document.getElementById('invite');
     const inviteTiers = document.getElementById('invite-tiers');
+    const inviteQr = document.getElementById('invite-qr');
     const roomsButton = document.getElementById('rooms-button');
     const roomsSheet = document.getElementById('rooms');
     const roomsList = document.getElementById('rooms-list');
@@ -370,13 +371,38 @@
         + `#${roomId}.${encode(secret.slice(0, bytes))}`;
     }
 
+    // A tier's QR code shows only when asked for: a code on screen hands
+    // its access to any camera that sees it.
+    function showQr(tier, button) {
+      const shown = button.getAttribute('aria-pressed') === 'true';
+      inviteTiers.querySelectorAll('[aria-pressed]')
+        .forEach(other => other.setAttribute('aria-pressed', 'false'));
+      inviteQr.hidden = shown;
+      if (shown) return;
+      button.setAttribute('aria-pressed', 'true');
+      inviteQr.querySelector('.invite-qr-code').innerHTML = window.mevedelQr.svg(linkFor(tier.bytes));
+      inviteQr.querySelector('figcaption').textContent =
+        `Scan to join with ${tier.name} access: ${tier.what}.`;
+    }
+
     function openInvite() {
       inviteTiers.replaceChildren();
+      if (inviteQr) inviteQr.hidden = true;
       TIERS.filter(tier => tier.bytes <= held()).forEach(tier => {
         const row = el('div', 'invite-tier');
         row.append(el('span', 'invite-name', tier.name));
         row.append(el('span', 'invite-what', tier.what));
-        row.append(copyButton('Copy', linkFor(tier.bytes)));
+        const actions = el('span', 'room-actions');
+        if (inviteQr && window.mevedelQr) {
+          const qr = el('button', 'btn quiet', 'QR code');
+          qr.type = 'button';
+          qr.setAttribute('aria-pressed', 'false');
+          qr.title = `Show a QR code for the ${tier.name} link`;
+          qr.addEventListener('click', () => showQr(tier, qr));
+          actions.append(qr);
+        }
+        actions.append(copyButton('Copy', linkFor(tier.bytes)));
+        row.append(actions);
         inviteTiers.append(row);
       });
       inviteSheet.showModal();
