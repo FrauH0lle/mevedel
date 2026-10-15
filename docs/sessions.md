@@ -373,6 +373,11 @@ checks without a prompt and reports when Claude is ready. Changing the
 executable, adapter, directory, model or `CLAUDE_CONFIG_DIR`, and login or
 runtime changes, forget the result.
 
+Failures after request admission but before ACP startup, including an invalid
+tool roster, use the ordinary failed-turn settlement. They record the cause,
+release the busy state and sleep inhibitor, and leave the next send available
+as an explicit retry; they do not launch the provider or replay the prompt.
+
 The Claude Code provider routes root and directive submissions through ACP. The
 session's `:external-conversations` metadata maps conversation scopes to the
 engine, native conversation ID, local installation directory, machine name and

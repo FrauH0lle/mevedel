@@ -434,14 +434,14 @@ Variables are scoped to BODY.  NAME's agent roster and tool catalog stay
 until the current request ends, when its teardown reinstalls the session
 preset's."
   (declare (indent 1) (debug t))
-  `(let ((preset ,name))
+  `(let ((preset ,name)
+         (mevedel-preset--temporary-p t))
      (mevedel-preset--restore-scope-at-request-end)
      (if (and (symbolp preset)
               (assq preset mevedel-preset--registry))
          (let* ((symbols (mapcar #'car
                                  (mevedel-preset-resolve-settings preset)))
-                (values (mapcar #'symbol-value symbols))
-                (mevedel-preset--temporary-p t))
+                (values (mapcar #'symbol-value symbols)))
            (cl-progv symbols values
              (gptel-with-preset preset ,@body)))
        (gptel-with-preset preset ,@body))))

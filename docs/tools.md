@@ -608,6 +608,10 @@ error.
 Preset application also resolves its tool specs from the current registry.
 Reloading a native tool therefore updates the next request's schema and
 handler instead of leaving a stale `gptel-tool` captured by an older preset.
+Claude root sends refresh their selected registered preset's tools, extras
+and local Agent schema before freezing the native roster. Request-only presets
+keep their explicitly applied scope, including raw tool specifications; a
+session's broader preset must not replace them.
 
 ## Resource addresses in filesystem-shaped tools
 

@@ -15,6 +15,7 @@
 (require 'mevedel-claude-code-history)
 (require 'mevedel-context-delivery)
 (require 'mevedel-implementation-policy)
+(require 'mevedel-presets)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-shared-conversation)
 (require 'mevedel-skills-core)
@@ -156,25 +157,44 @@ An omitted policy resolves through the common request model resolver."
                       (mevedel-request-begin session directive)))
          (system-prompt gptel-system-prompt)
          tools record selected)
-    (unless (and (eq session (mevedel-request-session request))
-                 (eq request mevedel--current-request))
-      (error "Subscription send lost its admitted request"))
-    (when excerpt
-      (mevedel-claude-code-reset-root-delivery session)
-      (message "mevedel: starting Claude with an excerpt continuation"))
-    (setf (mevedel-engine-info request)
-          (append (mevedel-engine-info request)
-                  (list :backend backend :model model-id :reasoning-effort effort
-                        :external-history t :mevedel-native-isolated isolated)))
-    ;; UpdateGoal visibility depends on the request's Goal attribution.
-    (mevedel-goal-capture-request request)
-    (setq tools (mevedel-tools-native-roster request))
-    ;; Preparation can settle before the agent returns an identity.  Record
-    ;; that startup state without inventing a resumable native history.
-    (unless (or history isolated)
-      (setf (alist-get "root" (mevedel-session-external-conversations session)
-                       nil nil #'equal)
-            (list :engine 'claude-code :state 'unstarted)))
+    (condition-case err
+        (progn
+          (unless (and (eq session (mevedel-request-session request))
+                       (eq request mevedel--current-request))
+            (error "Subscription send lost its admitted request"))
+          (when excerpt
+            (mevedel-claude-code-reset-root-delivery session)
+            (message "mevedel: starting Claude with an excerpt continuation"))
+          (setf (mevedel-engine-info request)
+                (append (mevedel-engine-info request)
+                        (list :backend backend :model model-id :reasoning-effort effort
+                              :external-history t :mevedel-native-isolated isolated)))
+          ;; UpdateGoal visibility depends on the request's Goal attribution.
+          (mevedel-goal-capture-request request)
+          ;; Resolve the selected preset's current tools, extras and local
+          ;; Agent schema before freezing the external turn's roster.
+          ;; A request-only preset has already installed its own scope.
+          (unless mevedel-preset--temporary-p
+            (when-let* ((preset gptel--preset)
+                        ((assq preset mevedel-preset--registry)))
+              (mevedel-preset--refresh-tools preset)
+              (mevedel-preset--setup-scope preset)))
+          (setq tools (mevedel-tools-native-roster request))
+          ;; Preparation can settle before the agent returns an identity.  Record
+          ;; that startup state without inventing a resumable native history.
+          (unless (or history isolated)
+            (setf (alist-get "root" (mevedel-session-external-conversations session)
+                             nil nil #'equal)
+                  (list :engine 'claude-code :state 'unstarted))))
+      (error
+       ;; ACP has not installed its terminal owner yet.  Admission still owns
+       ;; the failed turn, including its reservation and busy/sleep state.
+       (when (eq request mevedel--current-request)
+         (setf (mevedel-engine-info request)
+               (plist-put (mevedel-engine-info request) :error
+                          (error-message-string err)))
+         (mevedel-preset--settle-terminal request nil 'error))
+       (signal (car err) (cdr err))))
     (mevedel-acp-turn-start
      request
      (lambda (mcp hook-command)

@@ -325,6 +325,135 @@
           (when (buffer-live-p restored)
             (test-mevedel-session-persistence--release-and-kill restored restored-session)))))))
 
+(mevedel-deftest mevedel--send-request/claude-tools-refresh (:quiet t)
+  ,test
+  (test)
+
+  :doc "a session preset refreshes stale tools after re-registration"
+  (mevedel-engine-test--with-claude-session
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (setq-local mevedel-preset-extra-tool-specs
+                '((mevedel-implement (:tool "Agent"))))
+    (mevedel-preset-apply 'mevedel-implement)
+    (let ((previous gptel-tools) offered)
+      (mevedel-tools-register)
+      (should-not (mevedel-tool-for-gptel (car previous)))
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (&rest _args)
+                    (setq offered (plist-get (mevedel-engine-info mevedel--current-request) :tools))
+                    nil))))
+        (mevedel--insert-user-turn "Refresh registered tools")
+        (mevedel--send-request "Refresh registered tools")
+        (mevedel-test--await 5 "Refreshed roster did not settle"
+          (not (mevedel-turn-busy-p buffer))))
+      (should (eq 'success (mevedel-session-last-outcome session)))
+      (should (equal (mapcar #'gptel-tool-name previous)
+                     (mapcar #'gptel-tool-name offered)))
+      (should (cl-every #'mevedel-tool-for-gptel offered))
+      (let ((agent (cl-find "Agent" gptel-tools :key #'gptel-tool-name :test #'equal)))
+        (should agent)
+        (should-not (eq agent (mevedel-tool-gptel-tool (mevedel-tool-get "Agent" "mevedel"))))
+        (should (equal (vconcat (mapcar #'car (mevedel-agents-specs)))
+                       (plist-get (cl-find "role" (gptel-tool-args agent)
+                                           :key (lambda (arg) (plist-get arg :name))
+                                           :test #'equal)
+                                  :enum))))
+      (should (eq 'mevedel-implement (mevedel-session-preset-name session)))))
+
+  :doc "a request-only preset retains its narrower tool scope"
+  (mevedel-engine-test--with-claude-session
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (mevedel-preset-apply 'mevedel-implement)
+    (let (offered)
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (&rest _args)
+                    (setq offered (plist-get (mevedel-engine-info mevedel--current-request) :tools))
+                    nil))))
+        (mevedel--insert-user-turn "Discuss only")
+        (mevedel-with-preset 'mevedel-discuss
+          (mevedel--send-request "Discuss only"))
+        (mevedel-test--await 5 "Request-only roster did not settle"
+          (not (mevedel-turn-busy-p buffer))))
+      (should (eq 'success (mevedel-session-last-outcome session)))
+      (should (equal '("Read" "Glob" "Grep" "ToolCall" "ToolSearch")
+                     (mapcar #'gptel-tool-name offered)))
+      (should (eq 'mevedel-implement (mevedel-session-preset-name session)))))
+
+  :doc "a raw request-only tool spec is not replaced by the session preset"
+  (mevedel-engine-test--with-claude-session
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (mevedel-preset-apply 'mevedel-implement)
+    (let ((offered 'not-launched))
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (&rest _args)
+                    (setq offered (plist-get (mevedel-engine-info mevedel--current-request) :tools))
+                    nil))))
+        (mevedel--insert-user-turn "No tools")
+        (mevedel-with-preset '(:tools nil)
+          (mevedel--send-request "No tools"))
+        (mevedel-test--await 5 "Raw request-only roster did not settle"
+          (not (mevedel-turn-busy-p buffer))))
+      (should-not offered)
+      (should (eq 'success (mevedel-session-last-outcome session)))
+      (should (eq 'mevedel-implement (mevedel-session-preset-name session))))))
+
+(mevedel-deftest mevedel--send-request/claude-roster-failure (:quiet t)
+  ,test
+  (test)
+
+  :doc "pre-ACP roster failures settle and permit an explicit retry"
+  (mevedel-engine-test--with-claude-session
+    (let ((launches 0)
+          (gptel-tools
+           (list (gptel--make-tool :name "Read" :category "mevedel"
+                                   :function #'ignore))))
+      (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                 (mevedel-engine-test--claude-launch
+                  (lambda (&rest _args)
+                    (cl-incf launches)
+                    (list :meta '((echoAllText . t)))))))
+        (mevedel--insert-user-turn "Rejected roster")
+        (should (equal '(error "Tool Read is not registered with mevedel")
+                       (should-error (mevedel--send-request "Rejected roster"))))
+        (mevedel-test--await 5 "Roster failure left the request busy"
+          (not (mevedel-turn-busy-p buffer)))
+        (should (eq 'error (mevedel-session-last-outcome session)))
+        (should (= 1 (mevedel-session-turn-count session)))
+        (should (= 0 launches))
+        (should-not (mevedel-session-external-conversations session))
+        (setq gptel-tools nil)
+        (goto-char (point-max))
+        (mevedel--insert-user-turn "Retry after roster failure")
+        (mevedel--send-request "Retry after roster failure")
+        (mevedel-test--await 5 "Roster failure retry did not settle"
+          (not (mevedel-turn-busy-p buffer)))
+        (should (= 1 launches))
+        (should (= 2 (mevedel-session-turn-count session)))
+        (let* ((text (buffer-string)) (answer (string-search "answer:" text)))
+          (should answer)
+          (should (string-search "Retry after roster failure" (substring text answer)))))))
+
+  :doc "a pre-ACP failure cannot settle a replacement request"
+  (mevedel-engine-test--with-claude-session
+    (let (replacement)
+      (cl-letf (((symbol-function 'mevedel-tools-native-roster)
+                 (lambda (_owner)
+                   (mevedel-request-end)
+                   (setq replacement (mevedel-request-begin session))
+                   (error "Fixture ownership changed"))))
+        (should (equal '(error "Fixture ownership changed")
+                       (should-error (mevedel--send-request "Replaced owner")))))
+      (should (eq replacement mevedel--current-request))
+      (should (mevedel-turn-busy-p buffer))
+      (should-not (mevedel-session-last-outcome session))
+      (should (= 0 (mevedel-session-turn-count session))))))
+
 (mevedel-deftest mevedel--send-request/claude-outcome (:quiet t)
   ,test
   (test)
