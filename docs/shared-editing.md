@@ -471,7 +471,11 @@ they answer. The tab and the **Discussions** button count the open
 discussions, and **Resolved** brings resolved ones back. A status line under
 the tabs reports the session's queued, paused, working, disconnected, or
 provider-failure state, and stays away while there is nothing to report.
-The explanations of how to discuss show only while there is no discussion.
+The explanations of how to discuss show only while there is no discussion. To leave the sidebar to the discussions, the
+composer starts at two lines and a reply box at one, each growing with its
+text, the composer takes at most 45% of the sidebar, and a message's own turn
+shows only when it carries context. No size depends on focus, so pressing a
+button never moves it.
 While the session is working, a spinner accompanies the status and the panel's
 toolbar button. The room chat shows **Assistant working…** in its status strip.
 These indicators follow the host's session activity, including tool execution,

@@ -721,6 +721,25 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('#discussion-markers .discussion-pin').count(), 1, 'a removed target has no marker');
       await page.close();
     });
+    await t.test('a compact composer and replies leave the sidebar to the discussions', async () => {
+      const {page, frame} = await open({viewport:{width:1280,height:640}});
+      await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});
+      await frame.locator('#discuss-selection').click();
+      await frame.locator('#question').fill('Is this the database?');
+      await frame.locator('#question-send').click();
+      const card = frame.locator('.discussion:not([data-discussion-id="general"])');
+      await card.locator('.thread-message').first().waitFor();
+      // Two lines for the composer, one for a reply; both grow with their text.
+      assert.ok((await frame.locator('#question').boundingBox()).height <= 50);
+      const reply = card.locator('.reply-form textarea');
+      const empty = (await reply.boundingBox()).height;
+      assert.ok(empty <= 46, `a reply starts at one line: ${empty}`);
+      await reply.fill('First line\nSecond line\nThird line');
+      assert.ok((await reply.boundingBox()).height > empty + 30, 'a reply grows with its text');
+      assert.equal(await card.locator('.thread-question').isVisible(), false, 'the message is not repeated as an empty turn');
+      assert.ok(await frame.locator('#assistant-scroll').evaluate(n => n.scrollWidth <= n.clientWidth));
+      await page.close();
+    });
     await t.test('the composer names its subject in one chip, with a switch to the other', async () => {
       const {page, frame} = await open();
       await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});

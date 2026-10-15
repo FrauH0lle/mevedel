@@ -147,6 +147,19 @@ body.editor .thread-context { background:var(--accent-soft); border-left-color:v
 body.editor .discussion-actions button { font-size:12px; min-height:32px; }
 body.editor .discussion-show { font-size:13px; line-height:1.6; }
 body.editor .conversation-empty,.discussions-empty { margin:12px 0 0; color:var(--muted); font-size:13px; line-height:1.6; }
+/* The discussions keep the room: the composer starts at two lines and a
+   reply box at one, each growing with its text. No size depends on focus,
+   so nothing moves under a press. */
+body.editor #assistant-scroll { overflow-x:hidden; }
+body.editor .discussion { min-width:0; }
+body.editor .assistant-compose { max-height:45%; overflow-y:auto; }
+/* A message's own turn repeats its sender; it shows only to carry context. */
+.thread-conversation .thread-question:not(:has(.shared-context)) { display:none; }
+body.editor #question { min-height:44px; field-sizing:content; max-height:30vh; }
+.reply-form textarea { min-height:38px; field-sizing:content; max-height:30vh; resize:none; font-size:14px; line-height:1.5; }
+@media (max-width:799px) { .reply-form textarea { font-size:16px; } }
+body.editor .discussion-actions { margin-top:6px; }
+body.editor .discussion-actions button { min-height:28px; padding:4px 8px; }
 
 /* The whiteboard's controls float over the canvas in islands. The board is a
    size container: where it is narrow, as beside the sidebar or on a phone,
