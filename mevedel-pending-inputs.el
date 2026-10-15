@@ -96,6 +96,14 @@
 (declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
 (autoload 'mevedel-mentions-file-token "mevedel-mentions")
 
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-absence-clear
+                  "mevedel-permission-queue" (session))
+(declare-function mevedel-permission-absence-held-p
+                  "mevedel-permission-queue" (session))
+(autoload 'mevedel-permission-absence-clear "mevedel-permission-queue")
+(autoload 'mevedel-permission-absence-held-p "mevedel-permission-queue")
+
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-display-text
                   "mevedel-prompt-submission" (cl-x) t)
@@ -335,6 +343,7 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
   "Return non-nil when SESSION follow-ups should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
     (or (mevedel-recovery-blocker sess)
+        (mevedel-permission-absence-held-p sess)
         (cl-find 'failed-turn (mevedel-session-pending-follow-ups sess)
                  :key (lambda (entry) (plist-get entry :state)))
         (mevedel-session-pending-input-delivery-paused-p sess)
@@ -487,6 +496,8 @@ explicitly selected skills applied together, with the same admission recheck."
                             :queued-at-time (float-time)
                             :queued-at-turn
                             (or (mevedel-session-turn-count session) 0)))))
+          ;; A guest's message is a human instruction: it ends the wait.
+          (mevedel-permission-absence-clear session)
           (mevedel-pending-inputs-follow-up-changed session)
           (mevedel-view--interaction-rebuild)
           (mevedel-view--schedule-late-follow-up-drain)
@@ -498,6 +509,7 @@ explicitly selected skills applied together, with the same admission recheck."
   (let ((session (mevedel-view--session)))
     (unless session
       (user-error "No active session for follow-up"))
+    (mevedel-permission-absence-clear session)
     (let* ((dropped-file-grants
             (mevedel-view--pop-dropped-file-grants-for-input input session))
            (entry

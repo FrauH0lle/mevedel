@@ -53,6 +53,11 @@
   "mevedel-pending-inputs")
 (autoload 'mevedel-view--run-follow-up-drain "mevedel-pending-inputs")
 
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-absence-held-p
+                  "mevedel-permission-queue" (session))
+(autoload 'mevedel-permission-absence-held-p "mevedel-permission-queue")
+
 ;; `mevedel-plan'
 (declare-function mevedel-plan-artifact-path-p "mevedel-plan" (path))
 (declare-function mevedel-plan-read-artifact "mevedel-plan"
@@ -407,6 +412,7 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
      ((not goal) 'no-goal)
      ((not (eq (mevedel-goal-status goal) 'active)) 'inactive)
      ((buffer-local-value 'mevedel--current-request buffer) 'request)
+     ((mevedel-permission-absence-held-p session) 'absence)
      ((mevedel-session-pending-follow-ups session)
       (run-at-time 0 nil #'mevedel-view--run-follow-up-drain buffer)
       'follow-up)

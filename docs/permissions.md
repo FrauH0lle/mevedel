@@ -539,6 +539,48 @@ The permission hook boundary precedes queue admission. An admitted entry has
 already fired `PermissionRequest`; rendering the head, redrawing it, and
 coalescing siblings by re-running policy never fire that hook again.
 
+### Absence timeout
+
+Permission prompts wait indefinitely by default. With
+`mevedel-permission-queue-timeout` set to a number of seconds (default nil,
+Customize suggests 3600), the root session's whole unanswered human queue
+expires after that long without a human answer. Root and agent cards share the
+one deadline, kept in the transient `permission-absence` session slot.
+
+- The first card admitted to an empty queue starts the period, whether or not
+  the view is visible; siblings join it. Only a genuine answer from the local
+  card or an authorized browser restarts it, before any callback runs. Automatic
+  review, coalescing, mode changes, folding a card, typing and render failure do
+  not. An empty queue cancels it. The clock is plain wall time; a suspend past
+  the deadline expires the queue on wake. Cards show the stored deadline
+  outside their folded details; nothing redraws on a timer.
+- Expiry detaches the complete queue and sets the hold below before any
+  callback can run, retires remote controls
+  (`mevedel-collaboration-retire-permission-requests`), then settles each entry
+  through the exactly-once gate with `(deny . REASON)`, settlement phase
+  `expired` and `absence` hook provenance. The reason tells the model the user
+  may be absent, that nothing was authorized, and not to retry just to get an
+  answer. No rule, grant or prohibition is stored. The reason cons is the
+  same denial shape every entry kind and origin already understands.
+- The hold means the session is waiting for the user. While it lasts, a new
+  ask that needs a human, including reviewer fallback, is denied at once with
+  `:settlement-source absence-held` and no card, notification or deadline;
+  Goal continuation (`absence` gate) and queued follow-up delivery wait; and the
+  interaction zone shows one notice with the count and time. Reviews already
+  running, and any approval they validly reach, are untouched. Only submitting a
+  user message ends the hold: a composer prompt or steering, `/goal OBJECTIVE`,
+  `/plan ARGS`, a `$skill`, a queued follow-up, or an authorized browser guest's
+  message. Drafts, inspection and other slash commands, `/stop`, mail and
+  reviewer activity do not.
+- A late local or browser answer for an expired card grants nothing and reports
+  that the request expired or is no longer pending. Turning the option off
+  cancels deadlines and clears holds in every live session; a changed duration
+  applies from the next admission or answer. Neither state is persisted or
+  cloned into forks.
+- Expiry settles the waiting turns; it does not itself promise sleep. Other
+  turns, running commands and collaboration can keep the
+  [sleep inhibitor](sessions.md#system-sleep) held.
+
 `mevedel-permission-notify-function` (default nil) is called once per admitted
 card with its entry plist, at admission -- never for decisions the rule chain
 or hooks settle without prompting, and never again on head redraw, coalesce,
@@ -680,7 +722,9 @@ evidence. The explanation stays in `permission-log.el`, not unified telemetry
 or forwarded side audits, and does not confer authority. It does not count
 as a displayed card or a human answer. Each admitted request settles once as
 `permission-resolved` for a user answer, `permission-coalesced` for a covering
-policy decision, `permission-swept` for owner-request teardown, or
+policy decision, `permission-swept` for owner-request teardown,
+`permission-expired` for an expired queue or an ask denied during the hold
+(`:settlement-source expired` or `absence-held`), or
 `permission-aborted` for cancellation, queue abort, or rendering failure.
 `:settlement-source` distinguishes these paths. A crash may leave an admission
 without a terminal record; that is an unrecorded outcome, not an approval.

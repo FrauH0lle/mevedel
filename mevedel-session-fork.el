@@ -272,7 +272,8 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     forked-from-fork-point-id worktree-source-root worktree-directory
     worktree-branch worktree-base-commit prompt-index file-snapshots
     ptc-checkpoints persisted-first-user-message durable-tree-ensured
-    agent-transcripts invoked-skills permission-queue pending-plan-approval
+    agent-transcripts invoked-skills permission-queue permission-absence
+    pending-plan-approval
     plan-metadata goal attached-artifacts dedicated-artifact)
   "Every `mevedel-session' slot decided by the logical clone constructor.")
 
@@ -451,6 +452,7 @@ The identity and timestamp keywords describe the new materialized child."
               (mevedel-session-invoked-skills session))
             t)
            :permission-queue nil
+           :permission-absence nil
            :pending-plan-approval nil
            :plan-metadata (unless fork-p
                             (copy-tree

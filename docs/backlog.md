@@ -25,17 +25,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   inserted. Same evidence.
 - Check if memory and journal processing could be async
 
-## Request lifecycle
-
-### Time out unanswered permission prompts
-
-A permission prompt currently waits indefinitely, which keeps its turn, and the
-[system sleep inhibitor](sessions.md#system-sleep), alive while the user is
-away. After a configurable period, deny the request and tell the model that
-the user is probably absent. Open questions: the default duration, whether
-agent prompts share it, and how it interacts with the automatic reviewer's
-fallback to the human card.
-
 ## Execution
 
 ### Harness-enforced Bash timeouts

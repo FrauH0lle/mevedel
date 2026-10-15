@@ -134,6 +134,69 @@
         (should-not received)
         (should (overlay-buffer ov))))))
 
+(mevedel-deftest mevedel-permission--prompt-feedback ()
+  ,test
+  (test)
+  :doc "feedback stays bound to the captured card when point moves"
+  (with-temp-buffer
+    (insert "first\nsecond\n")
+    (let ((first (make-overlay 1 6))
+          (second (make-overlay 7 13))
+          received)
+      (dolist (ov (list first second))
+        (overlay-put ov 'mevedel-permission-prompt t))
+      (overlay-put first 'mevedel--callback
+                   (lambda (outcome) (setq received outcome)))
+      (overlay-put second 'mevedel--callback
+                   (lambda (_) (ert-fail "Settled the replacement card")))
+      (goto-char 1)
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (&rest _) (goto-char 7) "  needs a dry run  ")))
+        (mevedel-permission--prompt-feedback))
+      (should (equal '(feedback . "needs a dry run") received))
+      (should-not (overlay-get second 'mevedel-settled))))
+
+  :doc "expiry during feedback reports it without answering the replacement"
+  (dolist (expired '(nil t))
+    (with-temp-buffer
+      (insert "first\nsecond\n> keep this draft\nsecond line")
+      (let* ((first (make-overlay 1 6))
+             (second (make-overlay 7 13))
+             (entry (list :kind 'generic))
+             (cell (cons nil nil))
+             (mevedel-permission-queue--settled-cells
+              (make-hash-table :test #'eq))
+             (before (buffer-string))
+             messages)
+        (puthash entry cell mevedel-permission-queue--settled-cells)
+        (dolist (ov (list first second))
+          (overlay-put ov 'mevedel-permission-prompt t)
+          (overlay-put ov 'mevedel--callback
+                       (lambda (_) (ert-fail "Settled a card after retirement"))))
+        (overlay-put first 'mevedel-view-interaction-entry entry)
+        (goto-char 1)
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _)
+                     (setcar cell t)
+                     (when expired (setcdr cell 'expired))
+                     (delete-overlay first)
+                     (goto-char 7)
+                     "unfinished feedback")))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-permission--prompt-feedback)))
+        (should (equal (if expired
+                           "Request expired; nothing was approved"
+                         "Request is no longer pending; nothing was approved.")
+                       (string-trim messages)))
+        (should (equal before (buffer-string)))
+        (should-not (overlay-get second 'mevedel-settled)))))
+
+  :doc "no active card preserves ordinary typing"
+  (with-temp-buffer
+    (let ((last-command-event ?f))
+      (mevedel-permission--prompt-feedback))
+    (should (equal "f" (buffer-string)))))
+
 (mevedel-deftest mevedel-permission--prompt-toggle-remember
   ()
   ,test
@@ -426,6 +489,43 @@
   ()
   ,test
   (test)
+  :doc "the stored queue deadline stays visible locally and remotely when folded"
+  (dolist (enabled '(nil t))
+    (dolist (expanded '(nil t))
+      (with-temp-buffer
+        (let* ((target (current-buffer))
+               (deadline 1800000000.0)
+               (mevedel-permission-queue-timeout (and enabled 3600))
+               (session (mevedel-session--create
+                         :permission-absence (list :deadline deadline)))
+               (entry (list :session session :kind 'generic
+                            :permission-mode-effective 'ask
+                            :permission-via 'workspace-boundary))
+               (line (format "Unanswered requests expire at %s (session policy)."
+                             (format-time-string "%H:%M" deadline)))
+               local-body overlay)
+          (mevedel-queue--entry-metadata-put entry :expanded expanded)
+          (cl-letf (((symbol-function 'mevedel--prompt-block-face)
+                     (lambda () 'ask))
+                    ((symbol-function 'mevedel--prompt--data-buffer)
+                     (lambda (&optional _buffer) target))
+                    ((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (_buffer) target))
+                    ((symbol-function 'mevedel-view--interaction-register)
+                     (lambda (descriptor)
+                       (setq local-body (plist-get descriptor :body))
+                       (make-overlay 1 1))))
+            (setq overlay
+                  (mevedel-permission--prompt-async-with-content
+                   "Body\n" nil #'ignore 1 entry)))
+          (let ((remote-body (plist-get (overlay-get overlay 'mevedel--remote) :body)))
+            (dolist (body (list local-body remote-body))
+              (should (eq enabled (and (string-match-p (regexp-quote line) body) t))))
+            (should (string-match-p "Permission mode at admission" remote-body)))
+          (should (eq expanded
+                      (and (string-match-p "Permission mode at admission" local-body) t)))
+          (mevedel-queue--entry-metadata-remhash entry)))))
+
   :doc "suppressed session allow reaches the body and local keymap"
   (with-temp-buffer
     (let ((target (current-buffer))

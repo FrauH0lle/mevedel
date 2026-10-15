@@ -130,6 +130,68 @@
             (mevedel-collaboration--on-prompt-created overlay)
             (should-not sent)))))))
 
+(mevedel-deftest mevedel-collaboration-retire-permission-requests
+  (:doc "retires the whole batch before sending, with one notice per affected guest")
+  (with-temp-buffer
+    (insert "prompt text")
+    (let* ((session (mevedel-session--create))
+           (other-session (mevedel-session--create))
+           (guests (make-hash-table :test #'eql))
+           (requests (make-hash-table :test #'eql))
+           (other-requests (make-hash-table :test #'eql))
+           (room (list :transport 'transport :session session :guests guests
+                       :data-buffer (current-buffer) :ui-requests requests))
+           (other-room (list :transport 'other :session other-session
+                             :guests guests :ui-requests other-requests))
+           (first (list :kind 'generic))
+           (second (list :kind 'bash))
+           (unshown (list :kind 'eval))
+           (unrelated (make-overlay 1 2))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           sent)
+      (puthash 'other-room other-room mevedel-collaboration--rooms)
+      (puthash 1 '(:name "full" :writable t) guests)
+      (puthash 2 '(:name "readonly" :writable nil) guests)
+      (puthash 3 '(:name "owner" :writable t :owner t) guests)
+      (dolist (pair (list (cons 41 first) (cons 42 second)))
+        (let ((overlay (make-overlay 1 5)))
+          (overlay-put overlay 'mevedel-view-interaction-entry (cdr pair))
+          (overlay-put overlay 'mevedel--callback
+                       (lambda (_) (ert-fail "Retirement invoked an answer callback")))
+          (when (= (car pair) 42)
+            (overlay-put overlay 'mevedel--remote '(:audience owner)))
+          (puthash (car pair) overlay requests)))
+      (puthash 43 unrelated requests)
+      (puthash 41 (gethash 41 requests) other-requests)
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (transport peer frame)
+                   ;; No transport callback may see a partially retired batch.
+                   (should-not (gethash 41 requests))
+                   (should-not (gethash 42 requests))
+                   (should (eq transport 'transport))
+                   (push (cons peer frame) sent)
+                   t)))
+        (mevedel-collaboration-retire-permission-requests
+         session (list first second unshown))
+        (should (= 1 (hash-table-count requests)))
+        (should (eq unrelated (gethash 43 requests)))
+        (should (= 1 (hash-table-count other-requests)))
+        (should (= 5 (length sent)))
+        (should-not (assq 2 sent))
+        (dolist (peer '(1 3))
+          (let* ((frames (mapcar #'cdr (seq-filter (lambda (item) (= peer (car item))) sent)))
+                 (notices (seq-filter (lambda (frame) (equal "notice" (plist-get frame :t))) frames))
+                 (ends (seq-filter (lambda (frame) (equal "ui-request-end" (plist-get frame :t))) frames)))
+            (should (= 1 (length notices)))
+            (should (equal "3 permission requests expired; nothing was approved."
+                           (plist-get (car notices) :message)))
+            (should (equal (if (= peer 1) '(41) '(41 42))
+                           (sort (mapcar (lambda (frame) (plist-get frame :reqId)) ends) #'<)))))
+        ;; Repeated retirement is inert and cannot dismiss an unrelated Ask.
+        (setq sent nil)
+        (mevedel-collaboration-retire-permission-requests session (list first second))
+        (should-not sent)))))
+
 (mevedel-deftest mevedel-collaboration--handle-ui-response
   (:doc "settles once with the mapped outcome and ignores unauthorized answers")
   (with-temp-buffer
@@ -159,12 +221,16 @@
                      (push (cons peer frame) sent)
                      t))
                   ((symbol-function 'message) (lambda (&rest _) nil)))
-          ;; A read-only guest and an unknown request id are ignored.
+          ;; A read-only guest is ignored; an unknown id gets a notice.
           (mevedel-collaboration--handle-ui-response
            room 2 (list :reqId 41 :option 0))
+          (should-not sent)
           (mevedel-collaboration--handle-ui-response
            room 1 (list :reqId 999 :option 0))
           (should-not settled)
+          (should (equal '(1 . (:t "notice" :message
+                                  "Request is no longer pending; nothing was approved."))
+                         (car sent)))
           ;; Seeing a narrowed interaction and answering it are the same
           ;; authority: a guest outside the audience is refused even
           ;; though a request id is easy to guess.
@@ -278,11 +344,14 @@
           (should (= 0 (hash-table-count requests)))
           (should (equal '(1 . (:t "ui-request-end" :reqId 41))
                          (car sent)))
-          ;; A late answer after dismissal is ignored silently.
+          ;; A late answer after dismissal gets a nonterminal notice.
           (setq settled nil)
           (mevedel-collaboration--handle-ui-response
            room 1 (list :reqId 41 :option 0))
-          (should-not settled))))))
+          (should-not settled)
+          (should (equal '(1 . (:t "notice" :message
+                                  "Request is no longer pending; nothing was approved."))
+                         (car sent))))))))
 
 (provide 'test-mevedel-collaboration-guest-remote)
 ;;; test-mevedel-collaboration-guest-remote.el ends here

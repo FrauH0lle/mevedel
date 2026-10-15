@@ -971,6 +971,10 @@ session is idle, the zone offers the session's held idle work again: queued
 follow-ups first, otherwise an active Goal's continuation. The choice is made
 after the closing command, so a permission sibling rendered by the same
 settlement still holds the work, and each offered path rechecks its own gates.
+After an expired permission queue the session waits for the user; the zone
+shows one non-interactive, non-pausing `permission-absence` notice for that
+hold, and ending the hold by submitting a message closes it and re-offers idle
+work like any other closed interaction.
 Interaction keybindings are active only when point is on the interaction text;
 composer input must never settle or cycle interaction prompts.
 

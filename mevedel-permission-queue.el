@@ -30,6 +30,11 @@
 ;; `mevedel-agents'
 (defvar mevedel--agent-invocation)
 
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration-retire-permission-requests
+                  "mevedel-collaboration-guest" (session entries))
+(autoload 'mevedel-collaboration-retire-permission-requests
+  "mevedel-collaboration-guest")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
@@ -89,9 +94,13 @@
 (declare-function mevedel-request-cancelled-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-absence
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-forwarded-audit-p
@@ -113,6 +122,42 @@
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 (autoload 'mevedel--warn-once "mevedel-utilities")
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-rebuild
+                  "mevedel-view-interaction" ())
+(autoload 'mevedel-view--interaction-rebuild "mevedel-view-interaction")
+
+(defun mevedel-permission-queue--set-timeout (symbol value)
+  "Set SYMBOL to VALUE; turning the timeout off drops all absence state."
+  (set-default symbol value)
+  (unless (mevedel-permission-queue--timeout-seconds)
+    (mevedel-permission-queue--disable-all)))
+
+(defcustom mevedel-permission-queue-timeout nil
+  "Seconds without a human answer before the permission queue expires.
+
+Nil, the default, keeps every permission prompt waiting indefinitely.
+With a number, the whole unanswered human queue of a root session expires
+once that many seconds pass without a human answering one of its cards:
+every queued request is denied with a message telling the model the user
+may be absent, and nothing is granted or remembered.  The first card
+admitted to an empty queue starts the period; only a real answer from the
+local card or an authorized browser restarts it.  Reviewer results,
+coalescing, mode changes, folding a card and typing do not.
+
+After expiry the session waits for the user: new requests that need a
+human are denied at once, and Goal continuation and queued follow-ups do
+not start, until you send a new message.  Turning this option off cancels
+a running period and ends any wait.  A changed duration applies from the
+next admission or answer.  Unanswered prompts keep a turn, and with it the
+system sleep inhibitor, alive, so a value such as 3600 lets an abandoned
+session settle."
+  :type '(choice (const :tag "Disabled" nil)
+                 (natnum :tag "Seconds without an answer" :value 3600))
+  :initialize #'custom-initialize-default
+  :set #'mevedel-permission-queue--set-timeout
+  :group 'mevedel)
 
 (defcustom mevedel-permission-notify-function nil
   "Function called when an interactive permission card enters the queue.
@@ -158,10 +203,157 @@ the slot through `mevedel-session-permission-queue' to mutate."
 
 (defun mevedel-permission-queue--set (queue &optional session)
   "Set SESSION's permission-queue slot to QUEUE.
-SESSION defaults to the current session."
+SESSION defaults to the current session.  An empty QUEUE cancels the
+session's armed absence deadline; an established hold stays."
   (when-let* ((sess (or session
                         (mevedel-queue--current-session))))
-    (setf (mevedel-session-permission-queue sess) queue)))
+    (setf (mevedel-session-permission-queue sess) queue)
+    (unless queue
+      (mevedel-permission-queue--disarm sess))))
+
+
+;;
+;;; Absence deadline and hold
+
+(defconst mevedel-permission-queue--expired-reason
+  "Permission request expired without a human response; the user may be absent.  This invocation was not authorized.  Do not repeat it solely to obtain an answer.  Requests that need approval will be denied until the user sends a new message; finish already-authorized work and report what is blocked."
+  "Model-visible denial for a request whose queue expired.")
+
+(defconst mevedel-permission-queue--held-reason
+  "Permission denied without prompting: an earlier request expired without a human response and the user may be absent.  Do not repeat it solely to obtain an answer.  Requests that need approval are denied until the user sends a new message; finish already-authorized work and report what is blocked."
+  "Model-visible denial for a request made while the session waits.")
+
+(defun mevedel-permission-queue--timeout-seconds ()
+  "Return the configured absence timeout in seconds, or nil when off."
+  (and (numberp mevedel-permission-queue-timeout)
+       (> mevedel-permission-queue-timeout 0)
+       mevedel-permission-queue-timeout))
+
+(defun mevedel-permission-absence-deadline (session)
+  "Return the absolute time SESSION's unanswered queue expires, or nil."
+  (and session (mevedel-permission-queue--timeout-seconds)
+       (plist-get (mevedel-session-permission-absence session) :deadline)))
+
+(defun mevedel-permission-absence-hold (session)
+  "Return SESSION's expired-queue hold plist, or nil.
+The plist carries `:expired-at' and `:count'."
+  (and session (mevedel-permission-queue--timeout-seconds)
+       (let ((state (mevedel-session-permission-absence session)))
+         (and (plist-get state :expired-at) state))))
+
+(defun mevedel-permission-absence-held-p (session)
+  "Return non-nil while SESSION waits for a user message after expiry."
+  (and (mevedel-permission-absence-hold session) t))
+
+(defun mevedel-permission-queue--rebuild-view (session)
+  "Rebuild SESSION's root interaction zone, if its view is live."
+  (when-let* ((data (mevedel-session-root-buffer session))
+              ((buffer-live-p data))
+              (view (buffer-local-value 'mevedel--view-buffer data))
+              ((buffer-live-p view)))
+    (with-current-buffer view
+      (mevedel-view--interaction-rebuild))))
+
+(defun mevedel-permission-queue--disarm (session)
+  "Cancel SESSION's armed deadline, leaving any hold in place."
+  (let ((state (mevedel-session-permission-absence session)))
+    (when (plist-member state :deadline)
+      (when (timerp (plist-get state :timer))
+        (cancel-timer (plist-get state :timer)))
+      (setf (mevedel-session-permission-absence session) nil))))
+
+(defun mevedel-permission-queue--arm (session)
+  "Start SESSION's absence period from now, replacing an armed one.
+Do nothing when the timeout is off or the session already waits."
+  (when-let* ((seconds (mevedel-permission-queue--timeout-seconds))
+              ((not (mevedel-permission-absence-held-p session))))
+    (mevedel-permission-queue--disarm session)
+    (let ((state (list :timer nil :deadline (+ (float-time) seconds))))
+      (setf (mevedel-session-permission-absence session) state)
+      ;; The state plist is the generation: a stale timer finds another one.
+      (plist-put state :timer
+                 (run-at-time seconds nil
+                              #'mevedel-permission-queue--expire
+                              session state)))))
+
+(defun mevedel-permission-queue--ensure-armed (session)
+  "Arm SESSION's absence period unless one is already running."
+  (unless (plist-get (mevedel-session-permission-absence session) :deadline)
+    (mevedel-permission-queue--arm session)))
+
+(defun mevedel-permission-absence-clear (session)
+  "End SESSION's wait for a user message.  Return non-nil when one ended.
+Callers are the actions that submit a user message; nothing else resumes."
+  (when (and session
+             (plist-get (mevedel-session-permission-absence session)
+                        :expired-at))
+    (setf (mevedel-session-permission-absence session) nil)
+    (mevedel-permission-queue--rebuild-view session)
+    t))
+
+(defun mevedel-permission-queue--disable-all ()
+  "Drop every live session's deadline and hold."
+  (let (sessions)
+    (dolist (buffer (buffer-list))
+      (when-let* ((session (and (buffer-live-p buffer)
+                                (buffer-local-value 'mevedel--session buffer)))
+                  ((mevedel-session-p session)))
+        (cl-pushnew session sessions)))
+    (dolist (session sessions)
+      (let ((held (plist-get (mevedel-session-permission-absence session)
+                             :expired-at)))
+        (mevedel-permission-queue--disarm session)
+        (when held
+          (setf (mevedel-session-permission-absence session) nil)
+          (mevedel-permission-queue--rebuild-view session))))))
+
+(defun mevedel-permission-queue--mark-absence (entry &optional expired)
+  "Record absence provenance on ENTRY; with EXPIRED, mark its settled cell."
+  (when-let* ((cell (plist-get entry :approval-decision-cell)))
+    (setcar cell (list :source 'absence)))
+  (when expired
+    (setcdr (mevedel-permission-queue--ensure-settled-cell entry) 'expired)))
+
+(defun mevedel-permission-queue--note-stale (entry)
+  "Tell the user that a late answer for ENTRY, retired by expiry, is void."
+  (when (eq (cdr (gethash entry mevedel-permission-queue--settled-cells))
+            'expired)
+    (message "mevedel: Request expired; nothing was approved")
+    t))
+
+(defun mevedel-permission-queue--expire (session state)
+  "Expire SESSION's whole unanswered queue when STATE is still its deadline."
+  (when (and (eq state (mevedel-session-permission-absence session))
+             (mevedel-permission-queue--timeout-seconds))
+    (let ((queue (mevedel-permission-queue--get session)))
+      ;; The hold exists before any callback can run or enqueue again.
+      (setf (mevedel-session-permission-absence session)
+            (and queue (list :expired-at (float-time)
+                             :count (length queue))))
+      (when queue
+        (mevedel-permission-queue--set nil session)
+        (dolist (entry queue)
+          (mevedel-permission-queue--mark-absence entry t))
+        (condition-case err
+            (mevedel-collaboration-retire-permission-requests session queue)
+          (error
+           (mevedel--warn-once
+            'permission-queue-retire
+            "permission-queue: retiring remote requests failed: %S" err)))
+        (dolist (entry queue)
+          (mevedel-permission-queue--safe-settle
+           entry (cons 'deny mevedel-permission-queue--expired-reason)
+           'expired))
+        (mevedel-permission-queue--rebuild-view session)))))
+
+(defun mevedel-permission-queue--deny-if-held (entry session)
+  "Deny ENTRY without a card while SESSION waits for a user message.
+Return non-nil when it was denied."
+  (when (and session (mevedel-permission-absence-held-p session))
+    (mevedel-permission-queue--mark-absence entry)
+    (mevedel-permission-queue--safe-settle
+     entry (cons 'deny mevedel-permission-queue--held-reason) 'absence-held)
+    t))
 
 (defun mevedel-permission-queue--ensure-settled-cell (entry)
   "Return ENTRY's settled cell, adding one when absent."
@@ -188,6 +380,7 @@ Return non-nil when this call delivered or consumed the outcome."
                ('pop 'permission-resolved)
                ('coalesced 'permission-coalesced)
                ('sweep 'permission-swept)
+               ((or 'expired 'absence-held) 'permission-expired)
                (_ 'permission-aborted))
              entry nil :outcome outcome :settlement-source phase
              (when (eq phase 'coalesced)
@@ -386,48 +579,54 @@ ENTRY plist keys:
     ;; Automatic review has already prepared the same scope; preparation is
     ;; idempotent, so fallback keeps it.  Hooks saw the original request.
     (setq entry (plist-put entry :session session))
-    (when session
-      (mevedel-permission-queue-prepare-resources entry))
-    (mevedel-permission-queue--log 'permission-enqueued entry session)
-    (let* ((release
-            (and session
-                 (mevedel-agent-control-block-turn
-                  session (plist-get entry :origin)
-                  'permission-blocked)))
-           (callback (plist-get entry :callback))
-           (wrapped
-            (if release
-                (lambda (outcome)
-                  (funcall release)
-                  (when callback
-                    (funcall callback outcome)))
-              callback))
-           (entry (plist-put (copy-sequence entry) :callback wrapped)))
-      (condition-case err
-          (if (or (not session)
+    ;; A session waiting for the user gets no card, notification or deadline.
+    (unless (mevedel-permission-queue--deny-if-held entry session)
+      (when session
+        (mevedel-permission-queue-prepare-resources entry))
+      (mevedel-permission-queue--log 'permission-enqueued entry session)
+      (let* ((release
+              (and session
+                   (mevedel-agent-control-block-turn
+                    session (plist-get entry :origin)
+                    'permission-blocked)))
+             (callback (plist-get entry :callback))
+             (wrapped
+              (if release
+                  (lambda (outcome)
+                    (funcall release)
+                    (when callback
+                      (funcall callback outcome)))
+                callback))
+             (entry (plist-put (copy-sequence entry) :callback wrapped)))
+        (condition-case err
+            (cond
+             ((or (not session)
                   (when-let* ((request (plist-get entry :request)))
                     (mevedel-request-cancelled-p request)))
-              (progn
-                (unless session
-                  (mevedel--warn-once
-                   'permission-queue-no-session
-                   "permission-queue: enqueue with no session"))
-                (mevedel-permission-queue--safe-settle
-                 entry 'aborted (if session 'cancelled 'no-session)))
-            (mevedel-permission-queue--ensure-settled-cell entry)
-            (mevedel-permission-queue--set
-             (append (mevedel-permission-queue--get session) (list entry))
-             session)
-            (when mevedel-permission-notify-function
-              (with-demoted-errors "mevedel: permission notify failed: %S"
-                (funcall mevedel-permission-notify-function
-                         (map-delete (copy-sequence entry) :callback))))
-            ;; Re-render the head so its pending count includes new siblings.
-            (mevedel-permission-queue--render-head session))
-        (error
-         (when release
-           (funcall release))
-         (signal (car err) (cdr err)))))))
+              (unless session
+                (mevedel--warn-once
+                 'permission-queue-no-session
+                 "permission-queue: enqueue with no session"))
+              (mevedel-permission-queue--safe-settle
+               entry 'aborted (if session 'cancelled 'no-session)))
+             ;; Preparation can yield; the hold may have begun meanwhile.
+             ((mevedel-permission-queue--deny-if-held entry session))
+             (t
+              (mevedel-permission-queue--ensure-settled-cell entry)
+              (mevedel-permission-queue--set
+               (append (mevedel-permission-queue--get session) (list entry))
+               session)
+              (mevedel-permission-queue--ensure-armed session)
+              (when mevedel-permission-notify-function
+                (with-demoted-errors "mevedel: permission notify failed: %S"
+                  (funcall mevedel-permission-notify-function
+                           (map-delete (copy-sequence entry) :callback))))
+              ;; Re-render the head so its pending count includes new siblings.
+              (mevedel-permission-queue--render-head session)))
+          (error
+           (when release
+             (funcall release))
+           (signal (car err) (cdr err))))))))
 
 (defun mevedel-permission-queue--render-entry (entry)
   "Render ENTRY with settlement bound to its owning session."
@@ -540,17 +739,24 @@ subsume an exact grant, but this function never broadens selected authority."
      ((not (or (eq entry head)
                (mevedel-permission-queue--same-interaction-entry-p
                 entry head)))
-      (mevedel--warn-once
-       'permission-queue-stale-settlement
-       "permission-queue: stale queue entry settlement ignored"))
+      (unless (mevedel-permission-queue--note-stale entry)
+        (mevedel--warn-once
+         'permission-queue-stale-settlement
+         "permission-queue: stale queue entry settlement ignored")))
      (t
       (setq entry head)
       (mevedel-permission-queue-validate-approval entry outcome)
       ;; Directory and sandbox validation can yield to cancellation or enqueue.
       ;; Only remove the validated head, from the queue that exists now.
       (setq queue (mevedel-permission-queue--get session))
-      (when (eq entry (car queue))
+      (if (not (eq entry (car queue)))
+          (mevedel-permission-queue--note-stale entry)
         (mevedel-permission-queue--set (cdr queue) session)
+        ;; A real answer restarts the shared period before any callback runs.
+        (when (and (eq (or phase 'pop) 'pop)
+                   (not (eq outcome 'aborted))
+                   (cdr queue))
+          (mevedel-permission-queue--arm session))
         (when (mevedel-permission-queue--safe-settle entry outcome (or phase 'pop))
           (when (memq outcome '(allow-session deny-session always-allow))
             (condition-case err
@@ -599,18 +805,24 @@ still resolve to `ask' stay in place.
 Protected-path and deny precedence is handled inside
 `mevedel-check-permission': a protected resource needs a covering grant,
 while deny rules remain final."
-  (let (kept settled)
+  (let (settled)
     (dolist (entry (mevedel-permission-queue--get session))
       (let ((resolved (mevedel-permission-queue--reevaluate entry)))
-        (if (eq resolved 'ask)
-            (push entry kept)
+        (unless (eq resolved 'ask)
           (push
            (list entry
                  (mevedel-permission-queue--translate-coalesce-outcome
                   (plist-get entry :kind) resolved))
            settled))))
-    ;; Remove every resolved entry before callbacks can reenter queue teardown.
-    (mevedel-permission-queue--set (nreverse kept) session)
+    ;; Reevaluation can yield: expiry, a sibling's answer or a new admission
+    ;; may have changed the queue.  Settle only entries still queued, and
+    ;; keep the live queue's other entries, in order.
+    (let ((live (mevedel-permission-queue--get session)))
+      (setq settled (cl-remove-if-not (lambda (item) (memq (car item) live))
+                                      settled))
+      ;; Remove every resolved entry before callbacks can reenter queue teardown.
+      (mevedel-permission-queue--set
+       (cl-remove-if (lambda (entry) (assq entry settled)) live) session))
     (dolist (item (nreverse settled))
       (pcase-let ((`(,entry ,outcome) item))
         (mevedel-permission-queue--safe-settle

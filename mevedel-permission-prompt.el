@@ -47,6 +47,8 @@
 (autoload 'mevedel--prompt-key "mevedel-interaction-prompt")
 
 ;; `mevedel-permission-queue'
+(declare-function mevedel-permission-absence-deadline
+                  "mevedel-permission-queue" (session))
 (declare-function mevedel-permission-queue--log
                   "mevedel-permission-queue" (event entry &optional session &rest props))
 (declare-function mevedel-permission-queue--render-head
@@ -59,6 +61,8 @@
                   "mevedel-permission-queue" (entry previous selected))
 (declare-function mevedel-permission-queue-validate-approval
                   "mevedel-permission-queue" (entry outcome))
+(defvar mevedel-permission-queue--settled-cells)
+(autoload 'mevedel-permission-absence-deadline "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue--log "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue-justification "mevedel-permission-queue")
@@ -241,11 +245,21 @@ Selection changes the visible card only; approval chooses its lifetime."
 (defun mevedel-permission--prompt-feedback ()
   "Deny this tool invocation and pass free-form feedback to the LLM."
   (interactive)
-  (if (mevedel--prompt--overlay-at-point 'mevedel-permission-prompt)
-      (let ((text (read-string "Feedback: ")))
-        (when (and text (not (string-empty-p (string-trim text))))
-          (mevedel-permission--prompt-finish
-           (cons 'feedback (string-trim text)))))
+  (if-let* ((ov (mevedel--prompt--overlay-at-point 'mevedel-permission-prompt)))
+      (let* ((entry (overlay-get ov 'mevedel-view-interaction-entry))
+             (cell (and entry
+                        (gethash entry mevedel-permission-queue--settled-cells)))
+             (text (read-string "Feedback: ")))
+        ;; Timers and browser answers can retire the card while the minibuffer
+        ;; is active.  Never redirect its feedback to a replacement at point.
+        (cond
+         ((eq (cdr cell) 'expired)
+          (message "Request expired; nothing was approved"))
+         ((or (car cell) (overlay-get ov 'mevedel-settled)
+              (not (buffer-live-p (overlay-buffer ov))))
+          (message "Request is no longer pending; nothing was approved."))
+         ((and text (not (string-empty-p (string-trim text))))
+          (mevedel--prompt--settle ov (cons 'feedback (string-trim text))))))
     (mevedel-permission--prompt-self-insert)))
 
 (defun mevedel-permission--prompt-toggle-remember ()
@@ -536,8 +550,13 @@ workspace approval would store."
          ;; Explanations and controls fold locally; the guest has no TAB, so
          ;; its descriptor always receives the complete card.
          (details (concat cause authority))
+         (expiry-line
+          (when-let* ((session (plist-get entry :session))
+                      (deadline (mevedel-permission-absence-deadline session)))
+            (format "Unanswered requests expire at %s (session policy).\n\n"
+                    (format-time-string "%H:%M" deadline))))
          (remote-body (and entry (mevedel-queue--entry-metadata-get entry :remote-body)))
-         (remote-content (concat (or remote-body content) details))
+         (remote-content (concat (or remote-body content) expiry-line details))
          ;; TAB is offered only when folding hides something.
          (toggle (and entry
                       (cond
@@ -547,7 +566,8 @@ workspace approval would store."
                                  (not (equal remote-body
                                              (substring-no-properties content)))))
                         'collapsed))))
-         (content (concat content (and (or (null entry) expanded-p) details)))
+         (content (concat content expiry-line
+                          (and (or (null entry) expanded-p) details)))
          ;; The entry's session decides where its card goes.  A prompt can be
          ;; admitted from an unrelated buffer, such as the permission
          ;; reviewer's request buffer when it leaves the decision to a human.

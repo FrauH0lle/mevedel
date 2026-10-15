@@ -604,12 +604,44 @@ must not collect a decision it may not see by reconnecting."
            (plist-get room :transport) peer
            (mevedel-collaboration--ui-request-frame request-id overlay)))))))
 
+(defun mevedel-collaboration-retire-permission-requests (session entries)
+  "Retire SESSION's expired permission ENTRIES from guest surfaces.
+Remove registry entries before sending frames, without invoking any answer
+callback.  Each affected guest receives one nonterminal batch notice."
+  ;; Expiring a local queue must not load the optional sharing subsystem.
+  (when (featurep 'mevedel-collaboration)
+    (dolist (room (mevedel-collaboration--room-list))
+      (when (eq session (plist-get room :session))
+        (let ((requests (plist-get room :ui-requests))
+              retired audience)
+          (maphash
+           (lambda (request-id overlay)
+             (when (memq (overlay-get overlay 'mevedel-view-interaction-entry)
+                         entries)
+               (let ((peers (mevedel-collaboration--audience-peers room overlay)))
+                 (push (cons request-id peers) retired)
+                 (dolist (peer peers)
+                   (cl-pushnew peer audience)))
+               (remhash request-id requests)))
+           requests)
+          (dolist (request retired)
+            (dolist (peer (cdr request))
+              (mevedel-collaboration--transport-send
+               (plist-get room :transport) peer
+               (list :t "ui-request-end" :reqId (car request)))))
+          (dolist (peer audience)
+            (mevedel-collaboration--transport-send
+             (plist-get room :transport) peer
+             (list :t "notice" :message
+                   (format "%d permission requests expired; nothing was approved."
+                           (length entries))))))))))
+
 (defun mevedel-collaboration--handle-ui-response (room peer frame)
   "Settle the ui-request answered by writable guest PEER through FRAME.
 
 The first answer -- from Emacs or any guest -- wins; the shared settle
-already guards exactly-once, and a request no longer in the registry is
-ignored silently.  A function option runs in the prompt's buffer so an
+already guards exactly-once, and a request no longer in the registry gets
+a nonterminal notice.  A function option runs in the prompt's buffer so an
 answer can execute the same path the host key binding would."
   (let ((guest (mevedel-collaboration--guest room peer))
         (request-id (plist-get frame :reqId)))
@@ -617,6 +649,11 @@ answer can execute the same path the host key binding would."
                (plist-get guest :writable)
                mevedel-collaboration-remote-interactions
                (integerp request-id))
+      (unless (gethash request-id (plist-get room :ui-requests))
+        (mevedel-collaboration--transport-send
+         (plist-get room :transport) peer
+         (list :t "notice" :message
+               "Request is no longer pending; nothing was approved.")))
       (when-let* ((overlay (gethash request-id (plist-get room :ui-requests)))
                   ;; Seeing a narrowed interaction and answering it are
                   ;; the same authority, so the audience is rechecked

@@ -131,6 +131,44 @@
         (should-not mevedel-view--interaction-focus-return)
         (mevedel--prompt-dismiss-all)))))
 
+(mevedel-deftest mevedel-view--permission-absence-render
+  (:doc "the expired-queue notice informs without disturbing the composer")
+  ,test
+  (test)
+
+  :doc "the hold shows one notice, keeps the draft, and clearing removes it"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-permission-queue-timeout 3600)
+          (session (mevedel-session--create :name "absence")))
+      (switch-to-buffer view-buf)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-root-buffer session) data-buf)
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+        (setf (mevedel-session-permission-absence session)
+              (list :expired-at (float-time) :count 3))
+        (mevedel-view--interaction-rebuild)
+        (should (string-match-p "3 permission requests expired at"
+                                (buffer-string)))
+        (should (string-match-p "Send a message to resume"
+                                (buffer-string)))
+        (should (mevedel-view-interaction-pending-p))
+        (should-not (mevedel-view--interaction-active-work-paused-p))
+        (should (equal (mevedel-view--input-text) "> quoted\nsecond line"))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (mevedel-view--interaction-rebuild)
+        (should (= 2 (length (split-string
+                              (buffer-string)
+                              "permission requests expired at"))))
+        (mevedel-permission-absence-clear session)
+        (should-not (string-match-p "permission requests expired"
+                                    (buffer-string)))
+        (should-not (mevedel-view-interaction-pending-p))
+        (should (equal (mevedel-view--input-text) "> quoted\nsecond line"))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))))))
+
 (mevedel-deftest mevedel-view-interaction-ownership ()
   ,test
   (test)

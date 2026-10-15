@@ -311,6 +311,11 @@ workspace."
   ;; sidecar; empty at every completed-turn boundary because
   ;; pending tool calls are not recoverable.
   permission-queue
+  ;; Transient absence-timeout state for `permission-queue': nil, a plist
+  ;; (:timer TIMER :deadline TIME) while an unanswered-queue deadline is
+  ;; armed, or (:expired-at TIME :count N) while the session holds for a
+  ;; user message after that deadline expired.  Never persisted.
+  permission-absence
   ;; The single transient Plan approval interaction descriptor, or nil.
   pending-plan-approval
   ;; Plan artifact metadata.  Goal plan paths are recorded here.

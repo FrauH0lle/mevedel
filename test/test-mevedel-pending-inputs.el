@@ -1290,6 +1290,70 @@
           (should (eq 'discuss (plist-get scope :action)))
           (should (= 2 (plist-get scope :attempt-index))))))))
 
+(defmacro test-pending-inputs--with-held-session (&rest body)
+  "Run BODY in a view whose session waits for a user message after expiry."
+  (declare (indent 0))
+  `(mevedel-view-test--with-buffers
+     (let* ((mevedel-permission-queue-timeout 3600)
+            (workspace (mevedel-workspace--create
+                        :type 'file :id "absence-clear"
+                        :root (mevedel-test--placeholder-root)
+                        :name "absence-clear"))
+            (session (mevedel-session-create "main" workspace)))
+       (with-current-buffer data-buf
+         (setq-local mevedel--session session))
+       (setf (mevedel-session-root-buffer session) data-buf)
+       (setf (mevedel-session-permission-absence session)
+             (list :expired-at (float-time) :count 2))
+       (with-current-buffer view-buf
+         (setq-local mevedel--session session)
+         (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
+                    #'ignore)
+                   ((symbol-function
+                     'mevedel-view--schedule-late-follow-up-drain)
+                    #'ignore)
+                   ((symbol-function 'mevedel-view--forward-input) #'ignore))
+           ,@body)))))
+
+(mevedel-deftest mevedel-view--absence-clearing-sites
+  (:quiet t :doc "a submitted user message ends the wait after expiry")
+  ,test
+  (test)
+
+  :doc "queueing a follow-up from the composer clears the hold"
+  (test-pending-inputs--with-held-session
+    (should (mevedel-permission-absence-held-p session))
+    (mevedel-view--queue-follow-up "later")
+    (should-not (mevedel-permission-absence-held-p session)))
+
+  :doc "submitting a prompt clears the hold"
+  (test-pending-inputs--with-held-session
+    (mevedel-view--submit-planned-input "hello" nil nil nil nil t)
+    (should-not (mevedel-permission-absence-held-p session)))
+
+  :doc "a guest's queued message clears the hold"
+  (test-pending-inputs--with-held-session
+    (mevedel-view-enqueue-external-follow-up data-buf "from a guest"
+                                             :guest-name "Guest")
+    (should-not (mevedel-permission-absence-held-p session)))
+
+  :doc "a directive-scoped composer message clears the hold"
+  (test-pending-inputs--with-held-session
+    (setq-local mevedel-view--composer-scope
+                '(:directive-id "directive-1" :action discuss))
+    (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
+               #'ignore)
+              ((symbol-function 'mevedel-view-history-add) #'ignore)
+              ((symbol-function 'mevedel-view--clear-input) #'ignore))
+      (mevedel-view--send-directive-input "about the directive"))
+    (should-not (mevedel-permission-absence-held-p session)))
+
+  :doc "the hold stops queued follow-ups from draining until it clears"
+  (test-pending-inputs--with-held-session
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
+    (mevedel-permission-absence-clear session)
+    (should-not (mevedel-view--follow-up-auto-drain-blocked-p session))))
+
 (mevedel-deftest mevedel-view--pending-input-text ()
   ,test
   (test)

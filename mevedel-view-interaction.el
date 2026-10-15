@@ -34,9 +34,12 @@
 (autoload 'mevedel-view--pending-inputs-render "mevedel-pending-inputs")
 
 ;; `mevedel-permission-queue'
+(declare-function mevedel-permission-absence-hold
+                  "mevedel-permission-queue" (session))
 (declare-function mevedel-permission-queue--render-head
 		  "mevedel-permission-queue" (&optional session))
 (autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
+(autoload 'mevedel-permission-absence-hold "mevedel-permission-queue")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
@@ -700,6 +703,20 @@ approval."
              (not (mevedel-view-interaction-pending-p)))
     (mevedel-pending-inputs-offer-idle-work mevedel--data-buffer)))
 
+(defun mevedel-view--permission-absence-render (hold)
+  "Register the notice for HOLD, the session's expired-queue wait.
+The notice only informs: it has no controls and does not pause active work."
+  (let ((count (or (plist-get hold :count) 0)))
+    (mevedel-view--interaction-register
+     (list :kind 'permission-absence
+           :id 'permission-absence
+           :active-work-paused nil
+           :body
+           (format "\n%s expired at %s without a response; nothing was approved.\nSend a message to resume permission prompts.\n"
+                   (mevedel-view--interaction-plural
+                    count "permission request" "permission requests")
+                   (format-time-string "%H:%M" (plist-get hold :expired-at)))))))
+
 (defun mevedel-view--interaction-rebuild ()
   "Rebuild interaction-zone descriptors from live preview and queue state.
 Descriptors are dropped and re-registered without rendering the
@@ -722,6 +739,8 @@ queued idle work free to proceed."
                 (mevedel-plan-approval-render session))
               (when (mevedel-session-permission-queue session)
                 (mevedel-permission-queue--render-head session))
+              (when-let* ((hold (mevedel-permission-absence-hold session)))
+                (mevedel-view--permission-absence-render hold))
               (when (or (mevedel-session-pending-steering session)
                         (mevedel-session-pending-follow-ups session)
                         (mevedel-session-pending-input-failure-paused session))

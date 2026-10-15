@@ -87,13 +87,14 @@
   (:doc "skips skill planning entirely for inert-skills submissions")
   (let ((data-buffer (generate-new-buffer " *ext-inert-data*"))
         (view-buffer (generate-new-buffer " *ext-inert-view*"))
+        (session (mevedel-session--create))
         forwarded planned)
     (unwind-protect
         (progn
           (with-current-buffer view-buffer
             (setq-local mevedel--data-buffer data-buffer))
           (cl-letf (((symbol-function 'mevedel-view--session)
-                     (lambda () 'session))
+                     (lambda () session))
                     ((symbol-function 'mevedel-skills-plan-user-input)
                      (lambda (&rest _) (setq planned t) nil))
                     ((symbol-function 'mevedel-skills-input-refresh-bound-input)

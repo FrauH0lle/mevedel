@@ -185,6 +185,11 @@
                   "mevedel-permission-mode" (mode))
 (defvar mevedel-permission-mode)
 
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-absence-clear
+                  "mevedel-permission-queue" (session))
+(autoload 'mevedel-permission-absence-clear "mevedel-permission-queue")
+
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-reserved-goal-id
 		  "mevedel-plan-handoff" (&optional session))
@@ -2237,6 +2242,9 @@ SELECTED-SKILLS explicitly names the skills to apply to literal INPUT."
         ;; below run asynchronously, and only this entry is still holding
         ;; the draft the user actually submitted.
         (submitted-draft (mevedel-view--visible-draft)))
+    ;; Submitting a message ends a wait for the user after a permission
+    ;; queue expired; queued follow-ups cannot reach here while it holds.
+    (mevedel-permission-absence-clear session)
     (let* ((plan
             (unless inert-skills
               (with-current-buffer data-buffer
@@ -2419,6 +2427,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
       (user-error "The workflow is occupied -- use C-c TAB to queue this directive follow-up"))
     (when (mevedel-skills-parse-slash-line input)
       (user-error "Slash commands are unavailable in directive scope"))
+    (mevedel-permission-absence-clear session)
     (mevedel-view--dispatch-directive-input mevedel-view--composer-scope input)
     (mevedel-view-history-add input)
     (mevedel-view--clear-input)))
@@ -2666,6 +2675,7 @@ INPUT is the original composer text, including the slash command."
          (submitted-draft (mevedel-view--visible-draft)))
     (when (string-blank-p objective)
       (user-error "Goal objective must not be blank"))
+    (mevedel-permission-absence-clear (mevedel-view--session))
     (mevedel-view--run-prompt-submit-hook
      objective input
      (lambda (submission)

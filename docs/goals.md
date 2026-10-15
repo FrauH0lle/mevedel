@@ -257,6 +257,8 @@ after canonical request teardown. Dispatch requires all of the following:
 - no permission, Ask, Plan approval, or other interaction is pending in the
   root view, and no prompt hook is running;
 - no queued follow-up remains to be delivered; and
+- the session is not waiting for the user after an expired permission queue
+  (`absence`; see [permissions](permissions.md#absence-timeout)); and
 - the token budget is not exhausted.
 
 Continuation is also offered again when a gate clears without a settling

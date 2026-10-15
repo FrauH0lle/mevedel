@@ -17,7 +17,7 @@
 (mevedel-deftest mevedel-session-fork-clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-		   (should (= 91
+		   (should (= 92
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -163,6 +163,7 @@
                      (mevedel-session-lease candidate)
                      (mevedel-session-lease-renewal-timer candidate)
                      (mevedel-session-permission-queue candidate)
+                     (mevedel-session-permission-absence candidate)
                      (mevedel-session-pending-plan-approval candidate)))
         (should-not value)))
     (dolist (candidate (list fork save-as))

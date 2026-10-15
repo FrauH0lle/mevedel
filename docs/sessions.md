@@ -2314,7 +2314,9 @@ While this Emacs has work that sleep would interrupt, `mevedel-sleep.el`
 holds one operating-system sleep inhibitor. The work that counts is:
 
 - a root or agent turn that is running or settling (`mevedel-busy-p`),
-  including one waiting on a permission prompt;
+  including one waiting on a permission prompt (indefinitely, unless
+  `mevedel-permission-queue-timeout` expires the unanswered queue; see
+  [permissions](permissions.md#absence-timeout));
 - a live managed command, including a yielded one that outlives its turn;
 - an open collaboration share or lobby within its idle allowance (see
   [collaboration](collaboration.md)).
