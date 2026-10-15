@@ -27,7 +27,10 @@
 (declare-function mevedel-agent-control-steer-user
                   "mevedel-agent-control"
                   (session message &optional before-wake metadata))
+(declare-function mevedel-agent-control-wake-pending-p
+                  "mevedel-agent-control" (session))
 (autoload 'mevedel-agent-control-steer-user "mevedel-agent-control")
+(autoload 'mevedel-agent-control-wake-pending-p "mevedel-agent-control")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-goal-owner "mevedel-agents" (cl-x) t)
@@ -45,10 +48,13 @@
   "mevedel-implementation-policy")
 
 ;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs--run-event-wake
+                  "mevedel-pending-inputs" (data-buffer))
 (declare-function mevedel-pending-inputs-follow-up-changed
                   "mevedel-pending-inputs" (session))
 (declare-function mevedel-view--run-follow-up-drain
                   "mevedel-pending-inputs" (data-buffer))
+(autoload 'mevedel-pending-inputs--run-event-wake "mevedel-pending-inputs")
 (autoload 'mevedel-pending-inputs-follow-up-changed
   "mevedel-pending-inputs")
 (autoload 'mevedel-view--run-follow-up-drain "mevedel-pending-inputs")
@@ -416,6 +422,11 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
      ((mevedel-session-pending-follow-ups session)
       (run-at-time 0 nil #'mevedel-view--run-follow-up-drain buffer)
       'follow-up)
+     ;; Background work that reported runs before the Goal does; the turn
+     ;; it starts continues the Goal when it settles.
+     ((mevedel-agent-control-wake-pending-p session)
+      (run-at-time 0 nil #'mevedel-pending-inputs--run-event-wake buffer)
+      'event)
      ((with-current-buffer buffer
         (mevedel-goal--pending-interaction-p session)) 'interaction)
      ((mevedel-goal--budget-exhausted-p goal) 'budget)

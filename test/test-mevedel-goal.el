@@ -596,8 +596,16 @@
             (should (eq 'follow-up
                         (mevedel-goal-continue-if-idle session buffer)))
             (should scheduled)
-            (setf (mevedel-session-pending-follow-ups session) nil
-                  (mevedel-session-permission-queue session) '(pending))
+            (setf (mevedel-session-pending-follow-ups session) nil)
+            ;; Background work that reported runs before the Goal does.
+            (setq scheduled nil dispatched nil)
+            (mevedel-session--set-messages
+             session (list (list :type 'EXECUTION :wake t)))
+            (should (eq 'event (mevedel-goal-continue-if-idle session buffer)))
+            (should (eq 'mevedel-pending-inputs--run-event-wake (nth 2 scheduled)))
+            (should-not dispatched)
+            (mevedel-session--set-messages session nil)
+            (setf (mevedel-session-permission-queue session) '(pending))
             (should (eq 'interaction
                         (mevedel-goal-continue-if-idle session buffer)))
             (setf (mevedel-session-permission-queue session) nil

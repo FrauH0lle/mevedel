@@ -33,6 +33,30 @@
 (mevedel-deftest mevedel-permission--preflight ()
   ,test
   (test)
+  :doc "omitted owners use ambient Plan stamps but explicit nil owners do not"
+  (let* ((mevedel-permission-rules nil)
+         (session (mevedel-session--create :authority-mode 'pid-lock)))
+    (dolist (owner '(request invocation))
+      (let ((mevedel--current-request
+             (and (eq owner 'request)
+                  (mevedel-request--create :session session :plan-read-only t)))
+            (mevedel--agent-invocation
+             (and (eq owner 'invocation)
+                  (mevedel-agent-invocation--create
+                   :path "/root/ambient" :parent-session session
+                   :plan-read-only t))))
+        (should (eq 'plan-mode
+                    (plist-get
+                     (plist-get (mevedel-permission--preflight
+                                 "Eval" :session session :mode 'full-auto)
+                                :early-decision)
+                     :via)))
+        (should-not
+         (plist-get (mevedel-permission--preflight
+                     "Eval" :session session :mode 'full-auto
+                     :request nil :invocation nil)
+                    :early-decision)))))
+
   :doc "normalizes extracted specifiers and shared decision facts"
   (let* ((get-path-calls 0)
          (tool (mevedel-tool--create
@@ -109,6 +133,25 @@
 (mevedel-deftest mevedel-check-permission-async-with-metadata ()
   ,test
   (test)
+  :doc "bare async slot results retain the tool's policy provenance"
+  (let ((mevedel-permission-rules nil)
+        (mevedel--current-request nil)
+        (mevedel--agent-invocation nil))
+    (dolist (case '(("Monitor" . bash-classifier)
+                    ("Bash" . bash-classifier)
+                    ("Eval" . eval-policy)
+                    ("Custom" . tool-slot)))
+      (let* ((tool (mevedel-tool--create
+                    :name (car case)
+                    :check-permission-async
+                    (lambda (_tool _input cont) (funcall cont 'deny))))
+             decision)
+        (mevedel-check-permission-async-with-metadata
+         (car case) (lambda (result) (setq decision result))
+         :tool-struct tool :mode 'full-auto)
+        (should (eq 'deny (mevedel-permission-decision-raw-outcome decision)))
+        (should (eq (cdr case) (plist-get decision :via))))))
+
   :doc "sync and async entry points return identical non-async decisions"
   (let* ((read-tool (mevedel-tool--create :name "Read" :read-only-p t))
          (edit-tool (mevedel-tool--create :name "Edit" :read-only-p nil))
@@ -1134,6 +1177,97 @@
 (mevedel-deftest mevedel-permission--invocation-context ()
   ,test
   (test)
+  :doc "captured request and invocation Plan stamps survive ambient drift"
+  (let* ((mevedel-permission-rules nil)
+         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (mevedel--current-request (mevedel-request--create :session session))
+         (mevedel--agent-invocation
+          (mevedel-agent-invocation--create
+           :path "/root/unrelated" :parent-session session)))
+    (dolist (owner '(request invocation))
+      (dolist (name '("Eval" "Edit" "ApplyPatch"))
+        (dolist (mode '(ask edits full-auto))
+          (let* ((tool (mevedel-tool--create
+                        :name name :groups (unless (equal name "Eval") '(edit))))
+                 (context
+                  (mevedel-permission--invocation-context
+                   :tool tool :session session :mode mode
+                   :request (and (eq owner 'request)
+                                 (mevedel-request--create
+                                  :session session :plan-read-only t))
+                   :invocation (and (eq owner 'invocation)
+                                    (mevedel-agent-invocation--create
+                                     :path "/root/captured"
+                                     :parent-session session
+                                     :plan-read-only t))))
+                 (decision (plist-get context :early-decision)))
+            (should (eq 'deny (mevedel-permission-decision-raw-outcome decision)))
+            (should (eq 'plan-mode (plist-get decision :via))))))))
+
+  :doc "captured non-Plan and nil stamps do not borrow ambient Plan authority"
+  (let* ((mevedel-permission-rules nil)
+         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (mevedel--current-request
+          (mevedel-request--create :session session :plan-read-only t))
+         (mevedel--agent-invocation
+          (mevedel-agent-invocation--create
+           :path "/root/unrelated" :parent-session session :plan-read-only t)))
+    (dolist (nil-stamps '(nil t))
+      (dolist (name '("Eval" "Edit" "ApplyPatch"))
+        (dolist (mode '(ask edits full-auto))
+          (let ((context
+                 (mevedel-permission--invocation-context
+                  :tool (mevedel-tool--create
+                         :name name :groups (unless (equal name "Eval") '(edit)))
+                  :session session :mode mode
+                  :request (unless nil-stamps
+                             (mevedel-request--create :session session))
+                  :invocation (unless nil-stamps
+                                (mevedel-agent-invocation--create
+                                 :path "/root/captured" :parent-session session)))))
+            (should-not (plist-get context :early-decision)))))))
+
+  :doc "captured nil stamps still enforce the owning session's live Plan flag"
+  (let* ((mevedel-permission-rules nil)
+         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (mevedel--current-request nil)
+         (mevedel--agent-invocation nil)
+         (tool (mevedel-tool--create :name "Eval")))
+    (should-not
+     (plist-get (mevedel-permission--invocation-context
+                 :tool tool :session session :request nil :invocation nil
+                 :mode 'full-auto)
+                :early-decision))
+    (setf (mevedel-session-plan-mode session) t)
+    (let ((decision
+           (plist-get (mevedel-permission--invocation-context
+                       :tool tool :session session :request nil :invocation nil
+                       :mode 'full-auto)
+                      :early-decision)))
+      (should (eq 'deny (mevedel-permission-decision-raw-outcome decision)))
+      (should (eq 'plan-mode (plist-get decision :via)))))
+
+  :doc "session-only patches use captured directive Plan ownership"
+  (let* ((mevedel-permission-rules nil)
+         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (tool (mevedel-tool--create :name "ApplyPatch" :groups '(edit)))
+         (mevedel--agent-invocation nil))
+    (dolist (directive-p '(nil t))
+      (let* ((mevedel--current-request
+              (mevedel-request--create
+               :session session :plan-read-only t
+               :directive-uuid (unless directive-p "ambient-directive")))
+             (context
+              (mevedel-permission--invocation-context
+               :tool tool :session session :mode 'full-auto
+               :patch-session-only-p t :invocation nil
+               :request (mevedel-request--create
+                         :session session :plan-read-only t
+                         :directive-uuid (and directive-p "captured-directive")))))
+        (should (eq directive-p
+                    (eq 'plan-mode
+                        (plist-get (plist-get context :early-decision) :via)))))))
+
   :doc "resolves a named built-in tool before deriving capability facts"
   (let ((tool (mevedel-tool--create :name "Read" :read-only-p t)))
     (cl-letf (((symbol-function 'mevedel-tool-ensure)

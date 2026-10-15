@@ -131,8 +131,8 @@ authorization.  The result explicitly records omitted older turns."
   "Resolve fresh deterministic permission facts for ENTRY."
   (let* ((session (plist-get entry :session))
          (kind (plist-get entry :kind))
-         (tool (pcase kind ('bash "Bash") ('eval "Eval")
-                 (_ (plist-get entry :tool-name))))
+         (tool (or (plist-get entry :tool-name)
+                   (pcase kind ('bash "Bash") ('eval "Eval"))))
          (key (plist-get entry :specifier-key))
          (value (plist-get entry :specifier-value))
          (context
@@ -240,6 +240,7 @@ and global user allow rules are considered.  PROFILE is the selected additive
 profile and TARGET its execution target.  Candidates are contextual evidence:
 they grant nothing and do not change deterministic matching.  Ordering is
 deterministic and limits omit whole candidates, reported as `:omitted'."
+  (setq tool (mevedel-permission-policy-tool-name tool))
   (let ((facts (and (stringp operation) (equal tool "Bash")
                     (cons (mevedel-bash-policy-single-reusable-segment-p operation)
                           (mevedel-bash-policy-stable-prefix operation))))
@@ -295,7 +296,8 @@ The returned value is data for the reviewer, never trusted system policy."
    (let* ((session (plist-get entry :session))
          (mevedel--session session)
          (context (mevedel-permission-review--context entry))
-         (tool (plist-get context :tool-name))
+         (tool (mevedel-permission-policy-tool-name
+                (plist-get context :tool-name)))
          (execution-p (member tool '("Bash" "Eval")))
          (args (or (plist-get entry :args)
                    (list :mode (plist-get entry :mode))))

@@ -422,6 +422,26 @@
                      (plist-put context :buckets
                                 '((:session ("Bash" :pattern "rm file"
                                              :action allow))))))))))
+  :doc "captured nil Plan stamps ignore ambient turns but retain live session Plan"
+  (let* ((mevedel-permission-rules nil)
+         (session (mevedel-session--create :authority-mode 'pid-lock))
+         (mevedel--current-request
+          (mevedel-request--create :session session :plan-read-only t))
+         (mevedel--agent-invocation
+          (mevedel-agent-invocation--create
+           :path "/root/unrelated" :parent-session session :plan-read-only t))
+         (context (list :mode 'full-auto :session session :buckets nil
+                        :request nil :invocation nil)))
+    (should (eq 'allow
+                (mevedel-bash-policy-check-permission
+                 "make test" :permission-context context)))
+    (setf (mevedel-session-plan-mode session) t)
+    (should (eq 'deny
+                (mevedel-bash-policy-check-permission
+                 "make test" :permission-context context)))
+    (should (eq 'allow
+                (mevedel-bash-policy-check-permission
+                 "pwd" :permission-context context))))
   :doc "directive planning denies effectful Bash even in Full-auto"
   (let* ((mevedel-permission-rules nil)
          (session

@@ -412,6 +412,29 @@
                            :timestamp '(1 0 0 0)))))
       (should (equal raw (mevedel-agent-persistence-sanitize-mailbox
                          raw parent)))))
+  :doc "keeps root MONITOR records and drops the runtime wake mark"
+  (let* ((raw (list (list :type 'MONITOR :sender "/root" :recipient "/root"
+                          :execution-id "exec-1" :description "CI"
+                          :payload "line\n" :timestamp '(1 0 0 0) :wake t)
+                    (list :type 'EXECUTION :sender "/root" :recipient "/root"
+                          :execution-id "exec-2" :payload "done"
+                          :timestamp '(1 0 0 0) :wake t)))
+         (clean (mevedel-agent-persistence-sanitize-mailbox raw "/root")))
+    (should (equal (list :type 'MONITOR :sender "/root" :recipient "/root"
+                         :payload "line\n" :timestamp '(1 0 0 0)
+                         :execution-id "exec-1" :description "CI")
+                   (car clean)))
+    (should-not (cl-some (lambda (record) (plist-member record :wake)) clean)))
+  :doc "drops MONITOR records without identity or outside the root"
+  (dolist (entry
+           (list (list :type 'MONITOR :sender "/root" :recipient "/root"
+                       :description "CI" :payload "x" :timestamp '(1 0 0 0))
+                 (list :type 'MONITOR :sender "/root" :recipient "/root"
+                       :execution-id "e" :payload "x" :timestamp '(1 0 0 0))
+                 (list :type 'MONITOR :sender "/root/a" :recipient "/root"
+                       :execution-id "e" :description "CI" :payload "x"
+                       :timestamp '(1 0 0 0))))
+    (should-not (mevedel-agent-persistence-sanitize-mailbox (list entry) "/root")))
   :doc "drops wrong recipients, malformed outcomes, payloads, and timestamps"
   (dolist (entry
            (list

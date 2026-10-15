@@ -3183,7 +3183,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           (mevedel-request--create :session session))
               (mevedel-skills-install session data-buf))
             (cl-letf (((symbol-function
-                        'mevedel-view--schedule-late-follow-up-drain)
+                        'mevedel-pending-inputs-schedule-held-input-delivery)
                        #'ignore)
                       ((symbol-function 'gptel-send)
                        (lambda (&rest _)
@@ -3957,7 +3957,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                         roots)
                        :invoked-skills nil)))))
                 ((symbol-function
-                  'mevedel-view--schedule-late-follow-up-drain)
+                  'mevedel-pending-inputs-schedule-held-input-delivery)
                  #'ignore)
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (error "Gptel-send should not run"))))
@@ -4450,7 +4450,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                     mevedel--current-request
                     (mevedel-request--create :session session)))
       (cl-letf (((symbol-function
-                  'mevedel-view--schedule-late-follow-up-drain)
+                  'mevedel-pending-inputs-schedule-held-input-delivery)
                  #'ignore))
         (with-current-buffer view-buf
           (dolist (text '("first" "second"))
@@ -4480,7 +4480,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                     mevedel--current-request
                     (mevedel-request--create :session session)))
       (cl-letf (((symbol-function
-                  'mevedel-view--schedule-late-follow-up-drain)
+                  'mevedel-pending-inputs-schedule-held-input-delivery)
                  #'ignore)
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _)
@@ -5152,7 +5152,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (with-current-buffer view-buf
                 (setq-local mevedel--session session))
               (cl-letf (((symbol-function
-                          'mevedel-view--schedule-late-follow-up-drain)
+                          'mevedel-pending-inputs-schedule-held-input-delivery)
                          #'ignore))
                 (with-current-buffer view-buf
                   (goto-char (mevedel-view--input-start))
@@ -5244,7 +5244,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (with-current-buffer view-buf
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function
-                      'mevedel-view--schedule-late-follow-up-drain)
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
                      #'ignore))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
@@ -5325,7 +5325,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (with-current-buffer view-buf
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function
-                      'mevedel-view--schedule-late-follow-up-drain)
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
                      #'ignore))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
@@ -5506,7 +5506,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (cl-incf hooks))
                    (funcall callback nil)))
                 ((symbol-function
-                  'mevedel-view--schedule-late-follow-up-drain)
+                  'mevedel-pending-inputs-schedule-held-input-delivery)
                  #'ignore)
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (cl-incf sends))))
@@ -5538,7 +5538,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--current-request
                     (mevedel-request--create :session session)))
       (cl-letf (((symbol-function
-                  'mevedel-view--schedule-late-follow-up-drain)
+                  'mevedel-pending-inputs-schedule-held-input-delivery)
                  #'ignore))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
@@ -5629,7 +5629,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (mapcar (lambda (entry) (plist-get entry :input))
                              (mevedel-session-pending-follow-ups session))))))
 
-  :doc "late drain scheduler uses data buffer after request cleanup"
+  :doc "held-input scheduler uses data buffer after request cleanup"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'file :id "vq-hook-late-schedule"
@@ -5639,6 +5639,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                              :order nil :total-bytes 0)))
            (session (mevedel-session-create "main" ws))
            drain-buffer)
+      (mevedel-session-set-pending-inputs
+       session 'follow-up (list (list :input "queued")))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--workspace ws)
@@ -5648,7 +5650,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (setq drain-buffer (car args))
                    'timer)))
         (with-current-buffer view-buf
-          (mevedel-view--schedule-late-follow-up-drain)))
+          (mevedel-pending-inputs-schedule-held-input-delivery)))
       (should (eq drain-buffer data-buf))))
 
   :doc "interaction rebuild preserves composer point while drafting"

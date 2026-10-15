@@ -818,8 +818,18 @@ authorize dangerous or complex syntax."
         (cl-return-from mevedel-bash-policy-check-permission
           (decide 'deny 'rule)))
 
-      (when (and (mevedel-plan-read-only-p
-                  (plist-get permission-context :session))
+      (when (and (let ((mevedel--current-request
+                       (if (plist-member permission-context :request)
+                           (plist-get permission-context :request)
+                         mevedel--current-request))
+                      (mevedel--agent-invocation
+                       (if (plist-member permission-context :invocation)
+                           (plist-get permission-context :invocation)
+                         mevedel--agent-invocation)))
+                   ;; Captured nil stamps must not borrow a newer turn's Plan
+                   ;; authority.  The owning session's live Plan flag still applies.
+                   (mevedel-plan-read-only-p
+                    (plist-get permission-context :session)))
                  (not (eq class 'read-only)))
         (cl-return-from mevedel-bash-policy-check-permission
           (decide 'deny 'plan-mode)))

@@ -130,7 +130,7 @@ created as a side effect of registration and handles serialization."
      "ToolSearch" "WaitAgent"
      mevedel-tool-ui mevedel-tool-ui--register)
     ("Ask" mevedel-tool-ask mevedel-tool-ask-register)
-    ("Bash" "Eval" "ListExecutions" "StopExecution" "WriteStdin"
+    ("Bash" "Eval" "ListExecutions" "Monitor" "StopExecution" "WriteStdin"
      mevedel-tool-exec-registration mevedel-tool-exec--register)
     ("Glob" "Grep" "Read"
      mevedel-tool-fs mevedel-tool-fs--register)

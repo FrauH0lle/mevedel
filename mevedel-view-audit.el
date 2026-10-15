@@ -327,6 +327,9 @@ When EXPANDED is non-nil, include record details."
      ;; ("NAME (guest)" instead of "You"), so the record itself needs no
      ;; disclosure line.
      "")
+    ('background-event
+     ;; Likewise rendered as the "Background event" turn heading.
+     "")
     ('prompt-rewrite
      (concat
       "  \u25c7 hook changed prompt\n"

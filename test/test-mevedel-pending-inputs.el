@@ -50,7 +50,7 @@
            ;; Killing the cockpit resumes delivery, and a real drain
            ;; would leave a timer behind after the case has ended.
            (cl-letf (((symbol-function
-                       'mevedel-view--schedule-late-follow-up-drain)
+                       'mevedel-pending-inputs-schedule-held-input-delivery)
                      #'ignore)
                     ((symbol-function 'mevedel-recovery-save) #'ignore))
              (kill-buffer cockpit)))))))
@@ -473,7 +473,7 @@
                (with-current-buffer view-buf
                  (mevedel-pending-inputs-open))))
           (cl-letf (((symbol-function
-                      'mevedel-view--schedule-late-follow-up-drain)
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
                      (lambda () (setq scheduled t))))
             (kill-buffer cockpit))))
       (should scheduled)
@@ -501,7 +501,7 @@
           (cl-letf (((symbol-function 'gptel--fsm-transition)
                      (lambda (_fsm state) (setq transition state)))
                     ((symbol-function
-                      'mevedel-view--schedule-late-follow-up-drain)
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
                      #'ignore))
             (kill-buffer cockpit))))
       (should (eq transition 'WAIT))
@@ -527,7 +527,7 @@
           (should (buffer-local-value 'mevedel-view--pending-input-edit
                                       view-buf))
           (cl-letf (((symbol-function
-                      'mevedel-view--schedule-late-follow-up-drain)
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
                      (lambda () (setq scheduled t))))
             (kill-buffer cockpit))))
       (should scheduled)
@@ -548,7 +548,7 @@
                (with-current-buffer view-buf
                  (mevedel-pending-inputs-open))))
           (cl-letf (((symbol-function
-                      'mevedel-view--schedule-late-follow-up-drain)
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
                      (lambda () (setq scheduled t))))
             (kill-buffer cockpit))))
       (should-not scheduled)
@@ -562,7 +562,7 @@
     (let (scheduled)
       (save-window-excursion
         (cl-letf (((symbol-function
-                    'mevedel-view--schedule-late-follow-up-drain)
+                    'mevedel-pending-inputs-schedule-held-input-delivery)
                    (lambda () (setq scheduled t))))
           (with-current-buffer view-buf
             (mevedel-pending-inputs-open))
@@ -580,7 +580,7 @@
       (mevedel-session-enqueue-pending-input
        first-session 'follow-up '(:input "later"))
       (cl-letf (((symbol-function
-                  'mevedel-view--schedule-late-follow-up-drain)
+                  'mevedel-pending-inputs-schedule-held-input-delivery)
                  #'ignore))
         (save-window-excursion
           (with-current-buffer view-buf
@@ -605,7 +605,7 @@
                (with-current-buffer view-buf
                  (mevedel-pending-inputs-open))))
           (cl-letf (((symbol-function
-                      'mevedel-view--schedule-late-follow-up-drain)
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
                      (lambda () (cl-incf drains)))
                     ((symbol-function 'mevedel-cockpit-quit) #'ignore))
             (with-current-buffer cockpit
@@ -631,7 +631,7 @@
               (((symbol-function 'mevedel-cockpit-quit)
                 (lambda (&rest _) (setq quit t)))
                ((symbol-function
-                 'mevedel-view--schedule-late-follow-up-drain)
+                 'mevedel-pending-inputs-schedule-held-input-delivery)
                 (lambda () (setq scheduled t))))
             (with-current-buffer cockpit
               (mevedel-pending-inputs-quit)))))
@@ -663,7 +663,7 @@
                 (lambda (_fsm state) (setq transition state)))
                ((symbol-function 'mevedel-cockpit-quit) #'ignore)
                ((symbol-function
-                 'mevedel-view--schedule-late-follow-up-drain)
+                 'mevedel-pending-inputs-schedule-held-input-delivery)
                 #'ignore))
             (with-current-buffer cockpit
               (mevedel-pending-inputs-quit)))))
@@ -684,7 +684,7 @@
           (cl-letf
               (((symbol-function 'mevedel-cockpit-quit) #'ignore)
                ((symbol-function
-                 'mevedel-view--schedule-late-follow-up-drain)
+                 'mevedel-pending-inputs-schedule-held-input-delivery)
                 (lambda () (setq scheduled t))))
             (with-current-buffer cockpit
               (mevedel-pending-inputs-quit)))))
@@ -1280,7 +1280,7 @@
         (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
                    #'ignore)
                   ((symbol-function
-                    'mevedel-view--schedule-late-follow-up-drain)
+                    'mevedel-pending-inputs-schedule-held-input-delivery)
                    #'ignore))
           (mevedel-view--queue-follow-up "follow up"))
         (let ((scope
@@ -1436,6 +1436,19 @@
               ((symbol-function 'mevedel-view--clear-input) #'ignore))
       (mevedel-view--send-directive-input "about the directive"))
     (should-not (mevedel-permission-absence-held-p session)))
+
+  :doc "a directive message that fails to dispatch keeps the hold"
+
+  :doc "a background-event wake waits while held and runs once a message clears it"
+  (test-pending-inputs--with-held-session
+    (cl-letf (((symbol-function 'mevedel-agent-control-wake-pending-p) #'always)
+              ((symbol-function 'mevedel-turn-busy-p) #'ignore)
+              ((symbol-function 'mevedel-recovery-blocker) #'ignore)
+              ((symbol-function 'mevedel-view--reserved-goal-handoff-id)
+               #'ignore))
+      (should-not (mevedel-pending-inputs--event-wake-view data-buf))
+      (mevedel-permission-absence-clear session)
+      (should (eq view-buf (mevedel-pending-inputs--event-wake-view data-buf)))))
 
   :doc "a directive message that fails to dispatch keeps the hold"
   (test-pending-inputs--with-held-session
@@ -1615,7 +1628,21 @@
       (with-current-buffer data-buf
         (setq-local mevedel--current-request nil
                     mevedel--view-buffer nil))
-      (should-not (mevedel-pending-inputs--idle-work data-buf)))))
+      (should-not (mevedel-pending-inputs--idle-work data-buf))))
+  :doc "names background events after follow-ups and before an active Goal"
+  (mevedel-pending-inputs-test--with-session
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create :id "g" :status 'active))
+    (mevedel-agent-control-enqueue-execution-result
+     session "/root" "done" "exec-1" t)
+    (should (eq 'event (mevedel-pending-inputs--idle-work data-buf)))
+    (mevedel-session-set-pending-inputs
+     session 'follow-up (list (list :input "queued")))
+    (should (eq 'follow-up (mevedel-pending-inputs--idle-work data-buf)))
+    (mevedel-session-set-pending-inputs session 'follow-up nil)
+    ;; Mail that does not wake leaves the Goal next.
+    (mevedel-agent-control-clear-wake session "/root" "exec-1")
+    (should (eq 'goal (mevedel-pending-inputs--idle-work data-buf)))))
 
 (mevedel-deftest mevedel-pending-inputs-offer-idle-work ()
   ,test
@@ -1645,6 +1672,16 @@
         (mevedel-session-set-pending-inputs session 'follow-up nil)
         (mevedel-pending-inputs--offer-idle-work-now data-buf)
         (should (equal `((,session ,data-buf)) continued)))))
+
+  :doc "dispatches a pending background event"
+  (mevedel-pending-inputs-test--with-session
+    (let (woken)
+      (mevedel-agent-control-enqueue-execution-result
+       session "/root" "done" "exec-1" t)
+      (cl-letf (((symbol-function 'mevedel-pending-inputs--run-event-wake)
+                 (lambda (buffer) (push buffer woken))))
+        (mevedel-pending-inputs--offer-idle-work-now data-buf))
+      (should (equal (list data-buf) woken))))
 
   :doc "schedules nothing when the session holds no idle work"
   (mevedel-pending-inputs-test--with-session
@@ -1678,7 +1715,7 @@
           (delete-region (- (point-max) 6) (point-max))
           (should-not timers)
           (delete-region (mevedel-view--input-start) (point-max))
-          (should (equal `((mevedel-view--run-follow-up-drain ,data-buf))
+          (should (equal `((mevedel-pending-inputs--offer-idle-work-now ,data-buf t))
                          timers))
           (apply (caar timers) (cdar timers))
           (should (equal (list entry) delivered))))))
@@ -1691,7 +1728,239 @@
         (with-current-buffer view-buf
           (mevedel-view-test--insert-composer-draft "draft")
           (delete-region (mevedel-view--input-start) (point-max))))
-      (should-not timers))))
+      (should-not timers)))
+
+  :doc "a background event held by a draft is offered once the draft is deleted"
+  (mevedel-pending-inputs-test--with-session
+    (let (timers woken continued)
+      (setf (mevedel-session-goal session)
+            (mevedel-goal--create :id "g" :status 'active))
+      (mevedel-agent-control-enqueue-execution-result
+       session "/root" "done" "exec-1" t)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) timers)))
+                ((symbol-function 'mevedel-pending-inputs--run-event-wake)
+                 (lambda (buffer) (push buffer woken)))
+                ((symbol-function 'mevedel-goal-schedule-continuation)
+                 (lambda (&rest args) (push args continued))))
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft "draft")
+          (should-not timers)
+          (delete-region (mevedel-view--input-start) (point-max)))
+        (should (= 1 (length timers)))
+        (apply (caar timers) (cdar timers))
+        (should (equal (list data-buf) woken))
+        ;; A wake consumed before the timer fires leaves the Goal alone:
+        ;; a draft never held it.
+        (setq woken nil)
+        (mevedel-agent-control-clear-context-mailbox session)
+        (apply (caar timers) (cdar timers))
+        (should-not woken)
+        (should-not continued)))))
+
+(defmacro mevedel-pending-inputs-test--with-event (&rest body)
+  "Run BODY in a session holding one waking result, capturing submissions.
+BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
+  (declare (indent 0) (debug t))
+  `(mevedel-pending-inputs-test--with-session
+     (let (submitted)
+       (mevedel-agent-control-enqueue-execution-result
+        session "/root" "done" "exec-1" t)
+       (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                  (lambda (_key _path thunk &rest _) (funcall thunk) t))
+                 ((symbol-function 'mevedel--submit-generated-turn)
+                  (lambda (prompt &optional display &rest _)
+                    (push (list prompt display
+                                mevedel-view--pending-guest-attribution)
+                          submitted))))
+         ,@body))))
+
+(mevedel-deftest mevedel-pending-inputs-schedule-held-input-delivery ()
+  ,test
+  (test)
+  :doc "hold release wakes background mail without a queued follow-up"
+  (mevedel-pending-inputs-test--with-event
+    (let (timers)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) timers))))
+        (with-current-buffer view-buf
+          (mevedel-pending-inputs-schedule-held-input-delivery)))
+      (dolist (timer timers) (apply (car timer) (cdr timer)))
+      (should (= 1 (length submitted)))))
+  :doc "hold release offers follow-ups before background mail"
+  (mevedel-pending-inputs-test--with-event
+    (let (timers drained)
+      (mevedel-session-set-pending-inputs
+       session 'follow-up (list (list :input "queued")))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) timers)))
+                ((symbol-function 'mevedel-view--run-follow-up-drain)
+                 (lambda (buffer) (push buffer drained))))
+        (mevedel-pending-inputs-schedule-held-input-delivery data-buf)
+        (dolist (timer timers) (apply (car timer) (cdr timer))))
+      (should (equal (list data-buf) drained))
+      (should-not submitted)))
+  :doc "consumed mail never turns a hold-release offer into Goal continuation"
+  (mevedel-pending-inputs-test--with-event
+    (let (timers continued)
+      (setf (mevedel-session-goal session)
+            (mevedel-goal--create :id "g" :status 'active))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) timers)))
+                ((symbol-function 'mevedel-goal-schedule-continuation)
+                 (lambda (&rest args) (push args continued))))
+        (mevedel-pending-inputs-schedule-held-input-delivery data-buf)
+        (should (= 1 (length timers)))
+        (mevedel-agent-control-clear-wake session "/root" "exec-1")
+        (dolist (timer timers) (apply (car timer) (cdr timer)))
+        (setq timers nil)
+        (mevedel-pending-inputs-schedule-held-input-delivery data-buf)
+        (should-not timers))
+      (should-not continued)
+      (should-not submitted))))
+
+(mevedel-deftest mevedel-pending-inputs--run-event-wake ()
+  ,test
+  (test)
+  :doc "starts one fixed, attributed turn and leaves the mail for the request"
+  (mevedel-pending-inputs-test--with-event
+    (mevedel-pending-inputs--run-event-wake data-buf)
+    (should (equal `((,mevedel-pending-inputs--event-trigger
+                      ,mevedel-pending-inputs--event-trigger
+                      (:type background-event)))
+                   submitted))
+    (should (string-match-p "not a message from the user"
+                            mevedel-pending-inputs--event-trigger))
+    (with-current-buffer data-buf
+      (should-not mevedel-view--pending-guest-attribution))
+    ;; The request's inbox, not the prompt, delivers the result.
+    (should (= 1 (length (mevedel-agent-control-context-mailbox session)))))
+  :doc "two completions while idle start one turn"
+  (mevedel-pending-inputs-test--with-event
+    (mevedel-agent-control-enqueue-execution-result
+     session "/root" "two" "exec-2" t)
+    (cl-letf* ((submit (symbol-function 'mevedel--submit-generated-turn))
+               ((symbol-function 'mevedel--submit-generated-turn)
+                (lambda (&rest args)
+                  (apply submit args)
+                  ;; A started turn occupies the session.
+                  (with-current-buffer data-buf
+                    (setq-local mevedel--current-request
+                                (mevedel-request--create :session session))))))
+      (mevedel-pending-inputs--run-event-wake data-buf)
+      (mevedel-pending-inputs--run-event-wake data-buf))
+    (should (= 1 (length submitted))))
+  :doc "each hold defers the wake"
+  (dolist (hold
+           (list
+            (cons "draft"
+                  (lambda (_session _data view)
+                    (with-current-buffer view
+                      (mevedel-view-test--insert-composer-draft "draft"))))
+            (cons "follow-up"
+                  (lambda (session _data _view)
+                    (mevedel-session-set-pending-inputs
+                     session 'follow-up (list (list :input "first")))))
+            (cons "paused input"
+                  (lambda (session _data _view)
+                    (mevedel-session-set-pending-input-paused session t)))
+            (cons "permission"
+                  (lambda (session _data _view)
+                    (setf (mevedel-session-permission-queue session)
+                          (list (list :id "p")))))
+            (cons "plan approval"
+                  (lambda (session _data _view)
+                    (setf (mevedel-session-pending-plan-approval session)
+                          (list :id "plan"))))
+            (cons "directive planning"
+                  (lambda (session _data _view)
+                    (setf (mevedel-session-directive-planning session)
+                          (list :directive-id "d1"))))
+            (cons "compaction"
+                  (lambda (_session data _view)
+                    (with-current-buffer data
+                      (setq-local mevedel-compact-run-in-flight t))))
+            (cons "busy turn"
+                  (lambda (session data _view)
+                    (with-current-buffer data
+                      (setq-local mevedel--current-request
+                                  (mevedel-request--create :session session)))))
+            (cons "recovery blocker"
+                  (lambda (session _data _view)
+                    (setf (mevedel-session-recovery-issues session)
+                          (list (list :blocking t :message "blocked")))))))
+    (mevedel-pending-inputs-test--with-event
+      (funcall (cdr hold) session data-buf view-buf)
+      (cl-letf (((symbol-function 'mevedel-view-interaction-pending-p)
+                 #'ignore))
+        (mevedel-pending-inputs--run-event-wake data-buf))
+      (ert-info ((car hold))
+        (should-not submitted)
+        (should (mevedel-agent-control-wake-pending-p session)))))
+  :doc "admission rechecks holds after mutation authority yields"
+  (dolist (hold '(draft busy follow-up consumed))
+    (mevedel-pending-inputs-test--with-event
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-new-mutation-authority)
+                 (lambda (_session)
+                   (pcase hold
+                     ('draft
+                      (with-current-buffer view-buf
+                        (mevedel-view-test--insert-composer-draft "> draft\nsecond line")))
+                     ('busy
+                      (with-current-buffer data-buf
+                        (setq-local mevedel--current-request
+                                    (mevedel-request--create :session session))))
+                     ('follow-up
+                      (mevedel-session-set-pending-inputs
+                       session 'follow-up (list (list :input "first"))))
+                     ('consumed
+                      (mevedel-agent-control-clear-wake session "/root" "exec-1"))))))
+        (mevedel-pending-inputs--run-event-wake data-buf))
+      (ert-info ((symbol-name hold))
+        (should-not submitted))))
+  :doc "a pending view interaction holds the wake"
+  (mevedel-pending-inputs-test--with-event
+    (cl-letf (((symbol-function 'mevedel-view-interaction-pending-p)
+               (lambda (&rest _) t)))
+      (mevedel-pending-inputs--run-event-wake data-buf))
+    (should-not submitted))
+  :doc "no live view means no wake"
+  (mevedel-pending-inputs-test--with-event
+    (with-current-buffer data-buf
+      (setq-local mevedel--view-buffer nil))
+    (mevedel-pending-inputs--run-event-wake data-buf)
+    (should-not submitted))
+  :doc "a failed start leaves the waking mail and clears the attribution"
+  (mevedel-pending-inputs-test--with-event
+    (let (reported)
+      (cl-letf (((symbol-function 'mevedel--submit-generated-turn)
+                 (lambda (&rest _) (error "Backend not ready"))))
+        (mevedel-test--with-captured-diagnostics reported
+          (mevedel-pending-inputs--run-event-wake data-buf)))
+      (should (string-match-p "Backend not ready" reported))
+      (should (mevedel-agent-control-wake-pending-p session))
+      (with-current-buffer data-buf
+        (should-not mevedel-view--pending-guest-attribution)))))
+
+(mevedel-deftest mevedel-pending-inputs-offer-event-after-turn ()
+  ,test
+  (test)
+  :doc "offers idle work only while a wake is pending"
+  (mevedel-pending-inputs-test--with-session
+    (let ((fsm (gptel-make-fsm :info (list :buffer data-buf)))
+          offered)
+      (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                 (lambda (buffer) (push buffer offered))))
+        (mevedel-pending-inputs-offer-event-after-turn fsm)
+        (should-not offered)
+        (mevedel-agent-control-enqueue-execution-result
+         session "/root" "done" "exec-1" t)
+        (mevedel-pending-inputs-offer-event-after-turn fsm)
+        (should (equal (list data-buf) offered))))))
 
 (provide 'test-mevedel-pending-inputs)
 ;;; test-mevedel-pending-inputs.el ends here

@@ -1991,6 +1991,12 @@
                      ((symbol-function 'make-process)
                       (lambda (&rest args)
                         (car (push (apply real-make-process args) children))))
+                     ;; Every deletion below fails, so the stderr pipe must be
+                     ;; collected here too or it outlives the test.
+                     (real-make-pipe-process (symbol-function 'make-pipe-process))
+                     ((symbol-function 'make-pipe-process)
+                      (lambda (&rest args)
+                        (car (push (apply real-make-pipe-process args) children))))
                      ((symbol-function 'process-send-string)
                       (lambda (&rest _) (error "Broken pipe")))
                      (real-delete-process (symbol-function 'delete-process))
@@ -2463,7 +2469,7 @@
                      (lambda (&optional proc seconds millisec just-this-one)
                        (let ((result (funcall accept proc seconds millisec just-this-one)))
                          (if (and surviving-writer-p (processp proc)
-                                  (equal (process-name proc) "mevedel-hook-stderr"))
+                                  (string-prefix-p "mevedel-hook-stderr" (process-name proc)))
                              (progn
                                ;; Preserve the real first read, then model a
                                ;; pipe continuously replenished by a descendant.

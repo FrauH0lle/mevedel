@@ -74,7 +74,7 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
 (defun mevedel-tool-permission--sanitized-pattern (tool-name pattern)
   "Return log-safe PATTERN metadata for TOOL-NAME."
   (cond
-   ((and (equal tool-name "Bash") pattern)
+   ((and (equal (mevedel-permission-policy-tool-name tool-name) "Bash") pattern)
     (mevedel-bash-policy-decision-specifier-value pattern))
    (t pattern)))
 

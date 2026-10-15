@@ -856,9 +856,9 @@ the shared permission prompt contract."
           (lambda (remote-p)
             (concat
              (mevedel-permission--card-title
-              (if dangerous
-                  "Bash Command Execution Request — DANGEROUS"
-                "Bash Command Execution Request")
+              (format "%s Command Execution Request%s"
+                      (or (plist-get entry :tool-name) "Bash")
+                      (if dangerous " — DANGEROUS" ""))
               (if dangerous 'error 'warning))
              (mevedel--prompt-attribution-line origin)
              "\n"

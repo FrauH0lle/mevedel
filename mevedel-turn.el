@@ -124,12 +124,15 @@
 (autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
 
 ;; `mevedel-pending-inputs'
-(declare-function mevedel-view--schedule-follow-up-drain
+(declare-function mevedel-pending-inputs-offer-event-after-turn
                   "mevedel-pending-inputs" (fsm))
-(autoload 'mevedel-view--schedule-follow-up-drain "mevedel-pending-inputs")
 (declare-function mevedel-pending-inputs-requeue-steering
                   "mevedel-pending-inputs" (session request-id))
+(declare-function mevedel-view--schedule-follow-up-drain
+                  "mevedel-pending-inputs" (fsm))
+(autoload 'mevedel-pending-inputs-offer-event-after-turn "mevedel-pending-inputs")
 (autoload 'mevedel-pending-inputs-requeue-steering "mevedel-pending-inputs")
+(autoload 'mevedel-view--schedule-follow-up-drain "mevedel-pending-inputs")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
@@ -1228,7 +1231,10 @@ inverting them drops the turn's file-history checkpoints."
               (lambda (m) (mevedel-goal-dispatch-after-turn m t)) machine))
            (lambda (machine)
              (mevedel--turn-after-publication
-              #'mevedel-view--schedule-follow-up-drain machine)))))))
+              #'mevedel-view--schedule-follow-up-drain machine))
+           (lambda (machine)
+             (mevedel--turn-after-publication
+              #'mevedel-pending-inputs-offer-event-after-turn machine)))))))
 
 (defun mevedel--turn-clear-pending-policy (fsm)
   "Clear only the unadmitted submission policy captured in FSM's info.

@@ -33,7 +33,8 @@
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-enqueue-execution-result
-                  "mevedel-agent-control" (session owner body))
+                  "mevedel-agent-control"
+                  (session owner body &optional execution-id wake))
 
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime-queue-execution-completion
@@ -298,6 +299,10 @@ operation rather than a successful or semantic non-error result."
   "Return compact model-visible XML derived from canonical FACTS."
   (let (attributes)
     (dolist (entry '((:execution-id . "execution_id")
+                     (:kind . "kind")
+                     (:description . "description")
+                     (:expires-at . "expires_at")
+                     (:event-count . "event_count")
                      (:command . "command")
                      (:state . "state")
                      (:termination . "termination")
@@ -317,16 +322,27 @@ operation rather than a successful or semantic non-error result."
                     (cond
                      ((eq value t) "true")
                      ((null value) "false")
+                     ;; A model reads a calendar time, not epoch seconds.
+                     ((eq (car entry) :expires-at)
+                      (format-time-string "%FT%T%z" value))
                      ((floatp value) (format "%.3f" value))
                      (t (format "%s" value)))))
            attributes))))
-    (format "<bash-execution %s/>" (string-join (nreverse attributes) " "))))
+    (format "<%s-execution %s/>"
+            (if (eq (plist-get facts :kind) 'monitor) "monitor" "bash")
+            (string-join (nreverse attributes) " "))))
 
 (defun mevedel-tool-exec-format-execution-metadata (facts)
   "Return compact UI metadata for execution FACTS."
   (string-join
    (delq nil
          (list
+          (when (eq (plist-get facts :kind) 'monitor)
+            (format "Watching: %s" (or (plist-get facts :description) "")))
+          (when-let* ((expires (plist-get facts :expires-at)))
+            (format "expires %s" (format-time-string "%H:%M:%S" expires)))
+          (when (plist-get facts :event-count)
+            (format "%d events" (plist-get facts :event-count)))
           (when-let* ((state (plist-get facts :state)))
             (symbol-name (if (eq state 'completed)
                              (or (plist-get facts :outcome) state)
@@ -342,7 +358,8 @@ operation rather than a successful or semantic non-error result."
           (when-let* ((termination (plist-get facts :termination))
                       ((not (eq termination 'exited))))
             (symbol-name termination))
-          (when (plist-member facts :wall-time-seconds)
+          (when (and (not (eq (plist-get facts :kind) 'monitor))
+                     (plist-member facts :wall-time-seconds))
             (mevedel--duration-label (plist-get facts :wall-time-seconds)))
           (when (plist-member facts :output-lines)
             (format "%d lines" (or (plist-get facts :output-lines) 0)))
@@ -418,30 +435,101 @@ stopped command's outcome."
                         :model-result-envelope-p
                         (not suppress-sandbox-disclosure-p))))))
 
-(defun mevedel-tool-exec-handle-execution-event (event owner-context)
-  "Secure an independently completed Bash EVENT in its owner mailbox."
-  (when (and (eq (plist-get event :type) 'terminal)
-             (eq (plist-get event :delivery) 'mailbox))
-    (let* ((args (plist-get event :tool-args))
-           (observation (plist-get event :observation))
-           (envelope
-            (mevedel-tool-exec--observation-envelope
-             observation
-             (plist-get args :suppress-sandbox-disclosure-p))))
-      (if (mevedel-session-p owner-context)
-          (progn
-            (mevedel-agent-control-enqueue-execution-result
-             owner-context
-             (plist-get event :owner)
-             (plist-get envelope :result)))
-        (mevedel-agent-runtime-queue-execution-completion
-         owner-context
-         (plist-get event :owner)
-         (plist-get envelope :result))))))
+(defun mevedel-tool-exec--offer-wake (session event)
+  "Offer SESSION's idle model a turn for newly delivered background mail.
+EVENT's root data buffer also works before SESSION has saved artifacts.
+Delivery is already durable here, so a failure only skips the wake: the
+record stays unread and the next turn still receives it."
+  (condition-case err
+      (when-let* ((buffer (let ((origin (plist-get event :data-buffer)))
+                           (if (and (buffer-live-p origin)
+                                   (eq session (buffer-local-value
+                                                'mevedel--session origin))
+                                   (equal (plist-get event :owner) "/root"))
+                              origin
+                             (mevedel-session-root-buffer session))))
+                  ((buffer-live-p buffer)))
+        (mevedel-pending-inputs-offer-idle-work buffer))
+    (error
+     (mevedel--warn-once
+      'execution-wake "Could not offer a background event turn: %s"
+      (error-message-string err)))))
 
-(defun mevedel-tool-exec--bash (callback args)
+(defun mevedel-tool-exec-handle-execution-event (event owner-context)
+  "Secure an independently delivered execution EVENT in its owner mailbox.
+Return non-nil only after the record is durable.  A yielded root result
+that ended on its own wakes an idle model; a stopped one does not."
+  (pcase (plist-get event :type)
+    ('monitor-batch
+     (let ((facts (plist-get event :facts)))
+       (mevedel-agent-control-enqueue-monitor-event
+        owner-context (plist-get facts :execution-id)
+        (or (plist-get facts :description) "")
+        (plist-get event :body) t)
+       (mevedel-tool-exec--offer-wake owner-context event)
+       t))
+    ((and 'terminal (guard (eq (plist-get event :delivery) 'mailbox)))
+     (let* ((args (plist-get event :tool-args))
+            (facts (plist-get event :facts))
+            (observation (plist-get event :observation))
+            (root-p (and (mevedel-session-p owner-context)
+                         (equal (plist-get event :owner) "/root")))
+            (wake (and root-p
+                       (not (eq (plist-get facts :termination) 'stopped)))))
+       (prog1
+           (cond
+            ((eq (plist-get facts :kind) 'monitor)
+             (mevedel-agent-control-enqueue-monitor-event
+              owner-context (plist-get facts :execution-id)
+              (or (plist-get facts :description) "")
+              (mevedel-tool-exec--monitor-terminal-body event) wake))
+            ((mevedel-session-p owner-context)
+             (mevedel-agent-control-enqueue-execution-result
+              owner-context
+              (plist-get event :owner)
+              (plist-get
+               (mevedel-tool-exec--observation-envelope
+                observation (plist-get args :suppress-sandbox-disclosure-p))
+               :result)
+              (plist-get facts :execution-id) wake))
+            (t
+             (mevedel-agent-runtime-queue-execution-completion
+              owner-context
+              (plist-get event :owner)
+              (plist-get
+               (mevedel-tool-exec--observation-envelope
+                observation (plist-get args :suppress-sandbox-disclosure-p))
+               :result))))
+         (when wake
+           (mevedel-tool-exec--offer-wake owner-context event)))))))
+
+(defun mevedel-tool-exec--monitor-terminal-body (event)
+  "Return EVENT's pending monitor lines followed by its terminal notice."
+  (let* ((facts (plist-get event :facts))
+         (termination (plist-get facts :termination))
+         (notice
+          (pcase termination
+            ('timed-out "timed out; re-arm explicitly to keep watching")
+            ('flood "stopped for flooding; restart with a tighter filter")
+            ('stopped "stopped")
+            ('exited (format "exited with code %s" (plist-get facts :exit-code)))
+            (_ (format "ended (%s)" termination)))))
+    (concat (or (plist-get event :monitor-output) "")
+            (format "Monitor %s: %s (%d events)."
+                    (or (plist-get facts :description) "") notice
+                    (or (plist-get facts :event-count) 0)))))
+
+(defun mevedel-tool-exec--monitor (callback args)
+  "Start a root-owned stdout event monitor from ARGS; return via CALLBACK."
+  (unless (equal (mevedel-current-origin) "/root")
+    (error "Monitor is available only to /root"))
+  (when (plist-member args :tty)
+    (error "Monitor does not support tty"))
+  (mevedel-tool-exec--bash callback args 'monitor))
+
+(defun mevedel-tool-exec--bash (callback args &optional kind)
   "Execute a Bash command and return its output.
-CALLBACK receives the result envelope.  ARGS is a plist with :command."
+CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
   (let ((command (plist-get args :command))
         (tty (plist-get args :tty)))
     (unless (stringp command)
@@ -487,6 +575,8 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
            observation (plist-get args :suppress-sandbox-disclosure-p))))
        :session session :data-buffer (current-buffer)
        :owner owner :request mevedel--current-request
+       :kind (or kind 'bash) :description (plist-get args :description)
+       :timeout-ms (or (plist-get args :timeout_ms) 300000)
        :owner-context (or invocation session)
        :tool-args args
        :tool-use-id (mevedel-pipeline-active-tool-use-id)
@@ -532,6 +622,10 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
     (mevedel-execution-observe
      session owner execution-id
      (lambda (observation)
+       ;; The model now holds the terminal result; its mailbox copy must
+       ;; not wake it again.
+       (when (eq (plist-get (plist-get observation :facts) :state) 'completed)
+         (mevedel-agent-control-clear-wake session owner execution-id))
        (let* ((envelope
                ;; Keep the model-visible tool status unchanged.  Presentation
                ;; separately distinguishes a collected command failure from
@@ -579,6 +673,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
     (mevedel-execution-stop
      session owner execution-id
      (lambda (observation)
+       (mevedel-agent-control-clear-wake session owner execution-id)
        (let ((envelope (mevedel-tool-exec--observation-envelope
                         observation nil t)))
          (funcall callback
@@ -857,7 +952,7 @@ the full command, bounded output and execution details."
                               (not (plist-member render-data :execution-output))
                               (not (plist-get render-data :live-execution-p)))
                          (replace-regexp-in-string
-                          "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result)
+                          "\n*<\\(?:bash\\|monitor\\)-execution [^\n]*/>[ \t\r\n]*\\'" "" result)
                        ;; Canonical output and unmarked results are not tool
                        ;; envelopes, even if the command printed this XML.
                        result)))
@@ -892,7 +987,8 @@ the full command, bounded output and execution details."
                          '(stopped owner-stopped interrupted)))
               "interrupted")
              ((eq state 'unknown) "completion unavailable")
-             ((eq state 'running) "running")
+             ((eq state 'running)
+              (if (eq (plist-get render-data :kind) 'monitor) "watching" "running"))
              ((eq state 'completed)
               (if (eq (plist-get render-data :outcome) 'failure)
                   "failed" "finished"))
@@ -916,10 +1012,14 @@ the full command, bounded output and execution details."
                              (if (eq status 'error) "failed"
                                (or label "stopped"))))
              (t (concat
-                 (format "%s: %s" (or name "Bash")
-                         (mevedel--truncate-display first-line 60 "..."))
+                 (if (eq (plist-get render-data :kind) 'monitor)
+                     (format "Watching: %s" (or (plist-get render-data :description)
+                                               (plist-get args :description) ""))
+                   (format "%s: %s" (or name "Bash")
+                           (mevedel--truncate-display first-line 60 "...")))
                  (and label (format " · %s" label))
-                 (when (plist-member render-data :wall-time-seconds)
+                 (when (and (not (eq (plist-get render-data :kind) 'monitor))
+                            (plist-member render-data :wall-time-seconds))
                    (format " · %s" (mevedel--duration-label
                                     (plist-get render-data :wall-time-seconds))))
                  (when (or (plist-get render-data :output-preview-truncated-p)

@@ -38,6 +38,7 @@
 (require 'mevedel-tool-editing)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-web-registration)
+(require 'xml)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -159,7 +160,8 @@ Keep them request-local across temporary removal of all callable tools."
 (defun mevedel-tools-visibility (owner)
   "Return a predicate of tool names visible to OWNER's next model sample.
 OWNER is a native gptel FSM or an external turn owner.  Plan and directive
-planning hide editing tools; Goal tools follow their current availability."
+planning hide editing tools; Goal tools follow their current availability.
+Monitor is visible only to the root, never to an agent invocation."
   (let* ((info (mevedel-engine-info owner))
          (invocation (plist-get info :mevedel-agent-invocation))
          (buffer (plist-get info :buffer))
@@ -181,7 +183,8 @@ planning hide editing tools; Goal tools follow their current availability."
          (apply-patch-visible-p
           (and plan-read-only-p (not (mevedel-plan-directive-p session request)))))
     (lambda (name)
-      (and (mevedel-tool-goal-available-p name owner)
+      (and (not (and invocation (equal name "Monitor")))
+           (mevedel-tool-goal-available-p name owner)
            (not (and plan-read-only-p
                      (when-let* ((registered (mevedel-tool-get name)))
                        (if (equal name "ApplyPatch")
@@ -504,6 +507,16 @@ On a miss, suggest search terms from the effective callable CATALOG."
              (plist-get msg :type)
              (plist-get msg :sender)
              (plist-get msg :recipient)
+             (mevedel-tools--mailbox-body-escape
+              (or (plist-get msg :payload) ""))))
+    ('MONITOR
+     (format "<agent-message type=\"MONITOR\" sender=\"%s\" recipient=\"%s\" execution_id=\"%s\" description=\"%s\">\n%s\n</agent-message>"
+             (plist-get msg :sender)
+             (plist-get msg :recipient)
+             (xml-escape-string (or (plist-get msg :execution-id) ""))
+             (xml-escape-string
+              (replace-regexp-in-string
+               "[\n\r]+" " " (or (plist-get msg :description) "")))
              (mevedel-tools--mailbox-body-escape
               (or (plist-get msg :payload) ""))))
     ('USER

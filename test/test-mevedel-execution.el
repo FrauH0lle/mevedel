@@ -639,6 +639,36 @@
                               (plist-get preview :output)))
       (should (= 10 (plist-get preview :omitted))))))
 
+(mevedel-deftest mevedel-execution--collect-stderr ()
+  ,test
+  (test)
+  :doc "counts collected stderr and marks a capped collection in the preview"
+  (let ((record (mevedel-execution--record-create
+                 :child 'child :newline-count 0 :output-chars 0
+                 :output-head "" :output-tail "")))
+    (cl-letf (((symbol-function 'mevedel-execution-process-collect-stderr)
+               (lambda (_child) (cons "err\n" t))))
+      (mevedel-execution--collect-stderr record))
+    (should (= 1 (mevedel-execution--record-newline-count record)))
+    (should (mevedel-execution--record-output-limit-p record))
+    (should (string-match-p "err\n\n\\[stderr truncated at the output limit\\]"
+                            (mevedel-execution--record-unread-tail record))))
+  :doc "reports a failed collection and still lets delivery proceed"
+  (let ((record (mevedel-execution--record-create :child 'child))
+        warning)
+    (cl-letf (((symbol-function 'mevedel-execution-process-collect-stderr)
+               (lambda (_child) (signal 'file-error '("Injected read failure")))))
+      (mevedel-test--with-captured-diagnostics warning
+        (mevedel-execution--collect-stderr record)))
+    (should (string-match-p "Could not collect remote execution stderr" warning))
+    (should-not (mevedel-execution--record-output-limit-p record)))
+  :doc "a child without a target file collects nothing"
+  (let ((record (mevedel-execution--record-create :child 'child)))
+    (cl-letf (((symbol-function 'mevedel-execution-process-collect-stderr)
+               #'ignore))
+      (mevedel-execution--collect-stderr record))
+    (should-not (mevedel-execution--record-output-chars record))))
+
 (mevedel-deftest mevedel-execution--managed-append ()
   ,test
   (test)

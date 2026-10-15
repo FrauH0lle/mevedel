@@ -25,6 +25,7 @@
                   (&optional session request))
 (declare-function mevedel-plan-read-only-p "mevedel-agents"
                   (&optional session))
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-data-buffer
@@ -324,6 +325,7 @@ happen for a non-read-only tool."
            :mode mode
            :session session
            :request request
+           :invocation invocation
            :workspace-root workspace-root
            :allowed-roots allowed-roots
            :exact-allowed-paths exact-allowed-paths
@@ -358,7 +360,8 @@ happen for a non-read-only tool."
            :specifier-value specifier-value
            :protected-path (plist-get context :protected-path-p)
            :workspace-root workspace-root
-           :rule-tool (if workspace-boundary-p "*" tool-name)
+           :rule-tool (if workspace-boundary-p "*"
+                        (mevedel-permission-policy-tool-name tool-name))
            :rule-key rule-key
            :rule-value rule-value
            :include-always (not (null workspace))
@@ -368,10 +371,17 @@ happen for a non-read-only tool."
            :persistent-rules persistent-rules
            :permission-request permission-request))))
 
+(defun mevedel-permission-policy-tool-name (tool-name)
+  "Return the permission policy identity of TOOL-NAME.
+Monitor executes Bash commands under Bash rules and execution authority.
+Keep the original name in invocation contexts and presentation metadata."
+  (if (equal tool-name "Monitor") "Bash" tool-name))
+
 (defun mevedel-permission--checker-args (context)
   "Return `mevedel-check-permission' keyword args for CONTEXT."
   (let ((content (plist-get context :args))
-        (tool-name (plist-get context :tool-name)))
+        (tool-name (mevedel-permission-policy-tool-name
+                    (plist-get context :tool-name))))
     (when (and (member tool-name '("Bash" "Eval"))
                (listp content)
                (keywordp (car-safe content)))
@@ -381,7 +391,9 @@ happen for a non-read-only tool."
           (plist-put (copy-sequence context) :content content))))
 
 (cl-defun mevedel-permission--preflight
-    (tool-name &key tool-struct path pattern domain name content request
+    (tool-name &key tool-struct path pattern domain name content
+               (request nil request-supplied-p)
+               (invocation nil invocation-supplied-p)
                invocation-rules request-rules session-rules persistent-rules
                mode session workspace-root allowed-roots exact-allowed-paths
                resource-access resource-grants one-shot-mutations-p
@@ -395,7 +407,9 @@ plist's `:early-decision' is nil when the tool-owned permission slot and
 the remaining decision chain still need to run.
 
 TOOL-NAME identifies the tool.  TOOL-STRUCT and CONTENT supply its policy
-and input.  REQUEST identifies the owning request when available.  PATH,
+and input.  REQUEST and INVOCATION identify the captured owners.  When supplied,
+even as nil, their Plan stamps replace ambient owners; the owning SESSION's
+live Plan flag still applies.  Omitted owners use ambient stamps.  PATH,
 PATTERN, DOMAIN, and NAME may supply pre-extracted
 specifiers.  INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, and
 PERSISTENT-RULES are the ordered rule sources.  MODE selects the permission
@@ -419,7 +433,11 @@ session-owned work descendants; workspace-owned shared files are excluded."
               pattern (extract #'mevedel-tool-get-pattern pattern)
               domain (extract #'mevedel-tool-get-domain domain)
               name (extract #'mevedel-tool-get-name name))))
-    (let* ((read-only-p
+    (let* ((mevedel--current-request
+            (if request-supplied-p request mevedel--current-request))
+           (mevedel--agent-invocation
+            (if invocation-supplied-p invocation mevedel--agent-invocation))
+           (read-only-p
             (when tool-struct (mevedel-tool-read-only-p tool-struct)))
            (package-source-root
             (and read-only-p
@@ -442,9 +460,13 @@ session-owned work descendants; workspace-owned shared files are excluded."
            (buckets
             (mevedel-permission-rules-collect-buckets
              invocation-rules request-rules session-rules persistent-rules))
+           (policy-tool (mevedel-permission-policy-tool-name tool-name))
            (deny-bucket
-            (mevedel-permission-rules-first-deny-bucket
-             buckets tool-name path pattern domain name))
+            (or (mevedel-permission-rules-first-deny-bucket
+                 buckets policy-tool path pattern domain name)
+                (and (not (equal policy-tool tool-name))
+                     (mevedel-permission-rules-first-deny-bucket
+                      buckets tool-name path pattern domain name))))
            (early-decision
             (cond
              (deny-bucket
@@ -594,7 +616,9 @@ exact-match in-bounds path list."
                  (mevedel-permission--decision
                   slot-result
                   (cond
-                   ((equal tool-name "Bash") 'bash-classifier)
+                   ((equal (mevedel-permission-policy-tool-name tool-name)
+                           "Bash")
+                    'bash-classifier)
                    ((equal tool-name "Eval") 'eval-policy)
                    (t 'tool-slot)))))))))
      (t

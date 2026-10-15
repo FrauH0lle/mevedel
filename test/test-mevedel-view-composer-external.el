@@ -40,7 +40,7 @@
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
                      (lambda () (setq rebuilt t)))
-                    ((symbol-function 'mevedel-view--schedule-late-follow-up-drain)
+                    ((symbol-function 'mevedel-pending-inputs-schedule-held-input-delivery)
                      (lambda () (setq drained t))))
             (let ((entry (mevedel-view-enqueue-external-follow-up
                           data-buffer "look at this $review please"

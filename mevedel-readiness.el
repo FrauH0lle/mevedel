@@ -31,7 +31,8 @@
 (autoload 'mevedel-claude-code-launch "mevedel-claude-code")
 
 ;; `mevedel-pending-inputs'
-(declare-function mevedel-view--schedule-late-follow-up-drain "mevedel-pending-inputs" ())
+(declare-function mevedel-pending-inputs-schedule-held-input-delivery
+                  "mevedel-pending-inputs" (&optional data-buffer))
 (defvar mevedel--view-buffer)
 
 (defvar-local mevedel-readiness--claude nil
@@ -51,7 +52,7 @@ A plist with :key, :state (`ready', `failed' or `checking'), the failure
     (mevedel-recovery-save session)
     (when (and (boundp 'mevedel--view-buffer) (buffer-live-p mevedel--view-buffer))
       (with-current-buffer mevedel--view-buffer
-        (mevedel-view--schedule-late-follow-up-drain)))))
+        (mevedel-pending-inputs-schedule-held-input-delivery)))))
 
 (defun mevedel-readiness-record (ready &optional failure checked)
   "Record the current root buffer's Claude readiness.

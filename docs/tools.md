@@ -1065,8 +1065,10 @@ and rendering. Bash classification and reusable rules live in
 `mevedel-bash-policy.el`; execution-specific permission normalization and
 prompt adaptation live in `mevedel-tool-exec-permission.el`.
 
-Bash source runs through `bash -lc`, so login-shell initialization contributes
-to the requested command's output. Managed Bash has no automatic timeout; use
+Bash source normally runs through `bash -lc`, so login-shell initialization
+contributes to the requested command's output. Analyzer-proven read-only calls
+instead use `bash --noprofile --norc -p -c` to avoid startup-file and environment
+side effects. Managed Bash has no automatic timeout; use
 the native `timeout` command when the command itself needs a deadline. On Unix,
 Emacs places each child in a dedicated process group, and mevedel sends TERM
 followed by KILL to the whole group. On Windows it terminates the direct child.
@@ -1156,7 +1158,7 @@ resemble a model-facing `<bash-execution .../>` envelope. Only a rendered tool
 result whose hidden data marks an appended model-facing envelope has that
 envelope removed from its expanded body.
 
-Managed executions publish transient progress after two seconds: at most four
+Ordinary Bash executions publish transient progress after two seconds: at most four
 times per second while output arrives, and once a second while the command is
 silent, which keeps its whole-second elapsed time current. Quiet updates share
 whole-second clock ticks with housekeeping and elapsed metadata. The transition
@@ -1197,7 +1199,22 @@ of a stale live handle. A yielded terminal result remains owner-pollable for 60
 seconds; repeated polls return the same observation without publishing another
 terminal event or mailbox message. If a yielded process exits independently,
 or the user stops it outside the model tool, root-owned output is queued
-synchronously in the root mailbox without starting a model request. Agent-owned
+synchronously in the root mailbox. A root result from a process that ended on
+its own also wakes an idle model: the record carries a runtime-only wake mark,
+and after it is saved the harness offers idle work. The wake starts one turn
+headed "Background event" with the fixed prompt "Background work you started
+has reported; its output follows. This is not a message from the user."; the
+result itself still arrives through the ordinary mailbox delivery (the native
+inbox or the Claude Code turn-start batch). A stop by the user or the model
+does not wake. A result the model already read, at its next step, through
+`WriteStdin`, or through `StopExecution`, does not wake again, and several
+completions while idle start one turn. The wake is a new request, so it runs
+under the session's current permission settings and sticky Plan restrictions,
+never a request-scoped override from the turn that started the command. It
+waits like a queued follow-up (see [view](view.md) for the idle-work order and
+holds); a failed save means no wake, and a wake that cannot start leaves the
+mail unread for the next turn. After a restart the result is still delivered
+but no longer wakes. Agent-owned
 completion is captured by the retained invocation instead: it does not wake
 `WaitAgent`, and once the provider has produced its terminal response the
 runtime settles the turn directly in either arrival order. Each captured completion
@@ -1329,6 +1346,85 @@ default-run core transport matrix is a CI gate:
 ```bash
 test/run-remote-acceptance.sh
 ```
+
+## Monitor
+
+`Monitor` runs a watcher whose repeated stdout lines should reach the root model
+as events. For a single eventual result, use Bash (for example, an `until` loop)
+and let its completion wake the model instead. Monitor is discoverable in the
+root presets, hidden from retained agents, and rejected by the handler for any
+owner other than `/root`.
+
+The required arguments are `command` and a non-empty `description`, shown on
+every event. `timeout_ms` defaults to 300000 (five minutes) and must be an integer
+from 1000 to 3600000. `sandbox_permissions`, `additional_permissions`, and
+`justification` have the same meanings as Bash. There is no `tty` argument:
+stdin is closed at launch. Monitor uses Bash's permission rules, request-scoped
+authority, approval/review path, and Plan restrictions; the tool name does not
+grant additional execution authority. It also preserves Bash's read-only
+startup hardening described above rather than unconditionally using a login
+shell. Any stdout emitted by the selected shell's startup is event output.
+
+After scheduler admission and launch, Monitor yields immediately, releasing its
+scheduler slot. The initial result contains execution metadata, not a second
+copy of stdout. The process continues across model turns under its captured
+owner and execution boundary, with its timeout measured from launch. Monitor's
+deadline does not add a deadline to ordinary Bash.
+
+Only stdout becomes events. Native separated stderr joins the retained output
+file but never triggers a line event. Local and direct-async launches separate
+it through a native stderr pipe. A remote monitor that runs through TRAMP's
+shell adapter (no direct-async channel, or a command over its length limit)
+cannot use one: that adapter serves `:stderr` through a FIFO on a second
+connection, and the cleanup it installs on the process sentinel issues remote
+commands from inside whatever command is already running on the host, which
+corrupted a concurrent `process-file` result in testing. There a target-side
+wrapper appends stderr to a temporary file on the target instead. Result
+delivery, which already waits for an idle transport, moves the file into the
+output file within the same 64 MiB cap and deletes it; registry cleanup
+deletes an uncollected file. On that path stderr joins the output file only
+when the monitor ends, after its stdout. Each pipe stage in a watcher must flush
+its output; buffering inside the command delays events. Filters should match
+failure states as well as success. The harness frames split chunks into lines,
+normalizes CRLF, and retains a final partial line on settlement. Each line keeps
+up to 2000 characters plus a truncation count. A single 200 ms timer batches
+pending lines; a batch holds at most 8 KiB and reports extra lines omitted from
+the event body. The output file remains subject to the managed 64 MiB spool cap.
+
+Each batch is a durable `MONITOR` mailbox record bearing the execution ID and
+description, with a runtime-only wake mark. It follows the same idle-wake holds
+and delivery path as background Bash completion above. Event text is tool
+output, never a user instruction. More than 100 lines in a rolling 60-second
+window, or more than 64 KiB of that monitor's unread mailbox events, stops the
+process with termination `flood`.
+
+Settlement cancels pending timers and publishes exactly one terminal record,
+combining pending lines with the terminal notice and event count. Natural exit
+reports the exit code; expiry says to re-arm explicitly; flooding says to
+restart with a tighter filter. These notices wake the idle model. A deliberate
+stop through `StopExecution` or the user controls folds pending lines into a
+non-waking terminal notice. Teardown discards pending publication instead of
+reviving a closed owner.
+
+`ListExecutions` includes live root-owned yielded monitors. `WriteStdin` with
+empty `chars` polls their combined stdout/stderr spool, not just event lines;
+ordinary input is rejected. Ctrl-C can signal the process, but does not promise
+termination or a non-waking completion. Use `StopExecution` to stop the watcher
+with the non-waking stop semantics. Observing a terminal result clears its
+pending wake.
+
+The initiating tool row, status zone, and `/ps` identify a monitor as
+"Watching" with its description. Details show the event count and fixed expiry
+timestamp (unknown until launch), not an elapsed-time ticker. Quiet monitors
+skip periodic progress redraws while retaining lost-process detection. A
+waiting monitor alone does not inhibit system sleep; an event-triggered request
+or permission interaction still does.
+
+Monitors exist only in the current Emacs runtime. Session teardown, clear, or
+close stops them; resume and fork never restart them. Transcript facts remain,
+with prior live executions shown as lost. Saved event mail survives reload but
+loses its wake mark, so it is read on the next turn rather than starting a new
+request after restart.
 
 ## Eval execution scope
 

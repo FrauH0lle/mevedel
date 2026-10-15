@@ -69,7 +69,13 @@ admission. Managed Bash imposes no automatic timeout.
 
 Structured execution facts keep exit and outcome separate from command output.
 UI progress is transient; completion updates durable presentation and reaches
-its captured owner without starting a model request. User controls can inspect
+its captured owner's mailbox. A root-owned yielded command that ends on its own
+also wakes an idle root model: the harness starts one
+"Background event" turn whose fixed prompt says it is not a user message, and
+the result reaches the model through the ordinary mailbox delivery. A stop by
+the user or the model does not wake it, a result the model already read does
+not wake it again, and agent-owned completions stay with their invocation.
+The wake mark is runtime state and is not persisted. User controls can inspect
 all session owners, while model controls remain owner-scoped. Deterministic
 UTF-8, terminal, color, pager, and `MEVEDEL_EXECUTION=1` defaults make child output
 consistent without changing user-authorized command semantics.
@@ -82,3 +88,18 @@ process facts. A single yield-based breadcrumb
 replaces duplicate completion cards and terminal poll summaries without relying
 on elapsed time or on whether a view happened to be open. Distinct executions
 of the same command remain independently navigable.
+
+## Decision history
+
+- **Completion wake (2026-10).** Originally a yielded completion started no
+  model request: the root saw it only at its next turn, so a model waiting for
+  a build or test run had to poll with `WriteStdin` or ask the user to nudge
+  it. The user wanted to start background work, end the turn, and be woken by
+  the result instead of polling, following Claude Code's background-Bash
+  contract, where a finished background command notifies the model. The wake
+  is always on, as there; Bash gained no parameter. It is admitted through the
+  same idle-work order as queued follow-ups and Goal continuation (follow-ups,
+  then background events, then Goal) and waits behind a composer draft,
+  pending interactions, and the follow-up drain's holds, so it never
+  interrupts the user. The same path carries [Monitor](../tools.md#monitor)
+  events.

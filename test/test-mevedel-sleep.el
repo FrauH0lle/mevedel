@@ -56,14 +56,14 @@ Everything is released afterwards."
   (test)
   :doc "is empty when nothing runs"
   (cl-letf (((symbol-function 'mevedel-busy-p) #'ignore)
-            ((symbol-function 'mevedel-execution-live-p) #'ignore)
+            ((symbol-function 'mevedel-execution-working-p) #'ignore)
             ((symbol-function 'mevedel-collaboration-sleep-reasons) #'ignore))
     (should-not (mevedel-sleep--reasons)))
 
   :doc "names a running turn, a live command and collaboration in order"
   (with-temp-buffer
     (setq-local mevedel--turn-settlements-pending '(settlement))
-    (cl-letf (((symbol-function 'mevedel-execution-live-p) #'always)
+    (cl-letf (((symbol-function 'mevedel-execution-working-p) #'always)
               ((symbol-function 'mevedel-collaboration-sleep-reasons)
                (lambda (now)
                  (should (floatp now))
@@ -76,7 +76,7 @@ Everything is released afterwards."
   (let ((mevedel--warn-once-table (make-hash-table :test #'equal))
         diagnostics)
     (cl-letf (((symbol-function 'mevedel-busy-p) #'always)
-              ((symbol-function 'mevedel-execution-live-p)
+              ((symbol-function 'mevedel-execution-working-p)
                (lambda () (error "Registry corrupt"))))
       (mevedel-test--with-captured-diagnostics diagnostics
         (should-not (mevedel-sleep--reasons))))

@@ -86,6 +86,8 @@
 
 (mevedel-deftest mevedel-executions-list--entry
   (:doc "sorts Elapsed and Bytes by their numbers, not their text")
+  ,test
+  (test)
   (let* ((session (mevedel-session--create :name "main"))
          (view (generate-new-buffer " *execution-list-view*"))
          (data (generate-new-buffer " *execution-list-data*"))
@@ -108,7 +110,51 @@
       (when-let* ((buffer (get-buffer mevedel-executions-list-buffer-name)))
         (kill-buffer buffer))
       (kill-buffer view)
-      (kill-buffer data))))
+      (kill-buffer data)))
+
+  :doc "monitor rows use fixed expiry and event count, not elapsed time"
+  (let* ((item '(:execution-id "watch-1" :kind monitor :owner "/root"
+                :description "Build failures" :command "tail -F build.log"
+                :expires-at 1700000000.0 :event-count 7 :wall-time-seconds 12))
+         (row (cadr (mevedel-executions-list--entry item nil))))
+    (should (equal "—" (aref row 3)))
+    (should (string-search "Watching: Build failures" (aref row 6)))
+    (should (string-search (format-time-string "%Y-%m-%d %H:%M:%S %Z" 1700000000.0)
+                           (aref row 6)))
+    (should (string-search "7 events" (aref row 6)))
+    (should (equal row (cadr (mevedel-executions-list--entry
+                             (plist-put (copy-sequence item) :wall-time-seconds 900)
+                             nil))))))
+
+(mevedel-deftest mevedel-executions-list--details ()
+  ,test
+  (test)
+  :doc "monitor details retain command and show Watching, expiry and events"
+  (let* ((item '(:execution-id "watch-1" :kind monitor :owner "/root"
+                :description "Build failures" :command "tail -F build.log"
+                :expires-at 1700000000.0 :event-count 7 :wall-time-seconds 12))
+         (text (mevedel-report-test-text
+                (mevedel-executions-list--details item nil))))
+    (should (string-search "Watching: Build failures" text))
+    (should (string-search "tail -F build.log" text))
+    (should (string-search (format-time-string "%Y-%m-%d %H:%M:%S %Z" 1700000000.0) text))
+    (should (string-match-p "Events.*7" text))
+    (should-not (string-search "Elapsed" text))))
+
+(mevedel-deftest mevedel-executions-list--entry/queued-monitor ()
+  ,test
+  (test)
+  :doc "queued monitors have no fabricated expiry in rows or details"
+  (let* ((item '(:execution-id "watch-queued" :kind monitor :owner "/root"
+                :state queued :description "Build failures" :expires-at nil))
+         (row (cadr (mevedel-executions-list--entry item nil)))
+         (details (mevedel-report-test-text
+                   (mevedel-executions-list--details item nil))))
+    (should (equal "—" (aref row 3)))
+    (should (equal "Watching: Build failures · 0 events" (aref row 6)))
+    (should (string-search "Watching: Build failures" details))
+    (should (string-match-p "Events.*0" details))
+    (should-not (string-search "Expires" details))))
 
 (mevedel-deftest mevedel-executions-list-send-input ()
   ,test

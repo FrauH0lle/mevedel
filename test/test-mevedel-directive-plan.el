@@ -268,7 +268,7 @@
                    ((symbol-function 'mevedel-directive-plan--implement)
                     (lambda (&rest _) (setq implemented t)))
                    ((symbol-function
-                     'mevedel-view--schedule-late-follow-up-drain)
+                     'mevedel-pending-inputs-schedule-held-input-delivery)
                     (lambda () (cl-incf drains))))
                 (mevedel-directive-plan--settle-planning
                  directive record
@@ -337,7 +337,7 @@
                     (lambda (&rest _)
                       (ert-fail "Non-presentable terminal reached approval")))
                    ((symbol-function
-                     'mevedel-view--schedule-late-follow-up-drain)
+                     'mevedel-pending-inputs-schedule-held-input-delivery)
                     (lambda () (cl-incf drains))))
                 (mevedel-directive-plan--settle-planning
                  directive record
@@ -403,7 +403,7 @@
                  ((symbol-function 'mevedel-plan-approval-present)
                   (lambda (&rest _)
                     (ert-fail "Old planning attempt reached approval")))
-                 ((symbol-function 'mevedel-view--schedule-late-follow-up-drain)
+                 ((symbol-function 'mevedel-pending-inputs-schedule-held-input-delivery)
                   (lambda () (cl-incf drains))))
               (mevedel-directive-plan--settle-planning
                directive record

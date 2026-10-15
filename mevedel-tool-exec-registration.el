@@ -11,6 +11,7 @@
 (autoload 'mevedel-tool-exec--bash "mevedel-tool-exec")
 (autoload 'mevedel-tool-exec--eval "mevedel-tool-exec")
 (autoload 'mevedel-tool-exec--list-executions "mevedel-tool-exec")
+(autoload 'mevedel-tool-exec--monitor "mevedel-tool-exec")
 (autoload 'mevedel-tool-exec--render-bash "mevedel-tool-exec")
 (autoload 'mevedel-tool-exec--render-eval "mevedel-tool-exec")
 (autoload 'mevedel-tool-exec--stop-execution "mevedel-tool-exec")
@@ -19,7 +20,7 @@
 (autoload 'mevedel-tool-exec-permission-check-eval-async "mevedel-tool-exec-permission")
 
 (defun mevedel-tool-exec--register ()
-  "Register Bash and Eval tools."
+  "Register managed execution and Eval tools."
   (mevedel-define-tool
    :name "Bash"
    :description "Execute Bash commands."
@@ -65,12 +66,56 @@
    :renderer #'mevedel-tool-exec--render-bash)
 
   (mevedel-define-tool
+   :name "Monitor"
+   :description "Watch a command's stdout for repeated events that wake the model."
+   :prompt-file "prompts/tools/monitor.md"
+   :handler #'mevedel-tool-exec--monitor
+   :args ((command string :required
+                   "Watcher command to execute from the session working directory. Each stdout line is an event.")
+          (description string :required
+                       "Short description of what is being watched, shown on every event.")
+          (timeout_ms integer :optional
+                      "Monitor lifetime in milliseconds. Defaults to 300000 (5 minutes); re-arm explicitly after expiry."
+                      :minimum 1000 :maximum 3600000)
+          (sandbox_permissions string :optional
+                               "Child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
+                               :enum ["use_default"
+                                      "with_additional_permissions"
+                                      "require_escalated"])
+          (additional_permissions object :optional
+                                  "Capabilities requested in addition to the default confinement profile."
+                                  :properties
+                                  (:network
+                                   (:type boolean
+                                          :description "Allow network access for this invocation.")
+                                   :file_system
+                                   (:type object
+                                          :description "Exact filesystem paths to reopen inside confinement."
+                                          :properties
+                                          (:read
+                                           (:type array
+                                                  :items (:type string)
+                                                  :description "Absolute paths requiring read access.")
+                                           :write
+                                           (:type array
+                                                  :items (:type string)
+                                                  :description "Absolute paths requiring write access.")))))
+          (justification string :optional
+                         "Concise user-facing reason for a non-default permission request."))
+   :async-p t
+   :max-result-size 30000
+   :groups (eval)
+   :check-permission-async #'mevedel-tool-exec-permission-check-bash-async
+   :get-pattern (lambda (input) (plist-get input :command))
+   :renderer #'mevedel-tool-exec--render-bash)
+
+  (mevedel-define-tool
    :name "WriteStdin"
-   :description "Poll unread output or send input to a yielded Bash execution."
+   :description "Poll unread output or send input to a managed execution."
    :prompt-file "prompts/tools/writestdin.md"
    :handler #'mevedel-tool-exec--write-stdin
    :args ((execution_id string :required
-                        "Opaque execution ID returned by Bash.")
+                        "Opaque execution ID returned by Bash, Monitor, or ListExecutions.")
           (chars string :optional
                  "Input to send. Omit or use an empty string to poll. Ordinary input requires a PTY; a single Ctrl-C character interrupts either mode.")
           (yield_time_ms integer :optional
@@ -89,7 +134,7 @@
 
   (mevedel-define-tool
    :name "ListExecutions"
-   :description "List yielded Bash executions owned by this agent."
+   :description "List live yielded Bash and Monitor executions owned by the caller."
    :prompt-file "prompts/tools/listexecutions.md"
    :handler #'mevedel-tool-exec--list-executions
    :args ()
@@ -98,11 +143,11 @@
 
   (mevedel-define-tool
    :name "StopExecution"
-   :description "Stop one yielded Bash execution owned by this agent."
+   :description "Stop one yielded Bash or Monitor execution owned by the caller."
    :prompt-file "prompts/tools/stopexecution.md"
    :handler #'mevedel-tool-exec--stop-execution
    :args ((execution_id string :required
-                        "Opaque execution ID returned by Bash."))
+                        "Opaque execution ID returned by Bash, Monitor, or ListExecutions."))
    :async-p t
    :max-result-size 30000
    :groups (eval)

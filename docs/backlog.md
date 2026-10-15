@@ -35,36 +35,13 @@ Managed Bash commands run until they exit or are stopped. `145c66a` removed
 `mevedel-bash-timeout` (120 s default) and the model-facing `timeout_seconds`,
 so only a native `timeout` the model writes itself bounds a command. A
 forgotten command keeps running and holds the
-[system sleep inhibitor](sessions.md#system-sleep). Restore a deadline the
-harness enforces, so the model neither has to remember it nor can drop it.
-Decide whether foreground and yielded commands share one deadline, and
-whether the deadline counts total runtime or time without output. Also decide
-how monitors (below) opt out or renew. Expiry reuses the existing TERM/KILL
-process-group teardown and reports a timeout outcome.
-
-### Monitors that wake the model
-
-Let the model start a background command or tool, end its turn, and be woken
-when the monitor emits an event: a matched output line, an exit, or a
-condition such as a test run finishing or a file appearing. Today, a root-owned
-yielded command that exits on its own is queued in the root mailbox without
-starting a model request (`docs/tools.md`, terminal delivery). The model sees
-it only on the next root turn, while agent-owned completions are captured by
-their invocation. A monitor would turn selected events into a wake-up that
-starts a request with the event delivered as input.
-
-Open questions:
-
-- Whether a monitor is a flag on yielded Bash, such as a wake-on pattern, or
-  its own tool.
-- How events are rate-limited and coalesced, so a chatty monitor cannot loop
-  requests.
-- How a wake-up interacts with an in-flight turn, pending user input, and
-  steering.
-- Whether agents can own monitors.
-- What a live monitor means for the sleep inhibitor and harness timeouts. An
-  open monitor is waiting rather than working, so it probably should not block
-  sleep indefinitely.
+[system sleep inhibitor](sessions.md#system-sleep). When Bash completion wake-ups
+and the [Monitor tool](tools.md#monitor) were added (2026-10), the user decided
+against restoring a Bash deadline for now; only Monitor expires (`timeout_ms`).
+Revisit if forgotten commands become a problem in practice. Reference point:
+Claude Code caps background commands at 10 minutes by default and 2 hours at
+most. Expiry would reuse the existing TERM/KILL process-group teardown and
+report a timeout outcome.
 
 ## Whiteboard
 

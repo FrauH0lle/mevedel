@@ -180,7 +180,23 @@ any valid record."
    'mevedel-hook-audit t))
 
 (defvar-local mevedel-transcript-audit--guest-prompts-memo nil
-  "(TICK . ATTRIBUTIONS) from the last whole-buffer guest prompt scan.")
+  "(TICK ATTRIBUTIONS . GUESTS) from the last whole-buffer attribution scan.")
+
+(defun mevedel-transcript-audit--attribution-memo ()
+  "Return the current (ATTRIBUTIONS . GUESTS) turn attribution scan."
+  (let ((tick (buffer-modified-tick)))
+    (if (eql tick (car mevedel-transcript-audit--guest-prompts-memo))
+        (cdr mevedel-transcript-audit--guest-prompts-memo)
+      (let* ((all (save-match-data
+                    (mevedel-transcript-audit--scan-guest-prompts)))
+             (result
+              (cons all
+                    (cl-remove-if-not
+                     (lambda (entry)
+                       (eq (plist-get (cdr entry) :type) 'guest-prompt))
+                     all))))
+        (setq mevedel-transcript-audit--guest-prompts-memo (cons tick result))
+        result))))
 
 (defun mevedel-transcript-audit-guest-prompts ()
   "Return guest attribution positions in the current buffer.
@@ -191,15 +207,17 @@ attributes is the nearest user turn ending at or before POSITION.
 The result is shared until the buffer's text or properties change;
 callers must not modify it.  A full projection asks once per prompt, and
 rescanning every audit payload each time dominated its allocation."
-  (let ((tick (buffer-modified-tick)))
-    (if (eql tick (car mevedel-transcript-audit--guest-prompts-memo))
-        (cdr mevedel-transcript-audit--guest-prompts-memo)
-      (let ((result (mevedel-transcript-audit--scan-guest-prompts)))
-        (setq mevedel-transcript-audit--guest-prompts-memo (cons tick result))
-        result))))
+  (cdr (mevedel-transcript-audit--attribution-memo)))
+
+(defun mevedel-transcript-audit-turn-attributions ()
+  "Return every user turn attribution position in the current buffer.
+Like `mevedel-transcript-audit-guest-prompts', but also includes
+background-event attributions, whose turns the harness started for
+background work rather than for a person."
+  (car (mevedel-transcript-audit--attribution-memo)))
 
 (defun mevedel-transcript-audit--scan-guest-prompts ()
-  "Return guest attributions by scanning the whole current buffer."
+  "Return guest and background-event attributions in the current buffer."
   (save-excursion
     (save-restriction
       (widen)
@@ -213,9 +231,21 @@ rescanning every audit payload each time dominated its allocation."
               (when-let* ((record-end (match-beginning 0))
                           ((mevedel-transcript-audit-trusted-range-p
                             start (point)))
-                          (record (mevedel-transcript-audit--typed-record
-                                   nil record-start record-end 'guest-prompt))
-                          ((stringp (plist-get record :name))))
+                          (record
+                           (let ((named (mevedel-transcript-audit--payload-type
+                                         nil record-start record-end)))
+                             (if named
+                                 (and (memq (cdr named)
+                                            '(guest-prompt background-event))
+                                      (mevedel-transcript-audit--typed-record
+                                       nil record-start record-end (cdr named)))
+                               (let ((any (mevedel-transcript-audit--typed-record
+                                           nil record-start record-end nil)))
+                                 (and (memq (plist-get any :type)
+                                            '(guest-prompt background-event))
+                                      any)))))
+                          ((or (eq (plist-get record :type) 'background-event)
+                               (stringp (plist-get record :name)))))
                 (push (cons start record) result)))))
         (nreverse result)))))
 

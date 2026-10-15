@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Tabulated user controls for every live Bash execution in one session.  The
+;; Tabulated user controls for every live managed execution in one session.  The
 ;; execution module owns process state and authority; this module owns only the
 ;; cockpit projection and interactive actions.
 
@@ -103,6 +103,7 @@
 (defun mevedel-executions-list--entry (item _context)
   "Return tabulated row for execution ITEM."
   (let ((id (plist-get item :execution-id))
+        (monitor-p (eq (plist-get item :kind) 'monitor))
         (seconds (or (plist-get item :wall-time-seconds) 0))
         (bytes (or (plist-get item :output-bytes) 0)))
     (list
@@ -111,10 +112,22 @@
       id
       (or (plist-get item :owner) "")
       (if (plist-get item :tty) "PTY" "pipe")
-      (mevedel-cockpit-number-cell (mevedel--duration-label seconds) seconds)
+      (mevedel-cockpit-number-cell
+       (if monitor-p "—" (mevedel--duration-label seconds))
+       (if monitor-p 0 seconds))
       (mevedel-cockpit-number-cell (number-to-string bytes) bytes)
       (format "%s" (or (plist-get item :sandbox-state) 'pending))
-      (mevedel--truncate-display (or (plist-get item :command) "") 60 "…")))))
+      (if monitor-p
+          (format "Watching: %s%s · %d events"
+                  (mevedel--truncate-display
+                   (or (plist-get item :description) "") 60 "…")
+                  (or (when-let* ((expires (plist-get item :expires-at)))
+                        (format " · expires %s"
+                                (format-time-string "%Y-%m-%d %H:%M:%S %Z"
+                                                    expires)))
+                      "")
+                  (or (plist-get item :event-count) 0))
+        (mevedel--truncate-display (or (plist-get item :command) "") 60 "…"))))))
 
 (defun mevedel-executions-list--header (items context)
   "Return cockpit header for execution ITEMS and CONTEXT."
@@ -127,18 +140,32 @@
 (defun mevedel-executions-list--details (item _context)
   "Return the information report for execution ITEM."
   (let ((tail (or (plist-get item :output-tail) ""))
+        (monitor-p (eq (plist-get item :kind) 'monitor))
         (sandbox (plist-get item :sandbox-facts)))
     (list :title "Execution" :subtitle (plist-get item :execution-id)
           :identity (plist-get item :execution-id)
           :sections
           (list
            (list :id 'execution :title "Execution"
-                 :body (mevedel-report-fields
-                        (list "Execution" (plist-get item :execution-id))
-                        (list "Owner" (plist-get item :owner))
-                        (list "Command" (plist-get item :command))
-                        (list "Mode" (if (plist-get item :tty) "PTY" "pipe"))
-                        (list "Elapsed" (mevedel--duration-label (or (plist-get item :wall-time-seconds) 0)))))
+                 :body (apply
+                        #'mevedel-report-fields
+                        (append
+                         (list
+                          (list "Execution" (plist-get item :execution-id))
+                          (list "Owner" (plist-get item :owner))
+                          (list "Command" (plist-get item :command))
+                          (list "Mode" (if (plist-get item :tty) "PTY" "pipe")))
+                         (if monitor-p
+                             (list
+                              (list "Status" (concat "Watching: " (plist-get item :description)))
+                              (when-let* ((expires (plist-get item :expires-at)))
+                                (list "Expires" (format-time-string
+                                                 "%Y-%m-%d %H:%M:%S %Z"
+                                                 expires)))
+                              (list "Events" (number-to-string (or (plist-get item :event-count) 0))))
+                           (list
+                            (list "Elapsed" (mevedel--duration-label
+                                             (or (plist-get item :wall-time-seconds) 0))))))))
            (list :id 'output :title "Output & sandbox"
                  :body (concat
                         (mevedel-report-fields

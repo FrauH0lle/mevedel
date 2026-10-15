@@ -129,6 +129,9 @@
 (declare-function mevedel-model-apply-session-policy
                   "mevedel-models" (session &optional buffer))
 
+;; `mevedel-pending-inputs'
+(defvar mevedel-view--pending-guest-attribution)
+
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-validate-persistent-stores
                   "mevedel-permission-persistence" (workspace))
@@ -270,7 +273,7 @@
 (declare-function mevedel-view--begin-external-turn
 		  "mevedel-view-composer"
 		  (display-text data-turn-start &optional kind
-				hook-context no-spinner user-source))
+				hook-context no-spinner user-source attribution))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-post-tool "mevedel-view-stream"
@@ -1222,14 +1225,22 @@ the LLM may have left an open block.  This handles:
 
 DISPLAY-TEXT is mirrored to the view, defaulting to PROMPT.  KIND and
 HOOK-CONTEXT are forwarded to `mevedel-view--begin-external-turn',
-with NO-SPINNER forwarded when non-nil."
+with NO-SPINNER forwarded when non-nil.  A pending turn attribution, such
+as a background event's, is recorded with the turn and consumed."
   (goto-char (point-max))
   (let* ((body-start (mevedel--insert-user-turn prompt))
          (user-source (cons (copy-marker body-start nil)
-                            (copy-marker (point) nil))))
+                            (copy-marker (point) nil)))
+         (attribution (and (boundp 'mevedel-view--pending-guest-attribution)
+                           mevedel-view--pending-guest-attribution)))
     (when (and display-text (not (equal display-text prompt)))
       (insert (mevedel-tool-render-data-format
                (list :kind 'user-display :text display-text))))
+    ;; Like a guest's, the attribution belongs inside the user turn, before
+    ;; the response marker below exists.
+    (when attribution
+      (insert (mevedel--format-hook-audit-record attribution))
+      (setq mevedel-view--pending-guest-attribution nil))
     (mevedel-collaboration--safe-accepted-prompt (current-buffer))
     (let ((data-turn-start (copy-marker (point) nil)))
       (when-let* ((view (and (boundp 'mevedel--view-buffer)
@@ -1239,7 +1250,7 @@ with NO-SPINNER forwarded when non-nil."
         (with-current-buffer view
           (mevedel-view--begin-external-turn
            (or display-text prompt) data-turn-start kind hook-context
-           no-spinner user-source)))
+           no-spinner user-source attribution)))
       data-turn-start)))
 
 (defun mevedel--submit-generated-turn

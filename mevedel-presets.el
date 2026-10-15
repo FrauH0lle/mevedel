@@ -508,6 +508,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:tool "ApplyPatch") (:discoverable edit) (:tool "Bash")
             (:tool "ToolSearch") (:tool "ToolCall")
             (:discoverable util)
+            (:discoverable (:tool "Monitor"))
             (:discoverable (:tool "WriteStdin"))
             (:discoverable (:tool "ListExecutions"))
             (:discoverable (:tool "StopExecution"))

@@ -683,6 +683,49 @@ connection charges for, so the program path is proved here too."
 (mevedel-deftest mevedel-execution-start-bash/remote (:quiet t)
   ,test
   (test)
+  :doc "a Monitor through TRAMP's shell adapter keeps stderr out of events"
+  (let* ((root (make-temp-file "mevedel-remote-monitor-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-transport-remote-direct-async nil)
+         (stderr-files
+          (lambda ()
+            (directory-files temporary-file-directory nil
+                             "\\`mevedel-stderr-")))
+         session events stderr-before)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session (test-mevedel-execution--session remote-root)
+                stderr-before (funcall stderr-files))
+          (let ((mevedel-execution-mailbox-delivery-function
+                 (lambda (event _) (push event events) t)))
+            (mevedel-execution-start-bash
+             #'ignore
+             :kind 'monitor :description "remote" :session session
+             :owner "/root" :owner-context session
+             :command '("sh" "-c" "printf 'warn\\n' >&2; printf 'event\\n'")
+             :workdir remote-root :writable-roots (list remote-root))
+            (test-mevedel-execution--wait
+             (lambda ()
+               (cl-find 'terminal events :key (lambda (e) (plist-get e :type))))
+             15))
+          (let* ((terminal (cl-find 'terminal events
+                                    :key (lambda (e) (plist-get e :type))))
+                 (bodies (concat
+                          (mapconcat (lambda (e) (or (plist-get e :body) ""))
+                                     events "")
+                          (or (plist-get terminal :monitor-output) ""))))
+            (should (string-match-p "event" bodies))
+            (should-not (string-match-p "warn" bodies))
+            ;; The output file still carries stderr.
+            (should (string-match-p "warn" (plist-get terminal :whole-output)))
+            (should (string-match-p "event" (plist-get terminal :whole-output))))
+          (should (equal stderr-before (funcall stderr-files))))
+      (when session
+        (mevedel-execution-teardown-session session))
+      (delete-directory root t)))
+
   :doc "keeps the live spool local and out of model-facing target facts"
   (let* ((root (make-temp-file "mevedel-remote-managed-spool-" t))
          (remote-root
