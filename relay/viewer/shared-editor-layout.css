@@ -117,49 +117,11 @@ body.editor .assistant-head { display:flex; align-items:center; gap:8px; min-hei
 .sidebar-tabs [role=tab] { display:inline-flex; align-items:center; gap:6px; min-height:34px; padding:6px 10px; border:0; background:transparent; color:var(--muted); font-size:14px; font-weight:600; }
 .sidebar-tabs [role=tab][aria-selected="true"] { background:var(--accent-soft); color:var(--accent); }
 #discussion-title { font:inherit; }
-body.editor .assistant-head .show-resolved { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:12px; color:var(--muted); }
 #assistant-close { min-width:32px; min-height:32px; padding:0; border:0; background:transparent; font-size:22px; }
 .sidebar-panel { flex:1; min-height:0; display:flex; flex-direction:column; }
 #library-panel { overflow-y:auto; padding:14px; scrollbar-width:thin; }
 body.editor #conversation-state { padding:8px 22px; font-size:12px; border-bottom:1px solid var(--line); }
-body.editor #assistant-scroll { padding:16px 22px; background:var(--ground); scrollbar-width:thin; scrollbar-gutter:stable; }
-body.editor .thread-conversation .turn { padding:20px 0; }
-body.editor .thread-conversation .turn.guest,body.editor .thread-conversation .turn.you { padding:14px 16px; margin-top:20px; background:color-mix(in srgb,var(--surface-2) 34%,var(--ground)); border-left:2px solid var(--guest); border-bottom:0; }
-body.editor .thread-conversation .who { color:var(--ink); font-size:12px; margin-bottom:10px; }
-body.editor .thread-conversation p { font-size:14px; line-height:1.7; }
-body.editor .thread-conversation p:last-child { margin-bottom:0; }
-body.editor .assistant-compose { display:flex; flex-direction:column; gap:8px; padding:14px 18px 16px; scrollbar-width:thin; }
-/* What the message is about, in one chip, with a switch to the other. */
-.compose-about { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; }
-.about-chip { display:inline-flex; align-items:center; min-height:26px; padding:3px 10px; border-radius:13px; background:var(--surface-2); color:var(--ink); font-size:12px; font-weight:600; }
-.about-chip[data-scope="selection"] { background:var(--accent-soft); color:var(--accent); }
-.compose-about button { min-height:26px; padding:3px 6px; border:0; background:transparent; color:var(--accent); font-size:12px; text-decoration:underline; text-underline-offset:2px; }
-body.editor #context-quote { margin:0; padding:8px 10px; max-height:84px; overflow:auto; border-left:2px solid var(--accent); background:var(--accent-soft); font-size:13px; line-height:1.55; white-space:pre-wrap; }
-body.editor #ask { margin:0; border:1px solid var(--rule-strong); border-radius:4px; padding:10px 12px; gap:8px; }
-body.editor #ask:focus-within { border-color:var(--accent); }
-body.editor #question { border:0; padding:0; min-height:64px; font-size:14px; line-height:1.6; background:transparent; }
-body.editor #question:focus-visible { outline:none; }
-body.editor #question-send { padding:7px 14px; min-height:34px; font-size:12px; font-weight:600; }
-body.editor #question-attach { display:grid; place-items:center; min-width:34px; min-height:34px; padding:0; }
-#question-attach svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
 body.editor .discussion-draft { background:var(--accent-soft); color:var(--ink); box-shadow:0 2px 0 var(--accent); }
-body.editor .thread-context { background:var(--accent-soft); border-left-color:var(--accent); padding:10px 12px; font-size:13px; line-height:1.6; }
-body.editor .discussion-actions button { font-size:12px; min-height:32px; }
-body.editor .discussion-show { font-size:13px; line-height:1.6; }
-body.editor .conversation-empty,.discussions-empty { margin:12px 0 0; color:var(--muted); font-size:13px; line-height:1.6; }
-/* The discussions keep the room: the composer starts at two lines and a
-   reply box at one, each growing with its text. No size depends on focus,
-   so nothing moves under a press. */
-body.editor #assistant-scroll { overflow-x:hidden; }
-body.editor .discussion { min-width:0; }
-body.editor .assistant-compose { max-height:45%; overflow-y:auto; }
-/* A message's own turn repeats its sender; it shows only to carry context. */
-.thread-conversation .thread-question:not(:has(.shared-context)) { display:none; }
-body.editor #question { min-height:44px; field-sizing:content; max-height:30vh; }
-.reply-form textarea { min-height:38px; field-sizing:content; max-height:30vh; resize:none; font-size:14px; line-height:1.5; }
-@media (max-width:799px) { .reply-form textarea { font-size:16px; } }
-body.editor .discussion-actions { margin-top:6px; }
-body.editor .discussion-actions button { min-height:28px; padding:4px 8px; }
 
 /* The whiteboard's controls float over the canvas in islands. The board is a
    size container: where it is narrow, as beside the sidebar or on a phone,
@@ -256,8 +218,6 @@ body.editor #board-shortcuts { width:660px; }
   body.editor .tiptap { padding:32px 30px 48px; font-size:18px; }
   body.editor .tiptap h1 { font-size:32px; }
   body.editor .editor-bar,body.editor #table-tools { padding-inline:16px; }
-  body.editor .assistant-compose { padding-inline:16px; }
-  body.editor #assistant-scroll { padding:16px; }
 }
 @media (max-width:799px) {
   body.editor.assistant-open { padding-right:0; }
@@ -278,7 +238,6 @@ body.editor #board-shortcuts { width:660px; }
   .editor-dialog input:not([type=checkbox]),.editor-dialog textarea { font-size:16px; }
   #link-address { flex-basis:100%; max-width:100%; }
   body.editor .tiptap td,body.editor .tiptap th { padding:6px; font-size:14px; }
-  body.editor #question { font-size:16px; }
   .shortcut-columns { grid-template-columns:1fr; gap:24px; }
 }
 /* A phone's document runs edge to edge, without the page's card. */
@@ -294,10 +253,6 @@ body.editor #board-shortcuts { width:660px; }
   body.editor #formatting > button { min-width:28px; width:28px; padding:4px; }
   body.editor #formatting select { min-width:0; width:90px; margin-right:2px; font-size:12px; }
   body.editor #formatting summary { padding:6px 4px; font-size:12px; }
-  body.editor #assistant-scroll { padding-top:0; padding-bottom:0; min-height:0; }
-  body.editor .assistant-compose { padding:6px 14px; gap:6px; max-height:calc(100% - 100px); }
-  body.editor #ask { padding:8px; }
-  body.editor #question { min-height:44px; height:44px; }
 }
 
 body.editor #board::before { background-color:var(--canvas, var(--board-bg)); background-image:radial-gradient(var(--board-dot) .7px,transparent .7px); }
@@ -339,3 +294,7 @@ body.editor #image-tools { flex-wrap:wrap; }
 :root:not([data-save-state="error"]) #retry { display:none; }
 :root[data-save-state="error"] #menu > summary { position:relative; color:var(--failed); border-color:var(--failed); }
 :root[data-save-state="error"] #menu > summary::after { content:""; position:absolute; top:3px; right:3px; width:7px; height:7px; border-radius:50%; background:var(--failed); }
+
+/* News in a discussion not on screen marks the Discussions button. */
+#ask-toggle.unread { position:relative; }
+#ask-toggle.unread::after { content:""; position:absolute; top:3px; right:3px; width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px var(--surface); }

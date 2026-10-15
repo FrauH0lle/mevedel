@@ -8,6 +8,7 @@ import { createServer } from 'node:net';
 import { chromium } from 'playwright';
 import { contentHash as h } from '../view.mjs';
 import { compactElement } from '../model.mjs';
+import { shown, box, askBox, send, menu, openList, openWhole } from './sidebar.mjs';
 const root = resolve(import.meta.dirname, '../..');
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 15000) {
@@ -461,14 +462,10 @@ test(
       );
       await until(async () => (await documentText(pages[1])).includes('An agent added this.'));
       const captured = JSON.parse((await agent('ReadShared', { id: documentId })).result);
-      if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
-      // The switch to the whole item shows only while the composer is on a
-      // selection; Refresh attaches the item as it is now.
-      if (await frame(pages[0]).locator('#whole-question').isVisible()) await frame(pages[0]).locator('#whole-question').click();
-      else await frame(pages[0]).locator('#refresh-context').click();
-      assert.equal(await frame(pages[0]).locator('#context-title').getAttribute('data-scope'), 'whole');
-      await frame(pages[0]).locator('#question').fill('Review the current notes');
-      await frame(pages[0]).locator('#question-send').click();
+      // The discussion about the whole item asks about it as it is now.
+      await openWhole(frame(pages[0]));
+      await box(frame(pages[0])).fill('Review the current notes');
+      await send(frame(pages[0]));
       const queued = await until(async () => {
         const info = await agent('InspectTest');
         return info.queue.length === 1 ? info : null;
@@ -515,30 +512,37 @@ test(
           .evaluate(() => window.getSelection().toString()),
         'An',
       );
-      const anchored = (page) => frame(page).locator('#discussions .discussion:not([data-discussion-id="general"])');
-      await frame(pages[1]).locator('#discuss-selection').click();
-      await frame(pages[1]).locator('#question').fill('Explain the selected opening');
-      await frame(pages[1]).locator('#ask-assistant').uncheck();
-      await frame(pages[1]).locator('#question-send').click();
-      await anchored(pages[1]).waitFor();
+      const [f0, f1] = [frame(pages[0]), frame(pages[1])];
+      await f1.locator('#discuss-selection').click();
+      await box(f1).fill('Explain the selected opening');
+      await askBox(f1).uncheck();
+      await send(f1);
+      await shown(f1).locator('.ds-message').waitFor();
       assert.equal((await agent('InspectTest')).queue.length, 1, 'a discussion without the assistant does not queue a model turn');
-      await anchored(pages[0]).locator('summary').click();
-      await frame(pages[0]).locator('.reply-form textarea').fill('Include a concrete example.');
-      await frame(pages[0]).locator('.reply-assistant').uncheck();
-      await anchored(pages[0]).getByText('Reply', {exact:true}).click();
-      await frame(pages[1]).locator('.thread-message').getByText('Include a concrete example.', {exact:true}).waitFor();
+      await openList(f0);
+      await f0.locator('.ds-list .ds-item:not(.general)').click();
+      await box(f0).fill('Include a concrete example.');
+      await askBox(f0).uncheck();
+      await send(f0);
+      await shown(f1).locator('.ds-message').getByText('Include a concrete example.', {exact:true}).waitFor();
       assert.equal((await agent('InspectTest')).queue.length, 1, 'human replies do not queue a model turn');
-      await frame(pages[0]).locator('.reply-form textarea').fill('> Private reply draft\nsecond line');
-      await frame(pages[0]).locator('#question').fill('Separate private AI question');
-      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Separate private AI question'));
+      // Each discussion keeps its own draft through a reload.
+      const stored = () => pages[0].evaluate(() => Object.keys(localStorage)
+        .filter(k => k.startsWith('mevedel-editing:')).map(k => JSON.parse(localStorage[k]).assistant?.replies || {}));
+      await box(f0).fill('> Private reply draft\nsecond line');
+      await openWhole(f0);
+      await box(f0).fill('Separate private AI question');
+      await until(async () => (await stored()).some(replies => replies.general?.text === 'Separate private AI question'
+        && Object.values(replies).some(reply => reply.text === '> Private reply draft\nsecond line')));
       await pages[0].reload();
       await frame(pages[0]).locator('.tiptap[contenteditable="true"]').waitFor();
-      if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
-      assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Separate private AI question');
-      await anchored(pages[0]).locator('summary').click();
-      assert.equal(await frame(pages[0]).locator('.reply-form textarea').inputValue(),'> Private reply draft\nsecond line');
+      await openWhole(frame(pages[0]));
+      assert.equal(await box(frame(pages[0])).inputValue(),'Separate private AI question');
+      await openList(frame(pages[0]));
+      await frame(pages[0]).locator('.ds-list .ds-item:not(.general)').click();
+      assert.equal(await box(frame(pages[0])).inputValue(),'> Private reply draft\nsecond line');
       await frame(pages[0]).locator('#assistant-close').click();
-      await anchored(pages[1]).locator('.thread-send').click();
+      await menu(f1, 'Ask assistant again');
       const rangeAsk = await until(async () => {
         const info = await agent('InspectTest');
         return info.queue.length === 2 ? info.queue[1] : null;
@@ -651,13 +655,15 @@ test(
         JSON.parse((await agent('ReadShared', { id: imported[0].id })).result).content.map(e => e.id),
         JSON.parse(exported).elements.map(e => e.id),
       );
-      if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
-      await frame(pages[0]).locator('#question').fill('Private recovered question');
-      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Private recovered question'));
-      // The context the question captured, as the editor keeps it with its draft.
+      // A new discussion about the board, with the content it captured.
+      await frame(pages[0]).locator('#canvas').focus();
+      await pages[0].keyboard.press('Control+a');
+      await frame(pages[0]).locator('#discuss-selection').click();
+      await box(frame(pages[0])).fill('Private recovered question');
+      await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.start?.text === 'Private recovered question'));
       const attached = () => pages[0].evaluate(() => JSON.stringify(Object.keys(localStorage)
         .filter(k => k.startsWith('mevedel-editing:'))
-        .map(k => JSON.parse(localStorage[k]).assistant?.question?.attachment)
+        .map(k => JSON.parse(localStorage[k]).assistant?.start?.attachment)
         .find(Boolean)?.snapshot));
       const capturedContext = await attached();
       assert.ok(capturedContext, 'the question carries its context');
@@ -665,7 +671,7 @@ test(
         await pages[0].reload();
         await frame(pages[0]).locator('[data-tool="rectangle"]').waitFor({state:'visible'});
         if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
-        assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Private recovered question',JSON.stringify({reload,storage:await pages[0].evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('mevedel-editing:')).map(k=>[k,JSON.parse(localStorage[k]).assistant])))}));
+        assert.equal(await box(frame(pages[0])).inputValue(),'Private recovered question',JSON.stringify({reload,storage:await pages[0].evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('mevedel-editing:')).map(k=>[k,JSON.parse(localStorage[k]).assistant])))}));
         assert.equal(await attached(),capturedContext);
       }
       await frame(pages[0]).locator('#assistant-close').click();
@@ -1094,24 +1100,25 @@ test(
           return post.call(this, data, ...rest);
         };
       });
-      await frame(ownerPage).locator('#question').fill('Explain this stroke');
+      await box(frame(ownerPage)).fill('Explain this stroke');
       // A file dropped on the form rides beside the board snapshot.
-      await frame(ownerPage).locator('#ask').evaluate((form) => {
+      await shown(frame(ownerPage)).locator('.ds-compose').evaluate((form) => {
         const transfer = new DataTransfer();
         transfer.items.add(new File(['stroke notes'], 'notes.txt', { type: 'text/plain' }));
         for (const type of ['dragenter', 'dragover', 'drop'])
           form.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
       });
-      await frame(ownerPage).locator('#question-attachments .attachment').waitFor();
-      await frame(ownerPage).locator('#question-send').click();
+      const files = frame(ownerPage).locator('.ds-files .attachment');
+      await files.waitFor();
+      await send(frame(ownerPage));
       const asked = await until(async () => {
         const info = await agent('InspectTest');
         return info.queue.length === 2 ? info : null;
       });
       assert.deepEqual(asked.attachments, [0, 2]);
       // Queue insertion precedes the editor's acknowledgement on slow hosts.
-      await frame(ownerPage).locator('#question-attachments .attachment').waitFor({state:'hidden'});
-      assert.equal(await frame(ownerPage).locator('#question-attachments .attachment').count(), 0);
+      await files.first().waitFor({state:'hidden'});
+      assert.equal(await files.count(), 0);
       assert.match(asked.queue[1], /"type":"freedraw"/);
       assert.doesNotMatch(asked.queue[1], /"type":"diamond"/);
       await frame(ownerPage).locator('body').evaluate(() => window.retryQuestion());

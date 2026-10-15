@@ -9,14 +9,13 @@
  *
  * Frame -> viewer messages carry {mevedelDiscussion: TYPE, ...}:
  *   pick    {anchor, rect, context}  a click, word, text selection or box
- *   draft   {rect}                   the picked target moved (scroll/resize)
  *   peek    {id, rect} / unpeek {}   pointer over / off a discussion marker
  *   open    {id, rect}               a marker was clicked
  *   located {found, missing}         which markers could be placed
  *   exit    {}                       Escape pressed in discussion mode
  * Viewer -> frame messages carry {t: TYPE, ...}:
  *   discussion-mode    {on}
- *   discussion-markers {markers: [{id, n, anchor, state}]}
+ *   discussion-markers {markers: [{id, n, anchor, state, unread}]}
  *   discussion-draft   {active}
  *   discussion-reveal  {id}
  */
@@ -35,7 +34,7 @@ function mevedelArtifactDiscussionRuntime() {
   let hover = null;          // {kind, el, rect, node, start, end, stack}
   let drag = null;           // {x, y, box, text}
   let draft = null;          // the picked target while the viewer composes
-  let markers = [];          // [{id, n, anchor, state}]
+  let markers = [];          // [{id, n, anchor, state, unread}]
   let placed = new Map();    // id -> {el, range, region}
   let layerHost = null;
   let layer = null;
@@ -576,6 +575,8 @@ function mevedelArtifactDiscussionRuntime() {
       @keyframes mevedel-discussion-spin{to{transform:rotate(360deg)}}
       @media (prefers-reduced-motion:reduce){.pin[data-state=working]::after{
         animation:none;border-style:dashed;border-color:#d97757}}
+      .pin[data-unread]::before{content:"";position:absolute;top:-5px;right:-5px;
+        width:8px;height:8px;border:2px solid #fff;border-radius:50%;background:#3b82f6}
       .pin:focus-visible{outline:2px solid #3b82f6;outline-offset:2px}`;
     layer.append(style);
     document.documentElement.append(layerHost);
@@ -637,9 +638,12 @@ function mevedelArtifactDiscussionRuntime() {
         pins.append(pin);
       }
       pin.dataset.state = marker.state;
+      if (marker.unread === true) pin.dataset.unread = 'true';
+      else delete pin.dataset.unread;
       pin.textContent = String(marker.n);
-      pin.setAttribute('aria-label', marker.state === 'working'
-        ? `Discussion ${marker.n}, assistant working` : `Discussion ${marker.n}`);
+      pin.setAttribute('aria-label', `Discussion ${marker.n}`
+        + (marker.state === 'working' ? ', assistant working' : '')
+        + (marker.unread === true ? ', new' : ''));
       const rect = rectOf(found);
       const onText = !!found.range;
       pin.style.left = `${(onText ? rect.left : rect.left + rect.width - 20) + scrollX}px`;
@@ -828,20 +832,9 @@ function mevedelArtifactDiscussionRuntime() {
     }
   }, true);
 
-  let scrollTimer = 0;
-  const moved = () => {
-    repaint();
-    if (draft && !scrollTimer) {
-      scrollTimer = setTimeout(() => {
-        scrollTimer = 0;
-        const rect = draftRect();
-        if (rect) post('draft', {rect});
-      }, 60);
-    }
-  };
-  addEventListener('scroll', moved, true);
+  addEventListener('scroll', repaint, true);
   addEventListener('resize', () => {
-    moved();
+    repaint();
     scheduleRelocate();
   });
 
@@ -887,24 +880,26 @@ function mevedelArtifactDiscussionRuntime() {
 
 // -- Viewer-side controller ------------------------------------------------
 
-// Owns discussion mode, the composer and the marker threads for the artifact
-// shown in the panel. Discussions live in the host's per-artifact store; the
-// transcript supplies what the assistant made of those sent to it. Frame
-// messages are untrusted: only the current frame's window is heard, and
-// every field is bounded before it is used or sent.
+// Owns discussion mode, the markers and the discussions sidebar for the
+// artifact shown in the panel. Discussions live in the host's per-artifact
+// store; the transcript supplies the assistant's answers. Frame messages are
+// untrusted: only the current frame's window is heard, and every field is
+// bounded before it is used or sent.
 function createArtifactDiscussionController(options) {
-  const {send, el, body, toggle, general, flash, renderMarkdown, reveal, canDiscuss} = options;
+  const {send, el, toggle, sidebarToggle, side, sideRoot, count, close, peek, reveal,
+         canDiscuss} = options;
   const busy = typeof options.busy === 'function' ? options.busy : () => false;
   const MAX_MESSAGE_BYTES = 10000;
-  // The discussion about the whole artifact: it has no marker and opens
-  // from its own button.
+  // The discussion about the whole artifact: the list's first row, without
+  // a marker.
   const GENERAL = 'general';
-  const view = {frame: null, id: null, name: null, mode: false,
-                draft: null, composer: null, card: null, cardPinned: false};
+  const NEW = 'new';
+  const view = {frame: null, id: null, name: null, mode: false, draft: null};
   let records = [];
   let queued = [];
   let stored = [];            // the host store's discussions for view.name
   const pending = new Map();  // discussionId -> local discussion awaiting the store
+  const drafts = new Map();   // sidebar key -> {text, toAssistant}
   let requestSequence = 0;
   const inflight = new Map(); // reqId -> {resolve, reject}
 
@@ -977,39 +972,41 @@ function createArtifactDiscussionController(options) {
 
   // -- Threads ----------------------------------------------------------
 
-  // Every discussion's latest request in the transcript with the first reply
-  // that followed it, the discussion of the room's latest user turn, and the
-  // discussions in this guest's queue.  One pass serves every discussion:
+  const item = () => `artifact:${view.name}`;
+  const mine = shared => !!shared && shared.kind === 'artifact' && shared.itemId === item()
+    && typeof shared.discussionId === 'string';
+
+  // Every discussion's latest request in the transcript, the discussion of
+  // the room's latest user turn, the discussions in this guest's queue, and
+  // the records about this artifact.  One pass serves every discussion:
   // streaming republishes markers for each record update.  Cleared whenever
   // records, queue, activity or the artifact change.
   let threads = null;
   function threadStates() {
     if (threads) return threads;
-    const item = `artifact:${view.name}`;
-    const mine = shared => shared && shared.kind === 'artifact' && shared.itemId === item
-      && typeof shared.discussionId === 'string';
     const byId = new Map();
+    const about = [];
     let current = null;
     let latest = null;
     for (const record of records) {
       if (!record) continue;
       if (record.kind === 'user') {
-        current = mine(record.shared) ? {state: 'sent', recordId: record.id, reply: ''} : null;
+        current = mine(record.shared) ? {state: 'sent', recordId: record.id} : null;
         latest = current && record.shared.discussionId;
         if (current) byId.set(latest, current);
       } else if (current && current.state === 'sent' && record.kind === 'assistant'
                  && typeof record.text === 'string' && record.text.trim()) {
-        current.reply = record.text;
         current.state = 'answered';
       }
+      if (current) about.push(record);
     }
     const queuedIds = new Set(queued.filter(entry => entry && mine(entry.shared))
                                     .map(entry => entry.shared.discussionId));
-    return (threads = {byId, latest, queuedIds});
+    return (threads = {byId, latest, queuedIds, about});
   }
 
   // What the assistant made of discussion ID: its latest request in the
-  // transcript or this guest's queue, and the reply that followed.
+  // transcript or this guest's queue.
   function assistantState(id) {
     const {byId, latest, queuedIds} = threadStates();
     const found = byId.get(id);
@@ -1018,35 +1015,38 @@ function createArtifactDiscussionController(options) {
     // this thread's request the assistant is working on it, through its first
     // reply text and on to the turn's end.
     const working = state === 'queued' || (latest === id && busy());
-    return {state, recordId: found ? found.recordId : null,
-            reply: found ? found.reply : '', working};
+    return {state, recordId: found ? found.recordId : null, working};
   }
 
-  // How a message reads in a thread: a selection sent alone has no text.
-  const ALONE = 'Sent the selection as the request';
   const messageView = message => ({
     id: String(message && message.id || ''),
-    actor: String(message && message.actor || ''),
-    text: message && message.alone === true ? ALONE : String(message && message.text || '')});
+    actor: String(message && message.actor || '').replace(/^Guest: /, ''),
+    text: String(message && message.text || ''),
+    alone: !!message && message.alone === true});
 
-  // The open discussions anchored to a part of the artifact; the general
-  // discussion about the whole artifact opens from its own button.
+  // The artifact's discussions: the whole artifact's first, then those
+  // anchored to a part of it, resolved ones included.
   function discussions() {
     if (!view.name) return [];
-    const list = [];
-    const seen = new Set();
+    const general = stored.find(discussion => discussion && discussion.id === GENERAL);
+    const list = [Object.assign({id: GENERAL, general: true, anchor: null, resolved: false,
+                                 sessionName: general && typeof general.sessionName === 'string'
+                                   ? general.sessionName : '',
+                                 messages: general && Array.isArray(general.messages)
+                                   ? general.messages.map(messageView) : []},
+                                assistantState(GENERAL))];
+    const seen = new Set([GENERAL]);
     for (const discussion of stored) {
       if (!discussion || typeof discussion.id !== 'string' || seen.has(discussion.id)) continue;
       seen.add(discussion.id);
       pending.delete(discussion.id);
       const anchor = cleanAnchor(discussion.target);
       const messages = Array.isArray(discussion.messages) ? discussion.messages.map(messageView) : [];
-      if (!anchor || discussion.resolved === true || !messages.length) continue;
-      list.push(Object.assign({id: discussion.id, anchor, text: messages[0].text,
-                               actor: messages[0].actor,
+      if (!anchor || !messages.length) continue;
+      list.push(Object.assign({id: discussion.id, anchor, messages,
+                               resolved: discussion.resolved === true,
                                sessionName: typeof discussion.sessionName === 'string'
-                                 ? discussion.sessionName : '',
-                               replies: messages.slice(1)},
+                                 ? discussion.sessionName : ''},
                               assistantState(discussion.id)));
     }
     for (const local of pending.values()) {
@@ -1058,18 +1058,124 @@ function createArtifactDiscussionController(options) {
     }
     return list;
   }
+  const open = list => list.filter(discussion => !discussion.general && !discussion.resolved);
 
-  function generalDiscussion() {
-    const found = stored.find(discussion => discussion && discussion.id === GENERAL);
-    const messages = found && Array.isArray(found.messages) ? found.messages.map(messageView) : [];
-    return Object.assign({id: GENERAL, general: true, anchor: {label: 'Whole artifact'},
-                          empty: !messages.length,
-                          text: messages.length ? messages[0].text : '',
-                          actor: messages.length ? messages[0].actor : '',
-                          sessionName: found && typeof found.sessionName === 'string'
-                            ? found.sessionName : '',
-                          replies: messages.slice(1)},
-                         assistantState(GENERAL));
+  // -- Sidebar ----------------------------------------------------------
+
+  const sidebar = window.mevedelDiscussionSidebar.create({
+    root: sideRoot, noun: 'artifact',
+    canWrite: () => !!view.frame && canDiscuss(),
+    visible: () => !side.hidden,
+    draft: {
+      get: key => drafts.get(key),
+      set: (key, patch) => drafts.set(key, Object.assign({}, drafts.get(key), patch)),
+    },
+    submit: (key, message) => submit(key, message),
+    // The list's foot points at a part of the artifact to discuss.
+    startNew: () => {
+      if (innerWidth < 800) showSide(false);
+      setMode(true);
+    },
+    reveal: id => {
+      post({t: 'discussion-reveal', id});
+      if (innerWidth < 800) showSide(false);
+    },
+    revealLabel: 'Show in artifact',
+    menu: discussion => {
+      const entries = [];
+      if (discussion.recordId && typeof reveal === 'function') {
+        entries.push({label: 'Show in chat', run: () => reveal(discussion.recordId)});
+      }
+      if (!discussion.general && canDiscuss()
+          && stored.some(entry => entry && entry.id === discussion.id)) {
+        entries.push({label: discussion.resolved ? 'Reopen' : 'Resolve', reopen: discussion.resolved,
+                      title: discussion.resolved ? '' : 'Mark this discussion done for everyone; its marker goes away',
+                      run: () => resolve(discussion.id, !discussion.resolved)});
+      }
+      return entries;
+    },
+    extras: discussion => ({
+      status: discussion.state === 'queued' ? 'Queued for the assistant'
+        : discussion.working ? 'The assistant is working on this'
+        // The session that answers this discussion, wherever it was written.
+        : discussion.sessionName ? `Answered in ${discussion.sessionName}` : '',
+      tone: discussion.working ? 'working' : ''}),
+    selectHint: '',
+    leaveNew: () => clearDraft(),
+    onRender: () => publishMarkers(),
+  });
+
+  function showSide(shown) {
+    side.hidden = !shown;
+    if (sidebarToggle) sidebarToggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
+    sidebar.update();
+  }
+
+  function clearDraft() {
+    view.draft = null;
+    drafts.delete(NEW);
+    post({t: 'discussion-draft', active: false});
+  }
+
+  // The message to send, '' for a selection sent alone, or null when there
+  // is nothing to send: only the assistant takes a selection without words.
+  function checkedText(text, toAssistant, alone) {
+    text = text.trim();
+    if (!text) {
+      if (alone && toAssistant) return '';
+      sidebar.notice(alone ? 'Write a message, or ask the assistant.' : 'Write a message first.', true);
+      return null;
+    }
+    if (new TextEncoder().encode(text).length > MAX_MESSAGE_BYTES) {
+      sidebar.notice('Message too long.', true);
+      return null;
+    }
+    return text;
+  }
+
+  async function submit(key, {text: written, toAssistant}) {
+    const alone = key === NEW;
+    const text = checkedText(written, toAssistant, alone);
+    if (text === null || !view.id || (alone && !view.draft)) return false;
+    sidebar.notice(toAssistant ? 'Posting and sending…' : 'Posting…');
+    try {
+      if (key === NEW) {
+        const draft = view.draft;
+        const discussionId = newId();
+        await request({action: 'post', item: view.id, discussionId, messageId: newId(), text,
+                       target: draft.anchor, context: draft.context, toAssistant});
+        if (!stored.some(discussion => discussion && discussion.id === discussionId)) {
+          pending.set(discussionId, {id: discussionId, name: view.name, anchor: draft.anchor,
+                                     resolved: false, toAssistant,
+                                     messages: [{id: 'local', actor: 'You', text, alone: !text}]});
+        }
+        clearDraft();
+        setMode(false);
+        refresh();
+        sidebar.notice('');
+        return discussionId;
+      }
+      // The first message about the whole artifact starts its discussion.
+      await request(key === GENERAL
+        ? {action: 'post', item: view.id, target: {kind: 'whole'}, messageId: newId(),
+           text, toAssistant}
+        : {action: 'reply', item: view.id, discussionId: key, messageId: newId(),
+           text, toAssistant});
+      drafts.delete(key);
+      sidebar.notice('');
+      return undefined;
+    } catch (error) {
+      sidebar.notice(error.message, true);
+      return false;
+    }
+  }
+
+  async function resolve(id, resolved) {
+    try {
+      await request({action: 'resolve', item: view.id, discussionId: id, resolved});
+    } catch (error) {
+      sidebar.notice(error.message, true);
+    }
   }
 
   // Streaming redraws call this for every record update; the frame only
@@ -1077,352 +1183,83 @@ function createArtifactDiscussionController(options) {
   let lastMarkers = '';
   function publishMarkers(force) {
     if (!view.frame) return;
-    const list = discussions();
-    const markers = list.map((discussion, index) => ({id: discussion.id, n: index + 1,
-                                                   anchor: discussion.anchor,
-                                                   state: discussion.working ? 'working'
-                                                     : discussion.state || 'posted'}));
+    const markers = open(discussions()).map((discussion, index) => ({
+      id: discussion.id, n: index + 1, anchor: discussion.anchor,
+      state: discussion.working ? 'working' : discussion.state || 'posted',
+      unread: sidebar.unread(discussion.id)}));
     const encoded = JSON.stringify(markers);
     if (force === true || encoded !== lastMarkers) {
       lastMarkers = encoded;
       post({t: 'discussion-markers', markers});
     }
-    if (view.card) {
-      const shown = view.card.dataset.discussion === GENERAL ? generalDiscussion()
-        : list.find(discussion => discussion.id === view.card.dataset.discussion);
-      if (!shown) closeCard();
-      else if (view.card.dataset.version !== cardVersion(shown)) refreshCard(shown);
-    }
-    updateToggle(list.length);
+    updateToggles();
   }
 
-  function updateToggle(count) {
-    if (general) {
-      // Everyone who sees the artifact reads its general discussion.
-      const whole = generalDiscussion();
-      const messages = whole.empty ? 0 : whole.replies.length + 1;
-      general.hidden = !view.frame;
-      general.textContent = messages ? `Whole artifact · ${messages}` : 'Whole artifact';
-      general.title = 'The discussion about the whole artifact';
+  // The sidebar's view of the discussions, then the markers it marks.
+  function refresh(settled = false) {
+    const list = discussions();
+    const pins = new Map(open(list).map((discussion, index) => [discussion.id, index + 1]));
+    sidebar.update({
+      discussions: list.map(discussion => ({
+        id: discussion.id, general: discussion.general === true, pin: pins.get(discussion.id),
+        title: discussion.anchor ? discussion.anchor.label || 'Part of the artifact' : '',
+        quote: discussion.anchor && discussion.anchor.kind !== 'word' ? discussion.anchor.quote || '' : '',
+        resolved: discussion.resolved, revealable: !discussion.resolved,
+        recordId: discussion.recordId, state: discussion.state, working: discussion.working,
+        sessionName: discussion.sessionName,
+        messages: discussion.messages})),
+      records: threadStates().about,
+      selection: view.frame && canDiscuss() ? {label: 'part of the artifact'} : null,
+      settled,
+    });
+  }
+
+  function updateToggles() {
+    const shown = !!view.frame;
+    const count_ = open(discussions()).length;
+    if (sidebarToggle) {
+      sidebarToggle.hidden = !shown;
+      sidebarToggle.classList.toggle('unread', sidebar.unreadCount() > 0);
+      sidebarToggle.setAttribute('aria-label', count_ ? `Discussions, ${count_} open` : 'Discussions');
+    }
+    if (count) {
+      count.textContent = String(count_);
+      count.hidden = !count_;
     }
     if (!toggle) return;
-    const allowed = !!view.frame && canDiscuss();
+    const allowed = shown && canDiscuss();
     toggle.hidden = !allowed;
     toggle.setAttribute('aria-pressed', view.mode ? 'true' : 'false');
-    toggle.textContent = view.mode ? 'Discussing…' : count ? `Discuss · ${count}` : 'Discuss';
+    toggle.textContent = view.mode ? 'Discussing…' : 'Discuss';
     toggle.title = view.mode
       ? 'Click, drag across text, or drag a box around what to discuss. Escape stops.'
       : 'Point at part of this artifact and discuss it';
   }
 
-  // -- Placement --------------------------------------------------------
-
-  // Frame coordinates are the frame's own viewport; the panel body is the
-  // positioned parent of the composer and the thread card.
-  // Thread cards open beside their marker rather than over the target.
-  function placeBeside(node, rect) {
-    if (!view.frame || !body) return;
+  // A marker under the pointer shows its latest message beside it.
+  function showPeek(id, rect) {
+    const discussion = discussions().find(entry => entry.id === id);
+    if (!peek || !discussion || !view.frame) return;
+    const latest = discussion.messages[discussion.messages.length - 1];
+    peek.replaceChildren(el('small', '', latest ? latest.actor || 'Guest' : ''),
+                         el('p', '', latest ? latest.alone ? 'Sent the selection as the request'
+                                       : latest.text : ''));
+    peek.hidden = false;
     const frameBox = view.frame.getBoundingClientRect();
-    const bodyBox = body.getBoundingClientRect();
-    const width = Math.min(340, Math.max(240, bodyBox.width - 24));
-    node.style.width = `${width}px`;
-    const originLeft = frameBox.left - bodyBox.left;
-    const originTop = frameBox.top - bodyBox.top + body.scrollTop;
-    let left = originLeft + rect.left + rect.width + 8;
-    if (left + width > bodyBox.width - 8) left = originLeft + rect.left - width - 8;
-    if (left < 8) {
-      place(node, rect);
-      return;
-    }
-    node.style.left = `${left}px`;
-    const height = node.offsetHeight || 160;
-    const top = Math.min(originTop + rect.top - 4,
-                         body.scrollTop + bodyBox.height - height - 8);
-    node.style.top = `${Math.max(body.scrollTop + 8, top)}px`;
+    const host = peek.offsetParent ? peek.offsetParent.getBoundingClientRect() : {left: 0, top: 0, width: innerWidth, height: innerHeight};
+    const left = frameBox.left - host.left + rect.left + rect.width + 6;
+    peek.style.left = `${Math.max(8, Math.min(left, host.width - peek.offsetWidth - 8))}px`;
+    peek.style.top = `${Math.max(8, Math.min(frameBox.top - host.top + rect.top, host.height - peek.offsetHeight - 8))}px`;
   }
-
-  function place(node, rect) {
-    if (!view.frame || !body) return;
-    const frameBox = view.frame.getBoundingClientRect();
-    const bodyBox = body.getBoundingClientRect();
-    const left = frameBox.left - bodyBox.left + (rect ? rect.left : 0);
-    const top = frameBox.top - bodyBox.top + body.scrollTop + (rect ? rect.top + rect.height : 0);
-    const width = Math.min(360, Math.max(240, bodyBox.width - 24));
-    const clampedLeft = Math.max(8, Math.min(left, bodyBox.width - width - 8));
-    node.style.width = `${width}px`;
-    node.style.left = `${clampedLeft}px`;
-    let placedTop = top + 8;
-    const height = node.offsetHeight || 160;
-    if (rect && placedTop + height > body.scrollTop + bodyBox.height) {
-      placedTop = Math.max(8, frameBox.top - bodyBox.top + body.scrollTop + rect.top - height - 8);
-    }
-    node.style.top = `${placedTop}px`;
-  }
-
-  // -- Message forms ----------------------------------------------------
-
-  // A textarea with an "Ask assistant" checkbox, on by default, and one
-  // submit button: posting is one action, and a people-only note is one
-  // untick away.
-  function messageForm(className, placeholder, submitLabel) {
-    const form = el('form', className);
-    const input = el('textarea', 'artifact-discussion-input');
-    input.placeholder = placeholder;
-    input.rows = 3;
-    input.setAttribute('aria-label', placeholder);
-    const status = el('p', 'artifact-discussion-status', '');
-    status.setAttribute('role', 'status');
-    const actions = el('div', 'artifact-discussion-actions');
-    const option = el('label', 'artifact-discussion-assistant');
-    const assistant = el('input');
-    assistant.type = 'checkbox';
-    assistant.checked = true;
-    option.append(assistant, ' Ask assistant');
-    const submit = el('button', 'btn', submitLabel);
-    submit.type = 'submit';
-    actions.append(option, submit);
-    form.append(input, status, actions);
-    input.addEventListener('keydown', event => {
-      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit'));
-      }
-    });
-    return {form, input, status, actions, assistant, submit};
-  }
-
-  // The message to send, '' for a selection sent alone, or null when there
-  // is nothing to send: only the assistant takes a selection without words.
-  function checkedText(parts, alone) {
-    const text = parts.input.value.trim();
-    if (!text) {
-      if (alone && parts.assistant.checked) return '';
-      parts.status.textContent = alone ? 'Write a message, or ask the assistant.' : '';
-      return null;
-    }
-    if (new TextEncoder().encode(text).length > MAX_MESSAGE_BYTES) {
-      parts.status.textContent = 'Message too long.';
-      return null;
-    }
-    return text;
-  }
-
-  // -- Composer ---------------------------------------------------------
-
-  function closeComposer() {
-    if (view.composer) view.composer.remove();
-    view.composer = null;
-    view.draft = null;
-    post({t: 'discussion-draft', active: false});
-  }
-
-  function openComposer(anchor, rect, context) {
-    closeCard();
-    if (view.composer) view.composer.remove();
-    view.draft = {anchor, rect, context};
-    const parts = messageForm('artifact-discussion-composer',
-                              'What should change here? Empty sends the selection as the request.',
-                              'Post');
-    const {form, input, status, actions, assistant, submit} = parts;
-    form.setAttribute('role', 'dialog');
-    form.setAttribute('aria-label', 'Discuss this part of the artifact');
-    form.prepend(el('p', 'artifact-discussion-target', anchor.label || 'Selected part'));
-    if (anchor.quote && anchor.kind !== 'word') {
-      form.insertBefore(el('blockquote', 'artifact-discussion-quote', anchor.quote), input);
-    }
-    const cancel = el('button', 'btn quiet', 'Cancel');
-    cancel.type = 'button';
-    cancel.addEventListener('click', closeComposer);
-    actions.insertBefore(cancel, submit);
-    input.addEventListener('keydown', event => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeComposer();
-      }
-    });
-    form.addEventListener('submit', async event => {
-      event.preventDefault();
-      const text = checkedText(parts, true);
-      if (text === null || !view.draft || !view.id) return;
-      const draft = view.draft;
-      const discussionId = newId();
-      submit.disabled = true;
-      status.textContent = assistant.checked ? 'Posting and sending…' : 'Posting…';
-      try {
-        await request({action: 'post', item: view.id, discussionId, messageId: newId(), text,
-                       target: draft.anchor, context: draft.context,
-                       toAssistant: assistant.checked});
-        if (!stored.some(discussion => discussion && discussion.id === discussionId)) {
-          pending.set(discussionId, {id: discussionId, name: view.name, anchor: draft.anchor,
-                                     text: text || ALONE, actor: 'You', replies: [],
-                                     toAssistant: assistant.checked});
-        }
-        if (form === view.composer) {
-          closeComposer();
-          setMode(false);
-        }
-        publishMarkers();
-      } catch (error) {
-        if (form === view.composer) {
-          submit.disabled = false;
-          status.textContent = error.message;
-        }
-      }
-    });
-    body.append(form);
-    view.composer = form;
-    place(form, rect);
-    input.focus();
-  }
-
-  // -- Thread card ------------------------------------------------------
-
-  const cardVersion = discussion => JSON.stringify(
-    [discussion.text, discussion.replies.map(reply => reply.id), discussion.state, discussion.working,
-     discussion.reply, discussion.sessionName]);
-
-  function closeCard() {
-    if (view.card) view.card.remove();
-    view.card = null;
-    view.cardPinned = false;
-  }
-
-  function fillCard(card, discussion) {
-    // Keep the live form attached while streaming or a store broadcast
-    // refreshes the thread. Replacing it resets the assistant choice, focus
-    // and pending submission, and the receipt would clear a detached input.
-    const form = view.card === card && card.querySelector
-      ? card.querySelector('.artifact-discussion-reply-form') : null;
-    if (form) {
-      for (const child of [...card.children]) if (child !== form) child.remove();
-    } else card.replaceChildren();
-    card.dataset.version = cardVersion(discussion);
-    const status = discussion.working && discussion.state !== 'queued' ? 'Assistant working…'
-      : {queued: 'Queued for the assistant', sent: 'Sent to assistant',
-         answered: 'Answered'}[discussion.state] || 'Posted';
-    const head = el('div', 'artifact-discussion-head');
-    head.append(el('span', '', [discussion.actor || 'Guest', status].join(' · ')));
-    // The session that answers this thread, wherever it was written.
-    if (discussion.sessionName) {
-      head.append(el('span', 'artifact-discussion-session', `answered in ${discussion.sessionName}`));
-    }
-    const close = el('button', 'artifact-discussion-close', '×');
-    close.type = 'button';
-    close.title = 'Close';
-    close.setAttribute('aria-label', 'Close');
-    close.addEventListener('click', closeCard);
-    head.append(close);
-    card.insertBefore(head, form);
-    card.insertBefore(el('p', 'artifact-discussion-target', discussion.anchor.label || ''), form);
-    const thread = el('div', 'artifact-discussion-thread');
-    if (discussion.empty) thread.append(el('p', 'artifact-discussion-text', 'No messages yet.'));
-    for (const message of discussion.empty ? [] : [discussion, ...discussion.replies]) {
-      const item = el('p', 'artifact-discussion-text');
-      item.append(el('strong', '', `${message.actor || 'Guest'}: `), String(message.text || ''));
-      thread.append(item);
-    }
-    card.insertBefore(thread, form);
-    if (discussion.reply) {
-      const excerpt = discussion.reply.length > 1200
-        ? discussion.reply.slice(0, 1200).trimEnd() + '…' : discussion.reply;
-      const answer = renderMarkdown(excerpt);
-      answer.className = 'prose artifact-discussion-reply';
-      card.insertBefore(answer, form);
-    }
-    if (!view.cardPinned) return;
-    const actions = el('div', 'artifact-discussion-actions');
-    if (discussion.recordId && typeof reveal === 'function') {
-      const show = el('button', 'btn quiet', 'Show in chat');
-      show.type = 'button';
-      show.addEventListener('click', () => reveal(discussion.recordId));
-      actions.append(show);
-    }
-    if (canDiscuss() && (discussion.general || stored.some(item => item && item.id === discussion.id))) {
-      // The general discussion stays open.
-      if (!discussion.general) {
-        const resolve = el('button', 'btn quiet', 'Resolve');
-        resolve.type = 'button';
-        resolve.title = 'Mark this discussion done for everyone; its marker goes away';
-        resolve.addEventListener('click', async () => {
-          resolve.disabled = true;
-          try {
-            await request({action: 'resolve', item: view.id, discussionId: discussion.id,
-                           resolved: true});
-          } catch (error) {
-            resolve.disabled = false;
-            if (flash) flash(error.message);
-          }
-        });
-        actions.append(resolve);
-      }
-      if (form) {
-        card.append(actions);
-        return;
-      }
-      const parts = messageForm('artifact-discussion-reply-form',
-                                discussion.general ? 'Write about the whole artifact…' : 'Reply…',
-                                discussion.general ? 'Post' : 'Post reply');
-      parts.form.addEventListener('submit', async event => {
-        event.preventDefault();
-        const text = checkedText(parts);
-        if (!text) return;
-        parts.submit.disabled = true;
-        parts.status.textContent = parts.assistant.checked ? 'Posting and sending…' : 'Posting…';
-        try {
-          // The first message about the whole artifact starts its discussion.
-          await request(discussion.general
-            ? {action: 'post', item: view.id, target: {kind: 'whole'}, messageId: newId(),
-               text, toAssistant: parts.assistant.checked}
-            : {action: 'reply', item: view.id, discussionId: discussion.id,
-               messageId: newId(), text, toAssistant: parts.assistant.checked});
-          parts.input.value = '';
-          parts.status.textContent = '';
-        } catch (error) {
-          parts.status.textContent = error.message;
-        } finally {
-          parts.submit.disabled = false;
-        }
-      });
-      card.append(parts.form);
-    }
-    card.append(actions);
-  }
-
-  function refreshCard(discussion) {
-    if (view.card) fillCard(view.card, discussion);
-  }
-
-  function openCard(id, rect, pinned) {
-    const discussion = id === GENERAL ? generalDiscussion() : discussions().find(item => item.id === id);
-    if (!discussion) return;
-    if (view.card && view.card.dataset.discussion === id) {
-      if (pinned && !view.cardPinned) {
-        view.cardPinned = true;
-        fillCard(view.card, discussion);
-      }
-      return;
-    }
-    if (view.cardPinned && !pinned) return;
-    closeCard();
-    const card = el('section', 'artifact-discussion-card');
-    card.dataset.discussion = id;
-    card.setAttribute('role', 'dialog');
-    card.setAttribute('aria-label', 'Discussion');
-    view.card = card;
-    view.cardPinned = pinned === true;
-    fillCard(card, discussion);
-    body.append(card);
-    if (rect) placeBeside(card, rect);
-    else place(card, null);
-  }
+  const hidePeek = () => { if (peek) peek.hidden = true; };
 
   // -- Mode and wiring --------------------------------------------------
 
   function setMode(on) {
     view.mode = on === true && !!view.frame && canDiscuss();
     post({t: 'discussion-mode', on: view.mode});
-    if (!view.mode && !view.composer) post({t: 'discussion-draft', active: false});
-    updateToggle(discussions().length);
+    if (!view.mode && !view.draft) post({t: 'discussion-draft', active: false});
+    updateToggles();
   }
 
   function onMessage(event) {
@@ -1433,93 +1270,108 @@ function createArtifactDiscussionController(options) {
     if (type === 'pick') {
       if (!view.mode) return;
       const anchor = cleanAnchor(data.anchor);
-      const rect = cleanRect(data.rect);
-      if (!anchor || !rect) return;
+      if (!anchor || !cleanRect(data.rect)) return;
       const context = data.context && typeof data.context === 'object' ? data.context : {};
-      openComposer(anchor, rect, {
+      view.draft = {anchor, context: {
         text: bounded(context.text, 4000) ? context.text : '',
         html: bounded(context.html, 8000) ? context.html : '',
-      });
-    } else if (type === 'draft') {
+      }};
+      sidebar.update({fresh: {
+        label: anchor.label || 'Part of the artifact',
+        quote: anchor.kind !== 'word' ? anchor.quote || '' : '',
+        placeholder: 'What should change here? Leave empty to send the selection as the request.'}});
+      sidebar.show({kind: NEW});
+      showSide(true);
+      sidebar.focus();
+    } else if (type === 'peek') {
       const rect = cleanRect(data.rect);
-      if (rect && view.composer) place(view.composer, rect);
-    } else if (type === 'peek' || type === 'open') {
-      const rect = cleanRect(data.rect);
-      if (typeof data.id === 'string' && rect) openCard(data.id, rect, type === 'open');
+      if (typeof data.id === 'string' && rect) showPeek(data.id, rect);
     } else if (type === 'unpeek') {
-      if (view.card && !view.cardPinned) closeCard();
+      hidePeek();
+    } else if (type === 'open') {
+      if (typeof data.id !== 'string' || !discussions().some(entry => entry.id === data.id)) return;
+      hidePeek();
+      sidebar.show({kind: 'thread', id: data.id});
+      showSide(true);
     } else if (type === 'exit') {
       setMode(false);
     }
   }
   if (typeof addEventListener === 'function') addEventListener('message', onMessage);
   if (toggle) toggle.addEventListener('click', () => setMode(!view.mode));
-  if (general) general.addEventListener('click', () => {
-    if (view.card && view.card.dataset.discussion === GENERAL) {
-      closeCard();
-      return;
+  if (sidebarToggle) sidebarToggle.addEventListener('click', () => showSide(side.hidden));
+  if (close) close.addEventListener('click', () => showSide(false));
+  // Escape drops a new discussion, or else closes the sidebar.
+  side.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    if (sidebar.view().kind === NEW) sidebar.show({kind: 'list'});
+    else {
+      showSide(false);
+      if (sidebarToggle) sidebarToggle.focus();
     }
-    closeComposer();
-    openCard(GENERAL, null, true);
   });
 
   function load(name) {
     request({action: 'list', item: view.id}).then(reply => {
       if (view.name === name) {
         stored = Array.isArray(reply.discussions) ? reply.discussions : [];
-        publishMarkers();
+        // What the artifact opens with is not news.
+        refresh(true);
       }
     }).catch(() => {});
+  }
+
+  function reset() {
+    view.mode = false;
+    view.draft = null;
+    stored = [];
+    threads = null;
+    lastMarkers = '';
+    drafts.clear();
+    hidePeek();
+    sidebar.reset();
   }
 
   return Object.freeze({
     // A newly rendered HTML frame for record ID named NAME.
     attach(frame, id, name) {
-      closeComposer();
-      closeCard();
       view.frame = frame;
       view.id = id;
       view.name = name;
-      view.mode = false;
-      stored = [];
-      threads = null;
-      lastMarkers = '';
+      reset();
       frame.addEventListener('load', () => publishMarkers(true));
-      updateToggle(0);
+      refresh();
       load(name);
     },
     detach() {
-      closeComposer();
-      closeCard();
       view.frame = null;
       view.id = null;
       view.name = null;
-      view.mode = false;
-      stored = [];
-      threads = null;
-      updateToggle(0);
+      reset();
+      side.hidden = true;
+      updateToggles();
     },
     records(next) {
       records = Array.isArray(next) ? next : [];
       threads = null;
-      publishMarkers();
+      refresh();
     },
     queue(entries) {
       queued = Array.isArray(entries) ? entries : [];
       threads = null;
-      publishMarkers();
+      refresh();
     },
     // The session's activity changed; working markers follow it.
     activity() {
       threads = null;
-      publishMarkers();
+      refresh();
     },
     // The host store changed for the item the frame names.
     stored(frame) {
-      if (frame && view.name && frame.item === `artifact:${view.name}`
-          && Array.isArray(frame.discussions)) {
+      if (frame && view.name && frame.item === item() && Array.isArray(frame.discussions)) {
         stored = frame.discussions;
-        publishMarkers();
+        refresh();
       }
     },
     // A message to the assistant in the general discussion of artifact ID

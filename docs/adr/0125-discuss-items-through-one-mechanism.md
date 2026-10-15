@@ -19,12 +19,20 @@ either stays between people or also asks the assistant, which answers beneath
 it. A room message with an item selected is a message to the assistant in its
 general discussion.
 
-**One interface.** Every place that discusses an item offers the same
-actions: **Discuss** picks the part, one composer writes about it with an
-**Ask assistant** choice, replies carry the same choice, **Send to assistant**
-sends a discussion as it stands, and **Resolve** hides it. The HTML artifact
-panel and the whiteboard and document editor differ only in how a part is
-picked.
+**One interface.** Every place that discusses an item shows the same
+discussions sidebar, one shared viewer component
+(`relay/viewer/viewer-discussions.js`). It shows either the list of the item's
+discussions -- the whole item first, then the open ones, then the resolved
+ones folded into one row -- or one discussion with its messages, the
+assistant's answers beneath them, and one box at its foot that replies to that
+discussion only. **Discuss** picks the part and opens a new discussion that
+looks like any other before its first message. Every message carries an **Ask
+assistant** choice, the ⋯ menu resolves or reopens, and **Ask assistant
+again** sends a discussion as it stands. An answer or message arriving in a
+discussion that is not on screen marks its row, the back link, its marker and
+the sidebar's toggle; it never switches the view. The HTML artifact panel and
+the whiteboard and document editor differ only in how a part is picked and in
+what each target offers, such as file attachments on the whole item.
 
 **One owner in Emacs.** `mevedel-collaboration-discussions` performs every
 guest action -- `list`, `post`, `reply`, `resolve`, `ask` -- for every item
@@ -87,6 +95,17 @@ a selection is a discussion, each handwritten "draw it" would otherwise leave
 an open discussion and a board pin behind with nothing left to discuss; the
 user accepted resolving those, and only those, on completion.
 
+The sidebar replaced a mixed layout after the user compared mocks of both
+models. The editor had one composer at the panel's foot whose chip switched
+between writing to the whole item and starting a discussion about the
+selection, and each discussion's card carried its own reply box; the artifact
+panel floated a composer and pinned cards over the frame. On a 1280 × 640
+window the composer took about 40% of the sidebar, a long answer stretched the
+card list, and three kinds of box made it unclear which one a message would
+reach. Showing one discussion at a time gives every box one visible owner and
+an answer the full height. Marking news rather than jumping to it keeps a
+participant's place while they type; the user chose marks over jumping.
+
 ## Consequences
 
 - Destructive: whiteboard and document comments are dropped on the item's
@@ -110,3 +129,19 @@ user accepted resolving those, and only those, on completion.
 - A retried message is sent only while it is still its discussion's latest;
   otherwise the sender reviews the discussion again, for every kind.
 - `shared://ID/discussions` replaces `shared://ID/comments` for models.
+- A message to the whole item carries no reviewed capture: the sidebar shows
+  no quote of the whole item, so the host captures it when the request is
+  read. Only parts of an item, whose quote the sender sees, are checked
+  against what was reviewed.
+- Saved discussion drafts from the composer format are reported as
+  unsupported once and reset; no migration.
+
+## Decision history
+
+- Until the shared sidebar, the editor's Discussions tab held one composer
+  with a scope chip (**Whole whiteboard** or **Selected objects**), a
+  **Resolved** filter, and a card per discussion with its own reply form and
+  **Send to assistant**; the artifact panel floated its composer and thread
+  cards over the frame, with a **Whole artifact** button for the general
+  discussion. Replaced by the list-then-discussion sidebar for the reasons
+  above.

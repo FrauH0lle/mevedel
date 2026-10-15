@@ -52,14 +52,14 @@ palettes and system/light/dark appearance; changes follow the editor without
 replacing its document or discussion drafts. The whiteboard keeps a light drawing
 surface so authored colors remain unchanged.
 
-**Discussions** opens the [discussion panel](#discussions-in-the-editor), a
+**Discussions** opens the [discussions sidebar](#discussions-in-the-editor), a
 sidebar on desktop and a full-width overlay on phones. It starts open on
 wide screens for documents. Drag its divider to widen it, up to half the viewport; Left/Right
 arrow keys also resize it, Home/End select the limits, and double-click resets
 its width. The width is retained with the item's private drafts. Closing the
 panel preserves drafts, captured context, and editor position. The editor
 follows the visible viewport above the keyboard; Escape closes the panel, and
-Ctrl/Command+Enter submits its composer.
+Ctrl/Command+Enter sends what its box holds.
 Downloads, recovery, retry, contribution history, and assistant highlighting
 are in the editor's **☰** menu, with a document's word count. A document's
 toolbar row holds its formatting, then undo, redo, **Discussions** and **☰**;
@@ -161,7 +161,7 @@ adds them to the current selection. Connectors are tested by their drawn path.
 A press without movement clears the selection. The box disappears on release,
 but its area stays attached to the selection, even when it contains no
 objects, until the selection changes or an object moves: **Discuss** uses it,
-and the area shows again while the discussion composer carries it. Box
+and the area shows again while a new discussion about it is on screen. Box
 selection never edits content.
 
 Selection follows Excalidraw's handles. A lone element shows an outline with
@@ -464,18 +464,13 @@ browser closed and never silently start a share.
 ### Discussions in the editor
 
 Whiteboards and documents follow the room's [discussion](collaboration.md#discussions)
-model. **Discussions** opens the sidebar's Discussions tab: the discussion
-about the whole item first, then one card per discussion about part of it,
-with its target, messages and the assistant's answers beneath the messages
-they answer. The tab and the **Discussions** button count the open
-discussions, and **Resolved** brings resolved ones back. A status line under
-the tabs reports the session's queued, paused, working, disconnected, or
+model and its shared discussions sidebar. **Discussions** opens the sidebar's
+Discussions tab on the list: the whole item first, then the open discussions
+with their pin number, then the resolved ones folded into one row. The tab and
+the **Discussions** button count the open discussions, and the button shows a
+dot while news in another discussion is unread. A status line under the tabs
+reports the session's queued, paused, working, disconnected, or
 provider-failure state, and stays away while there is nothing to report.
-The explanations of how to discuss show only while there is no discussion. To leave the sidebar to the discussions, the
-composer starts at two lines and a reply box at one, each growing with its
-text, the composer takes at most 45% of the sidebar, and a message's own turn
-shows only when it carries context. No size depends on focus, so pressing a
-button never moves it.
 While the session is working, a spinner accompanies the status and the panel's
 toolbar button. The room chat shows **Assistant working…** in its status strip.
 These indicators follow the host's session activity, including tool execution,
@@ -484,22 +479,27 @@ the spinning animation. A paused follow-up queue does not conceal a running turn
 Posted messages and assistant answers are shared with the room; drafts stay
 in the current browser's recovery storage. View participants can read them.
 
-The panel has one composer. A chip above it names what the message is about:
-the **Whole document** or **Whole whiteboard**, which posts to the general
-discussion, or the **Selected passage**, **Selected objects** or **Selected
-area**, which starts a new discussion and shows its quote. Beside the chip, a
-link switches to the other subject when there is one, and **Refresh** attaches
-the content as it is now. **Discuss** (Ctrl/Command+Alt+M) opens the composer
-for the current selection: selecting document text shows it beside the
-passage, and a board shows it in the selection panel. **Ask assistant**,
-checked by default, also sends the
-message to the assistant; the choice is kept for the next message. After a
-discussion starts, its card opens and the composer returns to the whole item.
-Each card has a reply form with its own **Ask assistant** choice, **Send to
-assistant**, which sends the discussion as it stands and confirms reviewed
-context or retries an unconfirmed request, and **Resolve** or **Reopen**. The
-composer, reply drafts and the panel width survive switching scopes,
-receiving updates, closing the panel and reopening the editor.
+**Discuss** (Ctrl/Command+Alt+M) opens a new discussion about the current
+selection: selecting document text shows it beside the passage, a board shows
+it in the selection panel, and the list's foot offers it, as **Discuss
+selected passage**, **Discuss 2 selected objects** or **Discuss selected
+area**. The new discussion names the **Selected passage**, **Selected
+objects** or **Selected area** and quotes it; the passage or area stays
+highlighted while it is on screen, and **Refresh** attaches the content as it
+is now. **Start discussion** posts it and keeps it open. **Ask assistant**,
+checked by default, also sends the message to the assistant; the choice is
+kept for the next message. A discussion's box replies to it, **Show passage**
+or **Show on board** shows its target, and its ⋯ menu holds **Ask assistant
+again**, which sends the discussion as it stands, and **Resolve** or
+**Reopen**. When a request needs attention, the discussion offers **Review
+updated context**, **Send to assistant** for reviewed context, or **Retry** for
+an unconfirmed request. The discussion about the whole item writes to it and
+takes file attachments. A message to the whole item asks about the item as it
+is when sent; it carries no reviewed capture, since none is shown. Each
+discussion's draft, the new discussion and the sidebar width survive
+receiving updates, closing the sidebar and reopening the editor; going back to
+the list drops a new discussion. The box starts at two lines and grows with
+its text, and no size depends on focus, so pressing a button never moves it.
 An unrecognized saved discussion-draft format is reported and reset without
 blocking recovery of document content or posted discussions.
 
@@ -508,7 +508,7 @@ blocking recovery of document content or posted discussions.
 A selection can be sent with no message, on a board or in a document: what is
 written in the selected content is then the request, for example a handwritten
 “draw it” beside a formula, or “Rephrase this paragraph” typed above the
-paragraph. The composer says so in its placeholder when **Ask assistant** is
+paragraph. A new discussion says so in its placeholder when **Ask assistant** is
 checked. A message to the whole board or document still needs text, because
 it has no instruction of its own, and so does a discussion that does not ask
 the assistant.
@@ -531,8 +531,8 @@ discussion resolves itself.
 A request carries the discussion's latest message, which is the visible
 request in the room and to the model, with the discussion so far in the shared
 context; unposted reply text never travels. Queue and delivery status appear
-on the card. Another AI request requires another message sent to the assistant
-or an explicit **Send to assistant**. The host checks that the discussion has
+in the discussion. Another AI request requires another message sent to the
+assistant or an explicit **Ask assistant again**. The host checks that the discussion has
 not moved on since the sender reviewed it, as well as its target; a concurrent
 reply requires sending again. Failed delivery retains its request identity for
 retry.
@@ -541,7 +541,7 @@ Clicking a document highlight opens its discussion; **Show passage** scrolls
 back to the live passage. Resolving hides its highlight.
 
 A document discussion keeps its original quote and a collaboration-aware text
-anchor. The card marks a passage changed or removed after later edits. A
+anchor. The discussion marks a passage changed or removed after later edits. A
 changed passage requires **Review updated context** before sending; a removed
 passage cannot be sent. The immutable snapshot of an already sent request
 remains unchanged. In the editor sidebar, room transcript, and Emacs view, sent
@@ -559,14 +559,14 @@ tool (M): it outlines the object under the pointer, discusses a clicked
 object, and discusses a dragged area together with the objects it contains.
 The tool stays active for further discussions; Escape returns to selection.
 Every open discussion shows a numbered pin at the top-right corner of its
-target, following moves live. Hovering a pin outlines its target and shows the
-author, first message, reply count, and whether its objects changed; clicking
-it opens the discussion. A ring turns around a pin while the assistant works on
-its discussion, the same way as for artifact discussions. Resolved discussions
-have no pin, and pins renumber in order of the open discussions. **Show
-objects** selects the discussion's surviving objects and area and frames them.
-Pins, hover cards and discussions are visible to view participants, who cannot
-post.
+target, following moves live. Hovering a pin outlines its target and shows its
+latest message, message count, and whether its objects changed; clicking it
+opens the discussion in the sidebar. A ring turns around a pin while the
+assistant works on its discussion, the same way as for artifact discussions,
+and a dot marks news not yet opened. Resolved discussions have no pin, and pins
+renumber in order of the open discussions. **Show on board** selects the
+discussion's surviving objects and area and frames them. Pins, peeks and
+discussions are visible to view participants, who cannot post.
 
 A board discussion records its object IDs, optional area, quote, and a
 fingerprint of those objects and their labels. The quote names labelled
@@ -587,12 +587,10 @@ appear by file reference, and their pixels only in the attached PNG, which
 shows the area with a small margin and is scaled up to four times so small
 areas stay legible. Selected objects bring their labels and the shapes their
 arrows connect as context.
-Switching the composer to the whole item retains
-the previously attached selection, so switching back does not require selecting
-it again. A private document highlight keeps the attached passage visible while
-the panel is open; closing it removes that highlight. The attached quote shows
-the chosen scope before submission. Opening controls, typing, and toggling the
-panel retain that capture.
+A private document highlight keeps a new discussion's passage visible while it
+is on screen; closing the sidebar removes that highlight and reopening it
+shows the passage again. The quote shows what will be sent before submission.
+Opening controls, typing, and toggling the sidebar retain that capture.
 Pending edits must save first. The browser sends a content hash of the capture
 it showed, and the host compares it with a capture of its committed content; a
 concurrent change rejects the request with an explicit **Refresh context**
@@ -850,14 +848,14 @@ actions and records what the assistant would be asked.
 stand-in for the host's library requests), groups, locking, duplicates,
 arrowheads and fonts; `test/test-mevedel-shared-library.el` covers the library
 file and public collection through a local HTTP server.
-The room scenario also checks question-draft recovery across repeated reloads. Set
+The room scenario also checks new-discussion draft recovery across repeated reloads. Set
 `MEVEDEL_EDITOR_SCREENSHOTS=1` when running `test/editor.browser.mjs` to save
 preview screenshots under `.scratch/shared-collaborative-editing/`.
 The focused room design and navigation checks also run with
 `MEVEDEL_BROWSER=firefox` after installing Playwright Firefox with
 `shared-editing/node_modules/.bin/playwright install firefox`.
 
-The room browser scenario checks the separate tab and preserved composer,
+The room browser scenario checks the separate tab and preserved drafts,
 as well as caret visibility after a mobile viewport resize. It uses a real
 relay and isolated Emacs, multiple Chromium contexts, and a deterministic participant invoking actual native tools. It
 requires Go, Emacs dependencies installed by Eask, and Playwright Chromium

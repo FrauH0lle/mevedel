@@ -619,22 +619,45 @@ discussion kept with the item: a target and its messages. The target is part
 of the item -- an element, word, passage or box of an HTML artifact, objects or
 an area of a whiteboard, a passage of a document -- or the whole item. Every
 item has one general discussion about the whole item. It always exists, stays
-open and has no marker; the room's discussion tab for the item and the top of
-the editor's Discussions panel show it. A discussion about part of an item
-starts with its first message. Participants with edit authority resolve and
-reopen it; resolving hides its marker for everyone, and **Resolved** in an
-editor's Discussions tab brings it back into view. Reopen a resolved discussion before writing to it.
-View participants read discussions but cannot write.
+open and has no marker; the room's discussion tab for the item shows it, and
+it is the first row of the item's discussions sidebar. A discussion about part
+of an item starts with its first message. Participants with edit authority
+resolve and reopen it; resolving hides its marker for everyone and folds the
+discussion into the sidebar's **Resolved** row. Reopen a resolved discussion
+before writing to it. View participants read discussions but cannot write.
+
+Whiteboards, documents and HTML artifacts share one discussions sidebar
+(`relay/viewer/viewer-discussions.js`). It shows either the list of the item's
+discussions or one discussion. The list puts the whole item first, then the
+open discussions with their marker number, latest message or answer and any
+state that needs attention, then the resolved ones folded into one row. Its
+foot offers **Discuss** for the current selection. A discussion fills the
+sidebar: its subject and a link that shows the target, its messages with the
+assistant's answers beneath the messages they answer, and one box at the foot
+that replies to that discussion and nothing else. Its ⋯ menu holds **Resolve**
+or **Reopen**, **Ask assistant again** in whiteboards and documents, and
+**Show in chat** for an artifact. **Discuss** opens a new discussion that looks
+the same before its first message, with the quoted target on top; going back
+to the list drops it.
+
+A message or answer that arrives in a discussion not on screen marks it
+instead of switching to it: its row turns bold with *New answer* or *New
+message*, the back link counts the discussions with news, its marker carries a
+dot, and the sidebar's toggle shows one while any news is unread. Opening the
+discussion clears the mark. What the item opens with is not news. In the
+discussion on screen, new messages and answers simply appear. Drafts belong to
+their discussion, so typing in one is never lost to another.
 
 Every place that discusses an item works the same way. **Discuss** picks the
-part to discuss and opens the composer for it: discuss mode in the
+part to discuss and opens a new discussion about it: discuss mode in the
 [artifact panel](#discussing-an-html-artifact), and the **Discuss** button,
 tool (M) and Ctrl/Command+Alt+M in the
 [whiteboard and document editor](shared-editing.md#discussions-in-the-editor).
 **Ask assistant**, checked by default, also sends the message to the
 assistant, which answers beneath it; unchecked, the message is a note between
-people and starts no model turn. Replies carry the same choice, and **Send to
-assistant** sends a discussion as it stands, without a new message. A message
+people and starts no model turn. Replies carry the same choice, which the next
+message keeps, and **Ask assistant again** sends a discussion as it stands,
+without a new message. A message
 to the general discussion needs text. With **Ask assistant** checked, a
 message about part of an item may be empty: what is written in that part is
 then the request (see
@@ -652,7 +675,7 @@ A message to the assistant goes to the session the link speaks for:
   to the item's dedicated session, created on first use.
 
 The discussion records its answering session; the artifact panel shows it as
-*answered in NAME*. A selection sent alone is a task rather than a
+*Answered in NAME*. A selection sent alone is a task rather than a
 conversation: once the turn that answered it completes, the discussion
 resolves itself, attributed to the assistant. A failed or cancelled turn
 leaves it open, and a discussion with a written message is never resolved
@@ -1031,22 +1054,24 @@ The picker is inlined into the panel frame ahead of the artifact and only
 reports what was picked: a CSS selector, a text fingerprint of the element,
 the quoted word or passage with its offset, the box as fractions of the
 element, a label such as `Decisions at a glance › word "share"`, and a
-bounded text and HTML excerpt of the target. The composer is drawn by the
-viewer, outside the sandbox, so the artifact can neither read nor write what
-a participant types. The viewer accepts picks only from the current panel
-frame and only while discuss mode is on, and bounds every field. An artifact
-can still misreport where it was clicked; the composer shows the label and
-quote it will send.
+bounded text and HTML excerpt of the target. A pick opens a new discussion in
+the panel's discussions sidebar, beside the frame and over it on a phone. The
+sidebar is drawn by the viewer, outside the sandbox, so the artifact can
+neither read nor write what a participant types. The viewer accepts picks only
+from the current panel frame and only while discuss mode is on, and bounds
+every field. An artifact can still misreport where it was clicked; the new
+discussion shows the label and quote it will send. Another pick replaces its
+subject; Escape drops it.
 
-**Post** starts the discussion for everyone. Discussions belong to the store
+**Start discussion** posts it for everyone. Discussions belong to the store
 artifact and are kept on its main file. The host also refuses other files of
 an artifact and non-HTML artifacts, and rebuilds the target from its known
 bounded fields.
 
-**Whole artifact** beside **Discuss** opens the general discussion: its
-messages, the assistant's latest answer, and a form that writes to the whole
-artifact with the same **Ask assistant** choice. The button counts its
-messages, and everyone who sees the artifact can open it.
+**Discussions** beside **Discuss** opens the sidebar and counts the open
+discussions; everyone who sees the artifact can open it. Its list starts with
+the whole artifact, whose box writes to the general discussion with the same
+**Ask assistant** choice, and its foot turns on discuss mode.
 
 Each change is broadcast to every room and the lobby of the workspace as a
 `discussions` frame naming the item; the stored excerpts stay on the host.
@@ -1066,11 +1091,11 @@ A ring turns around a marker while the assistant works on its discussion: its
 latest request is queued, or is the turn the session is running. The ring
 keeps turning through the assistant's first reply text, and stops when that
 turn ends or a later request starts. Reduced motion shows a still dashed ring.
-Hovering a marker shows its thread and the assistant's latest reply from the
-transcript; clicking pins it with a reply form, **Resolve**, and **Show in
-chat**, which closes the artifact panel, which covers the conversation, then
-scrolls to the latest request and highlights it. Resolving hides the marker
-for everyone.
+Hovering a marker shows its latest message; clicking opens its discussion in
+the sidebar, and the sidebar's **Show in artifact** scrolls back to the
+marker. **Show in chat** in the discussion's ⋯ menu closes the artifact panel,
+which covers the conversation, then scrolls to the latest request and
+highlights it.
 
 ## Notifications and browser storage
 

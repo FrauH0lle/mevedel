@@ -137,11 +137,11 @@ let documentSelection = null,
   /* Discussions with the live state of their targets, as the panel shows them. */
   discussions = [],
   hoverShape = null,
-  /* The board pins drawn with the assistant's working ring. */
-  drawnWorking = '';
-const workingPins = () => discussions
-  .filter((d) => d.target?.kind === 'objects' && !d.resolved && assistant?.working(d.id))
-  .map((d) => d.id).join('\n');
+  /* The board pins as drawn: working rings and unread dots. */
+  drawnPins = '';
+const pinStates = () => discussions
+  .filter((d) => d.target?.kind === 'objects' && !d.resolved)
+  .map((d) => `${d.id}:${assistant?.working(d.id) ? 'w' : ''}${assistant?.unread(d.id) ? 'u' : ''}`).join('\n');
 let recoveryWarning = '';
 // Set when changes the host committed could not be read after a skipped revision.
 let missed = false;
@@ -507,6 +507,8 @@ function draw() {
   drawDiscussionMarkers(scene, scale);
   boardPresence?.animate();
   $('discuss-selection').disabled = readOnly || !(selected.size || selectionRegion);
+  assistant?.selectable(selectionRegion ? 'selected area'
+    : selected.size ? `${selected.size} selected object${selected.size === 1 ? '' : 's'}` : null);
   autoStyle();
   refresh();
 }
@@ -527,16 +529,17 @@ function discussionAnchor(discussion, scene) {
 /* Numbered pins at the top-right corner of each open discussion's target. */
 function drawDiscussionMarkers(scene, scale) {
   const anchored = discussions.filter((d) => d.target?.kind === 'objects' && !d.resolved);
-  drawnWorking = workingPins();
+  drawnPins = pinStates();
   $('discussion-markers').innerHTML = anchored.map((d, index) => {
     const box = discussionAnchor(d, scene);
     if (!box) return '';
     const [x, y, w, h] = box, gap = 4 / scale;
     // A ring turns around the pin while the assistant works on its discussion;
     // markers are redrawn often, so the ring keeps its phase from the clock.
-    const working = assistant?.working(d.id);
+    const working = assistant?.working(d.id), unread = assistant?.unread(d.id);
     const author = String(d.messages[0]?.actor || '').replace(/^Guest: /, '');
-    return `<g class="discussion-marker" data-discussion-id="${escape(d.id)}" data-status="${escape(d.anchorStatus)}"${working ? ' data-working="true"' : ''}><rect class="discussion-outline" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/><g class="discussion-pin" role="button" aria-label="Discussion ${index + 1} by ${escape(author)}${working ? ', assistant working' : ''}" transform="translate(${x + w} ${y}) scale(${1 / scale})">${working ? `<circle class="discussion-spin" r="15" style="animation-delay:-${(performance.now() % 900) / 1000}s"/>` : ''}<circle r="11"/><text>${index + 1}</text></g></g>`;
+    // A dot on the pin marks news the participant has not opened yet.
+    return `<g class="discussion-marker" data-discussion-id="${escape(d.id)}" data-status="${escape(d.anchorStatus)}"${working ? ' data-working="true"' : ''}${unread ? ' data-unread="true"' : ''}><rect class="discussion-outline" x="${x - gap}" y="${y - gap}" width="${w + gap * 2}" height="${h + gap * 2}" vector-effect="non-scaling-stroke"/><g class="discussion-pin" role="button" aria-label="Discussion ${index + 1} by ${escape(author)}${working ? ', assistant working' : ''}${unread ? ', new' : ''}" transform="translate(${x + w} ${y}) scale(${1 / scale})">${working ? `<circle class="discussion-spin" r="15" style="animation-delay:-${(performance.now() % 900) / 1000}s"/>` : ''}<circle r="11"/><text>${index + 1}</text>${unread ? '<circle class="discussion-unread" cx="8" cy="-8" r="4"/>' : ''}</g></g>`;
   }).join('');
   // A pin removed under the pointer never reports the pointer leaving, so a
   // peek at a discussion resolved or removed elsewhere closes with its marker.
@@ -645,11 +648,9 @@ function selectionSVG(scene, scale) {
       : `<rect data-handle="${name}" x="${hx - size / 2}" y="${hy - size / 2}" width="${size}" height="${size}" rx="${size / 4}" fill="#fff" stroke="var(--board-selection)" stroke-width="1.5" vector-effect="non-scaling-stroke" style="cursor:${cursor}"${frame.angle ? ` transform="rotate(${(frame.angle * 180) / Math.PI} ${hx} ${hy})"` : ''}/>`;
   return svg;
 }
-/* The board area attached to the open composer's message. */
+/* The board area a new discussion on screen is about. */
 function attachedRegion() {
-  if (!assistant || $('assistant').hidden) return null;
-  const attachment = assistant.draft.attachment;
-  return attachment?.snapshot?.scope === 'selection' ? attachment.region || null : null;
+  return assistant?.pending()?.region || null;
 }
 /* Bound labels of the elements IDS. */
 const labelsOf = (ids) => shapeList().filter((s) => s.type === 'text' && ids.has(s.containerId)).map((s) => s.id);
@@ -1881,7 +1882,7 @@ function board() {
         selectionRegion = d.region;
       }
       draw();
-      if (d.discuss && (d.region || d.target)) assistant.begin('selection');
+      if (d.discuss && (d.region || d.target)) assistant.begin();
       return;
     }
     if (readOnly || d.mode === 'pan' || d.mode === 'laser') return;
@@ -1920,10 +1921,11 @@ function board() {
     const discussion = marker && discussions.find((d) => d.id === marker.dataset.discussionId);
     if (!discussion) return;
     const line = (tag, text) => { const node = document.createElement(tag); node.textContent = text; return node; };
-    const [first] = discussion.messages, replies = discussion.messages.length - 1;
-    peek.replaceChildren(line('small', String(first?.actor || '').replace(/^Guest: /, '')),
-      line('p', first?.alone ? 'Sent the selection as the request' : first?.text || ''),
-      line('small', [replies ? `${replies} repl${replies === 1 ? 'y' : 'ies'}` : '',
+    // The latest message; the discussion itself opens in the sidebar.
+    const latest = discussion.messages.at(-1), count = discussion.messages.length;
+    peek.replaceChildren(line('small', String(latest?.actor || '').replace(/^Guest: /, '')),
+      line('p', latest?.alone ? 'Sent the selection as the request' : latest?.text || ''),
+      line('small', [count > 1 ? `${count} messages` : '', assistant?.unread(discussion.id) ? 'New' : '',
         discussion.anchorStatus === 'changed' ? 'Objects changed since posting' : ''].filter(Boolean).join(' · ')));
     peek.dataset.discussionId = discussion.id;
     peek.hidden = false;
@@ -2232,6 +2234,7 @@ function documentEditor() {
       };
     }
     $('discuss-selection').disabled = readOnly || !documentSelection;
+    assistant?.selectable(documentSelection ? 'selected passage' : null);
     const toolbar = $('selection-actions');
     toolbar.hidden = readOnly || !documentSelection;
     if (documentSelection) {
@@ -2524,26 +2527,23 @@ async function start(event) {
     changed: () => {
       draft();
       if (editor) {
-        const attachment = !$('assistant').hidden && assistant.draft.attachment;
         editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false)
-          .setMeta(discussionHighlight, attachment?.range || null));
+          .setMeta(discussionHighlight, assistant.pending()?.range || null));
       } else if (doc) draw();
     },
     reveal: discussion => editor ? revealPassage(discussion.target.range) : revealObjects(discussion),
     stored: setDiscussions, state: () => ({ readOnly, online }), restored: recovery?.assistant,
-    // Only the pins' working rings follow the conversation.
-    onConversation: () => { if (!editor && doc && workingPins() !== drawnWorking) draw(); },
+    // Only the pins' working rings and unread dots follow the sidebar.
+    onChange: () => { if (!editor && doc && pinStates() !== drawnPins) draw(); },
   });
   assistant.onLibrary = () => loadLibrary?.();
-  assistant.renderDraft();
+  assistant.resume();
   if (editor && matchMedia('(min-width:1100px)').matches) {
-    if (assistant.draft.attachment) assistant.toggle(true);
-    else assistant.begin('whole');
-    document.activeElement?.blur();
+    assistant.toggle(true, false);
   } else if (!editor) requestAnimationFrame(() => { frame(bounds(shapeList())); draw(); });
   setDiscussions(item.discussions || []);
   if (readOnly) $('discuss-selection').hidden = true;
-  $('discuss-selection').onclick = () => assistant.begin('selection');
+  $('discuss-selection').onclick = () => assistant.begin();
   $('document').addEventListener('click', event => {
     const id = event.target.closest('[data-discussion-id]')?.dataset.discussionId;
     if (!id) return;
@@ -2551,7 +2551,7 @@ async function start(event) {
   });
   document.addEventListener('keydown', event => {
     if (!readOnly && (event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'm') {
-      event.preventDefault(); if (editor) captureDocumentSelection(); assistant.begin('selection');
+      event.preventDefault(); if (editor) captureDocumentSelection(); assistant.begin();
     }
   });
   history(item.transactions);

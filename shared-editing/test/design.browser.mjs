@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 import {editorFixture} from './editor-fixture.mjs';
+import {shown, box} from './sidebar.mjs';
 
 const paragraph = text => ({type:'paragraph',content:[{type:'text',text}]});
 const content = {type:'doc',content:[
@@ -155,15 +156,11 @@ test('approved editor controls on the production bundle', async t => {
     await frame.locator('#undo').click();assert.equal(Math.round((await img.boundingBox()).width),240);
     await page.close();
   });
-  await t.test('discussion keeps its attached passage when focus or scope changes, and resizes with pointer or keyboard', async () => {
+  await t.test('a new discussion highlights its passage while on screen, and the sidebar resizes with pointer or keyboard', async () => {
     const {page,frame}=await open({kind:'document',content,viewport:{width:1600,height:1000}});
     const text=await select(frame);await frame.locator('#discuss-selection').click();
-    await frame.locator('#question').fill('Keep my question');
+    await box(frame).fill('Keep my question');
     assert.equal(await frame.locator('.discussion-draft').innerText(),text);
-    await frame.locator('#whole-question').click();assert.equal(await frame.locator('.discussion-draft').count(),0);
-    await frame.locator('#selected-question').click();
-    assert.equal(await frame.locator('.discussion-draft').innerText(),text);
-    assert.equal(await frame.locator('#question').inputValue(),'Keep my question');
     const handle=frame.locator('#discussion-resize'),b=await handle.boundingBox();
     await page.mouse.move(b.x+3,b.y+80);await page.mouse.down();await page.mouse.move(b.x-140,b.y+80,{steps:8});await page.mouse.up();
     assert.ok((await frame.locator('#assistant').boundingBox()).width>=495);
@@ -171,10 +168,12 @@ test('approved editor controls on the production bundle', async t => {
     await page.keyboard.press('Home');assert.equal((await frame.locator('#assistant').boundingBox()).width,360);
     await frame.locator('#assistant-close').click();assert.equal(await frame.locator('.discussion-draft').count(),0);
     await frame.locator('#ask-toggle').click();assert.equal(await frame.locator('.discussion-draft').innerText(),text);
+    assert.equal(await box(frame).inputValue(),'Keep my question');
     const draft=await page.evaluate(()=>window.messages.filter(m=>m.type==='draft').at(-1).draft.assistant);
     const restored=await open({kind:'document',content,assistantDraft:draft,viewport:{width:1600,height:1000}});
-    assert.equal(await restored.frame.locator('#question').inputValue(),'Keep my question');
-    assert.equal(await restored.frame.locator('#context-title').getAttribute('data-scope'),'selection','the restored draft is about the passage');
+    assert.equal(await shown(restored.frame).locator('.ds-subject-title').innerText(),'New discussion','the restored draft is about the passage');
+    assert.equal(await box(restored.frame).inputValue(),'Keep my question');
+    assert.equal(await shown(restored.frame).locator('.ds-quote').innerText(),text);
     await restored.page.close();await page.close();
   });
   await t.test('whiteboard object commands, shortcuts and zoom are exposed and edits stay undoable', async () => {

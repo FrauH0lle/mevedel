@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="/viewer-panel.css">
     <link rel="stylesheet" href="/viewer-agent.css">
     <link rel="stylesheet" href="/viewer-artifact.css">
+    <link rel="stylesheet" href="/viewer-discussions.css">
     <link rel="stylesheet" href="/viewer-task.css">
     <link rel="stylesheet" href="/viewer-room.css">
     <link rel="manifest" href="/manifest.json">
@@ -118,7 +119,8 @@
           <span class="presence keep" data-presence role="img" hidden></span>
           <button id="artifact-discussion" class="btn quiet" type="button" hidden data-fold="6"
                   aria-pressed="false">Discuss</button>
-          <button id="artifact-general" class="btn quiet" type="button" hidden data-fold="5">Whole artifact</button>
+          <button id="artifact-discussions" class="btn quiet" type="button" hidden data-fold="7"
+                  aria-expanded="false" aria-controls="artifact-side">Discussions<span id="artifact-discussion-count" class="count" hidden></span></button>
           <button id="artifact-ask" class="btn quiet" type="button" hidden data-fold="3"
                   title="Start a new session with this file in its first prompt">Ask</button>
           <button id="artifact-tab" class="btn quiet" type="button" hidden data-fold="2"
@@ -130,7 +132,14 @@
           <button id="artifact-close" class="btn quiet back" type="button" data-fold="4">Back to room</button>
         </div>
       </header>
-      <div id="artifact-body" class="artifact-body"></div>
+      <div class="artifact-main">
+        <div id="artifact-body" class="artifact-body"></div>
+        <div id="artifact-peek" class="artifact-peek" role="tooltip" hidden></div>
+        <aside id="artifact-side" class="artifact-side" aria-label="Discussions" hidden>
+          <div class="artifact-side-head"><b>Discussions</b><button id="artifact-side-close" class="btn quiet" type="button" aria-label="Close discussions">×</button></div>
+          <div id="artifact-discussion-sidebar" class="discussion-sidebar"></div>
+        </aside>
+      </div>
     </section>
     <div class="dock">
       <section id="editing-panel" class="viewer-panel" hidden role="dialog" aria-label="Shared editing">
@@ -374,6 +383,7 @@
     <script src="/notifications.js" defer></script>
     <script src="/renderer.js" defer></script>
     <script src="/attachments.js" defer></script>
+    <script src="/viewer-discussions.js" defer></script>
     <script src="/viewer-artifact-discussions.js" defer></script>
     <script src="/viewer-artifact.js" defer></script>
     <script src="/viewer-history.js" defer></script>

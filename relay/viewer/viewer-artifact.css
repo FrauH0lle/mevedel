@@ -54,107 +54,33 @@
   margin: 1rem;
 }
 .artifact-body .panel-note { padding: 1rem 1.1rem; }
-/* Artifact discussions: the composer and thread cards float over the frame. */
-.artifact-body { position: relative; }
-#artifact-discussion[aria-pressed="true"] {
+/* Artifact discussions: Discuss points into the frame; the discussions
+   sidebar sits beside it, and over it on a phone. */
+.artifact-main { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+.artifact-main .artifact-body { min-width: 0; }
+#artifact-discussion[aria-pressed="true"],
+#artifact-discussions[aria-expanded="true"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
-.artifact-discussion-composer,
-.artifact-discussion-card {
-  position: absolute;
-  z-index: 5;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: .4rem;
-  padding: .65rem .75rem;
-  background: var(--surface);
-  color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: var(--panel-radius, .6rem);
-  box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .18));
-  font-family: var(--font-ui);
-  font-size: .82rem;
+#artifact-discussions { display: inline-flex; align-items: center; gap: .4rem; position: relative; }
+#artifact-discussions .count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--on-accent); font: 600 11px/18px var(--font-ui); text-align: center; }
+/* Folded into the header's ⋯, the button's unread dot marks the menu. */
+#artifact-panel .head-more:has(#artifact-discussions.unread) > summary { position: relative; }
+#artifact-panel .head-more:has(#artifact-discussions.unread) > summary::after,
+#artifact-discussions.unread::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
+.artifact-side { flex: none; width: min(380px, 42vw); display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line); font-family: var(--font-ui); font-size: 14px; }
+.artifact-side[hidden] { display: none; }
+.artifact-side-head { flex: none; display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 4px 8px 4px 14px; border-bottom: 1px solid var(--line); }
+.artifact-side-head button { min-width: 32px; font-size: 20px; line-height: 1; }
+@media (max-width: 799px) {
+  .artifact-side { position: absolute; inset: 0; z-index: 6; width: auto; border-left: 0; }
 }
-.artifact-discussion-composer { border-color: var(--accent); }
-.artifact-discussion-target,
-.artifact-discussion-head {
-  margin: 0;
-  color: var(--muted);
-  font-size: .72rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.artifact-discussion-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: .5rem;
-  color: var(--ink);
-  font-weight: 700;
-}
-/* Long names shorten rather than push the close button out of the card. */
-.artifact-discussion-head > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.artifact-discussion-close {
-  flex: none;
-  border: 0;
-  padding: 0 .25rem;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 1rem;
-  line-height: 1;
-  cursor: pointer;
-}
-.artifact-discussion-close:hover { color: var(--ink); }
-.artifact-discussion-quote {
-  margin: 0;
-  padding: .2rem .5rem;
-  border-left: 3px solid var(--accent);
-  color: var(--muted);
-  max-height: 4.5rem;
-  overflow: auto;
-  white-space: pre-wrap;
-}
-.artifact-discussion-input {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 4rem;
-  resize: vertical;
-  padding: .4rem .5rem;
-  font: inherit;
-  color: var(--ink);
-  background: var(--paper, var(--surface));
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius, .4rem);
-}
-.artifact-discussion-status {
-  margin: 0;
-  min-height: 1em;
-  color: var(--muted);
-  font-size: .72rem;
-}
-.artifact-discussion-status:empty { display: none; }
-.artifact-discussion-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.artifact-discussion-reply {
-  margin: 0;
-  padding-top: .35rem;
-  border-top: 1px solid var(--line);
-  max-height: 14rem;
-  overflow: auto;
-}
-.artifact-discussion-actions {
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: .35rem;
-}
+/* A marker under the pointer shows its latest message. */
+.artifact-peek { position: absolute; z-index: 5; max-width: 260px; padding: 7px 9px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; box-shadow: var(--shadow); font: 12px/1.45 var(--font-ui); pointer-events: none; }
+.artifact-peek[hidden] { display: none; }
+.artifact-peek small { display: block; color: var(--muted); font-weight: 700; }
+.artifact-peek p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 /* A turn reached from an artifact discussion's "Show in chat". */
 @keyframes turn-revealed {
   from { background: var(--accent-soft); }
@@ -167,30 +93,3 @@
 @media (prefers-reduced-motion: reduce) {
   .turn-revealed { animation: none; outline: 2px solid var(--accent); }
 }
-.artifact-discussion-thread {
-  display: flex;
-  flex-direction: column;
-  gap: .3rem;
-  max-height: 12rem;
-  overflow: auto;
-}
-.artifact-discussion-reply-form {
-  display: flex;
-  flex-direction: column;
-  gap: .35rem;
-  margin: 0;
-}
-.artifact-discussion-reply-form .artifact-discussion-input { min-height: 2.6rem; }
-.artifact-discussion-assistant {
-  display: inline-flex;
-  align-items: center;
-  gap: .3rem;
-  margin-right: auto;
-  color: var(--muted);
-  font-size: .76rem;
-  cursor: pointer;
-}
-
-/* The session answering a thread, which may be another chat than this
-   room's. */
-.artifact-discussion-session { color: var(--muted); font-size: .8rem; }

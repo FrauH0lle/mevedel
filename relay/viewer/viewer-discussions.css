@@ -1,0 +1,106 @@
+/* The discussions sidebar of whiteboards, documents and HTML artifacts
+   (viewer-discussions.js): a list, or one discussion with its box at the
+   foot. No size depends on focus, so nothing moves under a press. */
+.discussion-sidebar { flex:1; min-height:0; display:flex; flex-direction:column; }
+.ds-view { flex:1; min-height:0; display:flex; flex-direction:column; }
+.ds-view[hidden] { display:none; }
+.ds-scroll { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; background:var(--ground); scrollbar-width:thin; overflow-wrap:anywhere; }
+.ds-foot { flex:none; display:grid; gap:8px; padding:10px 12px; border-top:1px solid var(--line); background:var(--surface); }
+.ds-foot[hidden] { display:none; }
+.discussion-sidebar svg { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linejoin:round; stroke-linecap:round; }
+.ds-pin { display:inline-grid; place-items:center; width:20px; height:20px; flex:none; border-radius:50%; background:var(--accent); color:var(--on-accent); font:600 11px/1 var(--font-ui); }
+.ds-kind { flex:none; padding:1px 6px; border-radius:4px; background:var(--surface-2); color:var(--muted); font-size:11px; font-weight:600; }
+.ds-dot { display:inline-block; width:8px; height:8px; margin-right:5px; border-radius:50%; background:var(--accent); vertical-align:1px; }
+.ds-empty,.ds-hint { margin:0; padding:12px 14px; color:var(--muted); font-size:13px; line-height:1.55; }
+.ds-hint { padding:2px 0; text-align:center; font-size:12px; }
+
+/* The list. */
+.ds-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 10px; width:100%; min-height:0; padding:11px 14px; border:0; border-bottom:1px solid var(--line); border-radius:0; background:var(--surface); color:var(--ink); font:inherit; text-align:left; cursor:pointer; }
+.ds-item:hover { background:color-mix(in srgb,var(--accent-soft) 45%,var(--surface)); }
+.ds-item:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.ds-item.general { box-shadow:inset 3px 0 var(--accent); }
+.ds-item-head { display:flex; align-items:center; gap:6px; min-width:0; font-weight:600; }
+.ds-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ds-meta { align-self:center; color:var(--muted); font-size:11px; white-space:nowrap; }
+.ds-snip { grid-column:1 / -1; overflow:hidden; color:var(--muted); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
+.ds-item.unread .ds-title,.ds-item.unread .ds-snip { color:var(--ink); font-weight:700; }
+.ds-item.unread .ds-meta { color:var(--accent); font-weight:600; }
+.ds-state { display:inline-flex; align-items:center; gap:5px; color:var(--accent); font-size:12px; font-weight:600; }
+.ds-state.warn { color:var(--failed); }
+.ds-state.working::before { content:""; width:9px; height:9px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:ds-spin 1s linear infinite; }
+@keyframes ds-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .ds-state.working::before { animation:none; } }
+.ds-resolved > summary { padding:11px 14px; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; list-style-position:inside; }
+.ds-resolved .ds-item { opacity:.75; }
+.ds-start { display:flex; align-items:center; justify-content:center; gap:8px; min-height:38px; padding:8px 12px; border:0; border-radius:6px; background:var(--accent); color:var(--on-accent); font:600 13px var(--font-ui); }
+.ds-start { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* One discussion. */
+.ds-bar { flex:none; display:grid; gap:6px; padding:8px 12px 10px; border-bottom:1px solid var(--line); background:var(--surface); }
+.ds-back { display:flex; align-items:center; gap:8px; justify-self:start; min-height:28px; padding:2px 4px 2px 0; border:0; background:transparent; color:var(--accent); font-size:13px; font-weight:600; }
+.ds-badge { padding:2px 8px; border-radius:10px; background:var(--accent-soft); color:var(--accent); font-size:11px; }
+.ds-subject { display:flex; align-items:center; gap:8px; min-width:0; }
+.ds-subject-title { flex:1; min-width:0; overflow:hidden; font-size:15px; text-overflow:ellipsis; white-space:nowrap; }
+.ds-link { flex:none; min-height:28px; padding:2px 4px; border:0; background:transparent; color:var(--accent); font-size:12px; text-decoration:underline; text-underline-offset:2px; white-space:nowrap; }
+.ds-menu { position:relative; flex:none; }
+.ds-menu > summary { display:grid; place-items:center; min-width:30px; min-height:28px; padding:0 6px; border:1px solid var(--line); border-radius:4px; color:var(--muted); list-style:none; cursor:pointer; }
+.ds-menu > summary::-webkit-details-marker { display:none; }
+.ds-menu-body { position:absolute; right:0; top:calc(100% + 4px); z-index:5; display:grid; min-width:190px; padding:4px; border:1px solid var(--line); border-radius:6px; background:var(--surface); box-shadow:var(--shadow); }
+.ds-menu-body button { justify-content:flex-start; min-height:34px; padding:6px 10px; border:0; background:transparent; color:var(--ink); font-size:13px; text-align:left; }
+.ds-menu-body button:hover:not(:disabled) { background:var(--accent-soft); }
+.ds-messages { display:flex; flex-direction:column; gap:12px; padding:12px 14px 16px; }
+.ds-target { margin:0; color:var(--muted); font-size:12px; font-weight:600; }
+.ds-quote { margin:0; padding:8px 10px; max-height:110px; overflow:auto; border-left:2px solid var(--accent); background:var(--accent-soft); font-size:13px; line-height:1.5; white-space:pre-wrap; }
+.ds-message { display:grid; gap:3px; min-width:0; }
+.ds-who { color:var(--muted); font-size:12px; font-weight:700; }
+.ds-text { margin:0; font-size:14px; line-height:1.6; white-space:pre-wrap; }
+.ds-text.alone { color:var(--muted); font-style:italic; }
+.ds-status { margin:0; color:var(--muted); font-size:12px; }
+.ds-status.warn { color:var(--failed); }
+.ds-extra { display:flex; flex-wrap:wrap; gap:6px; }
+.ds-extra button { min-height:32px; padding:5px 10px; font-size:12px; }
+.ds-extra .primary { border-color:var(--accent); background:var(--accent); color:var(--on-accent); font-weight:600; }
+
+/* The assistant's answers sit beneath the message they answer. */
+.ds-answers { display:grid; min-width:0; margin-top:6px; padding-left:10px; border-left:2px solid var(--accent); }
+.ds-answers:empty { display:none; }
+.ds-answers .turn { display:block; padding:8px 0; border:0; }
+.ds-answers .rail { display:none; }
+.ds-answers .who { margin-bottom:4px; color:var(--muted); font-size:11px; font-weight:600; }
+.ds-answers .who .badge { margin-left:6px; font-weight:400; }
+.ds-answers .prose { font-size:14px; line-height:1.6; }
+.ds-answers .prose > :first-child { margin-top:0; }
+.ds-answers .prose > :last-child { margin-bottom:0; }
+.ds-answers pre { overflow:auto; padding:8px; background:var(--code-bg); }
+.ds-answers blockquote { margin:8px 0; padding-left:8px; border-left:2px solid var(--line); white-space:pre-wrap; }
+.ds-answers table { border-collapse:collapse; }
+.ds-answers :is(th,td) { padding:4px; border:1px solid var(--line); }
+.ds-answers .tablewrap { overflow:auto; }
+.ds-answers .shared-context { color:var(--muted); font-size:11px; }
+.ds-answers .shared-context summary { padding-left:0; border:0; }
+.ds-answers .shared-context-body { max-height:400px; overflow:auto; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+/* A message's own request repeats it; the turn shows only the context it carried. */
+.ds-answers .thread-question .prose.prompt > :not(.shared-context) { display:none; }
+.ds-answers .thread-question:not(:has(.shared-context)) { display:none; }
+.ds-tail { margin-top:0; }
+
+/* The box at the foot belongs to the discussion on screen. */
+.ds-compose { display:flex; flex-direction:column; gap:8px; padding:8px 10px; border:1px solid var(--rule-strong); border-radius:4px; background:var(--surface); }
+.ds-compose:focus-within { border-color:var(--accent); }
+.ds-compose[hidden] { display:none; }
+.ds-input { width:100%; box-sizing:border-box; min-height:44px; max-height:30vh; field-sizing:content; resize:none; padding:0; border:0; background:transparent; color:var(--ink); font:14px/1.5 var(--font-ui); }
+.ds-input:focus-visible { outline:none; }
+.ds-actions { display:flex; align-items:center; gap:8px; }
+.ds-grow { flex:1; }
+.ds-choice { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:13px; cursor:pointer; }
+.ds-attach { display:grid; place-items:center; min-width:34px; min-height:34px; padding:0; }
+.ds-send { min-height:34px; padding:7px 14px; border-color:var(--accent); background:var(--accent); color:var(--on-accent); font-size:12px; font-weight:600; }
+.ds-send:hover:not(:disabled),.ds-start:hover,.ds-extra .primary:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 86%,var(--ink)); }
+.ds-closed { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
+.ds-closed[hidden] { display:none; }
+.ds-notice { flex:none; margin:0; padding:8px 14px; max-height:90px; overflow:auto; border-top:1px solid var(--line); background:var(--surface); font-size:12px; }
+.ds-notice:empty { display:none; }
+.ds-notice[data-error="true"] { color:var(--failed); }
+@media (max-width:799px) {
+  .ds-input { font-size:16px; }
+}

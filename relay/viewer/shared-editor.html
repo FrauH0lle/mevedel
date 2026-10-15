@@ -8,6 +8,7 @@
     <title>Shared editor</title>
     <link rel="stylesheet" href="/shared-editor.css" />
     <link rel="stylesheet" href="/attachments.css">
+    <link rel="stylesheet" href="/viewer-discussions.css">
     <link rel="stylesheet" href="/shared-editor-layout.css">
   </head>
   <body class="editor">
@@ -68,39 +69,12 @@
           <button id="discussions-tab" type="button" role="tab" aria-selected="true" aria-controls="discussions-panel"><span id="discussion-title">Discussions</span><span id="discussion-count" class="count" hidden></span></button>
           <button id="library-tab" type="button" role="tab" aria-selected="false" aria-controls="library-panel" hidden>Library</button>
         </div>
-        <label class="show-resolved"><input id="show-resolved" type="checkbox" /> Resolved</label>
         <button id="assistant-close" type="button" aria-label="Close sidebar">×</button>
       </div>
       <div id="discussions-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="discussions-tab">
         <div id="conversation-state" role="status" hidden></div>
-        <div id="assistant-scroll" tabindex="0" aria-label="Discussion history">
-          <div id="conversation-history-notice" class="conversation-context" role="status" hidden></div>
-          <div id="discussions" role="log" aria-label="Discussions about this item"></div>
-          <p id="discussions-hint" class="discussions-empty" hidden></p>
-        </div>
-        <div class="assistant-compose" id="question-compose">
-          <div id="compose-about" class="compose-about">
-            <span id="context-title" class="about-chip">Whole item</span>
-            <button id="selected-question" type="button" hidden>Selection</button>
-            <button id="whole-question" type="button" hidden>Whole item</button>
-            <button id="refresh-context" type="button" title="Attach the content as it is now">Refresh</button>
-          </div>
-          <blockquote id="context-quote" tabindex="0" aria-label="Attached content" hidden></blockquote>
-          <form id="ask" autocomplete="off">
-            <label id="compose-label" for="question" class="visually-hidden">Message</label>
-            <textarea id="question" placeholder="Write about the whole document…" maxlength="10000" rows="3"></textarea>
-            <div id="question-attachments" class="attachments"></div>
-            <div class="ask-row">
-              <input id="question-files" type="file" multiple hidden
-                     accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
-              <label class="assistant-choice"><input id="ask-assistant" type="checkbox" checked> Ask assistant</label>
-              <button id="question-attach" type="button" title="Attach files — images, PDFs, logs and patches"
-                      aria-label="Attach files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11 12 19a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7"/></svg></button>
-              <button id="question-send" type="submit">Post</button>
-            </div>
-          </form>
-        </div>
-        <div id="assistant-notice" role="status"></div>
+        <div id="conversation-history-notice" class="conversation-context" role="status" hidden></div>
+        <div id="discussion-sidebar" class="discussion-sidebar"></div>
       </div>
       <div id="library-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="library-tab" hidden></div>
     </aside>
@@ -126,6 +100,7 @@
     </dialog>
     <script src="/renderer.js" defer></script>
     <script src="/attachments.js" defer></script>
+    <script src="/viewer-discussions.js" defer></script>
     <script src="/shared-editor.js" defer></script>
   </body>
 </html>

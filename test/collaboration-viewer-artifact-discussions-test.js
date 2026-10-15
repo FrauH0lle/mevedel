@@ -1,6 +1,8 @@
 /* Artifact panel wiring for discussions: the panel inlines the picker into
- * its frame, hears only that frame, and "Show in chat" closes the panel that
- * covers the conversation before revealing the discussion's turn.
+ * its frame, hears only that frame, gives the discussions sidebar the
+ * artifact's discussions, and "Show in chat" closes the panel that covers the
+ * conversation before revealing the discussion's turn.  The sidebar itself is
+ * a stand-in here; test/collaboration-discussions.browser.mjs drives it.
  * Run: node test/collaboration-viewer-artifact-discussions-test.js
  */
 'use strict';
@@ -13,6 +15,9 @@ class Box extends Element {
     super(tag);
     this.style = {};
     this.offsetHeight = 120;
+    const classes = new Set();
+    this.classList = {toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)),
+                      contains: name => classes.has(name)};
   }
   getBoundingClientRect() { return {left: 0, top: 0, width: 800, height: 600}; }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this); }
@@ -25,17 +30,36 @@ class Box extends Element {
 
 const ids = ['artifacts-box', 'artifacts-summary', 'artifacts', 'artifact-panel',
              'artifact-title', 'artifact-meta', 'artifact-tab', 'artifact-download',
-             'artifact-close', 'artifact-body', 'artifact-discussion', 'artifact-general'];
+             'artifact-close', 'artifact-body', 'artifact-discussion', 'artifact-discussions',
+             'artifact-side', 'artifact-discussion-sidebar', 'artifact-discussion-count',
+             'artifact-side-close', 'artifact-peek'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Box('div')]));
 nodes['artifact-panel'].hidden = true;
 nodes['artifact-discussion'].hidden = true;
-nodes['artifact-general'].hidden = true;
+nodes['artifact-discussions'].hidden = true;
+nodes['artifact-side'].hidden = true;
 const listeners = {};
 const document = {
   getElementById: id => nodes[id],
   createElement: tag => new Box(tag),
 };
+// The controller runs in its own realm; compare its values as plain data.
+const plain = value => JSON.parse(JSON.stringify(value));
+// The sidebar's interface as the controller uses it.
+const sidebar = {updates: [], shown: []};
 const window = {
+  mevedelDiscussionSidebar: {create(options) {
+    sidebar.options = options;
+    return {
+      // Each render reports back, as the sidebar does.
+      update(next = {}) { sidebar.updates.push(next); Object.assign(sidebar, next); options.onRender(); },
+      show(view) { sidebar.shown.push(view); sidebar.view = view; options.onRender(); },
+      view: () => sidebar.view || {kind: 'list'},
+      unread: () => false, unreadCount: () => 0,
+      reset() { sidebar.view = {kind: 'list'}; },
+      notice(text) { sidebar.notice = text; }, focus() {},
+    };
+  }},
   mevedelTranscriptRenderer: {
     formatBytes: size => `${size} B`,
     renderMarkdown: text => element(document, 'article', 'prose', text),
@@ -81,6 +105,7 @@ const anchor = {kind: 'word', selector: '#lead', label: 'word "Hello"', quote: '
 const discussion = (id, actor, text, extra = {}) =>
   ({id, target: anchor, quote: 'Hello', resolved: false,
     messages: [{id: `${id}-m`, actor, text}], ...extra});
+assert.equal(nodes['artifact-discussions'].hidden, false, 'the sidebar toggle shows with the frame');
 controller.storedDiscussions({item: 'artifact:page', discussions: [
   {id: 'general', target: {kind: 'whole'}, quote: '', resolved: false,
    messages: [{id: 'g1', actor: 'Alice', text: 'Overall?'}]},
@@ -95,7 +120,15 @@ controller.render([
 ]);
 const markers = posted.filter(message => message.t === 'discussion-markers').at(-1);
 assert.deepEqual(JSON.parse(JSON.stringify(markers.markers)),
-                 [{id: 'c1', n: 1, anchor, state: 'answered'}]);
+                 [{id: 'c1', n: 1, anchor, state: 'answered', unread: false}]);
+// The sidebar lists the whole artifact first, then every anchored
+// discussion, resolved ones included, with the transcript about this item.
+const listed = id => sidebar.discussions.find(entry => entry.id === id);
+assert.deepEqual(plain(sidebar.discussions.map(entry => [entry.id, entry.pin, entry.resolved])),
+                 [['general', null, false], ['c1', 1, false], ['c2', null, true]]);
+assert.deepEqual(plain(sidebar.records.map(record => record.id)), ['u1', 'a1']);
+assert.equal(listed('c1').title, 'word "Hello"');
+assert.equal(nodes['artifact-discussion-count'].textContent, '1');
 
 // A delivered request spins its marker while the session's running turn is
 // that request, through its first reply until the turn ends; a queued one
@@ -143,72 +176,55 @@ controller.render([...delivered, {id: 'a1', kind: 'assistant', text: 'Waved.'}])
 const message = data => listeners.message.forEach(listener => listener(data));
 message({source: {}, data: {mevedelDiscussion: 'open', id: 'c1',
                             rect: {left: 1, top: 1, width: 1, height: 1}}});
-assert.equal(nodes['artifact-body'].children.length, 1);
+assert.equal(sidebar.shown.length, 0);
+assert.equal(nodes['artifact-side'].hidden, true);
 message({source: frame.contentWindow,
          data: {mevedelDiscussion: 'open', id: 'c1', rect: {left: 1, top: 1, width: 1, height: 1}}});
-const card = nodes['artifact-body'].children.find(child => child.className === 'artifact-discussion-card');
-assert.match(textOf(card), /Alice · Answered/);
-assert.match(textOf(card), /Waved\./);
+assert.deepEqual(plain(sidebar.shown.at(-1)), {kind: 'thread', id: 'c1'});
+assert.equal(nodes['artifact-side'].hidden, false, 'a marker opens its discussion in the sidebar');
+assert.equal(listed('c1').state, 'answered');
 
 // A selection sent alone reads as such in its thread.
 controller.storedDiscussions({item: 'artifact:page', discussions: [
   discussion('c1', 'Alice', 'Wave'),
   {id: 'c5', target: anchor, quote: 'Hello', resolved: false,
    messages: [{id: 'c5-m', actor: 'Alice', text: '', alone: true}]}]});
-message({source: frame.contentWindow,
-         data: {mevedelDiscussion: 'open', id: 'c5', rect: {left: 1, top: 1, width: 1, height: 1}}});
-assert.match(textOf(nodes['artifact-body'].children.find(
-  child => child.className === 'artifact-discussion-card')), /Sent the selection as the request/);
+assert.equal(listed('c5').messages[0].alone, true);
 
 // A discussion answered in another session says where.
 controller.storedDiscussions({item: 'artifact:page', discussions: [
   discussion('c1', 'Alice', 'Wave'),
   discussion('c9', 'Bob', 'Elsewhere', {session: 's2', sessionName: 'Design chat'})]});
-message({source: frame.contentWindow,
-         data: {mevedelDiscussion: 'open', id: 'c9', rect: {left: 1, top: 1, width: 1, height: 1}}});
-const answeredCard = nodes['artifact-body'].children.find(
-  child => child.className === 'artifact-discussion-card');
-assert.match(textOf(answeredCard), /answered in Design chat/);
-controller.storedDiscussions({item: 'artifact:page', discussions: [
-  discussion('c9', 'Bob', 'Elsewhere', {session: 's3', sessionName: 'Artifact chat'})]});
-assert.match(textOf(answeredCard), /answered in Artifact chat/,
-             'an open thread follows a changed answering session');
+assert.equal(sidebar.options.extras(listed('c9')).status, 'Answered in Design chat');
 
-const findNode = (node, text) => node.textContent === text ? node
-  : node.children.map(child => typeof child === 'string' ? null : findNode(child, text)).find(Boolean);
-// The general discussion about the whole artifact opens from its own button,
-// lists its messages and the latest answer, writes to the whole artifact and
-// stays open.
-const wholeButton = nodes['artifact-general'];
-assert.equal(wholeButton.hidden, false);
+// The discussion about the whole artifact comes first, writes to the whole
+// artifact and stays open.
 controller.storedDiscussions({item: 'artifact:page', discussions: [
   {id: 'general', target: {kind: 'whole'}, quote: '', resolved: false,
-   messages: [{id: 'g1', actor: 'Alice', text: 'Overall?'},
-              {id: 'g2', actor: 'Bob', text: 'Shorter, please'}]}]});
-assert.equal(wholeButton.textContent, 'Whole artifact · 2');
-controller.render([{id: 'u9', kind: 'user', guest: 'Bob', shared: {kind: 'artifact', itemId: 'artifact:page', title: 'page.html',
-  questionId: 'g2', discussionId: 'general', messageId: 'g2', text: 'Shorter, please'}},
-                   {id: 'a9', kind: 'assistant', text: 'Shortened.'}]);
-wholeButton.dispatch('click');
-const wholeCard = nodes['artifact-body'].children.find(child => child.className === 'artifact-discussion-card');
-assert.equal(wholeCard.dataset.discussion, 'general');
-assert.match(textOf(wholeCard), /Whole artifact/);
-assert.match(textOf(wholeCard), /Alice: Overall\?[^]*Bob: Shorter, please/);
-assert.match(textOf(wholeCard), /Shortened\./);
-assert.equal(findNode(wholeCard, 'Resolve'), undefined, 'the general discussion stays open');
-const wholeForm = wholeCard.children.find(child => child.className === 'artifact-discussion-reply-form');
-wholeForm.children.find(child => child.className === 'artifact-discussion-input').value = 'Also the footer';
-wholeForm.dispatch('submit', {preventDefault() {}});
+   messages: [{id: 'g1', actor: 'Guest: Alice', text: 'Overall?'},
+              {id: 'g2', actor: 'Bob', text: 'Shorter, please'}]},
+  discussion('c1', 'Alice', 'Wave')]});
+assert.deepEqual(plain(sidebar.discussions[0].messages.map(entry => [entry.actor, entry.text])),
+                 [['Alice', 'Overall?'], ['Bob', 'Shorter, please']]);
+assert.deepEqual(plain(sidebar.options.menu(sidebar.discussions[0]).map(entry => entry.label)), [],
+                 'the general discussion stays open');
+sidebar.options.submit('general', {text: 'Also the footer', toAssistant: true});
 assert.deepEqual(JSON.parse(JSON.stringify(sentFrames.at(-1))),
                  {t: 'discussion', reqId: sentFrames.at(-1).reqId, action: 'post', item: 'tool-1',
                   target: {kind: 'whole'}, messageId: sentFrames.at(-1).messageId,
                   text: 'Also the footer', toAssistant: true});
 
-const find = (node, text) => node.textContent === text ? node
-  : node.children.map(child => typeof child === 'string' ? null : find(child, text)).find(Boolean);
-find(card, 'Show in chat').dispatch('click');
+// Show in chat waits in the discussion's menu.
+controller.render([
+  {id: 'u1', kind: 'user', guest: 'Alice',
+   shared: {kind: 'artifact', itemId: 'artifact:page', title: 'page.html', questionId: 'c1-m', discussionId: 'c1', text: 'Wave'}},
+  {id: 'a1', kind: 'assistant', text: 'Waved.'}]);
+const entries = sidebar.options.menu(listed('c1'));
+assert.deepEqual(plain(entries.map(entry => entry.label)), ['Show in chat', 'Resolve']);
+entries[0].run();
 assert.deepEqual(revealed, [{id: 'u1', panelHidden: true}],
                  'the panel closes before the turn is revealed');
+assert.equal(nodes['artifact-side'].hidden, true, 'closing the panel closes its sidebar');
 
 // A room message about the whole artifact goes to its general discussion,
 // named by store id; the host decides whether the artifact takes messages.

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { editorFixture } from './editor-fixture.mjs';
+import { shown, box, openWhole } from './sidebar.mjs';
 
 test('message attachments follow the reply, not the host queue notification', async t => {
   const { open } = await editorFixture(t);
@@ -16,19 +17,20 @@ test('message attachments follow the reply, not the host queue notification', as
       return result;
     };
   });
-  await frame.locator('#ask-toggle').click();
-  await frame.locator('#question').fill('Explain this board');
-  await frame.locator('#ask').evaluate(form => {
+  await openWhole(frame);
+  await box(frame).fill('Explain this board');
+  await shown(frame).locator('.ds-compose').evaluate(form => {
     const transfer = new DataTransfer();
     transfer.items.add(new File(['notes'], 'notes.txt', { type: 'text/plain' }));
     form.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
   });
-  await frame.locator('#question-attachments .attachment').waitFor();
-  await frame.locator('#question-send').click();
+  const files = shown(frame).locator('.ds-files .attachment');
+  await files.waitFor();
+  await shown(frame).locator('.ds-send').click();
   await page.waitForFunction(() => window.questionQueued);
-  assert.equal(await frame.locator('#question-attachments .attachment').count(), 1);
-  assert.equal(await frame.locator('#question-send').isDisabled(), true);
+  assert.equal(await files.count(), 1);
+  assert.equal(await shown(frame).locator('.ds-send').isDisabled(), true);
   await page.evaluate(() => window.replyToQuestion());
-  await frame.locator('#question-attachments .attachment').waitFor({ state: 'hidden' });
-  assert.equal(await frame.locator('#question').inputValue(), '');
+  await files.waitFor({ state: 'hidden' });
+  assert.equal(await box(frame).inputValue(), '');
 });

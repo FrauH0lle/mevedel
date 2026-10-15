@@ -48,7 +48,7 @@
     const closeButton = document.getElementById('artifact-close');
     const body = document.getElementById('artifact-body');
     const discussToggle = document.getElementById('artifact-discussion');
-    const generalButton = document.getElementById('artifact-general');
+    const sidebarToggle = document.getElementById('artifact-discussions');
     const askButton = document.getElementById('artifact-ask');
     // KIND is 'artifact' for an artifact card or 'file' for a project file,
     // which has no discussions and is removed from the file tree instead.
@@ -58,9 +58,13 @@
     let requestSequence = 0;
     let theme = null;
     const discussionKit = window.mevedelArtifactDiscussions;
-    const discussions = discussionKit && body ? discussionKit.create({
-      send, el, body, toggle: discussToggle, general: generalButton, flash,
-      renderMarkdown: text => window.mevedelTranscriptRenderer.renderMarkdown(text),
+    const side = document.getElementById('artifact-side');
+    const discussions = discussionKit && side ? discussionKit.create({
+      send, el, toggle: discussToggle, sidebarToggle, side,
+      sideRoot: document.getElementById('artifact-discussion-sidebar'),
+      count: document.getElementById('artifact-discussion-count'),
+      close: document.getElementById('artifact-side-close'),
+      peek: document.getElementById('artifact-peek'),
       // The panel covers the conversation, so showing a discussion's turn
       // closes the artifact first.
       reveal: typeof reveal === 'function' ? id => {

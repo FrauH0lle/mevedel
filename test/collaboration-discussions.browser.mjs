@@ -16,7 +16,10 @@ import {resolve} from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const require = createRequire(resolve(root, 'shared-editing/package.json'));
 const {chromium} = require('playwright');
-const kit = await readFile(resolve(root, 'relay/viewer/viewer-artifact-discussions.js'), 'utf8');
+const viewer = name => readFile(resolve(root, 'relay/viewer', name), 'utf8');
+const kit = await viewer('viewer-artifact-discussions.js');
+const sidebar = await viewer('viewer-discussions.js');
+const renderer = await viewer('renderer.js');
 
 const ARTIFACT = `<!doctype html><html><head><style>
   body{font:16px/1.5 sans-serif;margin:24px;width:640px}
@@ -39,18 +42,28 @@ const REWRITTEN = ARTIFACT
   .replace('and app code.', 'and the app code.');
 
 const HOST = `<!doctype html><html><head><style>
-  #artifact-body{position:relative;width:760px;height:560px;overflow:auto}
-  .artifact-frame{border:0;width:740px;height:540px;display:block}
-  .artifact-discussion-composer,.artifact-discussion-card{position:absolute;background:#fff;border:1px solid #333}
+  .artifact-main{display:flex;width:900px;height:560px}
+  #artifact-body{position:relative;width:520px;height:560px;overflow:auto}
+  .artifact-frame{border:0;width:500px;height:540px;display:block}
+  .artifact-side{width:380px;display:flex;flex-direction:column}
+  .artifact-peek{position:absolute;background:#fff;border:1px solid #333}
+  [hidden]{display:none!important}
 </style></head><body>
   <button id="artifact-discussion" hidden>Discuss</button>
-  <button id="artifact-general" hidden>Whole artifact</button>
-  <div id="artifact-body"></div>
+  <button id="artifact-discussions" hidden aria-expanded="false">Discussions<span id="artifact-discussion-count" hidden></span></button>
+  <div class="artifact-main">
+    <div id="artifact-body"></div>
+    <div id="artifact-peek" class="artifact-peek" hidden></div>
+    <aside id="artifact-side" class="artifact-side" hidden>
+      <button id="artifact-side-close">×</button>
+      <div id="artifact-discussion-sidebar" class="discussion-sidebar"></div>
+    </aside>
+  </div>
 </body></html>`;
 
 async function setup(page) {
   await page.setContent(HOST);
-  await page.addScriptTag({content: kit});
+  for (const script of [renderer, sidebar, kit]) await page.addScriptTag({content: script});
   await page.evaluate(() => {
     window.sent = [];
     window.located = [];
@@ -77,8 +90,10 @@ async function setup(page) {
       } else if (frame.action === 'list') {
         reply.discussions = window.store;
       } else if (frame.action === 'post') {
-        window.store.push({id: frame.discussionId, target: frame.target, quote: '',
-                           messages: [message()], resolved: false});
+        const id = frame.target.kind === 'whole' ? 'general' : frame.discussionId;
+        const known = window.store.find(d => d.id === id);
+        if (known) known.messages.push(message());
+        else window.store.push({id, target: frame.target, quote: '', messages: [message()], resolved: false});
       } else if (frame.action === 'reply') {
         window.store.find(d => d.id === frame.discussionId).messages.push(message());
       } else if (frame.action === 'resolve') {
@@ -90,16 +105,16 @@ async function setup(page) {
       }
       window.controller.handle(reply);
     };
+    const $ = id => document.getElementById(id);
     window.controller = window.mevedelArtifactDiscussions.create({
       send: frame => {
         window.sent.push(frame);
         setTimeout(() => answer(frame), 0);
         return Promise.resolve(true);
       },
-      el, body: document.getElementById('artifact-body'),
-      toggle: document.getElementById('artifact-discussion'),
-      general: document.getElementById('artifact-general'),
-      flash: () => {}, renderMarkdown: text => el('div', '', text),
+      el, toggle: $('artifact-discussion'), sidebarToggle: $('artifact-discussions'),
+      side: $('artifact-side'), sideRoot: $('artifact-discussion-sidebar'),
+      count: $('artifact-discussion-count'), close: $('artifact-side-close'), peek: $('artifact-peek'),
       reveal: id => { window.revealed = id; }, canDiscuss: () => true,
     });
     window.show = (html, id) => {
@@ -161,52 +176,62 @@ async function commentMode(page) {
   await page.waitForTimeout(50);
 }
 
+// The sidebar's views: the list, and one discussion or a new one.
+const fresh = '#artifact-side .ds-thread:not([hidden])';
+const subject = page => page.textContent(`${fresh} .ds-subject-title`);
+const target = page => page.textContent(`${fresh} .ds-target`);
+const start = page => page.click(`${fresh} .ds-send`);
+
 test('artifact discussions: pick, send, marker thread, box, selection, relocation',
      {timeout: 120000}, async () => {
   const browser = await chromium.launch();
   try {
-    const page = await browser.newPage({viewport: {width: 900, height: 700}});
+    const page = await browser.newPage({viewport: {width: 960, height: 700}});
     const errors = [];
     page.on('pageerror', error => errors.push(String(error)));
     await setup(page);
     await page.evaluate(html => window.show(html, 'tool-1'), ARTIFACT);
     const frame = await artifactFrame(page);
     assert.equal(await page.isVisible('#artifact-discussion'), true);
+    assert.equal(await page.isVisible('#artifact-discussions'), true);
+    assert.equal(await page.isVisible('#artifact-side'), false, 'the sidebar opens on demand');
 
     // Outside comment mode the page behaves normally.
     await frame.click('#go');
     assert.equal(await frame.evaluate(() => document.title), 'clicked');
     await frame.evaluate(() => { document.title = ''; });
 
-    // The artifact cannot open a composer on its own, and messages from
+    // The artifact cannot start a discussion on its own, and messages from
     // any other window are not heard at all.
     const forged = {mevedelDiscussion: 'pick', anchor: {selector: '#lead', label: 'Forged'},
                     rect: {left: 0, top: 0, width: 10, height: 10}, context: {}};
     await frame.evaluate(message => parent.postMessage(message, '*'), forged);
     await page.waitForTimeout(50);
-    assert.equal(await page.$('.artifact-discussion-composer'), null);
+    assert.equal(await page.isVisible('#artifact-side'), false);
     await page.click('#artifact-discussion');
     await page.evaluate(message => window.postMessage(message, '*'), forged);
     await page.waitForTimeout(50);
-    assert.equal(await page.$('.artifact-discussion-composer'), null);
+    assert.equal(await page.isVisible('#artifact-side'), false);
     await page.click('#artifact-discussion');
     assert.equal(await page.getAttribute('#artifact-discussion', 'aria-pressed'), 'false');
 
-    // A click on a word picks the word, and the page's own handlers
-    // never see clicks while commenting.
+    // A click on a word picks the word and opens a new discussion in the
+    // sidebar; the page's own handlers never see clicks while commenting.
     await commentMode(page);
     const share = await inPage(page, frame, await wordRect(frame, 'share'));
     await page.mouse.move(share.x + share.width / 2, share.y + share.height / 2);
     await page.mouse.down();
     await page.mouse.up();
-    await page.waitForSelector('.artifact-discussion-composer');
-    const label = await page.textContent('.artifact-discussion-target');
-    assert.equal(label, 'Decisions at a glance › word "share"');
+    await page.waitForSelector(fresh);
+    assert.equal(await subject(page), 'New discussion');
+    assert.equal(await target(page), 'Decisions at a glance › word "share"');
     // Posting sends to the assistant by default: one action.
-    assert.equal(await page.isChecked('.artifact-discussion-composer input[type=checkbox]'), true);
-    await page.fill('.artifact-discussion-input', 'Say who shares them');
+    assert.equal(await page.isChecked(`${fresh} .ds-choice input`), true);
+    assert.equal(await page.evaluate(() => document.activeElement.className), 'ds-input');
+    await page.fill(`${fresh} .ds-input`, 'Say who shares them');
     await page.keyboard.press('Control+Enter');
-    await page.waitForSelector('.artifact-discussion-composer', {state: 'detached'});
+    await page.waitForFunction(() => document.querySelector(
+      '#artifact-side .ds-thread:not([hidden]) .ds-subject-title')?.textContent !== 'New discussion');
     const [sent] = await actions(page, 'post');
     assert.equal(sent.t, 'discussion');
     assert.equal(sent.item, 'tool-1');
@@ -220,41 +245,42 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
     assert.match(sent.context.text, /countries share the same tables/);
     assert.match(sent.context.html, /^<p id="lead">/);
     assert.equal(await page.getAttribute('#artifact-discussion', 'aria-pressed'), 'false');
+    assert.equal(await subject(page), 'Decisions at a glance › word "share"',
+                 'the started discussion stays open');
     await frame.click('#go');
     assert.equal(await frame.evaluate(() => document.title), 'clicked');
 
-    // The stored comment is a marker; once the assistant answered in the
-    // transcript, hovering it shows the thread and the reply.
-    await page.evaluate(id => window.controller.records([
+    // Once the assistant answered in the transcript, the open discussion
+    // shows the answer beneath its message.
+    await page.evaluate(([id, messageId]) => window.controller.records([
       {id: 'u1', kind: 'user', guest: 'Alice',
        shared: {kind: 'artifact', title: 'schema.html', questionId: 'q1', discussionId: id,
-                itemId: 'artifact:schema.html', text: 'Say who shares them'}},
+                messageId, itemId: 'artifact:schema.html', text: 'Say who shares them'}},
       {id: 'a1', kind: 'assistant', text: 'Named the country teams.'},
-    ]), sent.discussionId);
+    ]), [sent.discussionId, sent.messageId]);
+    await page.waitForSelector(`${fresh} .ds-message .ds-answers >> text=Named the country teams.`);
     await page.waitForFunction(id => window.located.some(entry => entry.found.includes(id)),
                                sent.discussionId);
-    await page.mouse.move(share.x + 6, share.y - 12);
-    await page.waitForSelector('.artifact-discussion-card');
-    const card = await page.textContent('.artifact-discussion-card');
-    assert.match(card, /Alice · Answered/);
-    assert.match(card, /Alice: Say who shares them/);
-    assert.match(card, /Named the country teams\./);
-    assert.equal(await page.$('.artifact-discussion-card .artifact-discussion-reply-form'), null,
-                 'a hover card only shows the thread');
 
-    // Clicking pins it with a reply form; an unticked reply is for people.
+    // Hovering a marker peeks at its latest message; clicking opens it.
+    await page.click('#artifact-side-close');
+    await page.mouse.move(share.x + 6, share.y - 12);
+    await page.waitForSelector('#artifact-peek:not([hidden])');
+    assert.match(await page.textContent('#artifact-peek'), /Alice.*Say who shares them/s);
     await page.mouse.down();
     await page.mouse.up();
-    await page.waitForSelector('.artifact-discussion-card .artifact-discussion-reply-form');
-    await page.fill('.artifact-discussion-reply-form textarea', 'Only the regional teams');
-    await page.uncheck('.artifact-discussion-reply-form input[type=checkbox]');
-    await page.click('.artifact-discussion-reply-form >> text=Post reply');
-    await page.waitForFunction(() =>
-      /Alice: Only the regional teams/.test(document.querySelector('.artifact-discussion-card')?.textContent));
+    await page.waitForSelector(fresh);
+    assert.equal(await subject(page), 'Decisions at a glance › word "share"');
+    // An unticked reply is for people.
+    await page.fill(`${fresh} .ds-input`, 'Only the regional teams');
+    await page.uncheck(`${fresh} .ds-choice input`);
+    await start(page);
+    await page.waitForSelector(`${fresh} .ds-message >> text=Only the regional teams`);
     const [reply] = await actions(page, 'reply');
     assert.equal(reply.discussionId, sent.discussionId);
     assert.equal(reply.toAssistant, false);
-    await page.click('.artifact-discussion-card >> text=Show in chat');
+    await page.click(`${fresh} .ds-menu > summary`);
+    await page.click(`${fresh} .ds-menu-body >> text=Show in chat`);
     assert.equal(await page.evaluate(() => window.revealed), 'u1');
 
     // A box around the three cards names the area and its elements.
@@ -269,24 +295,26 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
     await page.mouse.move(area.x + area.width / 2, area.y + area.height / 2, {steps: 4});
     await page.mouse.move(area.x + area.width, area.y + area.height, {steps: 4});
     await page.mouse.up();
-    await page.waitForSelector('.artifact-discussion-composer');
-    assert.equal(await page.textContent('.artifact-discussion-target'),
-                 'Decisions at a glance › area · 3 elements');
-    await page.fill('.artifact-discussion-input', 'Make these a row of four');
+    await page.waitForFunction(() => document.querySelector(
+      '#artifact-side .ds-thread:not([hidden]) .ds-target')?.textContent.includes('area'));
+    assert.equal(await target(page), 'Decisions at a glance › area · 3 elements');
+    await page.fill(`${fresh} .ds-input`, 'Make these a row of four');
     await page.evaluate(() => { window.failNext = 'The session cannot accept a message right now'; });
-    await page.click('.artifact-discussion-composer >> text=Post');
+    await start(page);
     await page.waitForFunction(() =>
-      document.querySelector('.artifact-discussion-status')?.textContent
+      document.querySelector('#artifact-side .ds-notice')?.textContent
         === 'The session cannot accept a message right now');
+    assert.equal(await subject(page), 'New discussion', 'a failed post keeps the new discussion');
+    assert.equal(await page.inputValue(`${fresh} .ds-input`), 'Make these a row of four');
     const [boxed] = await actions(page, 'post').then(list => list.slice(-1));
     assert.equal(boxed.target.kind, 'box');
     assert.equal(boxed.target.count, 3);
     assert.ok(boxed.target.region.x1 > boxed.target.region.x0);
     assert.match(boxed.context.text, /213,150 rows.*42 columns.*637 simulations/);
-    await page.click('.artifact-discussion-composer >> text=Cancel');
 
     // A box drawn a little past the grid and over two of its cards means
-    // those two cards, not the grid as the page's one covered child.
+    // those two cards, not the grid as the page's one covered child. A new
+    // pick replaces the new discussion's subject.
     const loose = await frame.evaluate(() => {
       const r = document.querySelector('.cards').getBoundingClientRect();
       const second = document.querySelectorAll('.card')[1].getBoundingClientRect();
@@ -299,10 +327,9 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
     await page.mouse.move(looseArea.x + looseArea.width, looseArea.y + looseArea.height,
                           {steps: 6});
     await page.mouse.up();
-    await page.waitForSelector('.artifact-discussion-composer');
-    assert.equal(await page.textContent('.artifact-discussion-target'),
-                 'Decisions at a glance \u203a area \u00b7 2 elements');
-    await page.click('.artifact-discussion-composer >> text=Cancel');
+    await page.waitForFunction(() => document.querySelector(
+      '#artifact-side .ds-thread:not([hidden]) .ds-target')?.textContent.includes('2 elements'));
+    assert.equal(await target(page), 'Decisions at a glance › area · 2 elements');
 
     // A tight box around a wide heading's words names that heading.
     const title = await frame.evaluate(() => {
@@ -317,35 +344,47 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
     await page.mouse.move(titleArea.x + titleArea.width, titleArea.y + titleArea.height,
                           {steps: 6});
     await page.mouse.up();
-    await page.waitForSelector('.artifact-discussion-composer');
-    assert.equal(await page.textContent('.artifact-discussion-target'), 'heading "SNT Schema v2"');
+    await page.waitForFunction(() => document.querySelector(
+      '#artifact-side .ds-thread:not([hidden]) .ds-target')?.textContent.startsWith('heading'));
+    assert.equal(await target(page), 'heading "SNT Schema v2"');
     // Without words, the selection itself is the request, but only for the
     // assistant: a note between people needs a message.
-    await page.uncheck('.artifact-discussion-composer input[type=checkbox]');
-    await page.click('.artifact-discussion-composer >> text=Post');
-    assert.equal(await page.textContent('.artifact-discussion-status'),
+    await page.fill(`${fresh} .ds-input`, '');
+    await page.uncheck(`${fresh} .ds-choice input`);
+    await start(page);
+    assert.equal(await page.textContent('#artifact-side .ds-notice'),
                  'Write a message, or ask the assistant.');
-    await page.check('.artifact-discussion-composer input[type=checkbox]');
-    await page.click('.artifact-discussion-composer >> text=Post');
-    await page.waitForSelector('.artifact-discussion-composer', {state: 'detached'});
+    await page.check(`${fresh} .ds-choice input`);
+    await start(page);
+    await page.waitForFunction(() => document.querySelector(
+      '#artifact-side .ds-thread:not([hidden]) .ds-subject-title')?.textContent === 'heading "SNT Schema v2"');
     const [alone] = await actions(page, 'post').then(list => list.slice(-1));
     assert.equal(alone.text, '');
     assert.equal(alone.toAssistant, true);
     assert.equal(alone.target.label, 'heading "SNT Schema v2"');
+    assert.match(await page.textContent(`${fresh} .ds-text.alone`), /Sent the selection as the request/);
     await commentMode(page);
 
     // Dragging across text keeps native selection and sends the quote.
-    // Cancelling keeps comment mode on for another try.
+    // Escape drops the new discussion and keeps comment mode on.
     assert.equal(await page.getAttribute('#artifact-discussion', 'aria-pressed'), 'true');
     const every = await inPage(page, frame, await wordRect(frame, 'Every table'));
     await page.mouse.move(every.x + 1, every.y + every.height / 2);
     await page.mouse.down();
     await page.mouse.move(every.x + every.width - 1, every.y + every.height / 2, {steps: 6});
     await page.mouse.up();
-    await page.waitForSelector('.artifact-discussion-composer');
-    assert.match(await page.textContent('.artifact-discussion-quote'), /^Every tabl/);
+    await page.waitForFunction(() => document.querySelector(
+      '#artifact-side .ds-thread:not([hidden]) .ds-subject-title')?.textContent === 'New discussion');
+    assert.match(await page.textContent(`${fresh} .ds-quote`), /^Every tabl/);
     await page.keyboard.press('Escape');
-    await page.waitForSelector('.artifact-discussion-composer', {state: 'detached'});
+    await page.waitForSelector('#artifact-side .ds-list:not([hidden])');
+    assert.equal(await page.getAttribute('#artifact-discussion', 'aria-pressed'), 'true');
+    await page.click('#artifact-discussion');
+
+    // The list: the whole artifact first, then the open discussions.
+    const rows = await page.$$eval('#artifact-side .ds-item .ds-title', nodes => nodes.map(n => n.textContent));
+    assert.deepEqual(rows, ['Whole artifact', 'Decisions at a glance › word "share"', 'heading "SNT Schema v2"']);
+    assert.equal(await page.textContent('#artifact-discussion-count'), '2');
 
     // A rewritten artifact still places the marker: the selector changed
     // meaning, but the text fingerprint finds the paragraph again.
@@ -360,7 +399,8 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
     await artifactFrame(page);
     await page.waitForFunction(id => window.located.some(entry => entry.missing.includes(id)),
                                sent.discussionId);
-    // Resolving takes the marker away for everyone.
+    // Resolving takes the marker away for everyone and folds the discussion
+    // into the list's resolved row.
     await page.evaluate(html => window.show(html, 'tool-4'), ARTIFACT);
     await artifactFrame(page);
     await page.waitForFunction(id => window.located.some(entry => entry.found.includes(id)),
@@ -371,44 +411,108 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
     await page.mouse.move(again.x + 6, again.y - 12);
     await page.mouse.down();
     await page.mouse.up();
-    await page.click('.artifact-discussion-card >> text=Resolve');
-    await page.waitForSelector('.artifact-discussion-card', {state: 'detached'});
+    await page.waitForSelector(fresh);
+    await page.click(`${fresh} .ds-menu > summary`);
+    await page.click(`${fresh} .ds-menu-body >> text=Resolve`);
+    await page.waitForSelector(`${fresh} .ds-closed >> text=Reopen to reply`);
     assert.equal((await actions(page, 'resolve'))[0].resolved, true);
-    assert.equal(await page.textContent('#artifact-discussion'), 'Discuss · 1',
+    assert.equal(await page.textContent('#artifact-discussion-count'), '1',
                  'the selection sent alone is still open');
+    await page.click(`${fresh} .ds-back`);
+    assert.equal(await page.textContent('#artifact-side .ds-resolved > summary'), 'Resolved · 1');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
   }
 });
 
-test('general discussion isolates item replies and preserves the live form', async () => {
+test('the whole artifact keeps its answers apart and a draft through streaming', async () => {
   const browser = await chromium.launch();
   try {
-    const page = await browser.newPage();
+    const page = await browser.newPage({viewport: {width: 960, height: 700}});
+    const errors = [];
+    page.on('pageerror', error => errors.push(String(error)));
     await setup(page);
     await page.evaluate(html => window.show(html, 'tool-1'), ARTIFACT);
     await artifactFrame(page);
-    await page.click('#artifact-general');
+    await page.click('#artifact-discussions');
+    await page.click('#artifact-side .ds-item.general');
+    assert.equal(await subject(page), 'Whole artifact');
+    await page.fill(`${fresh} .ds-input`, 'Shorten the intro');
+    await start(page);
+    await page.waitForSelector(`${fresh} .ds-message >> text=Shorten the intro`);
+    const [posted] = await actions(page, 'post');
+    assert.deepEqual(posted.target, {kind: 'whole'});
     await page.evaluate(() => window.controller.records([
       {id: 'u1', kind: 'user', shared: {kind: 'artifact', itemId: 'artifact:other',
         discussionId: 'general', questionId: 'q1'}},
       {id: 'a1', kind: 'assistant', text: 'OTHER ARTIFACT ANSWER'},
     ]));
-    assert.doesNotMatch(await page.textContent('.artifact-discussion-card'), /OTHER ARTIFACT ANSWER/);
-    await page.fill('.artifact-discussion-reply-form textarea', '> draft\nsecond line');
-    await page.uncheck('.artifact-discussion-reply-form input[type=checkbox]');
-    await page.focus('.artifact-discussion-reply-form textarea');
-    await page.evaluate(() => window.controller.records([
+    assert.doesNotMatch(await page.textContent(fresh), /OTHER ARTIFACT ANSWER/);
+    await page.fill(`${fresh} .ds-input`, '> draft\nsecond line');
+    await page.uncheck(`${fresh} .ds-choice input`);
+    await page.focus(`${fresh} .ds-input`);
+    await page.evaluate(messageId => window.controller.records([
       {id: 'u2', kind: 'user', shared: {kind: 'artifact', itemId: 'artifact:schema.html',
-        discussionId: 'general', questionId: 'q2'}},
+        discussionId: 'general', questionId: 'q2', messageId}},
       {id: 'a2', kind: 'assistant', text: 'THIS ARTIFACT ANSWER'},
-    ]));
-    assert.match(await page.textContent('.artifact-discussion-card'), /THIS ARTIFACT ANSWER/);
-    assert.equal(await page.inputValue('.artifact-discussion-reply-form textarea'), '> draft\nsecond line');
-    assert.equal(await page.isChecked('.artifact-discussion-reply-form input[type=checkbox]'), false);
-    assert.equal(await page.evaluate(() => document.activeElement.matches(
-      '.artifact-discussion-reply-form textarea')), true);
+    ]), posted.messageId);
+    assert.match(await page.textContent(`${fresh} .ds-answers`), /THIS ARTIFACT ANSWER/);
+    assert.equal(await page.inputValue(`${fresh} .ds-input`), '> draft\nsecond line');
+    assert.equal(await page.isChecked(`${fresh} .ds-choice input`), false);
+    assert.equal(await page.evaluate(() => document.activeElement.matches('.ds-input')), true);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('an answer to a discussion not on screen marks it, never takes the reader away', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({viewport: {width: 960, height: 700}});
+    const errors = [];
+    page.on('pageerror', error => errors.push(String(error)));
+    await setup(page);
+    await page.evaluate(() => {
+      window.store.push(
+        {id: 'one', target: {kind: 'element', selector: '#lead', label: 'paragraph'},
+         messages: [{id: 'm1', actor: 'Guest: Bob', text: 'Who shares them?'}], resolved: false},
+        {id: 'two', target: {kind: 'element', selector: 'h1', label: 'heading'},
+         messages: [{id: 'm2', actor: 'Alice', text: 'Shorter title?'}], resolved: false});
+    });
+    await page.evaluate(html => window.show(html, 'tool-1'), ARTIFACT);
+    const frame = await artifactFrame(page);
+    const history = [{id: 'u1', kind: 'user', shared: {kind: 'artifact', itemId: 'artifact:schema.html',
+      discussionId: 'one', questionId: 'q1', messageId: 'm1'}}];
+    await page.evaluate(records => window.controller.records(records), history);
+    await page.click('#artifact-discussions');
+    await page.waitForSelector('#artifact-side .ds-item[data-discussion-id="two"]');
+    assert.equal(await page.$$eval('#artifact-side .ds-item.unread', nodes => nodes.length), 0,
+                 'history loaded with the artifact marks nothing');
+    await page.click('#artifact-side .ds-item[data-discussion-id="two"]');
+    await page.fill(`${fresh} .ds-input`, 'Typing here');
+    await page.evaluate(records => window.controller.records(records),
+                        [...history, {id: 'a1', kind: 'assistant', text: 'The regional teams.'}]);
+    assert.equal(await subject(page), 'heading');
+    assert.equal(await page.inputValue(`${fresh} .ds-input`), 'Typing here');
+    assert.match(await page.textContent(`${fresh} .ds-back`), /1 new/);
+    assert.equal(await page.evaluate(() =>
+      document.getElementById('artifact-discussions').classList.contains('unread')), true);
+    await frame.waitForFunction(() => {
+      const layer = document.querySelector('mevedel-discussion-layer');
+      return !!layer;
+    });
+    await page.click(`${fresh} .ds-back`);
+    const row = '#artifact-side .ds-item[data-discussion-id="one"]';
+    assert.match(await page.getAttribute(row, 'class'), /unread/);
+    assert.match(await page.textContent(row), /New answer.*Assistant: The regional teams\./s);
+    await page.click(row);
+    await page.click(`${fresh} .ds-back`);
+    assert.doesNotMatch(await page.getAttribute(row, 'class'), /unread/, 'opening clears the mark');
+    assert.equal(await page.evaluate(() =>
+      document.getElementById('artifact-discussions').classList.contains('unread')), false);
+    assert.deepEqual(errors, []);
   } finally {
     await browser.close();
   }
