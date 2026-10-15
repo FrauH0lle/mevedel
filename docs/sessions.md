@@ -2303,6 +2303,43 @@ This file-session retention pass does not run journal maintenance. Journal
 retention uses its own scheduled lifecycle opportunities; neither the chooser
 nor the exit retention pass drains it synchronously.
 
+## System sleep
+
+While this Emacs has work that sleep would interrupt, `mevedel-sleep.el`
+holds one operating-system sleep inhibitor. The work that counts is:
+
+- a root or agent turn that is running or settling (`mevedel-busy-p`),
+  including one waiting on a permission prompt;
+- a live managed command, including a yielded one that outlives its turn;
+- an open collaboration share or lobby within its idle allowance (see
+  [collaboration](collaboration.md)).
+
+Only sleep is blocked. Screen blanking, locking and idle detection are
+unaffected. The inhibitor announces its reasons, such as
+`request running, command running`, so `systemd-inhibit --list` shows why the
+machine stays awake.
+
+Work owners request an evaluation when work begins: request admission, a
+change in the live execution set, and collaboration start and guest arrival.
+These requests only matter while nothing is held. While any reason holds, a
+30-second poll re-evaluates them, refreshes the announced reasons and releases
+the inhibitor once none remains. Turn and execution teardown therefore need no
+release path of their own, and a short command does not replace the inhibitor.
+When the reasons change, mevedel acquires a replacement before releasing the
+old inhibitor. The poll stops once no reason remains. A reason source that
+signals an error counts as no reason and warns once, so it cannot hold the
+lock indefinitely.
+
+The inhibitor is a child process (`systemd-inhibit ... cat` by default). Its
+standard input is a pipe from Emacs, so the lock also goes away when Emacs
+exits or is killed. If the inhibitor cannot start or exits unexpectedly, for
+example when polkit refuses it, mevedel warns once. It retries only after all
+reasons have cleared and work begins again. Remote execution targets are not
+inhibited: the local turn already keeps this machine awake, and the default
+polkit policy does not let an SSH session block sleep. Set
+`mevedel-sleep-inhibit-command` to nil to disable inhibition, or to another
+command on platforms without systemd.
+
 ## Defcustoms
 
 Defined in `mevedel-session-persistence.el` unless another module is named:
@@ -2324,3 +2361,6 @@ Defined in `mevedel-session-persistence.el` unless another module is named:
   `mevedel-session-durability.el`, default 3600)
 - `mevedel-view-input-history-size` (in `mevedel-view-history.el`,
   default 500)
+- `mevedel-sleep-inhibit-command` (in `mevedel-sleep.el`, default
+  `systemd-inhibit --what=sleep --who=mevedel --why=%s --mode=block cat` on
+  GNU/Linux, nil elsewhere)

@@ -200,6 +200,10 @@
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
 
+;; `mevedel-sleep'
+(declare-function mevedel-sleep-update "mevedel-sleep" (&rest _))
+(autoload 'mevedel-sleep-update "mevedel-sleep")
+
 ;; `mevedel-artifact-store'
 (declare-function mevedel-artifact-store-save-version
                   "mevedel-artifact-store" (workspace id &optional session-id))
@@ -516,6 +520,8 @@ recovery state alone."
     ;; Emacs auto-saves only after input; an unattended turn needs its own
     ;; mid-turn checkpoints.
     (mevedel-session-persistence-start-checkpoints)
+    ;; System sleep would suspend the turn.
+    (mevedel-sleep-update)
     (let ((buffer (current-buffer)))
       (mevedel--gc-hold
        request (lambda ()

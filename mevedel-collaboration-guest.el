@@ -173,6 +173,10 @@
 (autoload 'mevedel-skills-user-visible-skills "mevedel-skills-ui")
 (defvar mevedel-slash-commands)
 
+;; `mevedel-sleep'
+(declare-function mevedel-sleep-update "mevedel-sleep" (&rest _))
+(autoload 'mevedel-sleep-update "mevedel-sleep")
+
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (record))
 (declare-function mevedel-session-pending-follow-ups
@@ -720,6 +724,7 @@ Authority comes only from the tokens FRAME proves it holds."
                          (mevedel-collaboration-presence-state frame)
                        (error nil)))))
         (puthash peer guest (plist-get room :guests))
+        (mevedel-sleep-update)
         guest))))
 
 (defun mevedel-collaboration--handle-hello (room peer frame)
@@ -1221,6 +1226,8 @@ sending guest instead of waiting for an answer."
       ('peer-joined nil)
       ('peer-left
        (mevedel-collaboration-editing-depart room peer)
+       (when (gethash peer (plist-get room :guests))
+         (plist-put room :last-guest-departure (float-time)))
        (remhash peer (plist-get room :guests))
        (mevedel-collaboration-presence-publish room)))))
 
@@ -1232,6 +1239,8 @@ sending guest instead of waiting for an answer."
       ;; a drop invalidated every guest; they rejoin and re-hello against
       ;; the re-created room.
       ('down
+       (when (> (hash-table-count (plist-get room :guests)) 0)
+         (plist-put room :last-guest-departure (float-time)))
        (maphash (lambda (peer _guest) (mevedel-collaboration-editing-depart room peer))
                 (plist-get room :guests))
        (clrhash (plist-get room :guests))

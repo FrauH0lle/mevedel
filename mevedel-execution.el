@@ -195,13 +195,16 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-cancel-pending
+                  "mevedel-transport" (&optional key))
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk &optional on-cancel delay))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
-(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
-(declare-function mevedel-transport-run-at-time
-                  "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-cancel-pending "mevedel-transport")
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
@@ -2178,6 +2181,19 @@ not active work and cannot keep session transfer or history changes blocked."
                   (mevedel-execution--record-delivery-pending-p record))
           (setq live-p t)))
       live-p)))
+
+(defun mevedel-execution-live-p ()
+  "Return non-nil while any session's managed execution is running."
+  (catch 'live
+    (maphash
+     (lambda (session _present)
+       (when-let* ((state (mevedel-session-execution-state session)))
+         (maphash (lambda (_id record)
+                    (when (mevedel-execution--managed-live-p record)
+                      (throw 'live t)))
+                  (mevedel-execution--state-records state))))
+     mevedel-execution--sessions)
+    nil))
 
 (defun mevedel-execution--finalize-discarded-record
     (record managed-live-p)

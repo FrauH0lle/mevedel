@@ -1232,6 +1232,69 @@
 ;;
 ;;; Room lifecycle
 
+(mevedel-deftest mevedel-collaboration--keep-awake-state
+  (:doc "uses guests or the later start/departure baseline, with an exact cutoff")
+  (let* ((mevedel-collaboration-keep-awake-idle-time 100)
+         (guests (make-hash-table :test #'eql))
+         (room (list :started-at 1000 :last-guest-departure nil :guests guests)))
+    (should (= 1100 (mevedel-collaboration--keep-awake-state room 1099)))
+    (should-not (mevedel-collaboration--keep-awake-state room 1100))
+    (plist-put room :last-guest-departure 1050)
+    (should (= 1150 (mevedel-collaboration--keep-awake-state room 1100)))
+    (plist-put room :last-guest-departure 900)
+    (should (= 1100 (mevedel-collaboration--keep-awake-state room 1099)))
+    (puthash 1 '(:name "guest") guests)
+    (should (eq t (mevedel-collaboration--keep-awake-state room 10000)))
+    (clrhash guests)
+    (let ((mevedel-collaboration-keep-awake-idle-time nil))
+      (should (eq t (mevedel-collaboration--keep-awake-state room 10000))))
+    (let ((mevedel-collaboration-keep-awake-idle-time 0))
+      (should-not (mevedel-collaboration--keep-awake-state room 1000)))
+    (should-not (mevedel-collaboration--keep-awake-state '(:guests nil) 1000))))
+
+(mevedel-deftest mevedel-collaboration-sleep-reasons
+  (:doc "deduplicates open shares and lobbies even through relay outages")
+  (let ((mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+        (mevedel-collaboration-keep-awake-idle-time 100))
+    (should-not (mevedel-collaboration-sleep-reasons 1000))
+    (puthash 'a '(:started-at 1000) mevedel-collaboration--rooms)
+    (puthash 'b '(:started-at 1000) mevedel-collaboration--rooms)
+    (puthash "/root/" '(:started-at 1000) mevedel-collaboration-lobby--lobbies)
+    (should (equal '("collaboration share active" "collaboration lobby active")
+                   (mevedel-collaboration-sleep-reasons 1099)))
+    (should-not (mevedel-collaboration-sleep-reasons 1100))
+    (let ((mevedel-collaboration-keep-awake-idle-time nil))
+      (clrhash mevedel-collaboration--rooms)
+      (should (equal '("collaboration lobby active")
+                     (mevedel-collaboration-sleep-reasons 2000)))
+      (clrhash mevedel-collaboration-lobby--lobbies)
+      (should-not (mevedel-collaboration-sleep-reasons 2000)))))
+
+(mevedel-deftest mevedel-collaboration--keep-awake-status
+  (:doc "shows active, idle expiry and expired request states")
+  (let ((mevedel-collaboration-keep-awake-idle-time 100)
+        (room '(:started-at 1000)))
+    (should (equal (format "Keep-awake request: until %s (idle cutoff)"
+                           (format-time-string "%Y-%m-%d %H:%M:%S %Z" 1100))
+                   (mevedel-collaboration--keep-awake-status room 1000)))
+    (should (equal "Keep-awake request: idle cutoff reached"
+                   (mevedel-collaboration--keep-awake-status room 1100)))
+    (let ((mevedel-collaboration-keep-awake-idle-time nil))
+      (should (equal "Keep-awake request: active"
+                     (mevedel-collaboration--keep-awake-status room 1100))))))
+
+(mevedel-deftest mevedel-collaboration--room-status
+  (:doc "includes the keep-awake request without claiming OS success")
+  (let ((room (list :session-label "Shared" :started-at 1000
+                    :guests (make-hash-table :test #'eql)))
+        (mevedel-collaboration-keep-awake-idle-time 100))
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-open-p)
+               (lambda (_) nil))
+              ((symbol-function 'float-time) (lambda (&optional _) 1100)))
+      (should (equal "Shared: relay reconnecting; no guest connected; Keep-awake request: idle cutoff reached"
+                     (mevedel-collaboration--room-status room))))))
+
 (mevedel-deftest mevedel-collaboration--start
   (:doc "builds the room and all three bearer links without scheduling expiry")
   (with-temp-buffer
@@ -1239,11 +1302,14 @@
           (mevedel-collaboration-relay-host-token "test-token")
           (mevedel-collaboration--rooms (make-hash-table :test #'eq))
           (session (mevedel-session--create :name "share"))
+          (sleep-updates 0)
           dialed scheduled room)
       (unwind-protect
           (progn
             (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
                        (lambda (url _key &rest _) (setq dialed url) 'transport))
+                      ((symbol-function 'mevedel-sleep-update)
+                       (lambda () (cl-incf sleep-updates)))
                       ((symbol-function 'mevedel-collaboration--canonical-records)
                        (lambda (&rest _) nil))
                       ((symbol-function 'run-at-time)
@@ -1252,6 +1318,9 @@
                          'timer)))
               (setq room (mevedel-collaboration--start session
                                                         (current-buffer))))
+            (should (= 1 sleep-updates))
+            (should (numberp (plist-get room :started-at)))
+            (should-not (plist-get room :last-guest-departure))
             (should (string-match
                      "\\`ws://127\\.0\\.0\\.1:1/r/\\([A-Za-z0-9_-]+\\)\\?role=host\\'"
                      dialed))

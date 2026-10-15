@@ -128,6 +128,10 @@
 (autoload 'mevedel-session-persistence-restore "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-parse-iso-time "mevedel-session-persistence")
 
+;; `mevedel-sleep'
+(declare-function mevedel-sleep-update "mevedel-sleep" (&rest _))
+(autoload 'mevedel-sleep-update "mevedel-sleep")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
@@ -534,6 +538,8 @@ whose link is meant to keep working."
   "Forget PEER in ROOT's lobby when relay control EVENT says it left."
   (when-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies))
               ((eq event 'peer-left)))
+    (when (gethash peer (plist-get lobby :guests))
+      (plist-put lobby :last-guest-departure (float-time)))
     (remhash peer (plist-get lobby :guests))
     (mevedel-collaboration-presence-publish lobby)))
 
@@ -543,6 +549,8 @@ The relay collects the room with the host connection, so every guest
 rejoins with a fresh hello after a drop."
   (when-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies))
               ((eq state 'down)))
+    (when (> (hash-table-count (plist-get lobby :guests)) 0)
+      (plist-put lobby :last-guest-departure (float-time)))
     (clrhash (plist-get lobby :guests))
     (mevedel-collaboration-presence-publish lobby)))
 
@@ -602,6 +610,8 @@ until it is stopped."
                (lobby
                 (append
                  (list :workspace workspace
+                       :started-at (float-time)
+                       :last-guest-departure nil
                        :directory root
                        :project project
                        :session-label (format "Lobby: %s" project)
@@ -634,6 +644,7 @@ until it is stopped."
              (remhash root mevedel-collaboration-lobby--lobbies)
              (signal (car error-data) (cdr error-data))))
           (mevedel-collaboration-lobby--set-intended root t)
+          (mevedel-sleep-update)
           lobby))))
 
 (defun mevedel-collaboration-lobby--stop (lobby reason)
@@ -670,14 +681,16 @@ Only an exit leaves it recorded as running, to restart with Emacs."
   (let (lines)
     (maphash
      (lambda (_root lobby)
-       (push (format "%s: relay %s; %d guest%s"
+       (push (format "%s: relay %s; %d guest%s; %s"
                      (plist-get lobby :session-label)
                      (if (mevedel-collaboration--transport-open-p
                           (plist-get lobby :transport))
                          "connected" "reconnecting")
                      (hash-table-count (plist-get lobby :guests))
                      (if (= 1 (hash-table-count (plist-get lobby :guests)))
-                         "" "s"))
+                         "" "s")
+                     (mevedel-collaboration--keep-awake-status
+                      lobby (float-time)))
              lines))
      mevedel-collaboration-lobby--lobbies)
     (and lines (mapconcat #'identity (nreverse lines) "; "))))

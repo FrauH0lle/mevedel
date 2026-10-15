@@ -793,7 +793,12 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
     (puthash 1 '(:name "a") guests)
     (puthash 2 '(:name "b") guests)
     (mevedel-collaboration-lobby--on-control "/root/" 'peer-joined 3)
-    (mevedel-collaboration-lobby--on-control "/root/" 'peer-left 1)
+    (cl-letf (((symbol-function 'float-time) (lambda (&optional _) 1234)))
+      (mevedel-collaboration-lobby--on-control "/root/" 'peer-left 1))
+    (let ((lobby (gethash "/root/" mevedel-collaboration-lobby--lobbies)))
+      (should (= 1234 (plist-get lobby :last-guest-departure)))
+      (mevedel-collaboration-lobby--on-control "/root/" 'peer-left 99)
+      (should (= 1234 (plist-get lobby :last-guest-departure))))
     (should (equal '(2) (hash-table-keys guests)))))
 
 (mevedel-deftest mevedel-collaboration-lobby--on-state
@@ -805,7 +810,12 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
     (puthash 1 '(:name "a") guests)
     (mevedel-collaboration-lobby--on-state "/root/" 'open)
     (should (= 1 (hash-table-count guests)))
-    (mevedel-collaboration-lobby--on-state "/root/" 'down)
+    (cl-letf (((symbol-function 'float-time) (lambda (&optional _) 1234)))
+      (mevedel-collaboration-lobby--on-state "/root/" 'down))
+    (let ((lobby (gethash "/root/" mevedel-collaboration-lobby--lobbies)))
+      (should (= 1234 (plist-get lobby :last-guest-departure)))
+      (mevedel-collaboration-lobby--on-state "/root/" 'down)
+      (should (= 1234 (plist-get lobby :last-guest-departure))))
     (should (= 0 (hash-table-count guests)))))
 
 (mevedel-deftest mevedel-collaboration-lobby--workspace
@@ -832,9 +842,12 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
           (mevedel-collaboration-relay-url "wss://relay.example")
           (kill-emacs-hook nil)
           (workspace (mevedel-collaboration-lobby-test--workspace root))
+          (sleep-updates 0)
           opened stopped)
       (cl-letf (((symbol-function 'mevedel-collaboration-lobby--workspace)
                  (lambda (_directory) workspace))
+                ((symbol-function 'mevedel-sleep-update)
+                 (lambda () (cl-incf sleep-updates)))
                 ((symbol-function 'mevedel-collaboration--transport-open)
                  (lambda (url _key &rest _callbacks)
                    (push url opened)
@@ -844,6 +857,9 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
                 ((symbol-function 'mevedel-collaboration--transport-send)
                  (lambda (&rest _) t)))
         (let ((lobby (mevedel-collaboration-lobby-start root)))
+          (should (= 1 sleep-updates))
+          (should (numberp (plist-get lobby :started-at)))
+          (should-not (plist-get lobby :last-guest-departure))
           (should (eq lobby (mevedel-collaboration-lobby--find workspace)))
           (should (equal "Lobby: proj" (plist-get lobby :session-label)))
           (should (equal root (plist-get lobby :directory)))
@@ -860,6 +876,7 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
                          (mevedel-collaboration-lobby--intended)))
           ;; A second start is the same lobby, not a second room.
           (should (eq lobby (mevedel-collaboration-lobby-start root)))
+          (should (= 1 sleep-updates))
           (should (= 1 (length opened)))
           (mevedel-collaboration-lobby--stop lobby 'user-stop)
           (should-not (mevedel-collaboration-lobby--find workspace))
@@ -867,6 +884,7 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
           (should-not kill-emacs-hook)
           ;; Restarting revives the very same links.
           (let ((again (mevedel-collaboration-lobby-start root)))
+            (should (= 2 sleep-updates))
             (should-not (eq lobby again))
             (should (equal (plist-get lobby :link-owner)
                            (plist-get again :link-owner)))
@@ -950,7 +968,7 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
       (puthash "/root/" lobby mevedel-collaboration-lobby--lobbies)
       (cl-letf (((symbol-function 'mevedel-collaboration--transport-open-p)
                  (lambda (_transport) t)))
-        (should (equal "Lobby: proj: relay connected; 1 guest"
+        (should (equal "Lobby: proj: relay connected; 1 guest; Keep-awake request: active"
                        (mevedel-collaboration-lobby--status)))))))
 
 (mevedel-deftest mevedel-collaboration-lobby--intent-path

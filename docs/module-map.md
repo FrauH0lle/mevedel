@@ -47,6 +47,7 @@ Data model
   mevedel-bash-policy.el      Bash classification and reusable rules
   mevedel-bash-git.el         argument-aware Git inspection and hardened launch argv
   mevedel-transport.el        remote reentrancy detection and idle-transport deferral
+  mevedel-sleep.el            OS sleep inhibitor while turns, commands or shares are active
   mevedel-execution-target.el immutable local/TRAMP target, path domains, readiness
   mevedel-execution-grants.el protected-boundary-aware child authority coverage
   mevedel-execution.el        managed execution registry, admission, and facade

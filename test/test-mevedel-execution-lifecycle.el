@@ -271,6 +271,29 @@
     (should-not (mevedel-execution-session-live-p session))
     (remhash "exec-live" (mevedel-execution--state-records state))))
 
+(mevedel-deftest mevedel-execution-live-p ()
+  ,test
+  (test)
+  :doc "answers for the managed executions of every session"
+  (let* ((mevedel-execution--sessions
+          (make-hash-table :test #'eq :weakness 'key))
+         (session (mevedel-session--create :name "any-live"))
+         (state (mevedel-execution--state-for-session session))
+         (record
+          (mevedel-execution--record-create
+           :execution-id "exec-live"
+           :origin (mevedel-execution--origin-create :session session)))
+         (helper
+          (mevedel-execution--record-create
+           :origin (mevedel-execution--origin-create :session session))))
+    (should-not (mevedel-execution-live-p))
+    (puthash "helper" helper (mevedel-execution--state-records state))
+    (should-not (mevedel-execution-live-p))
+    (puthash "exec-live" record (mevedel-execution--state-records state))
+    (should (mevedel-execution-live-p))
+    (setf (mevedel-execution--record-finished-p record) t)
+    (should-not (mevedel-execution-live-p))))
+
 (mevedel-deftest mevedel-execution-teardown-all ()
   ,test
   (test)

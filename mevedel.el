@@ -188,6 +188,7 @@
 (autoload 'mevedel-skills-install-slash-commands "mevedel-skills-ui")
 (autoload 'mevedel-skills-uninstall-hot-reload "mevedel-skills-core")
 (autoload 'mevedel-skills-uninstall-slash-commands "mevedel-skills-ui")
+(autoload 'mevedel-sleep-update "mevedel-sleep")
 (autoload 'mevedel-telemetry--lag-stop "mevedel-telemetry")
 (autoload 'mevedel-telemetry-usage-install "mevedel-telemetry-usage")
 (autoload 'mevedel-telemetry-usage-uninstall "mevedel-telemetry-usage")
@@ -295,6 +296,9 @@
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--transform-apply-request-model-policy
                   "mevedel-skills-invoke" (fsm))
+
+;; `mevedel-sleep'
+(declare-function mevedel-sleep-stop "mevedel-sleep" ())
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
@@ -784,6 +788,8 @@ always prompt for the session name."
             #'mevedel-view-stream-handle-execution-event)
   (setq mevedel-execution-mailbox-delivery-function
         #'mevedel-tool-exec-handle-execution-event)
+  ;; A live command keeps the machine awake.
+  (add-hook 'mevedel-execution-state-change-hook #'mevedel-sleep-update)
 
   ;; Define gptel presets
   (mevedel--define-presets)
@@ -868,6 +874,9 @@ always prompt for the session name."
     (mevedel-transport-uninstall))
   (when (featurep 'mevedel-execution)
     (mevedel-execution-teardown-all))
+  (remove-hook 'mevedel-execution-state-change-hook #'mevedel-sleep-update)
+  (when (featurep 'mevedel-sleep)
+    (mevedel-sleep-stop))
   ;; Shared periodic callbacks belong to mevedel; their host timer would
   ;; otherwise outlive it.  Stop owners that remember their timer first, so
   ;; a later install starts them again and the threshold is restored.

@@ -227,11 +227,15 @@
          (room (list :transport 'transport :guests guests
                      :write-token (make-string 16 ?w)
                      :owner-token (make-string 16 ?o)))
+         (sleep-updates 0)
          sent)
     (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-               (lambda (_transport peer frame) (push (cons peer frame) sent) t)))
+               (lambda (_transport peer frame) (push (cons peer frame) sent) t))
+              ((symbol-function 'mevedel-sleep-update)
+               (lambda () (cl-incf sleep-updates))))
       (should-not (mevedel-collaboration--admit-hello
                    room 1 '(:proto 0 :name "old")))
+      (should (= 0 sleep-updates))
       (should (equal "error" (plist-get (cdar sent) :t)))
       (should (= 0 (hash-table-count guests)))
       (let ((guest (mevedel-collaboration--admit-hello
@@ -260,6 +264,7 @@
                                :viewing)))
       ;; Admission alone sends nothing: what a guest is told depends on
       ;; whether it joined a room or a lobby.
+      (should (= 3 sleep-updates))
       (should (= 1 (length sent))))))
 
 (mevedel-deftest mevedel-collaboration--handle-hello
@@ -1203,7 +1208,11 @@
       (mevedel-collaboration--on-control (current-buffer) 'peer-joined 1)
       (should (= 0 (hash-table-count guests)))
       (puthash 1 (list :name "g") guests)
-      (mevedel-collaboration--on-control (current-buffer) 'peer-left 1)
+      (cl-letf (((symbol-function 'float-time) (lambda (&optional _) 1234)))
+        (mevedel-collaboration--on-control (current-buffer) 'peer-left 1))
+      (should (= 1234 (plist-get room :last-guest-departure)))
+      (mevedel-collaboration--on-control (current-buffer) 'peer-left 99)
+      (should (= 1234 (plist-get room :last-guest-departure)))
       (should (= 0 (hash-table-count guests))))))
 
 (mevedel-deftest mevedel-collaboration--on-state ()
@@ -1221,9 +1230,13 @@
       (puthash "phone-guest-id"
                '(:endpoint "https://push.example/subscription" :writable t)
                push-guests)
-      (cl-letf (((symbol-function 'display-warning) (lambda (&rest _) nil)))
+      (cl-letf (((symbol-function 'display-warning) (lambda (&rest _) nil))
+                ((symbol-function 'float-time) (lambda (&optional _) 1234)))
         (mevedel-collaboration--on-state (current-buffer) 'down))
       (should (= 0 (hash-table-count guests)))
+      (should (= 1234 (plist-get room :last-guest-departure)))
+      (mevedel-collaboration--on-state (current-buffer) 'down)
+      (should (= 1234 (plist-get room :last-guest-departure)))
       (cl-letf (((symbol-function 'mevedel-collaboration--transport-control)
                  (lambda (_transport control) (push control controls))))
         (mevedel-collaboration--on-state (current-buffer) 'open))

@@ -36,6 +36,23 @@ stopping the share, or exiting Emacs tears its room down. Otherwise the room
 remains available for the host share's lifetime, including when no guest is
 connected. The share surface is a singleton QR panel for the selected room.
 
+An open share or lobby requests that the host stay awake while a guest is
+connected, and for two hours after it starts or the last guest leaves,
+whichever is later. `mevedel-collaboration-keep-awake-idle-time` configures this
+empty-share interval in seconds; nil disables the cutoff, while zero keeps
+the host awake only while guests are connected. This prevents a forgotten
+empty share from blocking sleep indefinitely. A connected browser tab still
+counts even when nobody is interacting with it.
+
+Temporary relay outages leave the share open. Losing connected guests starts
+the idle interval; repeated unsuccessful reconnects do not extend it. Rejoining
+guests request keep-awake again. The cutoff does not stop sharing or invalidate
+links, but a sleeping host cannot serve guests until it wakes and reconnects.
+Active mevedel requests independently prevent sleep, even after this cutoff.
+`/collab status` reports the keep-awake request and its idle expiry, not proof
+that the OS inhibitor succeeded. `mevedel-sleep-inhibit-command` must be enabled
+and available for these requests to inhibit sleep.
+
 The relay (the Go binary in `relay/`, which also serves the static viewer)
 is content-blind: every frame is sealed with AES-256-GCM under a room key
 that travels only in the links' URL fragments. A view link carries the bare

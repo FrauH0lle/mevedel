@@ -173,6 +173,17 @@
         (mevedel-request-begin session))
       (should (= 1 started))))
 
+  :doc "asks to keep the machine awake while the turn runs"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (updates 0))
+      (cl-letf (((symbol-function 'mevedel-sleep-update)
+                 (lambda (&rest _) (cl-incf updates))))
+        (mevedel-request-begin session))
+      (should (= 1 updates))))
+
   :doc "rejects admission while a lost turn is still settling"
   (with-temp-buffer
     (let ((session (mevedel-session--create :name "settling")))

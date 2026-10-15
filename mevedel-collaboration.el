@@ -193,6 +193,10 @@
 (autoload 'mevedel-session-control-transfer-unregister-observer
   "mevedel-session-control-transfer")
 
+;; `mevedel-sleep'
+(declare-function mevedel-sleep-update "mevedel-sleep" (&rest _))
+(autoload 'mevedel-sleep-update "mevedel-sleep")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (session))
 (declare-function mevedel-session-pending-follow-ups "mevedel-structs" (session))
@@ -239,6 +243,16 @@ authority is the bearer link.  It travels as a handshake header rather than a
 query parameter because reverse proxies log query strings."
   :type '(choice (const :tag "None" nil)
                  (string :tag "Token"))
+  :group 'mevedel)
+
+(defcustom mevedel-collaboration-keep-awake-idle-time 7200
+  "Seconds an empty share or lobby requests that the host stay awake.
+The interval starts when sharing starts or the last guest leaves,
+whichever is later.  Connected guests always request keep-awake.
+Nil means no idle cutoff: request keep-awake until sharing stops.
+This does not close the share or override the system inhibitor setting."
+  :type '(choice (const :tag "No idle cutoff" nil)
+                 (natnum :tag "Idle seconds"))
   :group 'mevedel)
 
 (defcustom mevedel-collaboration-guest-skills '((owner . t))
@@ -977,6 +991,8 @@ returning the live room."
                   (append
                    (list :transport transport
                          :session session
+                         :started-at (float-time)
+                         :last-guest-departure nil
                          :data-buffer data-buffer
                          :session-label
                          (mevedel-collaboration--session-label
@@ -1019,6 +1035,7 @@ returning the live room."
                       #'mevedel-collaboration--on-prompt-created)
             (add-hook 'mevedel-interaction-prompt-settled-hook
                       #'mevedel-collaboration--on-prompt-settled)
+            (mevedel-sleep-update)
             (mevedel-collaboration--room-for-buffer data-buffer))
         (error
          (condition-case nil
@@ -1157,6 +1174,47 @@ a bearer link."
                  guests))
       (list :guests (length ids)))))
 
+(defun mevedel-collaboration--keep-awake-state (room now)
+  "Return ROOM's keep-awake state at float-time NOW.
+Return t while guests are connected or the idle cutoff is disabled,
+the expiry time while the idle interval runs, or nil after it expires.
+ROOM may also be a lobby.  Only registered rooms are considered open;
+the caller owns that check."
+  (let ((guests (plist-get room :guests)))
+    (if (or (null mevedel-collaboration-keep-awake-idle-time)
+            (and guests (> (hash-table-count guests) 0)))
+        t
+      (let ((expiry (+ (max (or (plist-get room :started-at) 0)
+                           (or (plist-get room :last-guest-departure) 0))
+                       mevedel-collaboration-keep-awake-idle-time)))
+        (and (< now expiry) expiry)))))
+
+(defun mevedel-collaboration-sleep-reasons (now)
+  "Return stable keep-awake reasons for open shares and lobbies at NOW.
+NOW is a float-time.  Transient relay outages do not close a share."
+  (let (share lobby)
+    (maphash (lambda (_buffer room)
+               (when (mevedel-collaboration--keep-awake-state room now)
+                 (setq share t)))
+             mevedel-collaboration--rooms)
+    (when (boundp 'mevedel-collaboration-lobby--lobbies)
+      (maphash (lambda (_root room)
+                 (when (mevedel-collaboration--keep-awake-state room now)
+                   (setq lobby t)))
+               mevedel-collaboration-lobby--lobbies))
+    (delq nil (list (and share "collaboration share active")
+                    (and lobby "collaboration lobby active")))))
+
+(defun mevedel-collaboration--keep-awake-status (room now)
+  "Return ROOM's keep-awake request status at float-time NOW."
+  (let ((state (mevedel-collaboration--keep-awake-state room now)))
+    (concat "Keep-awake request: "
+            (cond ((eq state t) "active")
+                  (state (format "until %s (idle cutoff)"
+                                 (format-time-string "%Y-%m-%d %H:%M:%S %Z"
+                                                     state)))
+                  (t "idle cutoff reached")))))
+
 (defun mevedel-collaboration--room-status (room)
   "Return a status line for ROOM without exposing its secrets."
   (let ((transport (plist-get room :transport))
@@ -1167,14 +1225,15 @@ a bearer link."
                              (if (plist-get guest :writable) "" " (view)"))
                      names))
              guests)
-    (format "%s: relay %s; %s"
+    (format "%s: relay %s; %s; %s"
             (plist-get room :session-label)
             (if (mevedel-collaboration--transport-open-p transport)
                 "connected" "reconnecting")
             (if names
                 (format "guests: %s"
                         (mapconcat #'identity (nreverse names) ", "))
-              "no guest connected"))))
+              "no guest connected")
+            (mevedel-collaboration--keep-awake-status room (float-time)))))
 
 (defun mevedel-collaboration-status ()
   "Report every active share and lobby without exposing secrets."
