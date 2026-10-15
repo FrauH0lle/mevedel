@@ -317,6 +317,31 @@
           (should-not denied)
           (should-not queued)))))
 
+  :doc "Monitor: unrelated ambient Plan stamps cannot restrict the owning request"
+  (progn
+    (setf (mevedel-request-permission-mode-override request) 'full-auto)
+    (setq-local mevedel--agent-invocation
+                (mevedel-agent-invocation--create
+                 :path "/root/unrelated" :parent-session session))
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq queued t))))
+      (dolist (stamp '(request invocation))
+        (setf (mevedel-request-plan-read-only mevedel--current-request)
+              (eq stamp 'request)
+              (mevedel-agent-invocation-plan-read-only mevedel--agent-invocation)
+              (eq stamp 'invocation))
+        (dolist (name '("Bash" "Monitor"))
+          (ert-info ((format "Unrelated %s Plan authority for %s" stamp name))
+            (setq allowed nil denied nil queued nil
+                  context (plist-put context :tool (mevedel-tool-ensure name)))
+            (mevedel-tool-permission-step
+             context (lambda (_) (setq allowed t))
+             (lambda (reason &rest _) (setq denied reason)))
+            (ert-info ((format "Denial: %S" denied))
+              (should allowed))
+            (should-not denied)
+            (should-not queued))))))
+
   :doc "Monitor: captured request or invocation Plan stamps survive ambient drift"
   (let (outcomes)
     (setf (mevedel-request-permission-mode-override request) 'full-auto)

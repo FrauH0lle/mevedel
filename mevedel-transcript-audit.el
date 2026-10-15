@@ -187,7 +187,8 @@ any valid record."
   (let ((tick (buffer-modified-tick)))
     (if (eql tick (car mevedel-transcript-audit--guest-prompts-memo))
         (cdr mevedel-transcript-audit--guest-prompts-memo)
-      (let* ((all (mevedel-transcript-audit--scan-guest-prompts))
+      (let* ((all (save-match-data
+                    (mevedel-transcript-audit--scan-guest-prompts)))
              (result
               (cons all
                     (cl-remove-if-not

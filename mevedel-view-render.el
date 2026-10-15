@@ -5074,13 +5074,14 @@ are left bare, while blank lines between payload lines keep the gutter."
 (defun mevedel-view--monitor-mail-description (open-tag)
   "Return the unescaped description in Monitor mailbox OPEN-TAG, or nil.
 OPEN-TAG is the `<agent-message ...>' opener; other message types return nil."
-  (when (and (string-match-p "\\_<type=\"MONITOR\"" open-tag)
-             (string-match "\\_<description=\"\\([^\"]*\\)\"" open-tag))
-    (let ((text (match-string 1 open-tag)))
-      (dolist (entity '(("&quot;" . "\"") ("&apos;" . "'") ("&lt;" . "<")
-                        ("&gt;" . ">") ("&amp;" . "&")))
-        (setq text (string-replace (car entity) (cdr entity) text)))
-      text)))
+  (save-match-data
+    (when (and (string-match-p "\\_<type=\"MONITOR\"" open-tag)
+               (string-match "\\_<description=\"\\([^\"]*\\)\"" open-tag))
+      (let ((text (match-string 1 open-tag)))
+        (dolist (entity '(("&quot;" . "\"") ("&apos;" . "'") ("&lt;" . "<")
+                          ("&gt;" . ">") ("&amp;" . "&")))
+          (setq text (string-replace (car entity) (cdr entity) text)))
+        text))))
 
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
@@ -5370,7 +5371,7 @@ dialogue, because the following Agent Task is the authoritative one."
      turn-source)))
 
 (defun mevedel-view--user-turn-attribution (segments data-buf)
-  "Return the collaboration attribution owning this user turn, or nil.
+  "Return the guest or background-event attribution owning this turn, or nil.
 SEGMENTS are the turn's data-buffer spans.  The attribution block sits
 in the turn's trailing audit strip, or inside the turn's own span when
 segment repair absorbed it, so the lookup covers the turn extent plus
@@ -8875,7 +8876,8 @@ HOOK-CONTEXT is model-visible hook context to summarize in the view.
 PROMPT-SUMMARY-BODY, when non-nil, is shown as a collapsed Prompt
 section backed by PROMPT-SUMMARY-SOURCE when available.  HOOK-AUDITS
 is a list of hook audit records to render under the user turn.
-ATTRIBUTION identifies the collaboration guest and any attached shared context.
+ATTRIBUTION identifies a background event or a collaboration guest and any
+attached shared context.
 USER-SOURCE bounds the submitted prompt in the data buffer, including
 trusted skill metadata used for immediate attachment disclosures.
 

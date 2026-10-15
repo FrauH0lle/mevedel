@@ -140,7 +140,7 @@
                           :kind 'monitor :session session :owner "/root"
                           :command '("sh" "-c" "exit 0") :workdir root
                           (car case)))))
-          (should-not (mevedel-execution-live-p)))
+          (should (zerop (mevedel-execution-count-user session))))
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
@@ -168,7 +168,7 @@
           (should initial)
           (should (eq 'running (plist-get (plist-get initial :facts) :state)))
           (should (plist-get (plist-get initial :facts) :execution-id))
-          (should (mevedel-execution-live-p))
+          (should (= 1 (mevedel-execution-count-user session)))
           (should-not (mevedel-execution-working-p))
           (test-mevedel-execution--wait
            (lambda () (cl-find 'terminal events :key (lambda (e) (plist-get e :type)))))
@@ -213,6 +213,8 @@
           (test-mevedel-execution--wait (lambda () events))
           (should (= 1 (length initial)))
           (should (equal "" (plist-get (car initial) :output)))
+          ;; The start acknowledgement never claims the started monitor is queued.
+          (should (eq 'running (plist-get (plist-get (car initial) :facts) :state)))
           (should (= 1 (length events)))
           (should (eq 'terminal (plist-get (car events) :type)))
           (should (string-prefix-p "done\nMonitor quick: exited with code 0"
@@ -362,7 +364,16 @@
       (should (string-match-p "Watching: builds" text))
       (should (string-match-p "expires " text))
       (should (string-match-p "7 events" text))
-      (should-not (string-match-p "123456" text)))))
+      (should-not (string-match-p "123456" text))))
+  :doc "the model reads the expiry as a calendar timestamp"
+  (let ((xml (mevedel-tool-exec--execution-facts-xml
+              '(:kind monitor :execution-id "e" :expires-at 1700000000.0))))
+    (should (string-match-p
+             (regexp-quote
+              (format "expires_at=\"%s\""
+                      (format-time-string "%FT%T%z" 1700000000.0)))
+             xml))
+    (should-not (string-match-p "1700000000" xml))))
 
 (provide 'test-mevedel-monitor)
 ;;; test-mevedel-monitor.el ends here

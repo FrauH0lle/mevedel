@@ -191,7 +191,7 @@
         (setq-local mevedel--session session gptel-backend (mevedel-claude-code-register)))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft "> retained draft\nsecond line" 4))
-      (cl-letf (((symbol-function 'mevedel-view--schedule-late-follow-up-drain) #'ignore))
+      (cl-letf (((symbol-function 'mevedel-pending-inputs-schedule-held-input-delivery) #'ignore))
         (mevedel-readiness-runtime-changed '(:status "failed" :message "Update failed"))
         (mevedel-readiness-runtime-changed '(:status "ready")))
       (with-current-buffer view-buf

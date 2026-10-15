@@ -469,6 +469,28 @@ render would see once gptel has written the batch."
 (mevedel-deftest mevedel-view-stream-handle-execution-event ()
   ,test
   (test)
+  :doc "a Monitor batch neither refreshes its row nor schedules a render"
+  (mevedel-view-stream-test--with-buffers
+    (let (touched)
+      (cl-letf (((symbol-function 'mevedel-view--refresh-tool-row)
+                 (lambda (&rest _) (push 'refresh touched) t))
+                ((symbol-function 'mevedel-view--schedule-render)
+                 (lambda (&rest _) (push 'render touched)))
+                ((symbol-function 'mevedel-view-stream--schedule-execution-row-recovery)
+                 (lambda (&rest _) (push 'recovery touched))))
+        (should-not
+         (mevedel-view-stream-handle-execution-event
+          (list :type 'monitor-batch :data-buffer data-buf :owner "/root"
+                :tool-use-id "call-monitor" :body "line\n"
+                :facts '(:execution-id "exec-1" :kind monitor :state running))))
+        (should-not touched)
+        ;; The same event as ordinary progress does reach the row.
+        (mevedel-view-stream-handle-execution-event
+         (list :type 'progress :data-buffer data-buf :owner "/root"
+               :tool-use-id "call-monitor"
+               :facts '(:execution-id "exec-1" :state running)))
+        (should touched))))
+
   :doc "the pending live line stays plain while the row carries the metadata"
   ;; The pending line is keyed by gptel's tool-call name and arguments,
   ;; and an execution event arrives keyed by the provider's call id, so

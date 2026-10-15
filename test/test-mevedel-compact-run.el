@@ -58,7 +58,21 @@
       (mevedel-compact-run--finish state nil)
       (mevedel-compact-run--finish state "late")
       (should (equal results '(nil)))
-      (should-not mevedel-compact-run-in-flight))))
+      (should-not mevedel-compact-run-in-flight)))
+  :doc "successful manual compaction releases held background input once"
+  (dolist (case '((nil nil t) (t nil nil) (nil "failed" nil)))
+    (with-temp-buffer
+      (setq-local mevedel-compact-run-in-flight t)
+      (let* ((state (mevedel-compact-run--state-create
+                     :chat-buffer (current-buffer) :auto (car case)))
+             offered)
+        (cl-letf (((symbol-function 'mevedel-pending-inputs-schedule-held-input-delivery)
+                   (lambda (buffer)
+                     (should-not mevedel-compact-run-in-flight)
+                     (push buffer offered))))
+          (mevedel-compact-run--finish state (cadr case))
+          (mevedel-compact-run--finish state (cadr case)))
+        (should (equal (and (nth 2 case) (list (current-buffer))) offered))))))
 
 (mevedel-deftest mevedel-compact-run--fail ()
   ,test

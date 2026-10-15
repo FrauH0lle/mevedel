@@ -29,8 +29,12 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-execution-process'
+(declare-function mevedel-execution-process-collect-stderr
+                  "mevedel-execution-process" (child))
 (declare-function mevedel-execution-process-create
                   "mevedel-execution-process" (&rest keys))
+(declare-function mevedel-execution-process-discard-stderr
+                  "mevedel-execution-process" (child))
 (declare-function mevedel-execution-process-interrupt
                   "mevedel-execution-process" (child))
 (declare-function mevedel-execution-process-launch-attempted-p
@@ -724,6 +728,8 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
     (mevedel-transport-cancel-pending
      (list 'execution-delivery (mevedel-execution--record-token record)))
     (mevedel-execution--release-runtime record)
+    (when-let* ((child (mevedel-execution--record-child record)))
+      (mevedel-execution-process-discard-stderr child))
     (unless preserve-spool
       (when-let* ((child (mevedel-execution--record-child record)))
         (mevedel-execution-process-release child)))
@@ -996,15 +1002,43 @@ retained in the transcript and output artifacts."
     (when (zerop (or (mevedel-execution--record-output-chars record) 0))
       (mevedel-execution--telemetry
        record 'execution-first-output :chunk-bytes (string-bytes chunk)))
-    (mevedel-execution--retain-output record chunk)
     (if (eq (mevedel-execution--record-kind record) 'monitor)
         (unless (or stderr (mevedel-execution--record-stop-p record))
           (mevedel-execution--monitor-frame record chunk))
       (mevedel-execution--hasten-progress record))
-    (cl-incf (mevedel-execution--record-newline-count record)
-             (cl-count ?\n chunk))
-    (setf (mevedel-execution--record-last-byte-newline-p record)
-          (eq (aref chunk (1- (length chunk))) ?\n))))
+    (mevedel-execution--retain-text record chunk)))
+
+(defun mevedel-execution--retain-text (record chunk)
+  "Count spooled CHUNK in RECORD's previews and line facts."
+  (mevedel-execution--retain-output record chunk)
+  (cl-incf (mevedel-execution--record-newline-count record)
+           (cl-count ?\n chunk))
+  (setf (mevedel-execution--record-last-byte-newline-p record)
+        (eq (aref chunk (1- (length chunk))) ?\n)))
+
+(defun mevedel-execution--collect-stderr (record)
+  "Move RECORD's target-side stderr file into its spool and previews.
+Only a remote launch through TRAMP's shell adapter keeps one.  Delivery
+calls this where target I/O may run, before building the final result; a
+failure is reported and the result is delivered without that stderr.  Text
+cut by the output cap is marked in the result, as native stderr's cap stop
+is."
+  (when-let* ((child (mevedel-execution--record-child record)))
+    (condition-case err
+        (when-let* ((collected (mevedel-execution-process-collect-stderr child)))
+          (unless (string-empty-p (car collected))
+            (mevedel-execution--retain-text record (car collected)))
+          (when (cdr collected)
+            (setf (mevedel-execution--record-output-limit-p record) t)
+            ;; Preview only: the spool is full, and the model must not
+            ;; read the cut file as complete.
+            (mevedel-execution--retain-output
+             record "\n[stderr truncated at the output limit]\n")))
+      (error
+       (mevedel--warn-once
+        'execution-remote-stderr
+        "Could not collect remote execution stderr: %s"
+        (error-message-string err))))))
 
 (defun mevedel-execution--monitor-body (record)
   "Return RECORD's bounded pending event batch without consuming it."
@@ -1138,11 +1172,13 @@ preserve the default zero-success/nonzero-failure rule."
          default-outcome)))))
 
 (defun mevedel-execution--lifecycle-state (record)
-  "Return RECORD's canonical public lifecycle state."
+  "Return RECORD's canonical public lifecycle state.
+A launched child that already exited is still `running' until its record
+settles: it is no longer waiting for admission."
   (cond
    ((mevedel-execution--record-finished-p record) 'completed)
    ((mevedel-execution--record-stop-p record) 'stopping)
-   ((mevedel-execution-process-live-p
+   ((mevedel-execution-process-launch-attempted-p
      (mevedel-execution--record-child record))
     'running)
    (t 'queued)))
@@ -1639,7 +1675,9 @@ returning: their callers expect the outcome settled."
       (let ((deliver
              (lambda ()
                (unwind-protect
-                   (if (mevedel-execution--record-yielded-p record)
+                   (progn
+                    (mevedel-execution--collect-stderr record)
+                    (if (mevedel-execution--record-yielded-p record)
                        (if (and (mevedel-execution--record-observer record)
                                 (not (eq (mevedel-execution--record-kind record)
                                          'monitor)))
@@ -1652,7 +1690,7 @@ returning: their callers expect the outcome settled."
                        (unless (eq (mevedel-execution--record-delivery-state record)
                                    'discarded)
                          (funcall callback
-                                  (mevedel-execution--observation record t)))))
+                                  (mevedel-execution--observation record t))))))
                  (setf (mevedel-execution--record-delivery-pending-p record) nil))))
             (workdir (mevedel-execution--record-workdir record)))
         ;; Delivery starts the tool's continuation -- result handling and,
@@ -2344,21 +2382,9 @@ not active work and cannot keep session transfer or history changes blocked."
           (setq live-p t)))
       live-p)))
 
-(defun mevedel-execution-live-p ()
-  "Return non-nil while any session's managed execution is running."
-  (catch 'live
-    (maphash
-     (lambda (session _present)
-       (when-let* ((state (mevedel-session-execution-state session)))
-         (maphash (lambda (_id record)
-                    (when (mevedel-execution--managed-live-p record)
-                      (throw 'live t)))
-                  (mevedel-execution--state-records state))))
-     mevedel-execution--sessions)
-    nil))
-
 (defun mevedel-execution-working-p ()
-  "Return non-nil for live managed work, excluding waiting monitors."
+  "Return non-nil while any session's managed execution is working.
+A monitor waiting for events is live but not working."
   (catch 'working
     (maphash
      (lambda (session _present)

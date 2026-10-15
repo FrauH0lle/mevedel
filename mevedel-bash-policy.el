@@ -22,8 +22,6 @@
 (require 'subr-x)
 
 ;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-plan-read-only
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-plan-read-only-p "mevedel-agents"
@@ -80,8 +78,6 @@
 (defvar mevedel-sandbox-intrinsic-paths)
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-plan-read-only
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
@@ -822,14 +818,18 @@ authorize dangerous or complex syntax."
         (cl-return-from mevedel-bash-policy-check-permission
           (decide 'deny 'rule)))
 
-      (when (and (or (when-let* ((request
-                                 (plist-get permission-context :request)))
-                       (mevedel-request-plan-read-only request))
-                     (when-let* ((invocation
-                                 (plist-get permission-context :invocation)))
-                       (mevedel-agent-invocation-plan-read-only invocation))
-                     (mevedel-plan-read-only-p
-                      (plist-get permission-context :session)))
+      (when (and (let ((mevedel--current-request
+                       (if (plist-member permission-context :request)
+                           (plist-get permission-context :request)
+                         mevedel--current-request))
+                      (mevedel--agent-invocation
+                       (if (plist-member permission-context :invocation)
+                           (plist-get permission-context :invocation)
+                         mevedel--agent-invocation)))
+                   ;; Captured nil stamps must not borrow a newer turn's Plan
+                   ;; authority.  The owning session's live Plan flag still applies.
+                   (mevedel-plan-read-only-p
+                    (plist-get permission-context :session)))
                  (not (eq class 'read-only)))
         (cl-return-from mevedel-bash-policy-check-permission
           (decide 'deny 'plan-mode)))

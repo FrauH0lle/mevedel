@@ -1653,7 +1653,11 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
   (mevedel-execution-transcript-handle-event event)
   ;; The execution owner already bounds the tail and marks its own truncation.
   ;; Do not introduce an undisclosed second, line-based output limit here.
-  (mevedel-view-stream-handle-tool-progress event)
+  ;; A Monitor batch changes nothing its row shows: the event count reaches
+  ;; the status zone through the execution state hook, and the events reach
+  ;; the model as mail.  Refreshing the row would redraw it unchanged.
+  (unless (eq (plist-get event :type) 'monitor-batch)
+    (mevedel-view-stream-handle-tool-progress event))
   (when (eq (plist-get event :type) 'terminal)
     (mevedel-view-stream--terminal-breadcrumb event))
   nil)

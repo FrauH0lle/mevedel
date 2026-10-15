@@ -491,7 +491,7 @@ explicitly selected skills applied together, with the same admission recheck."
                             (or (mevedel-session-turn-count session) 0)))))
           (mevedel-pending-inputs-follow-up-changed session)
           (mevedel-view--interaction-rebuild)
-          (mevedel-view--schedule-late-follow-up-drain)
+          (mevedel-pending-inputs-schedule-held-input-delivery)
           entry)))))
 
 (defun mevedel-view--queue-follow-up (input)
@@ -529,7 +529,7 @@ explicitly selected skills applied together, with the same admission recheck."
       (mevedel-pending-inputs-follow-up-changed session)
       (mevedel-view--interaction-rebuild)
       (message "mevedel: queued follow-up for a separate turn")
-      (mevedel-view--schedule-late-follow-up-drain)
+      (mevedel-pending-inputs-schedule-held-input-delivery)
       entry)))
 
 (defun mevedel-view--steering-request-context-supported-p (context)
@@ -726,7 +726,7 @@ Call RELEASE on failure, dropping a permanently stale directive entry."
           session 'follow-up
           (delq entry (mevedel-view--pending-follow-ups session)))
          (mevedel-view--interaction-rebuild)
-         (mevedel-view--schedule-late-follow-up-drain))
+         (mevedel-pending-inputs-schedule-held-input-delivery))
        (message "mevedel: queued directive follow-up failed: %s"
                 (error-message-string scope-err))))))
 
@@ -956,15 +956,13 @@ an unrelated remote operation started by redisplay or another package included
        (when (buffer-live-p data-buffer)
          (mevedel-view--drain-follow-up data-buffer))))))
 
-(defun mevedel-view--schedule-late-follow-up-drain ()
-  "Schedule a fallback follow-up drain after request cleanup."
-  (when-let* ((data-buffer mevedel--data-buffer)
-              ((buffer-live-p data-buffer))
-              ((not (buffer-local-value 'mevedel--current-request
-                                        data-buffer))))
-    (run-at-time 0 nil
-                 #'mevedel-view--run-follow-up-drain
-                 data-buffer)))
+(defun mevedel-pending-inputs-schedule-held-input-delivery (&optional data-buffer)
+  "Offer held follow-ups or background mail after a hold clears.
+DATA-BUFFER defaults to this view's data buffer.  Recheck at dispatch so a
+consumed input does not start a Goal continuation instead."
+  (let ((buffer (or data-buffer mevedel--data-buffer)))
+    (when (memq (mevedel-pending-inputs--idle-work buffer) '(follow-up event))
+      (run-at-time 0 nil #'mevedel-pending-inputs--offer-idle-work-now buffer t))))
 
 (defun mevedel-pending-inputs--idle-work (data-buffer)
   "Return the kind of idle work DATA-BUFFER's session holds, or nil.
@@ -996,16 +994,17 @@ still occupied does nothing."
     (run-at-time 0 nil #'mevedel-pending-inputs--offer-idle-work-now
                  data-buffer)))
 
-(defun mevedel-pending-inputs--offer-idle-work-now (data-buffer)
+(defun mevedel-pending-inputs--offer-idle-work-now (data-buffer &optional inputs-only)
   "Start the idle work `mevedel-pending-inputs-offer-idle-work' offered.
 DATA-BUFFER is checked again, because the offering command may have
-started a turn or settled the work itself."
+started a turn or settled the work itself.  INPUTS-ONLY excludes Goal work."
   (pcase (mevedel-pending-inputs--idle-work data-buffer)
     ('follow-up (mevedel-view--run-follow-up-drain data-buffer))
     ('event (mevedel-pending-inputs--run-event-wake data-buffer))
-    ('goal (mevedel-goal-schedule-continuation
-            (buffer-local-value 'mevedel--session data-buffer)
-            data-buffer))))
+    ('goal (unless inputs-only
+             (mevedel-goal-schedule-continuation
+              (buffer-local-value 'mevedel--session data-buffer)
+              data-buffer)))))
 
 (defconst mevedel-pending-inputs--event-trigger
   (concat "Background work you started has reported; its output follows. "
@@ -1020,11 +1019,8 @@ prompt, so their text cannot pose as the user.")
       (mevedel-session-pending-plan-approval session)
       (mevedel-view-interaction-pending-p view-buffer)))
 
-(defun mevedel-pending-inputs--wake-for-event (data-buffer)
-  "Start one background-event turn in DATA-BUFFER when no hold remains.
-The holds are those of the follow-up drain, plus queued follow-ups, which
-go first, and pending user decisions.  The turn is a new request, so it
-runs under the session's current permission settings."
+(defun mevedel-pending-inputs--event-wake-view (data-buffer)
+  "Return DATA-BUFFER's live root view when no background wake hold remains."
   (when (buffer-live-p data-buffer)
     (let ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
           (session (buffer-local-value 'mevedel--session data-buffer)))
@@ -1044,18 +1040,32 @@ runs under the session's current permission settings."
                      (not (mevedel-pending-inputs--interaction-pending-p
                            session view-buffer))
                      (string-empty-p (mevedel-view--input-text)))
-            (mevedel-session-durability-with-transaction
-             (mevedel-session-artifacts-assert-new-mutation-authority session)
-             (with-current-buffer data-buffer
-               (setq mevedel-view--pending-guest-attribution
-                     (list :type 'background-event))
-               (unwind-protect
-                   (mevedel--submit-generated-turn
-                    mevedel-pending-inputs--event-trigger
-                    mevedel-pending-inputs--event-trigger)
-                 ;; Consumed where the prompt is inserted; a start that
-                 ;; failed before that must not label a later prompt.
-                 (setq mevedel-view--pending-guest-attribution nil))))))))))
+            view-buffer))))))
+
+(defun mevedel-pending-inputs--wake-for-event (data-buffer)
+  "Start one background-event turn in DATA-BUFFER when no hold remains.
+The holds are those of the follow-up drain, plus queued follow-ups, which
+go first, and pending user decisions.  The turn is a new request, so it
+runs under the session's current permission settings."
+  (when-let* ((view-buffer (mevedel-pending-inputs--event-wake-view data-buffer))
+              (session (buffer-local-value 'mevedel--session data-buffer)))
+    (mevedel-session-durability-with-transaction
+     (mevedel-session-artifacts-assert-new-mutation-authority session)
+     ;; Authority admission can yield during target I/O.  A user draft,
+     ;; another turn, or a consumed wake must win over this stale offer.
+     (when (and (eq view-buffer
+                    (mevedel-pending-inputs--event-wake-view data-buffer))
+                (eq session (buffer-local-value 'mevedel--session data-buffer)))
+       (with-current-buffer data-buffer
+         (setq mevedel-view--pending-guest-attribution
+               (list :type 'background-event))
+         (unwind-protect
+             (mevedel--submit-generated-turn
+              mevedel-pending-inputs--event-trigger
+              mevedel-pending-inputs--event-trigger)
+           ;; Consumed where the prompt is inserted; a start that
+           ;; failed before that must not label a later prompt.
+           (setq mevedel-view--pending-guest-attribution nil)))))))
 
 (defun mevedel-pending-inputs--run-event-wake (data-buffer)
   "Start a background-event turn for DATA-BUFFER once the transport is idle.
@@ -1088,10 +1098,11 @@ failing wake cannot loop."
     (start _end old-length)
   "Offer held idle work once an edit from START empties the composer.
 OLD-LENGTH is the length of the replaced text.  Automatic delivery leaves
-a composer draft alone, so a follow-up or a background-event turn -- and an
-active Goal waiting for them -- holds until the user sends, clears, or
-deletes that draft.  Only a deletion can empty the composer, and the
-whitespace scan stops at the first character of a real draft."
+a composer draft alone, so a follow-up or a background-event turn holds
+until the user sends, clears, or deletes that draft.  A draft never holds a
+Goal continuation, so its deletion never starts one.  Only a deletion can
+empty the composer, and the whitespace scan stops at the first character of
+a real draft."
   (when (and (> old-length 0)
              (markerp mevedel-view--input-marker)
              (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
@@ -1102,10 +1113,7 @@ whitespace scan stops at the first character of a real draft."
                (goto-char (mevedel-view--input-start))
                (skip-chars-forward " \t\n\r")
                (= (point) (point-max))))
-    (if (mevedel-view--pending-follow-ups)
-        (mevedel-view--schedule-late-follow-up-drain)
-      (when-let* ((data-buffer mevedel--data-buffer))
-        (mevedel-pending-inputs-offer-idle-work data-buffer)))))
+    (mevedel-pending-inputs-schedule-held-input-delivery)))
 
 (defun mevedel-view--schedule-follow-up-drain (fsm)
   "Schedule the next follow-up after FSM completes successfully."
@@ -1820,7 +1828,7 @@ and only a transition back to WAIT releases it."
         (gptel--fsm-transition fsm 'WAIT))
       (when (buffer-live-p view)
         (with-current-buffer view
-          (mevedel-view--schedule-late-follow-up-drain))))))
+          (mevedel-pending-inputs-schedule-held-input-delivery))))))
 
 (defun mevedel-pending-inputs--on-kill-buffer ()
   "Resume delivery when the cockpit is killed while it still owns a pause.

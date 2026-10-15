@@ -610,6 +610,24 @@
               (should (eq (cdr case) (plist-get message :wake))))
             (should (equal (and (cdr case) (list root)) offered)))
         (kill-buffer root))))
+  :doc "a fresh root without saved artifacts wakes through the event's data buffer"
+  (dolist (type '(terminal monitor-batch))
+    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "fresh"))
+          offered)
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (should-not (mevedel-session-root-buffer session))
+        (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                   (lambda (buffer) (push buffer offered))))
+          (should
+           (mevedel-tool-exec-handle-execution-event
+            (list :type type :delivery 'mailbox :owner "/root"
+                  :data-buffer (current-buffer)
+                  :facts '(:execution-id "exec-1" :termination exited)
+                  :body "event" :observation '(:output "done"))
+            session)))
+        (should (equal (list (current-buffer)) offered))
+        (should (mevedel-agent-control-wake-pending-p session)))))
   :doc "an agent's completion is queued unchanged and never wakes the root"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
         queued offered)

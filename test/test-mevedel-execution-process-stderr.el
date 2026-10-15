@@ -16,6 +16,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-execution-test-helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-execution-test-helpers"))
 
 (defun test-mevedel-process-stderr--wait (predicate)
   "Wait for PREDICATE with a bounded test deadline."
@@ -51,6 +56,9 @@
                    :coding 'utf-8-unix :separate-stderr t :confined confined))
           (setq pipe (mevedel-execution-process--child-stderr-process child)
                 buffer (mevedel-execution-process--child-stderr-buffer child))
+          ;; The stderr pipe decodes like stdout, not by the locale.
+          (when (process-live-p pipe)
+            (should (eq 'utf-8-unix (car (process-coding-system pipe)))))
           (test-mevedel-process-stderr--wait (lambda () result))
           (should (= terminals 1))
           (should (equal 0 (plist-get result :exit-code)))
@@ -99,22 +107,152 @@
            "--unshare-pid" "--die-with-parent" "sh" "-c"
            test-mevedel-process-stderr--script)
      t))
-  :doc "local-shell TRAMP sh adapter drains startup and terminal stderr"
+  :doc "the TRAMP sh adapter keeps stderr in a target file, collected once"
   (mevedel-test--with-local-shell-tramp nil
-    (let ((mevedel-transport-remote-direct-async nil))
-      (test-mevedel-process-stderr--run
-       (format "/mevedelmock:%s:%s" (system-name) temporary-file-directory)
-       (list "sh" "-c" test-mevedel-process-stderr--script))))
-  :doc "opt-in real SSH checks both sh and direct-async adapters"
-  (let ((root (getenv "MEVEDEL_TEST_SSH_ROOT")))
-    (unless root (ert-skip "MEVEDEL_TEST_SSH_ROOT is not configured"))
+    (let ((mevedel-transport-remote-direct-async nil)
+          result child stdout stderr remote-path)
+      (unwind-protect
+          (progn
+            (setq child
+                  (mevedel-execution-process-create
+                   :workdir (format "/mevedelmock:%s:%s" (system-name)
+                                    temporary-file-directory)
+                   :output-function (lambda (_child chunk) (push chunk stdout))
+                   :stderr-function (lambda (_child chunk) (push chunk stderr))
+                   :terminal-function (lambda (_child value) (setq result value))))
+            (should (mevedel-execution-process-start
+                     child :name "mevedel-separated-output"
+                     :command (list "sh" "-c" "printf 'caf\\303\\251' >&2; printf out")
+                     :coding 'utf-8-unix :separate-stderr t))
+            ;; No buffer-backed stderr, so TRAMP adds no FIFO, second
+            ;; connection, or sentinel cleanup.
+            (should-not (mevedel-execution-process--child-stderr-buffer child))
+            (setq remote-path
+                  (mevedel-execution-process--child-stderr-remote-path child))
+            (should (file-remote-p remote-path))
+            (test-mevedel-process-stderr--wait (lambda () result))
+            (should (equal 0 (plist-get result :exit-code)))
+            (should-not stderr)
+            (should (equal "out" (apply #'concat (nreverse stdout))))
+            (should (file-exists-p remote-path))
+            (should (equal '("café" . nil) (mevedel-execution-process-collect-stderr child)))
+            (should (equal "outcafé" (mevedel-execution-process-read child)))
+            (should-not (file-exists-p remote-path))
+            ;; Collection happens once.
+            (should-not (mevedel-execution-process-collect-stderr child)))
+        (when child (mevedel-execution-process-release child)))))
+  :doc "an uncollected target stderr file is deleted when discarded"
+  (mevedel-test--with-local-shell-tramp nil
+    (let ((mevedel-transport-remote-direct-async nil)
+          result child remote-path)
+      (unwind-protect
+          (progn
+            (setq child
+                  (mevedel-execution-process-create
+                   :workdir (format "/mevedelmock:%s:%s" (system-name)
+                                    temporary-file-directory)
+                   :terminal-function (lambda (_child value) (setq result value))))
+            (should (mevedel-execution-process-start
+                     child :name "mevedel-separated-output"
+                     :command (list "sh" "-c" "printf err >&2")
+                     :coding 'utf-8-unix :separate-stderr t))
+            (setq remote-path
+                  (mevedel-execution-process--child-stderr-remote-path child))
+            (test-mevedel-process-stderr--wait (lambda () result))
+            (mevedel-execution-process-discard-stderr child)
+            (should-not (file-exists-p remote-path))
+            (should-not (mevedel-execution-process-collect-stderr child)))
+        (when child (mevedel-execution-process-release child)))))
+  :doc "collection respects the shared output cap"
+  (mevedel-test--with-local-shell-tramp nil
+    (let ((mevedel-transport-remote-direct-async nil)
+          (mevedel-execution-process-output-limit 5)
+          result child)
+      (unwind-protect
+          (progn
+            (setq child
+                  (mevedel-execution-process-create
+                   :workdir (format "/mevedelmock:%s:%s" (system-name)
+                                    temporary-file-directory)
+                   :terminal-function (lambda (_child value) (setq result value))))
+            (should (mevedel-execution-process-start
+                     child :name "mevedel-separated-output"
+                     :command (list "sh" "-c" "printf abcdefghijklmnopqrstuvwxyz >&2; printf xy")
+                     :coding 'utf-8-unix :separate-stderr t))
+            (test-mevedel-process-stderr--wait (lambda () result))
+            ;; The target file itself was bounded before collection: the
+            ;; command wrote 26 bytes, the file holds at most cap + 1.
+            (should (<= (file-attribute-size
+                         (file-attributes
+                          (mevedel-execution-process--child-stderr-remote-path child)))
+                        6))
+            (should (equal '("abc" . t) (mevedel-execution-process-collect-stderr child)))
+            (should (equal "xyabc" (mevedel-execution-process-read child)))
+            (should (plist-get (mevedel-execution-process-status child)
+                               :output-limit-p)))
+        (when child (mevedel-execution-process-release child)))))
+  :doc "a failed read signals instead of silently dropping stderr"
+  (mevedel-test--with-local-shell-tramp nil
+    (let ((mevedel-transport-remote-direct-async nil)
+          result child remote-path)
+      (unwind-protect
+          (progn
+            (setq child
+                  (mevedel-execution-process-create
+                   :workdir (format "/mevedelmock:%s:%s" (system-name)
+                                    temporary-file-directory)
+                   :terminal-function (lambda (_child value) (setq result value))))
+            (should (mevedel-execution-process-start
+                     child :name "mevedel-separated-output"
+                     :command (list "sh" "-c" "printf err >&2")
+                     :coding 'utf-8-unix :separate-stderr t))
+            (test-mevedel-process-stderr--wait (lambda () result))
+            (setq remote-path
+                  (mevedel-execution-process--child-stderr-remote-path child))
+            (cl-letf (((symbol-function 'insert-file-contents-literally)
+                       (lambda (&rest _) (signal 'file-error '("Injected read failure")))))
+              (should-error (mevedel-execution-process-collect-stderr child)
+                            :type 'file-error))
+            (should-not (file-exists-p remote-path)))
+        (when child (mevedel-execution-process-release child)))))
+  :doc "opt-in real SSH separates stderr on both the sh and direct-async adapters"
+  ;; The shared helper skips without a target and applies the runner's SSH
+  ;; configuration, as the other real-SSH journeys do.
+  (let ((root (test-mevedel-execution-remote--real-root
+               "MEVEDEL_TEST_SSH_ROOT" 'ssh)))
     (unwind-protect
-        (dolist (direct '(nil t))
-          (let ((mevedel-transport-remote-direct-async direct))
+        (progn
+          (let ((mevedel-transport-remote-direct-async t))
             (should
-             (eq direct
-                 (test-mevedel-process-stderr--run
-                  root (list "sh" "-c" test-mevedel-process-stderr--script))))))
+             (test-mevedel-process-stderr--run
+              root (list "sh" "-c" test-mevedel-process-stderr--script))))
+          ;; The sh adapter keeps stderr in a target file and leaves a
+          ;; concurrent command on the same connection undisturbed.
+          (let ((mevedel-transport-remote-direct-async nil)
+                result child stdout remote-path)
+            (unwind-protect
+                (progn
+                  (setq child
+                        (mevedel-execution-process-create
+                         :workdir root
+                         :output-function (lambda (_child chunk) (push chunk stdout))
+                         :terminal-function (lambda (_child value) (setq result value))))
+                  (should (mevedel-execution-process-start
+                           child :name "mevedel-separated-output"
+                           :command (list "sh" "-c"
+                                          "sleep 0.3; printf err >&2; printf out; exit 4")
+                           :coding 'utf-8-unix :separate-stderr t))
+                  (setq remote-path
+                        (mevedel-execution-process--child-stderr-remote-path child))
+                  (should (equal 7 (let ((default-directory root))
+                                     (process-file "sh" nil nil nil "-c"
+                                                   "sleep 1; exit 7"))))
+                  (test-mevedel-process-stderr--wait (lambda () result))
+                  (should (equal 4 (plist-get result :exit-code)))
+                  (should (equal "out" (apply #'concat (nreverse stdout))))
+                  (should (equal '("err" . nil) (mevedel-execution-process-collect-stderr child)))
+                  (should-not (file-exists-p remote-path)))
+              (when child (mevedel-execution-process-release child)))))
       (tramp-cleanup-all-connections)))
   :doc "ordinary Bash output remains merged when separation is not requested"
   (let (result stdout stderr child)

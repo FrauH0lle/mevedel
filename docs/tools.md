@@ -1372,7 +1372,18 @@ owner and execution boundary, with its timeout measured from launch. Monitor's
 deadline does not add a deadline to ordinary Bash.
 
 Only stdout becomes events. Native separated stderr joins the retained output
-file but never triggers a line event. Each pipe stage in a watcher must flush
+file but never triggers a line event. Local and direct-async launches separate
+it through a native stderr pipe. A remote monitor that runs through TRAMP's
+shell adapter (no direct-async channel, or a command over its length limit)
+cannot use one: that adapter serves `:stderr` through a FIFO on a second
+connection, and the cleanup it installs on the process sentinel issues remote
+commands from inside whatever command is already running on the host, which
+corrupted a concurrent `process-file` result in testing. There a target-side
+wrapper appends stderr to a temporary file on the target instead. Result
+delivery, which already waits for an idle transport, moves the file into the
+output file within the same 64 MiB cap and deletes it; registry cleanup
+deletes an uncollected file. On that path stderr joins the output file only
+when the monitor ends, after its stdout. Each pipe stage in a watcher must flush
 its output; buffering inside the command delays events. Filters should match
 failure states as well as success. The harness frames split chunks into lines,
 normalizes CRLF, and retains a final partial line on settlement. Each line keeps

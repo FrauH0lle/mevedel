@@ -59,9 +59,9 @@
                   "mevedel-overlays" (record workspace))
 
 ;; `mevedel-pending-inputs'
-(declare-function mevedel-view--schedule-late-follow-up-drain
-                  "mevedel-pending-inputs" ())
-(autoload 'mevedel-view--schedule-late-follow-up-drain
+(declare-function mevedel-pending-inputs-schedule-held-input-delivery
+                  "mevedel-pending-inputs" (&optional data-buffer))
+(autoload 'mevedel-pending-inputs-schedule-held-input-delivery
   "mevedel-pending-inputs")
 
 ;; `mevedel-plan'
@@ -150,7 +150,7 @@
     (with-current-buffer view-buffer
       (mevedel-view-back-to-chat)
       (when drain
-        (mevedel-view--schedule-late-follow-up-drain)))))
+        (mevedel-pending-inputs-schedule-held-input-delivery)))))
 
 (defun mevedel-directive-plan--planning-prompt
     (implementation-prompt &optional feedback proposal)

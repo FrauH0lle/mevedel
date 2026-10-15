@@ -2353,7 +2353,11 @@ successfully, and a failed background-event turn does not wake again. A
 background-event turn waits for an idle transport and then rechecks every
 follow-up hold below, plus queued follow-ups and any pending permission, Ask,
 or Plan interaction, so it never replaces a draft or interrupts a decision;
-deleting the draft or closing the last interaction offers it again. No live
+deleting the draft or closing the last interaction offers it again. Resuming
+pending-input delivery, leaving directive planning, resolving readiness or
+recovery holds, and successfully finishing manual compaction also offer held
+follow-ups first, then background mail. Those release edges do not start a
+Goal continuation when neither input remains. No live
 root view means no wake. The turn's header reads `Background event` instead
 of `You`: a hidden attribution record, the same mechanism a collaboration
 guest's `NAME (guest)` heading uses, keeps it across rerender, archive, and

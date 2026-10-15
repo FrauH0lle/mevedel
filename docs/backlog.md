@@ -24,13 +24,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   session-transfer control programs in prompt admission before it is
   inserted. Same evidence.
 - Check if memory and journal processing could be async
-- Generic permission preflight (`mevedel-permission--preflight`, the Plan
-  `early-decision` in `mevedel-permissions.el`) checks Plan read-only only
-  through the ambient request and session, not the captured `request` it
-  already holds. A deferred Eval or native-edit check could then lose a
-  request-scoped Plan restriction to a newer non-Plan ambient request. Bash
-  and Monitor were fixed at their own policy boundary; reproduce this one
-  before changing it.
 
 ## Request lifecycle
 

@@ -77,6 +77,12 @@
 (autoload 'mevedel-journal-capture-checkpoint "mevedel-journal-capture")
 (autoload 'mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture")
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-schedule-held-input-delivery
+                  "mevedel-pending-inputs" (&optional data-buffer))
+(autoload 'mevedel-pending-inputs-schedule-held-input-delivery
+  "mevedel-pending-inputs")
+
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
 
@@ -177,7 +183,12 @@
          :error-class
          (and err (if (symbolp err) err 'compaction-error))))
       (when-let* ((callback (mevedel-compact-run--state-callback state)))
-        (funcall callback err)))))
+        (funcall callback err))
+      ;; Automatic compaction continues its existing turn.  Manual
+      ;; compaction has no turn-end edge to release inputs held by it.
+      (when (and (null err) (not (mevedel-compact-run--state-auto state))
+                 (buffer-live-p chat-buffer))
+        (mevedel-pending-inputs-schedule-held-input-delivery chat-buffer)))))
 
 (defun mevedel-compact-run--fail
     (state err retryable &optional ignore-failure-count)

@@ -222,7 +222,7 @@ bindings, including the absence of one."
           (mevedel-recovery-save session)
           (when (buffer-live-p mevedel--view-buffer)
             (with-current-buffer mevedel--view-buffer
-              (mevedel-view--schedule-late-follow-up-drain))))
+              (mevedel-pending-inputs-schedule-held-input-delivery))))
         (mevedel-collaboration--publish-status room)
         (mevedel-collaboration--publish-queue room)
         (mevedel-collaboration-recovery-send room peer)))))

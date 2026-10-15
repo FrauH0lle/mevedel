@@ -322,6 +322,9 @@ operation rather than a successful or semantic non-error result."
                     (cond
                      ((eq value t) "true")
                      ((null value) "false")
+                     ;; A model reads a calendar time, not epoch seconds.
+                     ((eq (car entry) :expires-at)
+                      (format-time-string "%FT%T%z" value))
                      ((floatp value) (format "%.3f" value))
                      (t (format "%s" value)))))
            attributes))))
@@ -432,12 +435,19 @@ stopped command's outcome."
                         :model-result-envelope-p
                         (not suppress-sandbox-disclosure-p))))))
 
-(defun mevedel-tool-exec--offer-wake (session)
+(defun mevedel-tool-exec--offer-wake (session event)
   "Offer SESSION's idle model a turn for newly delivered background mail.
+EVENT's root data buffer also works before SESSION has saved artifacts.
 Delivery is already durable here, so a failure only skips the wake: the
 record stays unread and the next turn still receives it."
   (condition-case err
-      (when-let* ((buffer (mevedel-session-root-buffer session))
+      (when-let* ((buffer (let ((origin (plist-get event :data-buffer)))
+                           (if (and (buffer-live-p origin)
+                                   (eq session (buffer-local-value
+                                                'mevedel--session origin))
+                                   (equal (plist-get event :owner) "/root"))
+                              origin
+                             (mevedel-session-root-buffer session))))
                   ((buffer-live-p buffer)))
         (mevedel-pending-inputs-offer-idle-work buffer))
     (error
@@ -456,7 +466,7 @@ that ended on its own wakes an idle model; a stopped one does not."
         owner-context (plist-get facts :execution-id)
         (or (plist-get facts :description) "")
         (plist-get event :body) t)
-       (mevedel-tool-exec--offer-wake owner-context)
+       (mevedel-tool-exec--offer-wake owner-context event)
        t))
     ((and 'terminal (guard (eq (plist-get event :delivery) 'mailbox)))
      (let* ((args (plist-get event :tool-args))
@@ -491,7 +501,7 @@ that ended on its own wakes an idle model; a stopped one does not."
                 observation (plist-get args :suppress-sandbox-disclosure-p))
                :result))))
          (when wake
-           (mevedel-tool-exec--offer-wake owner-context)))))))
+           (mevedel-tool-exec--offer-wake owner-context event)))))))
 
 (defun mevedel-tool-exec--monitor-terminal-body (event)
   "Return EVENT's pending monitor lines followed by its terminal notice."

@@ -74,7 +74,7 @@
     (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
                (lambda (&rest _) (error "Missing directive")))
               ((symbol-function 'mevedel-view--interaction-rebuild) #'ignore)
-              ((symbol-function 'mevedel-view--schedule-late-follow-up-drain)
+              ((symbol-function 'mevedel-pending-inputs-schedule-held-input-delivery)
                (lambda () (setq scheduled t))))
       (mevedel-test--with-captured-messages nil
         (mevedel-view--dispatch-directive-follow-up
@@ -97,7 +97,7 @@
     (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
                (lambda (&rest _) (error "Try later")))
               ((symbol-function 'mevedel-view--interaction-rebuild) #'ignore)
-              ((symbol-function 'mevedel-view--schedule-late-follow-up-drain)
+              ((symbol-function 'mevedel-pending-inputs-schedule-held-input-delivery)
                (lambda () (setq scheduled t))))
       (mevedel-test--with-captured-messages nil
         (mevedel-view--dispatch-directive-follow-up

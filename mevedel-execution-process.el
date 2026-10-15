@@ -155,6 +155,7 @@
   stderr-buffer
   stderr-function
   stderr-process
+  stderr-remote-path
   stop-p
   terminal-function
   termination
@@ -455,6 +456,35 @@ Incomplete identity, an unreachable target, or an unexpected exit is
             (zerop (signal-process (- group-id) 0))
           (error nil)))))))
 
+(defun mevedel-execution-process--append-spool (child chunk)
+  "Append CHUNK to CHILD's spool within the output cap.
+Return (RETAINED . OVER-LIMIT-P): the prefix of CHUNK that was written, and
+whether CHUNK exceeded the remaining cap."
+  (let* ((path (mevedel-execution-process--child-spool-path child))
+         (current (file-attribute-size (file-attributes path)))
+         (remaining (- mevedel-execution-process-output-limit current))
+         (coding (mevedel-execution-process--child-coding child))
+         (length (string-bytes (encode-coding-string chunk coding t)))
+         (retained
+          (if (<= length remaining)
+              chunk
+            (let ((low 0)
+                  (high (length chunk)))
+              (while (< low high)
+                (let ((middle (/ (+ low high 1) 2)))
+                  (if (<= (string-bytes
+                           (encode-coding-string
+                            (substring chunk 0 middle) coding t))
+                          remaining)
+                      (setq low middle)
+                    (setq high (1- middle)))))
+              (substring chunk 0 low)))))
+    (when (and (> remaining 0) (not (string-empty-p retained)))
+      (let ((coding-system-for-write 'no-conversion))
+        (write-region (encode-coding-string retained coding t)
+                      nil path t 'silent)))
+    (cons retained (> length remaining))))
+
 (defun mevedel-execution-process--consume-output (child chunk &optional stderr)
   "Append bounded raw output CHUNK to CHILD and notify its consumer.
 STDERR selects the separate consumer and bypasses stdout marker filtering."
@@ -465,43 +495,65 @@ STDERR selects the separate consumer and bypasses stdout marker filtering."
                 (unless stderr
                   (mevedel-execution-process--child-filter-function child)))
                (chunk (or (if filter (funcall filter child chunk) chunk) ""))
-               (path (mevedel-execution-process--child-spool-path child))
-               (current (file-attribute-size (file-attributes path)))
-               (remaining
-                (- mevedel-execution-process-output-limit current))
-               (coding (mevedel-execution-process--child-coding child))
-               (encoded (encode-coding-string chunk coding t))
-               (length (string-bytes encoded))
-               (retained
-                (if (<= length remaining)
-                    chunk
-                  (let ((low 0)
-                        (high (length chunk)))
-                    (while (< low high)
-                      (let ((middle (/ (+ low high 1) 2)))
-                        (if (<= (string-bytes
-                                 (encode-coding-string
-                                  (substring chunk 0 middle) coding t))
-                                remaining)
-                            (setq low middle)
-                          (setq high (1- middle)))))
-                    (substring chunk 0 low))))
-               (retained-bytes (encode-coding-string retained coding t)))
-          (when (and (> remaining 0) (not (string-empty-p retained)))
-            (let ((coding-system-for-write 'no-conversion))
-              (write-region retained-bytes nil path t 'silent)))
+               (appended (mevedel-execution-process--append-spool child chunk))
+               (retained (car appended)))
           (when-let* ((function
                        (if stderr
                            (mevedel-execution-process--child-stderr-function child)
                          (mevedel-execution-process--child-output-function child))))
             (unless (string-empty-p retained)
               (funcall function child retained)))
-          (when (> length remaining)
+          (when (cdr appended)
             (setf (mevedel-execution-process--child-output-limit-p child) t)
             (mevedel-execution-process-stop child 'output-limit)))
       (error
        (setf (mevedel-execution-process--child-error child) err)
        (mevedel-execution-process-stop child 'output-write-failed)))))
+
+(defconst mevedel-execution-process--stderr-redirect-script
+  "exec 2> >(exec head -c \"$1\" >>\"$0\"); shift; exec \"$@\""
+  "Target-side wrapper sending stderr to the file named by its first argument.
+The second argument bounds the file, as the spool cap bounds native stderr:
+once `head' has copied that many bytes it exits, and further stderr writes
+fail instead of filling the target's disk.")
+
+(defun mevedel-execution-process-collect-stderr (child)
+  "Move CHILD's target-side stderr file into its spool and delete the file.
+Return (TEXT . TRUNCATED-P), or nil when CHILD keeps no such file.  TEXT was
+appended to the spool; TRUNCATED-P reports stderr cut by the output cap.  The
+file exists only for a remote launch through TRAMP's shell adapter, where the
+child cannot get a native stderr pipe.  Reading it is target I/O, so callers
+run this where remote operations may run, such as result delivery.  A read
+failure signals after the file is deleted."
+  (when-let* ((path (mevedel-execution-process--child-stderr-remote-path child)))
+    (setf (mevedel-execution-process--child-stderr-remote-path child) nil)
+    (unwind-protect
+        (let* ((spool (mevedel-execution-process--child-spool-path child))
+               (remaining
+                (max 0 (- mevedel-execution-process-output-limit
+                          (or (and (file-readable-p spool)
+                                   (file-attribute-size (file-attributes spool)))
+                              0))))
+               (raw (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      ;; One byte more than fits reveals an over-limit file.
+                      (insert-file-contents-literally path nil 0 (1+ remaining))
+                      (buffer-string)))
+               (text (decode-coding-string
+                      raw (or (mevedel-execution-process--child-coding child)
+                              'utf-8-unix)
+                      t))
+               (appended (mevedel-execution-process--append-spool child text)))
+          (when (cdr appended)
+            (setf (mevedel-execution-process--child-output-limit-p child) t))
+          appended)
+      (mevedel-execution-process--delete-spool path))))
+
+(defun mevedel-execution-process-discard-stderr (child)
+  "Delete CHILD's uncollected target-side stderr file, if any."
+  (when-let* ((path (mevedel-execution-process--child-stderr-remote-path child)))
+    (setf (mevedel-execution-process--child-stderr-remote-path child) nil)
+    (mevedel-execution-process--delete-spool path)))
 
 (defun mevedel-execution-process--drain-stderr (child &optional buffer-only)
   "Drain CHILD's separate stderr buffer and any pending pipe output.
@@ -857,8 +909,13 @@ The former 0.1 s timer repainted a whole pgtk frame ten times a second.")
     (child &key name command target coding timeout confined separate-stderr)
   "Launch COMMAND in CHILD and return CHILD, or nil on failure.
 SEPARATE-STDERR retains stderr in the shared bounded spool without stdout
-filtering or notifications.  It uses a native buffer-backed stderr pipe,
-which also works with TRAMP's sh and direct-async adapters."
+filtering or notifications.  Local and direct-async launches use a native
+buffer-backed stderr pipe.  A remote launch through TRAMP's sh adapter does
+not: that adapter serves `:stderr' through a FIFO read on a second
+connection, and the sentinel it installs to remove that FIFO issues remote
+commands from inside whatever command is already running on the host.  There
+a target-side wrapper appends stderr to a temporary file instead, which
+`mevedel-execution-process-collect-stderr' moves into the spool."
   (let* ((workdir (mevedel-execution-process--child-workdir child))
          (remote (file-remote-p workdir))
          (command
@@ -868,13 +925,10 @@ which also works with TRAMP's sh and direct-async adapters."
           (and remote
                (mevedel-execution-process--direct-async-p
                 child command workdir)))
+         (file-stderr (and separate-stderr remote (not direct-async)))
+         (separate-stderr (and separate-stderr (not file-stderr)))
          (_ (setf (mevedel-execution-process--child-direct-async-p child)
                   direct-async))
-         (command
-          (if remote
-              (mevedel-execution-process--remote-command child command)
-            command))
-         (executable (car-safe command))
          (process-environment
           (mevedel-execution-process--process-environment remote)))
     (setf (mevedel-execution-process--child-confined-p child)
@@ -884,11 +938,27 @@ which also works with TRAMP's sh and direct-async adapters."
         (progn
           (with-temp-buffer
             (setq default-directory workdir)
-            (unless (and (stringp executable)
-                         (if remote
-                             (mevedel--executable-find executable remote)
-                           (executable-find executable)))
-              (signal 'file-missing (list "Executable not found" executable)))
+            (when file-stderr
+              (let ((path (make-nearby-temp-file "mevedel-stderr-")))
+                (setf (mevedel-execution-process--child-stderr-remote-path child)
+                      path)
+                ;; Outside any confinement wrapper, which inherits fd 2.
+                (setq command
+                      (append (list "bash" "-c"
+                                    mevedel-execution-process--stderr-redirect-script
+                                    (file-local-name path)
+                                    (number-to-string
+                                     (1+ mevedel-execution-process-output-limit)))
+                              command))))
+            (when remote
+              (setq command
+                    (mevedel-execution-process--remote-command child command)))
+            (let ((executable (car-safe command)))
+              (unless (and (stringp executable)
+                           (if remote
+                               (mevedel--executable-find executable remote)
+                             (executable-find executable)))
+                (signal 'file-missing (list "Executable not found" executable))))
             (when separate-stderr
               (setf (mevedel-execution-process--child-stderr-buffer child)
                     (generate-new-buffer " *mevedel-execution-stderr*")))
@@ -898,22 +968,28 @@ which also works with TRAMP's sh and direct-async adapters."
                   (mevedel-transport-call-with-spawn-channel
                    remote direct-async
                    (lambda ()
-                     (make-process
-                      :name name :buffer nil :command command :coding coding
-                      :stderr (mevedel-execution-process--child-stderr-buffer child)
-                      :connection-type
-                      (if (mevedel-execution-process--child-tty-p child)
-                          'pty
-                        'pipe)
-                      :file-handler t
-                      :filter
-                      (lambda (_process chunk)
-                        (mevedel-execution-process--filter-group-marker
-                         child chunk))
-                      :noquery t
-                      :sentinel
-                      (lambda (process _event)
-                        (mevedel-execution-process--ended child process)))))))
+                     ;; `make-process' does not pass CODING to the pipe it
+                     ;; creates for `:stderr'; that pipe takes the default
+                     ;; process coding, which follows the locale.
+                     (let ((default-process-coding-system
+                            (if coding (cons coding coding)
+                              default-process-coding-system)))
+                       (make-process
+                        :name name :buffer nil :command command :coding coding
+                        :stderr (mevedel-execution-process--child-stderr-buffer child)
+                        :connection-type
+                        (if (mevedel-execution-process--child-tty-p child)
+                            'pty
+                          'pipe)
+                        :file-handler t
+                        :filter
+                        (lambda (_process chunk)
+                          (mevedel-execution-process--filter-group-marker
+                           child chunk))
+                        :noquery t
+                        :sentinel
+                        (lambda (process _event)
+                          (mevedel-execution-process--ended child process))))))))
           (unless remote
             (setf (mevedel-execution-process--child-group-id child)
                   (process-id
