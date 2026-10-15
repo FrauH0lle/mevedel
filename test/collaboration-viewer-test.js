@@ -619,7 +619,8 @@ async function main() {
 
   const ids = ['transcript', 'history', 'connection', 'notice', 'live-button', 'assistant-working',
                'terminal-state', 'terminal-title', 'terminal-message',
-               'composer', 'composer-input', 'composer-name',
+               'composer', 'composer-input', 'composer-identity',
+               'you-menu', 'you-form', 'you-name', 'you-random', 'you-initials', 'you-label',
                'settings', 'settings-attention', 'settings-issues', 'settings-model', 'settings-mode',
                'settings-mode-help', 'settings-preset', 'settings-preset-apply', 'settings-account',
                'settings-account-title', 'settings-account-actions',
@@ -847,6 +848,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-presence.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-header.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-name.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
   assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
@@ -955,8 +957,10 @@ async function main() {
   assert.equal(typeof hello.name, 'string');
   assert.match(hello.name, /^[A-Z][a-z]+ [A-Z][a-z]+$/);
   assert.equal(hello.name[0], hello.name.split(' ')[1][0], 'generated name alliterates');
-  assert.equal(nodes['composer-name'].value, hello.name, 'generated name is visible and editable');
-  assert.equal(storage.get('mevedel-guest-name'), hello.name, 'generated name survives reload');
+  assert.equal(textOf(nodes['you-label']), hello.name, 'the header shows who you are');
+  assert.equal(textOf(nodes['composer-identity']), `as ${hello.name}`);
+  assert.equal(tabStorage.get('mevedel-random-name'), hello.name, 'a reload of this tab keeps the name');
+  assert.equal(storage.has('mevedel-chosen-name'), false, 'a random name is not remembered by the browser');
   // The stable per-browser guest id rides every hello, so the host can
   // match this guest's own queued entries across reconnects.
   assert.match(hello.guestId, /^[A-Za-z0-9_-]{8,64}$/);
@@ -1180,12 +1184,20 @@ async function main() {
   await deliver({t: 'remove', ids: ['tool', 'patch']});
   assert.equal(nodes.transcript.children.length, 2);
 
+  // Choosing a name tells the host at once and is remembered.
+  const chooseName = value => {
+    nodes['you-name'].value = value;
+    nodes['you-form'].dispatch('submit', {preventDefault() {}});
+  };
+  chooseName('roland');
+  await waitFor(() => first.sent.length === 4, 'sealed name');
+  assert.deepEqual(await unseal(key, first.sent[3]), {t: 'set-name', name: 'roland'});
+
   // Composer sends a sealed prompt; interrupt sends a sealed abort.
   nodes['composer-input'].value = 'check the tests';
-  nodes['composer-name'].value = 'roland';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 4, 'sealed prompt');
-  const prompt = await unseal(key, first.sent[3]);
+  await waitFor(() => first.sent.length === 5, 'sealed prompt');
+  const prompt = await unseal(key, first.sent[4]);
   assert.deepEqual(prompt, {t: 'prompt', text: 'check the tests',
                             name: 'roland'});
   assert.equal(nodes['composer-input'].value, '');
@@ -1210,8 +1222,8 @@ async function main() {
   assert.equal(nodes['queue-state'].hidden, true);
 
   nodes['stop-button'].dispatch('click');
-  await waitFor(() => first.sent.length === 5, 'sealed abort');
-  assert.deepEqual(await unseal(key, first.sent[4]), {t: 'abort'});
+  await waitFor(() => first.sent.length === 6, 'sealed abort');
+  assert.deepEqual(await unseal(key, first.sent[5]), {t: 'abort'});
 
   // Directive-tagged records grow the client-side filter; selecting a
   // directive hides everything outside it, per guest, no round-trips.
@@ -1243,14 +1255,14 @@ async function main() {
   assert.match(textOf(nodes['composer-scope']), /Refactor the parser/);
   nodes['composer-input'].value = 'and this one?';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 6, 'directive-scoped prompt');
-  assert.equal((await unseal(key, first.sent[5])).directive, 'dir-1');
+  await waitFor(() => first.sent.length === 7, 'directive-scoped prompt');
+  assert.equal((await unseal(key, first.sent[6])).directive, 'dir-1');
   nodes.filter.children[1].dispatch('click'); // Main chat
   assert.equal(nodes['composer-scope'].hidden, true);
   nodes['composer-input'].value = 'main chat';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 7, 'unscoped prompt');
-  assert.equal((await unseal(key, first.sent[6])).directive, undefined);
+  await waitFor(() => first.sent.length === 8, 'unscoped prompt');
+  assert.equal((await unseal(key, first.sent[7])).directive, undefined);
 
   // Activity in a thread the guest is not looking at marks its tab with
   // an unseen dot until the tab is selected.
@@ -1308,15 +1320,15 @@ async function main() {
   assert.equal(nodes.attachments.children[1].children[1].attributes['aria-pressed'], 'true');
   nodes['composer-input'].value = 'see the log';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 9, 'prompt with attachment and its upload');
-  const shared = await unseal(key, first.sent[8]);
+  await waitFor(() => first.sent.length === 10, 'prompt with attachment and its upload');
+  const shared = await unseal(key, first.sent[9]);
   assert.deepEqual({...shared, data: Buffer.from(shared.data, 'base64').toString()},
                    {t: 'file-upload', reqId: 1, data: 'print("hi")\n', dir: '',
                     name: 'tool.py', size: 12, rename: true, final: true});
   await deliver({t: 'file-upload', reqId: 1, ok: true, path: 'tool-2.py'});
   await waitFor(() => /tool-2\.py added to the project/.test(textOf(nodes.notice)),
                 'project share notice');
-  const withFile = await unseal(key, first.sent[7]);
+  const withFile = await unseal(key, first.sent[8]);
   assert.equal(withFile.images.some(image => 'share' in image || 'file' in image), false);
   assert.equal(withFile.images.length, 2);
   assert.equal(withFile.images[0].mime, 'text/plain');
@@ -1326,31 +1338,37 @@ async function main() {
   assert.deepEqual([withFile.images[1].mime, withFile.images[1].extension], ['text/plain', 'py']);
   assert.equal(nodes.attachments.children.length, 0);
 
-  // Name commits travel independently of the message draft.
+  // Name changes travel independently of the message draft; clearing the
+  // name returns to this tab's random one.
   nodes['composer-input'].value = 'Unsent draft';
-  for (const [value, event, expected] of [
-    ['  Roland55  ', 'blur', 'Roland55'],
-    ['Clever Cat', 'keydown', 'Clever Cat'],
-    ['   ', 'blur', hello.name],
+  for (const [value, expected, chosen] of [
+    ['  Roland55  ', 'Roland55', 'Roland55'],
+    ['Clever Cat', 'Clever Cat', 'Clever Cat'],
+    ['   ', hello.name, undefined],
   ]) {
     const before = first.sent.length;
-    nodes['composer-name'].value = value;
-    let prevented = false;
-    nodes['composer-name'].dispatch(event, {
-      key: 'Enter', preventDefault: () => { prevented = true; },
-    });
-    if (event === 'keydown') assert.equal(prevented, true);
+    chooseName(value);
     await waitFor(() => first.sent.length === before + 1, 'sealed name update');
     assert.deepEqual(await unseal(key, first.sent.at(-1)), {t: 'set-name', name: expected});
-    assert.equal(nodes['composer-name'].value, expected);
-    assert.equal(storage.get('mevedel-guest-name'), expected);
-    assert.match(textOf(nodes.modeline), new RegExp(expected));
+    assert.equal(textOf(nodes['you-label']), expected);
+    assert.equal(storage.get('mevedel-chosen-name'), chosen);
     assert.equal(nodes['composer-input'].value, 'Unsent draft');
   }
   const afterName = first.sent.length;
-  nodes['composer-name'].dispatch('blur');
+  chooseName(hello.name);
   await tick();
-  assert.equal(first.sent.length, afterName, 'unchanged blur sends no duplicate');
+  assert.equal(first.sent.length, afterName, 'an unchanged name sends nothing');
+  assert.equal(storage.get('mevedel-chosen-name'), hello.name,
+               'typing the random name keeps it as a choice');
+  chooseName('');
+  // A random name of one's own replaces the tab's and is not remembered.
+  nodes['you-random'].dispatch('click');
+  await waitFor(() => first.sent.length === afterName + 1, 'sealed random name');
+  const fresh = (await unseal(key, first.sent.at(-1))).name;
+  assert.notEqual(fresh, hello.name);
+  assert.match(fresh, /^[A-Z][a-z]+ [A-Z][a-z]+$/);
+  assert.equal(tabStorage.get('mevedel-random-name'), fresh);
+  assert.equal(storage.has('mevedel-chosen-name'), false);
 
   await Promise.all([
     api2.addFiles([fakeFile('one.log', '', '1'),
@@ -1369,29 +1387,32 @@ async function main() {
     fakeFile('queued.png', 'image/png', 'pixels'),
   ]);
   await waitFor(() => releaseBitmap, 'queued image conversion');
+  const beforeName = first.sent.length;
+  chooseName('before-wait');
+  await waitFor(() => first.sent.length === beforeName + 1, 'sealed name');
   const queuedSendBefore = first.sent.length;
   nodes.filter.children[2].dispatch('click');
-  nodes['composer-name'].value = 'before-wait';
   nodes['composer-input'].value = 'send the queued photo';
   nodes.composer.dispatch('submit');
   nodes.filter.children[1].dispatch('click');
-  nodes['composer-name'].value = 'after-wait';
-  await tick();
-  assert.equal(first.sent.length, queuedSendBefore);
+  // A name chosen while the prompt waits is the host's next, not the prompt's.
+  chooseName('after-wait');
+  await waitFor(() => first.sent.length === queuedSendBefore + 1, 'sealed name');
+  assert.equal((await unseal(key, first.sent[queuedSendBefore])).t, 'set-name');
   assert.equal(nodes['composer-input'].value, 'send the queued photo');
   releaseBitmap();
   holdBitmap = false;
   await addingPhoto;
-  await waitFor(() => first.sent.length === queuedSendBefore + 1,
+  await waitFor(() => first.sent.length === queuedSendBefore + 2,
                 'prompt after image conversion');
-  const queuedPhoto = await unseal(key, first.sent[queuedSendBefore]);
+  const queuedPhoto = await unseal(key, first.sent[queuedSendBefore + 1]);
   assert.equal(queuedPhoto.images.length, 1);
   assert.equal(queuedPhoto.images[0].mime, 'image/jpeg');
   assert.equal(queuedPhoto.directive, 'dir-1');
   assert.equal(queuedPhoto.name, 'before-wait');
   assert.equal(nodes['composer-input'].value, '');
   assert.equal(nodes.attachments.children.length, 0);
-  nodes['composer-name'].value = 'roland';
+  chooseName('roland');
 
   await api2.addFiles([fakeFile('photo.png', 'image/png', 'pixels')]);
   assert.equal(bitmapCloseCount, 2);

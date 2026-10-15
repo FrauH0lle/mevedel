@@ -25,6 +25,18 @@
       <div class="wordmark">mevedel</div>
       <div class="room-heading"><span class="project-name">Shared workspace</span><h1 id="session-label">Live session</h1></div>
       <div class="header-actions">
+        <details id="you-menu" class="you-menu keep">
+          <summary aria-label="Your name"><span id="you-initials" class="you-initials" aria-hidden="true"></span><span id="you-label" class="you-label"></span></summary>
+          <form id="you-form" class="you-body" autocomplete="off">
+            <label for="you-name">Your name</label>
+            <input id="you-name" maxlength="32" autocomplete="nickname" spellcheck="false">
+            <p>Everyone here sees this name on your messages, cursor and discussions. A name you choose is kept in this browser.</p>
+            <div class="you-actions">
+              <button id="you-random" class="btn quiet" type="button">Use a random name</button>
+              <button class="btn" type="submit">Save</button>
+            </div>
+          </form>
+        </details>
         <span class="presence keep" data-presence role="img" hidden></span>
         <details id="appearance-menu" data-fold="1">
           <summary>Appearance</summary>
@@ -215,11 +227,7 @@
                   aria-label="Prompt"></textarea>
         <div id="attachments" class="attachments"></div>
         <div class="composer-row">
-          <div class="name-field"><label for="composer-name">Display name</label>
-          <input id="composer-name" class="composer-name" type="text"
-                 maxlength="32" placeholder="Your name"
-                 title="Shown beside your prompts in the transcript"
-                 aria-label="Display name"></div>
+          <button id="composer-identity" class="composer-identity" type="button"></button>
           <input id="image-input" type="file" multiple hidden
                  accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
           <button id="attach-button" class="btn quiet" type="button"
@@ -378,6 +386,7 @@
     <script src="/viewer-editing.js" defer></script>
     <script src="/viewer-presence.js" defer></script>
     <script src="/viewer-header.js" defer></script>
+    <script src="/viewer-name.js" defer></script>
     <script src="/viewer.js" defer></script>
   </body>
 </html>

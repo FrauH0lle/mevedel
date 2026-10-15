@@ -52,6 +52,9 @@ window.mevedelEditingView = {
         titleInput.blur();
       }
     });
+    function setName(name) {
+      port?.postMessage({ type: 'name', name });
+    }
     function setAppearance(value) {
       appearance = value;
       port?.postMessage({ type: 'appearance', appearance });
@@ -789,7 +792,7 @@ window.mevedelEditingView = {
       attached = new Set(ids);
       if (!box.hidden) render();
     }
-    return { welcome, connection, receive, open, openItem, conversation, refreshConversation, setAppearance, ask, present,
+    return { welcome, connection, receive, open, openItem, conversation, refreshConversation, setAppearance, setName, ask, present,
              attachedItems, page: () => (panel.hidden ? null : current) };
   },
 };

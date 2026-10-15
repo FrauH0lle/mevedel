@@ -597,7 +597,7 @@ code, pre { font-family: var(--font-mono); }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn:focus-visible, .filter button:focus-visible,
 .tool > summary:focus-visible, .request-feedback:focus-visible,
-.composer textarea:focus-visible, .composer-name:focus-visible {
+.composer textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -643,19 +643,7 @@ code, pre { font-family: var(--font-mono); }
   gap: .5rem;
   flex-wrap: wrap;
 }
-.composer-row > .btn, .composer-name { min-height: 2.5rem; }
-.composer-name {
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--ground);
-  color: var(--muted);
-  font: inherit;
-  font-size: .78rem;
-  padding: .3rem .75rem;
-  flex: 1 1 6rem;
-  min-width: 0;
-  max-width: 9.5rem;
-}
+.composer-row > .btn { min-height: 2.5rem; }
 .composer-spacer { flex: 1; }
 
 .disclosure {
@@ -677,7 +665,6 @@ code, pre { font-family: var(--font-mono); }
   .prose { font-size: .9375rem; }
   .btn, .filter button { min-height: 40px; }
   .dock { padding-left: .6rem; padding-right: .6rem; }
-  .composer-name { max-width: 100%; }
 }
 
 .question {
@@ -849,8 +836,6 @@ code, pre { font-family: var(--font-mono); }
   color: var(--on-accent); background: var(--accent); }
 .skip-link:focus { transform: none; }
 .composer-label { color: var(--muted); font-size: .75rem; font-weight: 600; }
-.name-field { display: grid; gap: .2rem; min-width: 0; }
-.name-field label { font-size: .7rem; color: var(--muted); }
 .composer:focus-within { border-color: var(--accent); }
 
 /* On wide screens, session navigation has its own column. The same

@@ -2287,6 +2287,10 @@ async function start(event) {
       setAppearance(data.appearance);
       return;
     }
+    if (data.type === 'name') {
+      if (typeof data.name === 'string' && data.name) participant = data.name;
+      return;
+    }
     if (data.type === 'reply') {
       const r = replies.get(data.reqId);
       if (r) {

@@ -11,7 +11,6 @@
   const composer = document.getElementById('composer');
   const composerInput = document.getElementById('composer-input');
   const queueState = document.getElementById('queue-state');
-  const composerName = document.getElementById('composer-name');
   const stopButton = document.getElementById('stop-button');
   const filterNav = document.getElementById('filter');
   const requests = document.getElementById('requests');
@@ -210,6 +209,16 @@
   const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession,
     onVisibility: () => presence.report(),
     onCatalog: refreshFilter});
+  // The host learns a new name at once; a hello carries the current one.
+  const names = window.mevedelGuestName.create({
+    initials: window.mevedelPresence.initials,
+    onChange: name => {
+      state.guestName = name;
+      send({t: 'set-name', name});
+      editing.setName(name);
+    },
+  });
+  names.ready.then(name => { state.guestName = name; });
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
      summarize: summarizeSession, notice: flashNotice});
@@ -554,7 +563,6 @@
     if (state.plan) add('plan', 'ml plan');
     const tail = el('span', 'ml tail');
     const bits = [];
-    if (state.guestName) bits.push(state.guestName);
     if (state.pending) {
       bits.push(`${state.pending} queued${state.paused ? ' · paused' : ''}`);
     }
@@ -1038,55 +1046,6 @@
 
   /* -- Composer ------------------------------------------------------ */
 
-  function generatedGuestName() {
-    const families = [
-      [['Brave', 'Bright', 'Breezy'], ['Badger', 'Bear', 'Bison']],
-      [['Calm', 'Clever', 'Curious'], ['Capybara', 'Crane', 'Cat']],
-      [['Daring', 'Dapper', 'Dreamy'], ['Dolphin', 'Duck', 'Deer']],
-      [['Eager', 'Earnest', 'Elegant'], ['Eagle', 'Egret', 'Elephant']],
-      [['Fair', 'Friendly', 'Fearless'], ['Fox', 'Finch', 'Falcon']],
-      [['Gentle', 'Graceful', 'Gallant'], ['Gecko', 'Gazelle', 'Gibbon']],
-      [['Happy', 'Helpful', 'Hopeful'], ['Hedgehog', 'Heron', 'Hare']],
-      [['Jolly', 'Jaunty', 'Joyful'], ['Jaguar', 'Jackal', 'Jay']],
-      [['Kind', 'Keen', 'Kingly'], ['Koala', 'Kestrel', 'Kiwi']],
-      [['Lively', 'Lucky', 'Loyal'], ['Lynx', 'Lemur', 'Lark']],
-      [['Merry', 'Mellow', 'Mindful'], ['Mongoose', 'Meerkat', 'Marmot']],
-      [['Patient', 'Playful', 'Plucky'], ['Panda', 'Puffin', 'Penguin']],
-      [['Quiet', 'Quick', 'Quirky'], ['Quokka', 'Quail', 'Quetzal']],
-      [['Ready', 'Radiant', 'Resourceful'], ['Robin', 'Raven', 'Raccoon']],
-      [['Sunny', 'Swift', 'Spirited'], ['Sparrow', 'Seal', 'Squirrel']],
-      [['Warm', 'Wise', 'Witty'], ['Wombat', 'Wolf', 'Wren']],
-    ];
-    const picks = crypto.getRandomValues(new Uint32Array(3));
-    const [adjectives, animals] = families[picks[0] % families.length];
-    return `${adjectives[picks[1] % adjectives.length]} ${animals[picks[2] % animals.length]}`;
-  }
-
-  let defaultGuestName;
-
-  function guestName(commit = false) {
-    if (!defaultGuestName) {
-      let stored;
-      try {
-        stored = localStorage.getItem('mevedel-guest-name');
-        defaultGuestName = localStorage.getItem('mevedel-guest-default-name');
-      } catch (_error) { /* Keep names for this page when storage is unavailable. */ }
-      defaultGuestName ||= generatedGuestName();
-      state.guestName = stored || defaultGuestName;
-      try { localStorage.setItem('mevedel-guest-default-name', defaultGuestName); }
-      catch (_error) { /* The generated fallback remains usable without storage. */ }
-    }
-    const name = commit ? (composerName.value.trim() || defaultGuestName) : state.guestName;
-    if (composerName && (commit || !composerName.value)) composerName.value = name;
-    try { localStorage.setItem('mevedel-guest-name', name); }
-    catch (_error) { /* The display name remains usable without storage. */ }
-    if (state.guestName !== name) {
-      state.guestName = name;
-      renderModeline();
-    }
-    return name;
-  }
-
   // One random id per browser, minted on first use. It lets the host
   // match this guest's own queued entries across reconnects and page
   // reloads; peer numbers cannot, because the relay reassigns them.
@@ -1449,7 +1408,7 @@
       const text = composerInput.value;
       const armed = state.armed;
       const filter = state.filter;
-      const name = guestName(true);
+      const name = names.current();
       try {
         await tray.settled();
         const submittedFiles = tray.items();
@@ -1511,24 +1470,10 @@
     stopButton.addEventListener('click', () => send({t: 'abort'}));
     window.mevedelAttachments.bind(tray, {
       target: composer, input: composerInput, button: attachButton, picker: imageInput});
-    if (composerName) {
-      composerName.value = guestName();
-      const commitName = () => {
-        const previous = state.guestName;
-        const name = guestName(true);
-        if (name !== previous) send({t: 'set-name', name});
-      };
-      composerName.addEventListener('blur', commitName);
-      composerName.addEventListener('keydown', event => {
-        if (event.key === 'Enter' && !event.isComposing) {
-          event.preventDefault();
-          commitName();
-        }
-      });
-    }
   }
 
-  window.mevedelHeader.create({shared: [document.getElementById('appearance-menu')]});
+  window.mevedelHeader.create({shared: [document.getElementById('you-menu'),
+                                         document.getElementById('appearance-menu')]});
   window.mevedelAppearance.bind(value => {
     artifacts.setTheme(value.theme);
     editing.setAppearance(value);
@@ -1576,14 +1521,14 @@
     // The key remains only in this page's memory; remove it from the URL
     // and history before opening the socket.
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
-    importKey(credentials.keyBytes).then(key => {
+    Promise.all([importKey(credentials.keyBytes), names.ready]).then(([key]) => {
       transport = transportApi.create({
         roomId: credentials.roomId,
         key,
         giveUpMs: GIVE_UP_MS,
         joinGraceMs: JOIN_GRACE_MS,
         hello: () => {
-          const hello = {t: 'hello', proto: PROTO, name: guestName(),
+          const hello = {t: 'hello', proto: PROTO, name: names.current(),
                          guestId: guestId(), ...presence.hello()};
           if (credentials.writeToken) {
             hello.writeToken = base64urlEncode(credentials.writeToken);

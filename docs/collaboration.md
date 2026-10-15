@@ -196,16 +196,22 @@ remove button. Removing a selection preserves the message draft.
 At viewport widths of 1100px and above, the navigation occupies an independently
 scrolling right column. At smaller widths and increased browser zoom, it becomes
 a disclosure above the composer. Conversation text and the composer share a
-bounded reading width. Message and display-name fields have visible labels;
+bounded reading width. The message and name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
-The display name initially uses a randomly generated alliterative adjective
-and animal, such as **Curious Capybara**. It is visible and editable in the
-composer and retained in that browser's storage per relay origin; existing
-chosen names are preserved. Enter or leaving the name field saves the change
-and sends a sealed `set-name` frame to update the host's registered guest.
-Clearing the field restores that browser's saved generated name. Enter in the
-name field does not submit a message draft. Names are labels, not identities
-or unique handles.
+
+A guest's own chip leads the header's actions on every page. It opens a form
+for the name others see; the composer's **as …** beside Attach opens the same
+form. A guest is called by the name they chose, kept in that browser's storage
+per relay origin, or else by a random alliterative adjective and animal, such
+as **Curious Capybara**. A random name lasts while any of the browser's tabs
+on the relay is open: a reload keeps the tab's own, kept in its tab storage,
+and a new tab, the editor tab included, asks the open ones for theirs over a
+`BroadcastChannel` and waits up to 150 ms before picking a new one. Once every
+tab is closed, the next visit is someone new. **Use a random name** drops a
+chosen name and gives every open tab the same new random one; saving an empty
+name returns to the random one. Each change sends a sealed `set-name` frame to
+update the host's registered guest, and an open editor labels its laser
+pointer with it. Names are labels, not identities or unique handles.
 The guest's independent browser ID continues to identify its queued work.
 
 ### Who else is here

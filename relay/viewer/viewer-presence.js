@@ -5,6 +5,11 @@
   // PAGE returns the store artifact this tab shows, or null for its room
   // or lobby. Every [data-presence] element shows the same people: a tab
   // is on one page at a time.
+  function initials(name) {
+    return name.split(/\s+/).filter(Boolean).slice(0, 2)
+      .map(word => [...word][0]).join('').toUpperCase() || '?';
+  }
+
   function create({send, el, page}) {
     let reported = null;
 
@@ -25,11 +30,6 @@
     function hello() {
       reported = current();
       return reported;
-    }
-
-    function initials(name) {
-      return name.split(/\s+/).filter(Boolean).slice(0, 2)
-        .map(word => [...word][0]).join('').toUpperCase() || '?';
     }
 
     function show(frame) {
@@ -55,5 +55,5 @@
     return Object.freeze({report, hello, show});
   }
 
-  window.mevedelPresence = Object.freeze({create});
+  window.mevedelPresence = Object.freeze({create, initials});
 })();

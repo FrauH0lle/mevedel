@@ -107,9 +107,22 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .composer-row .quiet:hover { background:var(--surface-2); border-color:var(--line); }
 #send-button { min-width:74px; }
 #stop-button { background:transparent; color:var(--failed); border:1px solid var(--failed); }
-.name-field { display:flex; align-items:center; gap:8px; margin-right:6px; }
-.name-field label { font-size:11px; white-space:nowrap; }
-.composer-name { width:90px; min-height:34px; background:transparent; border-color:transparent; border-bottom-color:var(--line); border-radius:0; padding:4px 6px; }
+/* Who you are: a chip opening the name form, and a reminder in the composer. */
+.composer-identity { min-height:34px; max-width:14rem; padding:4px 8px; border:0; border-radius:4px; background:transparent; color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+.composer-identity:hover { background:var(--surface-2); color:var(--ink); }
+.you-menu { position:relative; flex:none; }
+.you-menu > summary { list-style:none; display:flex; align-items:center; gap:8px; min-height:36px; padding:3px 12px 3px 3px; border:1px solid var(--line); border-radius:18px; font-size:12px; cursor:pointer; }
+.you-menu > summary::-webkit-details-marker { display:none; }
+.you-menu[open] > summary { border-color:var(--accent); }
+.you-initials { display:grid; place-items:center; width:28px; height:28px; border-radius:50%; background:var(--guest-soft); color:var(--guest); font:600 11px/1 var(--font-ui); box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--guest); }
+.you-label { max-width:12rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); }
+.you-body { position:absolute; right:0; top:calc(100% + 10px); z-index:25; width:280px; max-width:calc(100vw - 24px); display:grid; gap:8px; padding:16px; background:var(--surface); border:1px solid var(--rule-strong); border-radius:4px; box-shadow:var(--shadow); }
+.you-body label { font-size:12px; font-weight:600; }
+.you-body input { min-height:38px; padding:6px 10px; border:1px solid var(--rule-strong); border-radius:3px; background:var(--surface); color:var(--ink); font:inherit; font-size:14px; }
+.you-body p { margin:0; font-size:12px; line-height:1.5; color:var(--muted); }
+.you-actions { display:flex; justify-content:space-between; gap:8px; margin-top:4px; }
+.you-actions .btn { min-height:34px; font-size:12px; }
+.you-actions .btn[type=submit] { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
 .modeline { margin:0; font-size:13px; gap:14px; width:100%; }
 .disclosure { padding:0; font-size:10px; }
 #session-box { border:0; border-radius:0; box-shadow:none; background:none; scrollbar-color:var(--rule-strong) transparent; }
@@ -219,7 +232,9 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
   .composer { padding:12px; }
   .composer textarea { font-size:16px; }
   .composer-row { gap:4px; }
-  .name-field { flex-basis:100%; }
+  .composer-identity { display:none; }
+  .you-menu > summary { padding:3px; border-color:transparent; }
+  .you-label { display:none; }
   .composer-row > .btn { font-size:11px; padding:6px 9px; }
   .sheet-form { padding:20px; }
   .modeline { font-size:12px; gap:8px; }

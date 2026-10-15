@@ -4,7 +4,7 @@
   body[data-reading] .dock:not(:focus-within) { padding-top: .9rem; }
   body[data-reading] .dock:not(:focus-within) :is(#session-box, #artifacts,
     #own-queue, .disclosure, .skill-chips, .composer-scope, .attachments,
-    .queue-state, .name-field, .composer-label, #attach-button, #send-button,
+    .queue-state, .composer-identity, .composer-label, #attach-button, #send-button,
     .composer-spacer) {
     display: none;
   }

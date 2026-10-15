@@ -60,7 +60,7 @@ test('the header keeps one line and folds actions into its menu', async t => {
   await page.setViewportSize({width:1280,height:800});await settle(page);
   assert.equal(await head(page).locator('.head-more').isVisible(),false);
   const order=await head(page).locator('.header-actions > *:not(.head-more)').evaluateAll(nodes=>nodes.map(n=>n.id||n.className));
-  assert.deepEqual(order.filter(Boolean),['presence keep','appearance-menu','invite-button','notify-button'],'actions return in order');
+  assert.deepEqual(order.filter(Boolean),['you-menu','presence keep','appearance-menu','invite-button','notify-button'],'actions return in order');
   assert.deepEqual(errors,[]);
 });
 

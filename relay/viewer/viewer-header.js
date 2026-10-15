@@ -100,17 +100,21 @@
       observer?.takeRecords();
     }
 
-    // Room-wide controls follow the head on screen, after its kept items.
+    // Room-wide controls follow the head on screen: kept ones lead its
+    // actions, others come first among those that fold.
     function place() {
       const head = active();
       const entry = heads.get(head);
       if (!entry) return;
+      const kept = shared.filter(node => node?.classList.contains('keep'));
       for (const node of shared) {
         if (!node || entry.actions.contains(node) || entry.body.contains(node)) continue;
         if (node.open) node.open = false;
         node.dataset.order = '-1';
-        const first = [...entry.actions.children].find(movable) || entry.more;
-        entry.actions.insertBefore(node, first);
+        const anchor = kept.includes(node)
+          ? [...entry.actions.children].find(child => !kept.includes(child))
+          : [...entry.actions.children].find(movable) || entry.more;
+        entry.actions.insertBefore(node, anchor);
       }
       for (const other of heads.keys()) fit(other);
     }

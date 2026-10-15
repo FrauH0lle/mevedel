@@ -59,35 +59,71 @@ test('room appearance, navigation and decisions preserve work', async t => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(`${url}/room#designroom000001.${Buffer.alloc(64).toString('base64url')}`);
   await page.locator('#editing-status').getByText('Shared editing is ready.',{exact:true}).waitFor();
-  const generatedName = await page.locator('#composer-name').inputValue();
+  const label=page.locator('#you-label');
+  const generatedName = await label.innerText();
   assert.match(generatedName,/^[A-Z][a-z]+ [A-Z][a-z]+$/);
   assert.equal(generatedName[0],generatedName.split(' ')[1][0]);
+  assert.equal(await page.locator('#composer-identity').innerText(),`as ${generatedName}`);
+  // A reload keeps the tab's random name; the browser does not remember it.
   await page.reload();
   await page.locator('#editing-status').getByText('Shared editing is ready.',{exact:true}).waitFor();
-  assert.equal(await page.locator('#composer-name').inputValue(),generatedName);
-  await page.evaluate(()=>localStorage.setItem('mevedel-guest-name','Roland'));
-  await page.reload();
-  await page.locator('#editing-status').getByText('Shared editing is ready.',{exact:true}).waitFor();
-  assert.equal(await page.locator('#composer-name').inputValue(),'Roland','chosen names are preserved');
+  assert.equal(await label.innerText(),generatedName);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('mevedel-chosen-name')),null);
+  // Another tab takes the name from the open one.
+  const second=await context.newPage();
+  await second.goto(`${url}/room#designroom000001.${Buffer.alloc(64).toString('base64url')}`);
+  await second.locator('#you-label').getByText(generatedName,{exact:true}).waitFor();
+  // A browser with none of its tabs open is someone new.
+  const elsewhere=await browser.newContext();
+  await elsewhere.route('**/transport.js',route=>route.fulfill({contentType:'text/javascript',body:'window.mevedelViewerTransport={parseFragment(){return null;}};'}));
+  await elsewhere.addInitScript(first=>{
+    // Pick the family after the open tab's, so the names cannot match.
+    const family='BCDEFGHJKLMPQRSW'.indexOf(first);
+    crypto.getRandomValues=array=>{array[0]=family+1;array[1]=0;array[2]=0;return array;};
+  },generatedName[0]);
+  const stranger=await elsewhere.newPage();
+  await stranger.goto(`${url}/room`);
+  await stranger.locator('#you-label').waitFor({state:'attached'});
+  await stranger.waitForFunction(name=>document.getElementById('you-label').textContent&&document.getElementById('you-label').textContent!==name,generatedName);
+  await elsewhere.close();
+
+  // A chosen name is kept by the browser, reaches the host at once and
+  // follows into every open tab; clearing it returns to the random one.
   await page.locator('#composer-input').fill('Keep this unsent draft');
-  const nameInput=page.locator('#composer-name');
-  await nameInput.fill('  Roland55  ');
-  await page.locator('#composer-input').focus();
-  assert.equal(await nameInput.inputValue(),'Roland55');
-  assert.deepEqual(await page.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:'Roland55'});
-  assert.match(await page.locator('#modeline').innerText(),/Roland55/);
-  await nameInput.fill('New Name');
-  await nameInput.press('Enter');
-  assert.deepEqual(await page.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:'New Name'});
-  assert.equal(await page.locator('#composer-input').inputValue(),'Keep this unsent draft');
-  await nameInput.fill('   ');
-  await page.locator('#composer-input').focus();
+  await page.locator('#you-menu > summary').click();
+  const nameInput=page.locator('#you-name');
+  // Opening the menu puts the current name in the focused field.
+  await page.waitForFunction(()=>document.activeElement?.id==='you-name');
   assert.equal(await nameInput.inputValue(),generatedName);
+  await nameInput.fill('  Roland55  ');
+  await nameInput.press('Enter');
+  assert.deepEqual(await page.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:'Roland55'});
+  assert.equal(await label.innerText(),'Roland55');
+  assert.equal(await page.locator('#you-menu').getAttribute('open'),null);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('mevedel-chosen-name')),'Roland55');
+  await second.locator('#you-label').getByText('Roland55',{exact:true}).waitFor();
+  assert.deepEqual(await second.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:'Roland55'});
+  assert.equal(await page.locator('#composer-input').inputValue(),'Keep this unsent draft');
+  await page.locator('#composer-identity').click();
+  await page.waitForFunction(()=>document.activeElement?.id==='you-name');
+  await nameInput.fill('   ');
+  await page.getByRole('button',{name:'Save',exact:true}).click();
   assert.deepEqual(await page.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:generatedName});
-  assert.equal(await page.evaluate(()=>localStorage.getItem('mevedel-guest-name')),generatedName);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('mevedel-chosen-name')),null);
+  // A new random name of one's own reaches the other open tabs too.
+  await page.locator('#you-menu > summary').click();
+  await page.waitForFunction(()=>document.activeElement?.id==='you-name');
+  await page.getByRole('button',{name:'Use a random name',exact:true}).click();
+  const fresh=await nameInput.inputValue();
+  assert.notEqual(fresh,generatedName);
+  assert.deepEqual(await page.evaluate(()=>window.sentTest.at(-1)),{t:'set-name',name:fresh});
+  await second.locator('#you-label').getByText(fresh,{exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#you-menu').getAttribute('open'),null);
+  await second.close();
   await page.reload();
   await page.locator('#editing-status').getByText('Shared editing is ready.',{exact:true}).waitFor();
-  assert.equal(await nameInput.inputValue(),generatedName);
+  assert.equal(await label.innerText(),fresh);
   await page.locator('#composer-input').fill('Keep this unsent draft');
   await page.locator('#skills-button').click();await page.locator('#skill-search').fill('review');
   assert.equal(await page.locator('.skill-chip:visible').count(),1);
