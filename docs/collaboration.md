@@ -361,6 +361,12 @@ attempt that may already have reached the transcript stays queued for review
 instead, and its sender is told so. None of these refusals blocks the host's own
 requests.
 
+A refusal that leaves a blocking recovery issue, such as an expired Codex
+login, holds the message in the queue instead. Its sender sees the issue's
+public reason ("Provider sign-in is required") and that the message will be
+sent once it is resolved; an owner signs in from Settings, and the queue
+resumes when readiness clears the issue.
+
 Owners can choose a replacement provider or preset, complete provider login,
 recover a root or child native history, or explicitly retry retained input.
 Undelivered steering or an interrupted queued delivery pauses delivery and must

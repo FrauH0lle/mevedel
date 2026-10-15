@@ -1085,6 +1085,49 @@
       ;; A refusal blocks nothing the host does.
       (should-not (mevedel-recovery-blocker session))))
 
+  :doc "holds a guest entry behind the blocking issue its refusal reported"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "refuse"))
+           (attachment (make-temp-file "mevedel-guest-attachment-"))
+           notified warned)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session))
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up (list :input "Hello" :guest-name "Happy Hare" :guest-id "g1"
+                                     :guest-paths (list attachment)))
+            (cl-letf (((symbol-function
+                        'mevedel-session-artifacts-assert-new-mutation-authority)
+                       (lambda (&rest _) nil))
+                      ;; Readiness reports the expired login, then refuses.
+                      ((symbol-function 'mevedel-view--dispatch-follow-up-entry)
+                       (lambda (&rest _)
+                         (mevedel-recovery-report session "authentication" 'authentication
+                                                  "Codex login needs renewal" t)
+                         (user-error "Codex login needs renewal; sign in or retry after refresh")))
+                      ((symbol-function 'mevedel-recovery-save) #'ignore)
+                      ((symbol-function 'mevedel-recovery-save-now) #'ignore)
+                      ((symbol-function 'mevedel-collaboration-notify-guest)
+                       (lambda (_session guest-id message)
+                         (setq notified (list guest-id message))))
+                      ((symbol-function 'display-warning)
+                       (lambda (_type message &rest _) (setq warned message))))
+              (mevedel-view--drain-follow-up data-buf))
+            (should (equal '("Hello") (mapcar (lambda (entry) (plist-get entry :input))
+                                              (mevedel-session-pending-follow-ups session))))
+            (should-not (plist-get (car (mevedel-session-pending-follow-ups session)) :state))
+            (should (file-exists-p attachment))
+            (should (equal "g1" (car notified)))
+            (should (string-search "Provider sign-in is required" (cadr notified)))
+            (should (string-search "will be sent" (cadr notified)))
+            (should (string-search "was held: Codex login needs renewal" warned))
+            ;; The queue waits for the issue instead of retrying.
+            (should (mevedel-view--follow-up-auto-drain-blocked-p session)))
+        (when (file-exists-p attachment) (delete-file attachment)))))
+
   :doc "keeps an attempt that may have reached the transcript for review"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "refuse"))

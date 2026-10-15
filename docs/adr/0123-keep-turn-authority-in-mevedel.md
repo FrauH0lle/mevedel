@@ -219,7 +219,11 @@ interval, and a session without a committed sidecar keeps its queue only in
 memory; the intent write then has nothing to update. On restart, interrupted delivery and uncertain native
 turns require explicit review before continuation. A failed turn pauses delivery
 only for input it left undelivered or uncertain. Refused guest input is dropped
-with a notice rather than held. OAuth readiness also runs at each gptel sampling boundary,
+with a notice rather than held, unless the refusal left a blocking issue whose
+owner re-checks it, such as an expired Codex login: then it waits in the queue
+and its sender learns the issue's public reason. Dropping it there told a
+browser owner only that the host "could not run" the message, though the
+owner could sign in from the browser and the queue would resume itself. OAuth readiness also runs at each gptel sampling boundary,
 so expiry during a tool loop settles the turn without synchronous login.
 
 CLI/adapter maintenance runs asynchronously behind an installation lock,

@@ -921,16 +921,19 @@ removed only when the resulting prompt reaches its transcript commit boundary."
       "")))
 
 (defun mevedel-view--refuse-guest-follow-up (entry session &optional err)
-  "Drop guest ENTRY of SESSION, whose turn could not run.
+  "Drop or hold guest ENTRY of SESSION, whose turn could not run.
 ERR is the `inhibited-interaction' signal, which may carry the question, or
 the error that refused the turn.  Its attachment files leave with it, as on
 a retraction; the host is warned and the guest told, rather than the queue
 retrying it forever.  An attempt that may have been delivered is kept for
-review instead.  Prompts and errors can name hosts and paths, so only the
-host sees the question or the error."
-  (let ((inhibited (or (null err) (eq 'inhibited-interaction (car err))))
-        (review (eq 'failed-turn (plist-get entry :state))))
-    (unless review
+review instead.  A refusal that left a blocking recovery issue, such as an
+expired provider login, keeps the entry queued: the queue waits for the
+issue, and the guest learns its public reason.  Prompts and errors can name
+hosts and paths, so only the host sees the question or the error."
+  (let* ((inhibited (or (null err) (eq 'inhibited-interaction (car err))))
+         (review (eq 'failed-turn (plist-get entry :state)))
+         (blocker (and (not (or inhibited review)) (mevedel-recovery-blocker session))))
+    (unless (or review blocker)
       (mevedel-pending-inputs--set-queues
        session 'follow-up (remq entry (mevedel-view--pending-follow-ups session)))
       (dolist (path (plist-get entry :guest-paths))
@@ -941,7 +944,9 @@ host sees the question or the error."
      'mevedel
      (format "A message from %s was %s: %s"
              (or (plist-get entry :guest-name) "a guest")
-             (if review "interrupted and needs review" "not sent")
+             (cond (review "interrupted and needs review")
+                   (blocker "held")
+                   (t "not sent"))
              (if inhibited
                  (concat "its turn needed a decision in Emacs"
                          (mevedel-view--refused-question err))
@@ -951,6 +956,8 @@ host sees the question or the error."
        session (plist-get entry :guest-id)
        (cond
         (review "Your message was interrupted; the owner can review it")
+        (blocker (concat (mevedel-recovery-public-message blocker)
+                         "; your message will be sent once that is resolved"))
         (inhibited (concat mevedel-collaboration-needs-host-message
                            "; your message was not sent"))
         (t "The host could not run your message; it was not sent"))))))
