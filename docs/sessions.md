@@ -2310,8 +2310,9 @@ nor the exit retention pass drains it synchronously.
 
 ## System sleep
 
-While this Emacs has work that sleep would interrupt, `mevedel-sleep.el`
-holds one operating-system sleep inhibitor. The work that counts is:
+When `mevedel-sleep-inhibit` is enabled (it is off by default),
+`mevedel-sleep.el` holds one operating-system sleep inhibitor while this
+Emacs has work that sleep would interrupt. The work that counts is:
 
 - a root or agent turn that is running or settling (`mevedel-busy-p`),
   including one waiting on a permission prompt (indefinitely, unless
@@ -2343,9 +2344,11 @@ exits or is killed. If the inhibitor cannot start or exits unexpectedly, for
 example when polkit refuses it, mevedel warns once. It retries only after all
 reasons have cleared and work begins again. Remote execution targets are not
 inhibited: the local turn already keeps this machine awake, and the default
-polkit policy does not let an SSH session block sleep. Set
-`mevedel-sleep-inhibit-command` to nil to disable inhibition, or to another
-command on platforms without systemd.
+polkit policy does not let an SSH session block sleep. Toggling
+`mevedel-sleep-inhibit` through Customize applies at once: disabling it
+releases a held inhibitor, and enabling it evaluates the current work. A plain
+`setq` takes effect at the next evaluation. On platforms without systemd, set
+`mevedel-sleep-inhibit-command` to another command.
 
 ## Defcustoms
 
@@ -2368,6 +2371,6 @@ Defined in `mevedel-session-persistence.el` unless another module is named:
   `mevedel-session-durability.el`, default 3600)
 - `mevedel-view-input-history-size` (in `mevedel-view-history.el`,
   default 500)
+- `mevedel-sleep-inhibit` (in `mevedel-sleep.el`, default nil)
 - `mevedel-sleep-inhibit-command` (in `mevedel-sleep.el`, default
-  `systemd-inhibit --what=sleep --who=mevedel --why=%s --mode=block cat` on
-  GNU/Linux, nil elsewhere)
+  `systemd-inhibit --what=sleep --who=mevedel --why=%s --mode=block cat`)

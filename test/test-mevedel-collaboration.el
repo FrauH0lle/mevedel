@@ -22,6 +22,7 @@
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-lobby)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-artifact-store)

@@ -33,16 +33,34 @@
 ;;
 ;;; Customization
 
+(defun mevedel-sleep--set-inhibit (symbol value)
+  "Set SYMBOL to VALUE and apply it to the current work at once."
+  (set-default symbol value)
+  (if value
+      (mevedel-sleep-update)
+    (mevedel-sleep-stop)))
+
+(defcustom mevedel-sleep-inhibit nil
+  "Non-nil means block system sleep while mevedel has work in progress.
+The work that counts is a running or settling turn, a live managed command,
+and an open collaboration share within its idle allowance.  Only sleep is
+blocked, not screen blanking or locking.  The block is held by
+`mevedel-sleep-inhibit-command'.  Setting this through Customize applies at
+once; a plain `setq' takes effect at the next evaluation."
+  :type 'boolean
+  :initialize #'custom-initialize-default
+  :set #'mevedel-sleep--set-inhibit
+  :group 'mevedel)
+
 (defcustom mevedel-sleep-inhibit-command
-  (when (eq system-type 'gnu/linux)
-    '("systemd-inhibit" "--what=sleep" "--who=mevedel" "--why=%s"
-      "--mode=block" "cat"))
+  '("systemd-inhibit" "--what=sleep" "--who=mevedel" "--why=%s"
+    "--mode=block" "cat")
   "Command that blocks system sleep for as long as it runs.
+Used while `mevedel-sleep-inhibit' is non-nil.  The default uses systemd.
 Each \"%s\" in an argument is replaced by the reasons sleep is blocked.  The
 command must exit when its standard input reaches end of file, so that it
-cannot outlive Emacs.  nil disables sleep inhibition."
-  :type '(choice (const :tag "Disabled" nil)
-                 (repeat :tag "Command and arguments" string))
+cannot outlive Emacs."
+  :type '(repeat :tag "Command and arguments" string)
   :group 'mevedel)
 
 
@@ -147,7 +165,7 @@ A replacement is acquired before the old inhibitor is released."
 (defun mevedel-sleep--reconcile ()
   "Match the inhibitor to the current reasons and schedule the next check."
   (setq mevedel-sleep--timer nil)
-  (let ((reasons (and mevedel-sleep-inhibit-command
+  (let ((reasons (and mevedel-sleep-inhibit
                       (mevedel-sleep--reasons))))
     (unless reasons
       (setq mevedel-sleep--failed nil))
@@ -165,7 +183,7 @@ Call this when work begins.  While an inhibitor is already held, the poll
 picks up new work, so this does nothing.  Repeated calls coalesce into one
 evaluation.  Arguments are ignored, so this can serve directly as a hook
 function."
-  (when (and mevedel-sleep-inhibit-command
+  (when (and mevedel-sleep-inhibit
              (not mevedel-sleep--process))
     (when (timerp mevedel-sleep--timer)
       (cancel-timer mevedel-sleep--timer))

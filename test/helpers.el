@@ -37,8 +37,8 @@
 (setq mevedel-memory-pass--inhibit-scheduling t)
 ;; Tests must never take real system sleep locks; cases that exercise the
 ;; inhibitor bind a stand-in command.
-(defvar mevedel-sleep-inhibit-command)
-(setq mevedel-sleep-inhibit-command nil)
+(defvar mevedel-sleep-inhibit)
+(setq mevedel-sleep-inhibit nil)
 
 ;; Tests that stub Markdown fontification on may enter `markdown-ts-mode'
 ;; without its grammars.  Emacs 31 then offers to install them with a

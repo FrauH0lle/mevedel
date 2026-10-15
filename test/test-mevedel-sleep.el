@@ -18,13 +18,15 @@
           "helpers"))
 
 (defmacro test-mevedel-sleep--with-state (&rest body)
-  "Run BODY with private inhibitor state, releasing everything afterwards."
+  "Run BODY with inhibition enabled and private inhibitor state.
+Everything is released afterwards."
   (declare (indent 0) (debug (body)))
   `(let ((mevedel-sleep--timer nil)
          (mevedel-sleep--process nil)
          (mevedel-sleep--held-reasons nil)
          (mevedel-sleep--failed nil)
          (mevedel--warn-once-table (make-hash-table :test #'equal))
+         (mevedel-sleep-inhibit t)
          (mevedel-sleep-inhibit-command mevedel-sleep-inhibit-command))
      (unwind-protect (progn ,@body)
        (mevedel-sleep-stop))))
@@ -144,7 +146,7 @@ Registry corrupt"
       (mevedel-sleep--reconcile)
       (let ((held mevedel-sleep--process))
         (should (process-live-p held))
-        (setq mevedel-sleep-inhibit-command nil)
+        (setq mevedel-sleep-inhibit nil)
         (mevedel-sleep--reconcile)
         (should-not mevedel-sleep--process)
         (should-not mevedel-sleep--timer)
@@ -195,7 +197,7 @@ Registry corrupt"
   (test)
   :doc "does nothing while inhibition is disabled"
   (test-mevedel-sleep--with-state
-    (setq mevedel-sleep-inhibit-command nil)
+    (setq mevedel-sleep-inhibit nil)
     (mevedel-sleep-update 'session 'buffer)
     (should-not mevedel-sleep--timer))
 
@@ -235,6 +237,29 @@ Registry corrupt"
         (should-not mevedel-sleep--process)
         (should-not mevedel-sleep--timer)
         (should-not (memq timer timer-list))
+        (should-not (process-live-p held))))))
+
+(mevedel-deftest mevedel-sleep--set-inhibit ()
+  ,test
+  (test)
+  :doc "Customize applies the switch to the current work at once"
+  (test-mevedel-sleep--with-state
+    (cl-letf (((symbol-function 'mevedel-sleep--reasons)
+               (lambda () '("request running"))))
+      (setq mevedel-sleep-inhibit nil
+            mevedel-sleep-inhibit-command '("cat"))
+      (funcall (get 'mevedel-sleep-inhibit 'custom-set)
+               'mevedel-sleep-inhibit t)
+      (should mevedel-sleep-inhibit)
+      (should (timerp mevedel-sleep--timer))
+      (mevedel-sleep--reconcile)
+      (let ((held mevedel-sleep--process))
+        (should (process-live-p held))
+        (funcall (get 'mevedel-sleep-inhibit 'custom-set)
+                 'mevedel-sleep-inhibit nil)
+        (should-not mevedel-sleep-inhibit)
+        (should-not mevedel-sleep--process)
+        (should-not mevedel-sleep--timer)
         (should-not (process-live-p held))))))
 
 (provide 'test-mevedel-sleep)

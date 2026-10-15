@@ -50,8 +50,8 @@ guests request keep-awake again. The cutoff does not stop sharing or invalidate
 links, but a sleeping host cannot serve guests until it wakes and reconnects.
 Active mevedel requests independently prevent sleep, even after this cutoff.
 `/collab status` reports the keep-awake request and its idle expiry, not proof
-that the OS inhibitor succeeded. `mevedel-sleep-inhibit-command` must be enabled
-and available for these requests to inhibit sleep.
+that the OS inhibitor succeeded. These requests inhibit sleep only while
+`mevedel-sleep-inhibit` is enabled and its command is available.
 
 The relay (the Go binary in `relay/`, which also serves the static viewer)
 is content-blind: every frame is sealed with AES-256-GCM under a room key
