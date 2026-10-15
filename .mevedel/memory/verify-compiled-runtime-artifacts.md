@@ -1,22 +1,40 @@
 ---
-name: "Verify against the compiled library the runtime loads"
-description: "Repository edits do not reach the running Emacs until Straight's compiled build artifacts are rebuilt; live availability is not cold-start correctness"
-type: project
+name: "Verify the loaded runtime and dependency provenance"
+description: "Repository tests, installed artifacts, native units, and live event sequences establish different things"
+type: feedback
 ---
 
-# Verify against the compiled library the runtime loads
+# Verify the loaded runtime and dependency provenance
 
-In this environment the running Emacs loads `~/.emacs.d/straight/build/mevedel/mevedel-*.elc`. The build tree's `.el` files are symlinks back to the repository, but each `.elc` is a separate compiled copy with its own mtime.
+## Repository source is not necessarily running code
 
-With `load-prefer-newer` nil, the older `.elc` keeps winning after repository edits. Observed 2026-09-15: repository mtime 08:07:32 against build `.elc` mtime 07:14:46, and a live Eval still ran the previous behavior.
+Captured environment observation, 2026-09-15: Emacs loaded separate compiled copies under `~/.emacs.d/straight/build/mevedel/`, while the build tree's `.el` files linked back to repository source. With `load-prefer-newer` nil, an older `.elc` still won after source edits.
 
-- Hot-loading with `(load ".../mevedel-X.el" nil t t)` can confirm an edited source quickly, but it does not recompile the build tree and does not survive a restart. Treat hot-loaded results as provisional and re-check after rebuilding.
-- Do not judge presence or absence of a change from a literal text search or `symbol-file` alone. Macroexpansion (for example from `setq-local`) can hide the token you are looking for while the behavior is present; verify behavior, not spelling.
-- Live availability is not cold-start correctness. `featurep`/`fboundp` true in an inspecting session only show what the loaded build artifact already provides. Observed 2026-09-16: `void-function (mevedel-view--resume-attended-views)` came from the install path registering a focus callback without loading the module that owns it, so a focus change before the first chat view opened called an undefined function — while the inspecting session already had both `featurep` and `fboundp` true from Straight's compiled files. Existing coverage masked this because it required `mevedel-view` and stubbed the callback, so a fresh `emacs --batch -Q` regression was needed to reproduce the exact error before the fix. When verifying a load-order, registration, or startup change, use a fresh process rather than a session that already loaded the owning module.
-- The same build-tree resolution affects modules that derive a package root from the loaded file. `Read mevedel://tools/execution.md` failed with `Resource address escapes its owning root` (observed 2026-09-14, investigated further 2026-09-16): `mevedel-resource--source-dir` had selected the Straight build directory, the Markdown files reported there were symlinks into the checkout, and `mevedel-resource-within-root-p` returned nil because the containment guard rejects symlink components. Model inference from inspected code (`mevedel-resource.el:147,789,972,1510`): the defect is package-root selection, not invalid resource addresses.
-  - Cheap confirmation of that diagnosis: temporarily bind the loaded resource root to the canonical directory of the sibling `.el` source. Observed 2026-09-16, both `mevedel://memory.md` and `mevedel://tools/execution.md` then read successfully through `mevedel-resource-prepare`/`mevedel-resource-execute`, and discovery found 124 Markdown files against 0 before the rebinding, with `:global-root-unchanged t`. No fix was implemented; the request to fix it and audit similar instances stayed planning-only in the captured evidence.
-  - Two other package-root initializers already resolve the sibling `.el` when loading `.elc` (`mevedel-system.el:83`, `mevedel-tool-registry.el:49`, `mevedel-skills-core.el:122`), so system/tool prompts and bundled skills avoid this particular root-selection defect while resource roots did not.
-  - `mevedel-resource--source-dir` is a `defvar`, so reloading edited source alone does not reset its existing value; a stale value can keep the guard and discovery pointed at the wrong root.
-  - Model inference, not runtime-tested (`mevedel-telemetry.el:675–690`): `mevedel-telemetry--library-snapshot` uses `locate-library`, which identifies what would load now rather than necessarily the loaded artifact, and infers provenance by searching for `.git` from that path — a compiled build layout can lose source-checkout provenance.
+When verifying a live change:
+- Establish which artifact is actually loaded and test its behavior.
+- Hot-loading edited source is provisional: it does not rebuild the installed artifact or survive a restart.
+- Literal text searches and `symbol-file` alone do not establish behavior; macroexpansion can obscure source spellings.
 
-The related stale-`.elc` trap for the Eask test command is covered by the existing `eask clean before tests` topic; this topic covers live, loaded-code verification.
+## Live availability is not cold-start correctness
+
+Observed 2026-09-16: a startup callback could be undefined before its owning module loaded, although an already-used inspecting session reported both `featurep` and `fboundp` true. Preloaded test fixtures hid the gap.
+
+For loading, registration, and initialization changes, use a fresh process and exercise first use without preloading the owner. A later agent-spawn failure on 2026-10-14 provided another example: a declaration did not load the referenced handler, and a cold-load regression exposed the missing load boundary.
+
+## Verify dependency provenance as well as controller provenance
+
+Observed 2026-10-13: installed `gptel-request` and `gptel-openai-responses` sources differed from the upstream checkout used for review; `gptel-openai-oauth` matched. Explicit installed-controller checks with frozen dependencies whose source hashes matched the live installation passed 75/75 checks.
+
+Reusable inference: in this locally patched environment, repository/Eask checks alone do not establish installed-runtime compatibility. Compare dependency source provenance and explicitly assert loaded controller and dependency paths when making that claim. A partner reported on 2026-10-14 that the installed source resolved to the user's fork at `/home/roland/gptel`; re-establish provenance for each investigation rather than assuming that path remains current.
+
+## Native-function printing is not a cross-process identity check
+
+Correction recorded 2026-10-14: printed native-compiled function objects contain process-specific identity. Hashing `(prin1-to-string (symbol-function ...))` is therefore not a valid cross-process identity comparison; a mismatch alone does not demonstrate different loaded behavior.
+
+In that investigation, explicitly loading the live editor's native artifacts and checking `native-comp-function-p` and `subr-native-comp-unit` supported native-unit provenance. It did not establish equivalence with the user's live event sequence.
+
+## Package-root and provenance checks need loaded-layout awareness
+
+Earlier investigation, 2026-09-14–16, found that deriving a resource root from the compiled build directory could conflict with containment checks when resources were symlinked into the checkout. The reusable lesson is to distinguish wrong root selection from an invalid resource address rather than weakening a valid containment boundary.
+
+Reloading source also need not reset an existing `defvar`. Separately, `locate-library` identifies what would load now, not necessarily the artifact already loaded; this was an inspected-code inference, not a runtime-tested provenance guarantee.

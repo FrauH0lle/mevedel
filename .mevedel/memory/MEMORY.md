@@ -2,7 +2,7 @@
 - [Debugging process feedback](debugging-process-feedback.md) - Bisect recurring test/log emitters before implementation changes
 - [View composer preservation feedback](view-composer-preservation-feedback.md) - test active drafts during async view/status redraws
 - [Forward declaration formatting feedback](forward-declaration-formatting-feedback.md) - sort declarations before defvars within source groups
-- [Verify against the compiled library the runtime loads](verify-compiled-runtime-artifacts.md) - Repository edits do not reach the running Emacs until Straight's compiled build artifacts are rebuilt; live availability is not cold-start correctness
+- [Verify the loaded runtime and dependency provenance](verify-compiled-runtime-artifacts.md) - Repository tests, installed artifacts, native units, and live event sequences establish different things
 - [Remote hook readiness and stdin timing](remote-hook-readiness-verification.md) - A stalled remote hook command is reproduced by imposing the suspected interleaving, not by raising its timeout; green replays diagnose nothing
 - [Working notes are temporary; extract durable knowledge automatically](working-note-destinations-feedback.md) - Use temporary machine-local shared notes, preserve skill workflows, and make selected automatic extraction genuinely automatic.
 - [Replay performance stalls from a restored copy of the real session](replay-real-session-for-performance.md) - Detached test buffers skip agent transcripts, archives and publications; restore a session copy at the stalled state
@@ -19,10 +19,18 @@
 - [Keep live-state inspection probes bounded and non-perturbing](bounded-live-inspection-probes.md) - Return scalars or booleans from live Emacs probes; large object dumps and profiling workload distort what you are measuring
 - [Verify consumer-visible state, not intermediate signals](rendered-state-verification-feedback.md) - Assert rendered/consumed state, not internal flags, audit rows, or same-segment tests
 - [Judge inline image previews by displayed size](inline-image-size-feedback.md) - Compact previews are a visual requirement, not a preference for pixel or fractional settings
-- [Artifact comments retain chat context; Git tracking stays user-controlled](artifact-collaboration-user-preferences.md) - Use the viewing chat's context for attached-artifact comments, and leave artifact-store Git tracking to the user or project
+- [Artifact context, visible titles, and user-controlled Git tracking](artifact-collaboration-user-preferences.md) - Use the viewing chat's context for artifact comments, display titles rather than hashes, and leave Git tracking user-controlled
 - [Do not attribute guessed values to a reference system](reference-system-values-feedback.md) - Check authoritative documentation before presenting a proposed limit as inherited from another product
 - [Reduce permission prompts' visual weight](permission-prompt-visual-weight.md) - User finds sandbox and permission prompts imposing and prefers collapsing parts of them
 - [View changes must preserve rendering and CPU gains](view-render-performance-constraint.md) - Rendering cost and CPU use are hard constraints; measure graphical-only effects in a graphical environment
 - [Prove injected failures and stubs exercise the intended path](injected-failure-test-evidence.md) - Check injection entry, exact diagnostics, isolated-file behavior, and a discriminating negative control
 - [Preserve controls and conditions when attributing test outcomes](controlled-test-attribution.md) - Green repetitions, whole-prompt matches, and capability skips do not by themselves establish cause or coverage
 - [Trace unreadable addresses back to discovery](resource-discovery-consumption-verification.md) - Check discovery-to-consumption at root and descendant scopes without weakening valid access refusals
+- [Correctness and simplicity without losing features or performance](development-priorities-user-preference.md) - Prioritize correctness and maintainability, avoid overengineering, and confirm feature removal with the user
+- [Keep named-agent guidance uniform](uniform-agent-role-guidance-feedback.md) - Make general-purpose delegation discoverable without singling out verifier for special contrasting guidance
+- [Show recurring advisories only once](one-time-recurring-advisories.md) - Repeated informational warnings become tedious; avoid repeatedly showing the same advisory
+- [Review observational Eval by its visible effects](observational-eval-review-feedback.md) - Unconfined execution alone is not a reason to defer task-relevant observational Eval; preserve safety boundaries and bounded explanations
+- [Agent model attribution and read-only inspection](agent-inspection-presentation-preferences.md) - Show accurate model/effort metadata and preserve the parent workspace during agent inspection
+- [Dim collapsed thinking blocks](collapsed-thinking-visual-preference.md) - Use subdued font highlighting for collapsed thinking blocks
+- [Protect long-running work without treating silence as refusal](sleep-and-long-running-work-preferences.md) - Sleep blocking protects work and remote reachability; permission absence timeouts are opt-in, not implicit refusals
+- [Separate feature enablement from its command setting](separate-feature-toggle-from-command.md) - Use separate defcustoms for enabling a command-backed feature and configuring its command, with enablement off by default

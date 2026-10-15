@@ -1,6 +1,6 @@
 ---
-name: "Artifact comments retain chat context; Git tracking stays user-controlled"
-description: "Use the viewing chat's context for attached-artifact comments, and leave artifact-store Git tracking to the user or project"
+name: "Artifact context, visible titles, and user-controlled Git tracking"
+description: "Use the viewing chat's context for artifact comments, display titles rather than hashes, and leave Git tracking user-controlled"
 type: user
 ---
 
@@ -11,4 +11,8 @@ User feedback recorded 2026-10-09:
 - When an artifact is attached to a chat and the user comments while viewing it there, use **that chat's context**. Routing every comment to the artifact's dedicated session would lose the context the user explicitly attached.
 - Whether `.mevedel/artifacts/` is committed to Git belongs to **the user or project**, not to mevedel.
 
-Apply these constraints when designing artifact comment routing and storage policy. Keeping leases outside the artifact store was the assistant's implementation inference, not an explicitly confirmed user preference.
+User statement recorded 2026-10-14:
+
+- Prefer artifact titles, not hashes, as visible labels in the artifact list: “can we have the artifact titles and not their hashes?”
+
+Apply these constraints when designing artifact comment routing, list presentation, and storage policy. Keeping leases outside the artifact store was the assistant's implementation inference, not an explicitly confirmed user preference.
