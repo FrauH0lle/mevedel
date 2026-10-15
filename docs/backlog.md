@@ -10,6 +10,8 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
+- - I couldn't use the Eask runner. This session is in `edits` mode, so `npx` has no network, and three requests for network access were refused with "Execution authority changed during preparation", before anything ran. That looks like a harness problem.
+
 - Investigate Firefox shared-editor test failures for synthetic image paste
   and touch presence; both reproduce with the previous save behavior.
   Sync and retry checks pass. Evidence: `.scratch/whiteboard-sync-latency/`.
