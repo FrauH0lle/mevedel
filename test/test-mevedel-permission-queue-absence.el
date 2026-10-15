@@ -78,6 +78,22 @@
       (mevedel-permission-queue-abort-all session)))
 
   :doc "the first card arms one shared deadline that siblings do not extend"
+
+  :doc "the deadline is armed through the TRAMP-safe timer"
+  (test-pqa--with-timeout 3600
+    (let ((session (test-pqa--session)) armed)
+      (cl-letf (((symbol-function 'mevedel-transport-run-at-time)
+                 (lambda (seconds function &rest args)
+                   (push (list seconds function args) armed)
+                   (timer-create))))
+        (test-pqa--enqueue session))
+      (should (equal (list (list 3600 #'mevedel-permission-queue--expire
+                                 (list session
+                                       (mevedel-session-permission-absence session))))
+                     armed))
+      (mevedel-permission-queue-abort-all session)))
+
+  :doc "the first card arms one shared deadline that siblings do not extend"
   (test-pqa--with-timeout 3600
     (let ((session (test-pqa--session)))
       (test-pqa--enqueue session)
@@ -262,8 +278,17 @@
             (should (mevedel-permission-absence-deadline armed))
             (with-current-buffer first (setq-local mevedel--session held))
             (with-current-buffer second (setq-local mevedel--session armed))
-            (mevedel-permission-queue--set-timeout
-             'mevedel-permission-queue-timeout nil)
+            (let (rebuilt)
+              ;; Both cards redraw: the armed one must drop its stale deadline.
+              (cl-letf (((symbol-function 'mevedel-permission-queue--rebuild-view)
+                         (lambda (session) (push session rebuilt))))
+                (mevedel-permission-queue--set-timeout
+                 'mevedel-permission-queue-timeout nil))
+              (should (memq held rebuilt))
+              (should (memq armed rebuilt))
+              (should (= 2 (length rebuilt))))
+            ;; Disabling leaves the queue itself untouched.
+            (should (= 1 (length (mevedel-session-permission-queue armed))))
             (should-not (mevedel-session-permission-absence held))
             (should-not (mevedel-session-permission-absence armed))
             (should-not (mevedel-permission-absence-held-p held)))

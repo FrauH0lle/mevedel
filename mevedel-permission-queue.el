@@ -118,6 +118,11 @@
 (autoload 'mevedel-tool-exec-permission-eval-mode "mevedel-tool-exec-permission")
 (autoload 'mevedel-tool-exec-permission-reevaluate "mevedel-tool-exec-permission")
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
@@ -271,10 +276,11 @@ Do nothing when the timeout is off or the session already waits."
     (let ((state (list :timer nil :deadline (+ (float-time) seconds))))
       (setf (mevedel-session-permission-absence session) state)
       ;; The state plist is the generation: a stale timer finds another one.
+      ;; A timer armed inside a TRAMP handler would otherwise be discarded.
       (plist-put state :timer
-                 (run-at-time seconds nil
-                              #'mevedel-permission-queue--expire
-                              session state)))))
+                 (mevedel-transport-run-at-time
+                  seconds #'mevedel-permission-queue--expire
+                  session state)))))
 
 (defun mevedel-permission-queue--ensure-armed (session)
   "Arm SESSION's absence period unless one is already running."
@@ -300,12 +306,11 @@ Callers are the actions that submit a user message; nothing else resumes."
                   ((mevedel-session-p session)))
         (cl-pushnew session sessions)))
     (dolist (session sessions)
-      (let ((held (plist-get (mevedel-session-permission-absence session)
-                             :expired-at)))
+      ;; A card showing the cancelled deadline must redraw without it.
+      (when (mevedel-session-permission-absence session)
         (mevedel-permission-queue--disarm session)
-        (when held
-          (setf (mevedel-session-permission-absence session) nil)
-          (mevedel-permission-queue--rebuild-view session))))))
+        (setf (mevedel-session-permission-absence session) nil)
+        (mevedel-permission-queue--rebuild-view session)))))
 
 (defun mevedel-permission-queue--mark-absence (entry &optional expired)
   "Record absence provenance on ENTRY; with EXPIRED, mark its settled cell."

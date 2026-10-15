@@ -26,6 +26,11 @@
 ;; `mevedel-execution'
 (declare-function mevedel-execution-live-p "mevedel-execution" ())
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-at-time
+                  "mevedel-transport" (seconds function &rest args))
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+
 ;; `mevedel-turn'
 (declare-function mevedel-busy-p "mevedel-turn" ())
 
@@ -162,6 +167,22 @@ A replacement is acquired before the old inhibitor is released."
 ;;
 ;;; Reconciliation
 
+(defun mevedel-sleep--schedule (seconds)
+  "Schedule a reconciliation SECONDS from now as the only current one.
+Execution state changes arrive from sentinels that can run inside a TRAMP
+handler, where a plain timer would be discarded, so the timer goes through
+the transport.  A held timer still fires after cancellation, so each
+callback checks that its timer is still current."
+  (let ((cell (list nil)))
+    (setcar cell (mevedel-transport-run-at-time
+                  seconds #'mevedel-sleep--scheduled cell))
+    (setq mevedel-sleep--timer (car cell))))
+
+(defun mevedel-sleep--scheduled (cell)
+  "Reconcile when CELL holds the current timer; a superseded one is inert."
+  (when (eq (car cell) mevedel-sleep--timer)
+    (mevedel-sleep--reconcile)))
+
 (defun mevedel-sleep--reconcile ()
   "Match the inhibitor to the current reasons and schedule the next check."
   (setq mevedel-sleep--timer nil)
@@ -172,9 +193,7 @@ A replacement is acquired before the old inhibitor is released."
     (unless (equal reasons mevedel-sleep--held-reasons)
       (mevedel-sleep--hold reasons))
     (when reasons
-      (setq mevedel-sleep--timer
-            (run-at-time mevedel-sleep--poll-interval nil
-                         #'mevedel-sleep--reconcile)))))
+      (mevedel-sleep--schedule mevedel-sleep--poll-interval))))
 
 ;;;###autoload
 (defun mevedel-sleep-update (&rest _)
@@ -187,8 +206,7 @@ function."
              (not mevedel-sleep--process))
     (when (timerp mevedel-sleep--timer)
       (cancel-timer mevedel-sleep--timer))
-    (setq mevedel-sleep--timer
-          (run-at-time 0 nil #'mevedel-sleep--reconcile))))
+    (mevedel-sleep--schedule 0)))
 
 (defun mevedel-sleep-stop ()
   "Release any sleep inhibitor and stop re-evaluating.

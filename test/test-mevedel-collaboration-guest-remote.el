@@ -190,7 +190,24 @@
         ;; Repeated retirement is inert and cannot dismiss an unrelated Ask.
         (setq sent nil)
         (mevedel-collaboration-retire-permission-requests session (list first second))
-        (should-not sent)))))
+        (should-not sent)
+        ;; A single expired request is announced in the singular.
+        (let ((overlay (make-overlay 1 5))
+              (single (list :kind 'generic)))
+          (overlay-put overlay 'mevedel-view-interaction-entry single)
+          (puthash 44 overlay requests)
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport peer frame)
+                       (push (cons peer frame) sent)
+                       t)))
+            (mevedel-collaboration-retire-permission-requests
+             session (list single)))
+          (should (equal "1 permission request expired; nothing was approved."
+                         (plist-get
+                          (cdr (seq-find (lambda (item)
+                                           (equal "notice" (plist-get (cdr item) :t)))
+                                         sent))
+                          :message))))))))
 
 (mevedel-deftest mevedel-collaboration--handle-ui-response
   (:doc "settles once with the mapped outcome and ignores unauthorized answers")

@@ -614,6 +614,8 @@ When PRESERVE-DRAFT is non-nil, leave the composer untouched."
                (mevedel-session-enqueue-pending-input
                 session 'steering prepared)))
     (mevedel-recovery-save session)
+    ;; Queued steering is a user message: it ends a wait after expiry.
+    (mevedel-permission-absence-clear session)
     (let ((input (plist-get entry :input)))
       (mevedel-view-history-add input)
       (when (and (not preserve-draft)

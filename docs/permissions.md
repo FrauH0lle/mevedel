@@ -570,8 +570,9 @@ one deadline, kept in the transient `permission-absence` session slot.
   running, and any approval they validly reach, are untouched. Only submitting a
   user message ends the hold: a composer prompt or steering, `/goal OBJECTIVE`,
   `/plan ARGS`, a `$skill`, a queued follow-up, or an authorized browser guest's
-  message. Drafts, inspection and other slash commands, `/stop`, mail and
-  reviewer activity do not.
+  message, once it is recorded or queued; a submission its hook or dispatch
+  rejects keeps the hold. Drafts, edits to already-queued input, inspection
+  and other slash commands, `/stop`, mail and reviewer activity do not.
 - A late local or browser answer for an expired card grants nothing and reports
   that the request expired or is no longer pending. Turning the option off
   cancels deadlines and clears holds in every live session; a changed duration

@@ -633,8 +633,9 @@ callback.  Each affected guest receives one nonterminal batch notice."
             (mevedel-collaboration--transport-send
              (plist-get room :transport) peer
              (list :t "notice" :message
-                   (format "%d permission requests expired; nothing was approved."
-                           (length entries))))))))))
+                   (format "%d permission %s expired; nothing was approved."
+                           (length entries)
+                           (if (= 1 (length entries)) "request" "requests"))))))))))
 
 (defun mevedel-collaboration--handle-ui-response (room peer frame)
   "Settle the ui-request answered by writable guest PEER through FRAME.

@@ -10,6 +10,7 @@
 
 (require 'mevedel-sleep)
 (require 'mevedel-execution)
+(require 'mevedel-transport)
 (require 'mevedel-turn)
 (require 'helpers
          (file-name-concat
@@ -220,7 +221,39 @@ Registry corrupt"
       (let ((poll mevedel-sleep--timer))
         (mevedel-sleep-update)
         (should (eq poll mevedel-sleep--timer))
-        (should (memq poll timer-list))))))
+        (should (memq poll timer-list)))))
+
+  :doc "a request from inside a TRAMP handler is held, not discarded"
+  (test-mevedel-sleep--with-state
+    (let ((held nil))
+      (cl-letf (((symbol-function 'mevedel-transport-nested-p) #'always))
+        (let ((mevedel-transport--held-timers nil))
+          (mevedel-sleep-update)
+          (setq held mevedel-transport--held-timers)))
+      (should (equal (list mevedel-sleep--timer) held))
+      (should-not (memq mevedel-sleep--timer timer-list))
+      (setq mevedel-sleep--timer nil)))
+
+  :doc "superseded or stopped held timers fire without effect"
+  (test-mevedel-sleep--with-state
+    (let ((reconciled 0) held)
+      (cl-letf (((symbol-function 'mevedel-transport-nested-p) #'always)
+                ((symbol-function 'mevedel-sleep--reconcile)
+                 (lambda () (cl-incf reconciled))))
+        (let ((mevedel-transport--held-timers nil))
+          (mevedel-sleep-update)
+          (mevedel-sleep-update)
+          (setq held mevedel-transport--held-timers))
+        (should (= 2 (length held)))
+        ;; Held timers fire even after cancellation: only the current runs.
+        (dolist (timer held) (apply (timer--function timer) (timer--args timer)))
+        (should (= 1 reconciled))
+        (let ((mevedel-transport--held-timers nil))
+          (mevedel-sleep-update)
+          (setq held mevedel-transport--held-timers))
+        (mevedel-sleep-stop)
+        (dolist (timer held) (apply (timer--function timer) (timer--args timer)))
+        (should (= 1 reconciled))))))
 
 (mevedel-deftest mevedel-sleep-stop ()
   ,test

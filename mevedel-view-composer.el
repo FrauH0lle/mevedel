@@ -2242,10 +2242,20 @@ SELECTED-SKILLS explicitly names the skills to apply to literal INPUT."
         ;; below run asynchronously, and only this entry is still holding
         ;; the draft the user actually submitted.
         (submitted-draft (mevedel-view--visible-draft)))
-    ;; Submitting a message ends a wait for the user after a permission
-    ;; queue expired; queued follow-ups cannot reach here while it holds.
-    (mevedel-permission-absence-clear session)
-    (let* ((plan
+    ;; A recorded message ends a wait for the user after a permission queue
+    ;; expired.  `after-insert' runs only once the prompt is durably recorded,
+    ;; before its request starts; a rejected submission keeps the wait.  A
+    ;; DISPATCH callback owns its own acceptance, as steering does.  Queued
+    ;; follow-ups cannot reach here while it holds.
+    (let* ((caller-after-insert after-insert)
+           (after-insert
+            (if dispatch
+                after-insert
+              (lambda ()
+                (mevedel-permission-absence-clear session)
+                (when caller-after-insert
+                  (funcall caller-after-insert)))))
+           (plan
             (unless inert-skills
               (with-current-buffer data-buffer
                 (mevedel-skills-input-refresh-bound-input input session)
@@ -2427,8 +2437,9 @@ SNAPSHOT is the exact Source composer state transferred on publication."
       (user-error "The workflow is occupied -- use C-c TAB to queue this directive follow-up"))
     (when (mevedel-skills-parse-slash-line input)
       (user-error "Slash commands are unavailable in directive scope"))
-    (mevedel-permission-absence-clear session)
     (mevedel-view--dispatch-directive-input mevedel-view--composer-scope input)
+    ;; Only a dispatched message ends a wait for the user.
+    (mevedel-permission-absence-clear session)
     (mevedel-view-history-add input)
     (mevedel-view--clear-input)))
 
@@ -2675,7 +2686,6 @@ INPUT is the original composer text, including the slash command."
          (submitted-draft (mevedel-view--visible-draft)))
     (when (string-blank-p objective)
       (user-error "Goal objective must not be blank"))
-    (mevedel-permission-absence-clear (mevedel-view--session))
     (mevedel-view--run-prompt-submit-hook
      objective input
      (lambda (submission)
@@ -2686,7 +2696,10 @@ INPUT is the original composer text, including the slash command."
            (mevedel-view--clear-submitted-input submitted-draft))
          (with-current-buffer data-buffer
            (mevedel-goal-start
-            (mevedel-prompt-submission-input submission) submission)))))))
+           (mevedel-prompt-submission-input submission) submission)
+          ;; The Goal's first turn is scheduled, not started, so the wait
+          ;; ends before it runs; a refused start keeps the wait.
+          (mevedel-permission-absence-clear mevedel--session)))))))
 
 (defun mevedel-view--join-hook-contexts (&rest contexts)
   "Return CONTEXTS joined as separate hook context blocks."

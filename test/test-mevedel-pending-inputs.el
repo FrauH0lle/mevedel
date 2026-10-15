@@ -1326,9 +1326,98 @@
     (mevedel-view--queue-follow-up "later")
     (should-not (mevedel-permission-absence-held-p session)))
 
-  :doc "submitting a prompt clears the hold"
+  :doc "a recorded prompt clears the hold once it is inserted"
   (test-pending-inputs--with-held-session
-    (mevedel-view--submit-planned-input "hello" nil nil nil nil t)
+    (let (caller-ran)
+      (cl-letf (((symbol-function 'mevedel-view--forward-input)
+                 (lambda (_input &rest keys)
+                   (should (mevedel-permission-absence-held-p session))
+                   (funcall (plist-get keys :after-insert)))))
+        (mevedel-view--submit-planned-input
+         "hello" nil nil nil (lambda () (setq caller-ran t)) t))
+      (should caller-ran)
+      (should-not (mevedel-permission-absence-held-p session))))
+
+  :doc "a prompt rejected before dispatch keeps the hold"
+  (test-pending-inputs--with-held-session
+    (cl-letf (((symbol-function 'mevedel-view--forward-input)
+               (lambda (_input &rest keys)
+                 (funcall (plist-get keys :on-block)))))
+      (mevedel-view--submit-planned-input "hello" nil #'ignore nil nil t))
+    (should (mevedel-permission-absence-held-p session)))
+
+  :doc "steering clears the hold only once it is queued"
+  (test-pending-inputs--with-held-session
+    (let ((submission (mevedel-prompt-submission-create :input "steer")))
+      ;; A request that can no longer be steered queues nothing.
+      (cl-letf (((symbol-function 'mevedel-view--prepare-steering-entry)
+                 #'ignore))
+        (should-not (mevedel-view--queue-prepared-steering submission 'request)))
+      (should (mevedel-permission-absence-held-p session))
+      (cl-letf (((symbol-function 'mevedel-view--prepare-steering-entry)
+                 (lambda (&rest _) (list :input "steer")))
+                ((symbol-function 'mevedel-view-history-add) #'ignore)
+                ((symbol-function 'mevedel-agent-control-root-waiting-p)
+                 #'ignore))
+        (should (mevedel-view--queue-prepared-steering submission 'request)))
+      (should-not (mevedel-permission-absence-held-p session))))
+
+  :doc "a dispatch callback, not submission, decides whether the hold clears"
+  (test-pending-inputs--with-held-session
+    (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
+               (lambda (input _display callback &rest _)
+                 (funcall callback
+                          (mevedel-prompt-submission-create :input input))))
+              ((symbol-function 'mevedel-view--dispatch-prepared-outcome)
+               (lambda (sub _buffer &rest keys)
+                 (when-let* ((before (plist-get keys :before-send)))
+                   (funcall before))
+                 (funcall (plist-get keys :dispatch) sub))))
+      (mevedel-view--submit-planned-input "steer" nil nil #'ignore nil t))
+    (should (mevedel-permission-absence-held-p session)))
+
+  :doc "saving an edit to queued steering is not a new message and keeps the hold"
+  (test-pending-inputs--with-held-session
+    (let ((state (list :saving nil)) finished)
+      (setq-local mevedel-view--pending-input-edit state)
+      (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                 (lambda (input _display callback &rest _)
+                   (funcall callback
+                            (mevedel-prompt-submission-create :input input))))
+                ((symbol-function 'mevedel-view--dispatch-prepared-outcome)
+                 (lambda (sub _buffer &rest keys)
+                   (when-let* ((before (plist-get keys :before-send)))
+                     (funcall before))
+                   (funcall (plist-get keys :dispatch) sub)))
+                ((symbol-function 'mevedel-view--prepare-steering-entry)
+                 (lambda (&rest _) (list :input "edited")))
+                ((symbol-function 'mevedel-pending-inputs--finish-replacement)
+                 (lambda (&rest _) (setq finished t))))
+        (mevedel-pending-inputs--save-steering state "edited" 'request))
+      (should finished)
+      (should (mevedel-permission-absence-held-p session))))
+
+  :doc "a /goal blocked by its submit hook keeps the hold"
+  (test-pending-inputs--with-held-session
+    (let (started)
+      (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                 #'ignore)
+                ((symbol-function 'mevedel-goal-start)
+                 (lambda (&rest _) (setq started t))))
+        (mevedel-view--send-local-goal "/goal finish" "finish"))
+      (should-not started)
+      (should (mevedel-permission-absence-held-p session))))
+
+  :doc "an accepted /goal clears the hold"
+  (test-pending-inputs--with-held-session
+    (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
+               (lambda (input _display callback &rest _)
+                 (funcall callback
+                          (mevedel-prompt-submission-create :input input))))
+              ((symbol-function 'mevedel-goal-start) #'ignore)
+              ((symbol-function 'mevedel-view-history-add) #'ignore)
+              ((symbol-function 'mevedel-view--clear-submitted-input) #'ignore))
+      (mevedel-view--send-local-goal "/goal finish" "finish"))
     (should-not (mevedel-permission-absence-held-p session)))
 
   :doc "a guest's queued message clears the hold"
@@ -1347,6 +1436,16 @@
               ((symbol-function 'mevedel-view--clear-input) #'ignore))
       (mevedel-view--send-directive-input "about the directive"))
     (should-not (mevedel-permission-absence-held-p session)))
+
+  :doc "a directive message that fails to dispatch keeps the hold"
+  (test-pending-inputs--with-held-session
+    (setq-local mevedel-view--composer-scope
+                '(:directive-id "directive-1" :action discuss))
+    (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
+               (lambda (&rest _) (user-error "Directive gone"))))
+      (should-error (mevedel-view--send-directive-input "about the directive")
+                    :type 'user-error))
+    (should (mevedel-permission-absence-held-p session)))
 
   :doc "the hold stops queued follow-ups from draining until it clears"
   (test-pending-inputs--with-held-session
