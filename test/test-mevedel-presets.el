@@ -427,7 +427,7 @@
       (dolist (name '("TaskCreate" "TaskUpdate" "TaskNote" "TaskList"
                       "TaskGet" "Agent" "FollowupAgent" "ListAgents"
                       "InterruptAgent" "SendMessage" "WaitAgent"
-                      "SharedCreate" "SharedEdit"))
+                      "SharedCreate" "SharedEdit" "Monitor"))
         (should (member name deferred))
         (should-not (member name active)))
       (should (member "ToolSearch" active))))

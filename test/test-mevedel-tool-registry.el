@@ -89,7 +89,7 @@
   :doc "loads only Bash's owner and returns the requested tool"
   (let ((tool (mevedel-tool-ensure "Bash")))
     (should (equal "Bash" (mevedel-tool-name tool)))
-    (should (equal '("Bash" "Eval" "ListExecutions"
+    (should (equal '("Bash" "Eval" "ListExecutions" "Monitor"
                      "StopExecution" "WriteStdin")
                    (sort (mapcar #'mevedel-tool-name
                                  (mevedel-tool-all))

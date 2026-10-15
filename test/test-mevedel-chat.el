@@ -1257,7 +1257,8 @@
 		       (progn
 			 (fset 'mevedel-view--begin-external-turn
 			       (lambda (display-text _marker &optional turn-kind
-                                                     _hook-context _no-spinner user-source)
+                                                     _hook-context _no-spinner user-source
+                                                     _attribution)
 				 (setq displayed display-text
 				       kind turn-kind
 				       source user-source)))

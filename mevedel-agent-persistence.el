@@ -55,7 +55,8 @@
   "Return canonical unread records from reverse-order queue RAW for RECIPIENT.
 
 Malformed records are dropped.  The returned queue keeps RAW's stored order;
-callers reverse it only when delivering the mailbox as FIFO."
+callers reverse it only when delivering the mailbox as FIFO.  Runtime-only
+fields such as a record's wake mark are not part of the canonical form."
   (cl-labels
       ((timestamp-p (value)
          (or (integerp value)
@@ -71,12 +72,16 @@ callers reverse it only when delivering the mailbox as FIFO."
      for payload = (and type (plist-get entry :payload))
      for timestamp = (and type (plist-get entry :timestamp))
      when
-     (and (memq type '(EXECUTION MAIL RESULT USER))
+     (and (memq type '(EXECUTION MAIL MONITOR RESULT USER))
           (equal target recipient)
           (stringp payload)
           (timestamp-p timestamp)
           (pcase type
             ('USER (and (equal sender "user") (equal recipient "/root")))
+            ('MONITOR
+             (and (equal sender "/root") (equal recipient "/root")
+                  (stringp (plist-get entry :execution-id))
+                  (stringp (plist-get entry :description))))
             ('EXECUTION
              (and (mevedel-agent-path-p sender)
                   (mevedel-agent-path-p recipient)
@@ -99,6 +104,13 @@ callers reverse it only when delivering the mailbox as FIFO."
        (when (eq type 'RESULT)
          (setq clean
                (plist-put clean :outcome (plist-get entry :outcome))))
+       (when (eq type 'MONITOR)
+         (setq clean
+               (append clean
+                       (list :execution-id
+                             (copy-sequence (plist-get entry :execution-id))
+                             :description
+                             (copy-sequence (plist-get entry :description))))))
        (when (and (eq type 'USER)
                   (mevedel--plain-data-p
                    (plist-get entry :transcript-payload)))

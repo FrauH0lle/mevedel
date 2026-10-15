@@ -813,7 +813,10 @@
                        (push (list 'drain
                                    (with-current-buffer chat-buf
                                      (null mevedel--current-request)))
-                             events))))
+                             events)))
+                    ((symbol-function
+                      'mevedel-pending-inputs-offer-event-after-turn)
+                     (lambda (_fsm) (push 'event-offer events))))
             (mevedel--complete-turn
              (gptel-make-fsm
               :info (list :buffer chat-buf
@@ -821,7 +824,7 @@
           (should (equal (nreverse events)
                          '(turn (plan success) baseline save
                            (Stop completed live)
-                           request-end (drain t))))
+                           request-end (drain t) event-offer)))
           (with-current-buffer chat-buf
             (should-not mevedel--current-request)))
       (kill-buffer chat-buf)))
@@ -852,7 +855,7 @@
   ,test
   (test)
   :doc "errors and aborts persist once without follow-up drainage"
-  (let (events drained)
+  (let (events drained event-offered)
     (cl-letf (((symbol-function 'display-warning) #'ignore)
               ((symbol-function 'mevedel--turn-commit)
                (lambda (_fsm) (push 'turn events)))
@@ -883,7 +886,11 @@
                (lambda (_fsm) (push 'request-end events)))
               ((symbol-function
                 'mevedel-view--schedule-follow-up-drain)
-               (lambda (_fsm) (setq drained t))))
+               (lambda (_fsm) (setq drained t)))
+              ;; A failed turn must not wake again for background work, or
+              ;; a failing wake would loop.
+              ((symbol-function 'mevedel-pending-inputs-offer-event-after-turn)
+               (lambda (_fsm) (setq event-offered t))))
       (dolist (case '((error) (aborted)))
         (setq events nil)
         (mevedel--fail-turn
@@ -899,7 +906,8 @@
                 '(failure-record))
            `(pending-input-failure save (StopFailure ,(car case))
              request-end goal-save goal-retry)))))
-    (should-not drained)))
+    (should-not drained)
+    (should-not event-offered)))
 
   :doc "transport rejection still performs local failure admission cleanup"
   (let* ((chat-buf (generate-new-buffer " *mevedel-turn-rejected*"))

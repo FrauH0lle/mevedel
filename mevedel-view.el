@@ -1924,19 +1924,29 @@ issue, so a stale control cannot dismiss a later failure with the same id."
 It names the command and owner without output: the original Bash row owns
 progress, and RET jumps there."
   (let* ((owner (plist-get snapshot :owner))
+         (monitor-p (eq (plist-get snapshot :kind) 'monitor))
          (command (replace-regexp-in-string
-                   "[\n\r\t]+" " " (or (plist-get snapshot :command) "Bash")))
+                   "[\n\r\t]+" " "
+                   (if monitor-p
+                       (concat "Watching: " (plist-get snapshot :description))
+                     (or (plist-get snapshot :command) "Bash"))))
          (line (concat
                 "  "
                 (propertize "●" 'font-lock-face 'mevedel-view-agent-running)
                 " "
                 (truncate-string-to-width command 72 nil nil "…")
+                (when monitor-p
+                  (concat
+                   (when-let* ((expires (plist-get snapshot :expires-at)))
+                     (format " · expires %s"
+                             (format-time-string "%H:%M:%S" expires)))
+                   (format " · %d events" (or (plist-get snapshot :event-count) 0))))
                 (if (equal owner "/root") "" (format " · %s" owner))
                 "\n")))
     (add-text-properties
      2 (1- (length line))
      (list 'mouse-face 'highlight
-           'help-echo "RET: show the running command's Bash row"
+           'help-echo "RET: show the running command's execution row"
            'mevedel-view-zone-activate
            (lambda () (mevedel-view-show-live-execution snapshot)))
      line)

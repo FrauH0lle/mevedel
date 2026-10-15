@@ -215,8 +215,6 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-buffer-only-p
                   "mevedel-transcript-audit" (start end))
-(declare-function mevedel-transcript-audit-guest-prompts
-                  "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-audit-only-p
                   "mevedel-transcript-audit" (text))
 (declare-function mevedel-transcript-audit-shared-context
@@ -2437,10 +2435,10 @@ folding a run into a group does not lose the boundary it ran with."
          (data (mevedel-view-segments-display-buffer))
          (direct (mevedel-tool-render-data-direct-call
                   name (plist-get child :render-data)))
-         (child-id (or (and (equal name "Bash")
+         (child-id (or (and (member name '("Bash" "Monitor"))
                             (stringp (plist-get child :id))
                             (plist-get child :id))
-                       (and (equal (plist-get direct :tool) "Bash")
+                       (and (member (plist-get direct :tool) '("Bash" "Monitor"))
                             (stringp (plist-get direct :id))
                             (plist-get direct :id))))
          (terminal (and child-id
@@ -2469,7 +2467,7 @@ folding a run into a group does not lose the boundary it ran with."
                                  :execution-output)
                    (or (plist-get (plist-get direct :render-data)
                                   :execution-output) ""))
-                  ((and (equal name "Bash")
+                  ((and (member name '("Bash" "Monitor"))
                         (plist-member (plist-get child :render-data)
                                       :execution-output))
                    (or (plist-get (plist-get child :render-data)
@@ -2514,7 +2512,10 @@ folding a run into a group does not lose the boundary it ran with."
       (when child-id
         (setq rendering (plist-put rendering :tool-use-id child-id))
         (setq rendering (plist-put rendering :execution-id
-                                  (plist-get render-data :execution-id))))
+                                  (or (plist-get latest :execution-id)
+                                      (plist-get render-data :execution-id)
+                                      (plist-get (plist-get direct :render-data)
+                                                 :execution-id)))))
       (when (and (not latest) (memq child-status '(warning running cancelled))
                  (not (eq (mevedel-view--rendering-status rendering) 'error)))
         (setq rendering (plist-put rendering :status child-status)))
@@ -2885,7 +2886,7 @@ finish before this function invokes registered renderers or reads live events."
                  (gethash tool-use-id mevedel-view--execution-events)))
            (call-render-data (plist-get call :render-data))
            (terminal-render-data
-            (and (equal name "Bash")
+            (and (member name '("Bash" "Monitor"))
                  (mevedel-view--execution-terminal-render-data
                   data-buf tool-use-id
                   (plist-get call-render-data :execution-id))))
@@ -2893,7 +2894,7 @@ finish before this function invokes registered renderers or reads live events."
            (direct-child (mevedel-tool-render-data-direct-call
                           name call-render-data))
            (direct-terminal
-            (and (equal (plist-get direct-child :tool) "Bash")
+            (and (member (plist-get direct-child :tool) '("Bash" "Monitor"))
                  (stringp (plist-get direct-child :id))
                  (mevedel-view--execution-terminal-render-data
                   data-buf (plist-get direct-child :id)
@@ -2923,14 +2924,14 @@ finish before this function invokes registered renderers or reads live events."
               (or (plist-get terminal-render-data :execution-output) ""))
              ((plist-member direct-latest :execution-output)
               (or (plist-get direct-latest :execution-output) ""))
+             (direct-progress
+              (or (plist-get direct-event :output-tail) ""))
              ((plist-member call-render-data :execution-output)
               (or (plist-get call-render-data :execution-output) ""))
              ((plist-member (plist-get direct-child :render-data)
                             :execution-output)
               (or (plist-get (plist-get direct-child :render-data)
                              :execution-output) ""))
-             (direct-progress
-              (or (plist-get direct-event :output-tail) ""))
              (t (plist-get call :result))))
            (render-data
             (if (eq event-type 'progress)
@@ -2974,7 +2975,7 @@ finish before this function invokes registered renderers or reads live events."
                                (plist-get render-data :sandbox-summary))))
         (setq rendering
               (plist-put rendering :sandbox-summary (copy-tree summary))))
-      (when (equal (plist-get direct-child :tool) "Bash")
+      (when (member (plist-get direct-child :tool) '("Bash" "Monitor"))
         (when-let* ((id (or (plist-get direct-latest :execution-id)
                            (plist-get (plist-get direct-child :render-data)
                                       :execution-id))))
@@ -5070,6 +5071,17 @@ are left bare, while blank lines between payload lines keep the gutter."
     (prog1 (marker-position end-marker)
       (set-marker end-marker nil))))
 
+(defun mevedel-view--monitor-mail-description (open-tag)
+  "Return the unescaped description in Monitor mailbox OPEN-TAG, or nil.
+OPEN-TAG is the `<agent-message ...>' opener; other message types return nil."
+  (when (and (string-match-p "\\_<type=\"MONITOR\"" open-tag)
+             (string-match "\\_<description=\"\\([^\"]*\\)\"" open-tag))
+    (let ((text (match-string 1 open-tag)))
+      (dolist (entity '(("&quot;" . "\"") ("&apos;" . "'") ("&lt;" . "<")
+                        ("&gt;" . ">") ("&amp;" . "&")))
+        (setq text (string-replace (car entity) (cdr entity) text)))
+      text)))
+
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
   "Replace OPEN-REGEX/CLOSE-TAG regions from START to END with mailbox cards.
@@ -5105,6 +5117,10 @@ hint.  Searches that region."
               (let* ((open-start (match-beginning 0))
                      (open-end (match-end 0))
                      (sender (match-string-no-properties 1))
+                     (monitor
+                      (and (eq kind 'agent-message)
+                           (mevedel-view--monitor-mail-description
+                            (match-string-no-properties 0))))
                      (outcome
                       (and (eq kind 'agent-result)
                            (save-match-data
@@ -5146,18 +5162,22 @@ hint.  Searches that region."
                                ('errored "Failed ")
                                ('interrupted "Stopped ")
                                (_ "Incomplete ")))
+                            (monitor (format "Monitor: %s" monitor))
                             (t "message "))
                            'font-lock-face 'mevedel-view-mailbox-header
                            'mevedel-view-mailbox t))
                   ;; Result cards name their sender directly; a plain
-                  ;; message reads as "from PATH".
-                  (if (eq kind 'agent-result)
-                      (let ((label-start (point)))
-                        (insert attribution)
-                        (when (string-prefix-p "from " attribution)
-                          (delete-region label-start
-                                         (+ label-start (length "from ")))))
-                    (insert attribution))
+                  ;; message reads as "from PATH".  A monitor event names
+                  ;; its watch instead of the root that started it.
+                  (cond
+                   (monitor)
+                   ((eq kind 'agent-result)
+                    (let ((label-start (point)))
+                      (insert attribution)
+                      (when (string-prefix-p "from " attribution)
+                        (delete-region label-start
+                                       (+ label-start (length "from "))))))
+                   (t (insert attribution)))
                   (insert "\n")
                   (mevedel-view--apply-rendering-indent card-start (point))
                   (let ((body-start (point)))
@@ -5372,7 +5392,7 @@ the contiguous run of audit blocks that follows it."
                       (throw 'done nil))))
                 (point))))
         (cl-loop for (position . record)
-                 in (mevedel-transcript-audit-guest-prompts)
+                 in (mevedel-transcript-audit-turn-attributions)
                  when (and (>= position start) (< position strip-end))
                  return record)))))
 
@@ -5582,7 +5602,9 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
       (mevedel-view--decorate-agent-message-blocks text-start (point)))
      (t
       (let* ((header-start (point))
-             (guest (plist-get attribution :name)))
+             (guest (plist-get attribution :name))
+             (background
+              (eq (plist-get attribution :type) 'background-event)))
         (insert (propertize
                  (cond
                   (directive
@@ -5593,10 +5615,11 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
                            (mevedel-overlay-ui-directive-action-label
                             (plist-get directive :action))
                            (or (plist-get directive :turn) "?")))
+                  (background "Background event\n")
                   (guest (format "%s (guest)\n" guest))
                   (t "You\n"))
                  'font-lock-face
-                 (if guest
+                 (if (or guest background)
                      'mevedel-view-guest-header
                    'mevedel-view-user-header)
                  'mevedel-view-type 'turn-header
@@ -8868,14 +8891,17 @@ marker at the end of the inserted block."
             (start (point))
             (fold-start nil)
             (guest-name (plist-get attribution :name))
+            (background
+             (eq (plist-get attribution :type) 'background-event))
             (shared-display (mevedel-transcript-audit-shared-context
                              text (plist-get attribution :shared)))
             user-end)
-        (insert (propertize (if guest-name
-                                (format "%s (guest)\n" guest-name)
-                              "You\n")
+        (insert (propertize (cond
+                             (background "Background event\n")
+                             (guest-name (format "%s (guest)\n" guest-name))
+                             (t "You\n"))
                             'font-lock-face
-                            (if guest-name
+                            (if (or guest-name background)
                                 'mevedel-view-guest-header
                               'mevedel-view-user-header)
                             'mevedel-view-prompt-preview

@@ -95,6 +95,7 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--agent-fsm-p
                   "mevedel-view-composer" (info data-buffer))
+(autoload 'mevedel-view--agent-fsm-p "mevedel-view-composer")
 (declare-function mevedel-view--call-preserving-input-point
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-user-view-state

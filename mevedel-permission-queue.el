@@ -630,10 +630,8 @@ cannot be cleared by a remembered sibling approval."
                (mevedel--current-request (plist-get entry :request))
                (mevedel--agent-invocation (plist-get entry :invocation))
                (kind (plist-get entry :kind))
-               (tool-name (pcase kind
-                            ('bash "Bash")
-                            ('eval "Eval")
-                            (_ (plist-get entry :tool-name))))
+               (tool-name (or (plist-get entry :tool-name)
+                              (pcase kind ('bash "Bash") ('eval "Eval"))))
                (spec-key (if (eq kind 'generic)
                              (or (plist-get entry :specifier-key) :path)
                            :pattern))
@@ -662,7 +660,8 @@ cannot be cleared by a remembered sibling approval."
             (setq context (plist-put context :resource-access access)))
           (let ((resolved
                  (cond
-                   ((member tool-name '("Bash" "Eval"))
+                   ((member (mevedel-permission-policy-tool-name tool-name)
+                            '("Bash" "Eval"))
                     (mevedel-tool-exec-permission-reevaluate entry context))
                    ((eq kind 'generic)
                     (apply #'mevedel-check-permission tool-name

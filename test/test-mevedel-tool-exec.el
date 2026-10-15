@@ -315,6 +315,24 @@
 (mevedel-deftest mevedel-tool-exec--write-stdin ()
   ,test
   (test)
+  :doc "a poll that reads the terminal result cancels its mailbox wake"
+  (dolist (state '(running completed))
+    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+      (mevedel-agent-control-enqueue-execution-result
+       session "/root" "done" "exec-1" t)
+      (let ((mevedel--session session)
+            (mevedel--current-request nil)
+            (mevedel--agent-invocation nil))
+        (cl-letf (((symbol-function 'mevedel-execution-observe)
+                   (lambda (&rest args)
+                     (funcall (nth 3 args)
+                              (list :output "done"
+                                    :facts (list :execution-id "exec-1"
+                                                 :state state)))))
+                  ((symbol-function 'mevedel-telemetry-record) #'ignore))
+          (mevedel-tool-exec--write-stdin #'ignore '(:execution_id "exec-1"))))
+      (should (eq (eq state 'running)
+                  (mevedel-agent-control-wake-pending-p session)))))
   :doc "polls through the captured session and canonical owner"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
         captured events input result)
@@ -568,7 +586,78 @@
   :doc "ignores model-claimed terminal events"
   (should-not
    (mevedel-tool-exec-handle-execution-event
-    '(:type terminal :delivery model) nil)))
+    '(:type terminal :delivery model) nil))
+  :doc "a root command that ended on its own wakes the idle root; stops do not"
+  (dolist (case '((exited . t) (signaled . t) (stopped . nil)))
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+           (root (generate-new-buffer " *wake-root*"))
+           offered)
+      (unwind-protect
+          (progn
+            (mevedel-session-set-root-buffer session root)
+            (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                       (lambda (buffer) (push buffer offered))))
+              (should
+               (mevedel-tool-exec-handle-execution-event
+                (list :type 'terminal :delivery 'mailbox :owner "/root"
+                      :tool-args '(:command "make")
+                      :facts (list :execution-id "exec-1" :state 'completed
+                                   :termination (car case))
+                      :observation '(:output "done"))
+                session)))
+            (let ((message (car (mevedel-agent-control-context-mailbox session))))
+              (should (equal "exec-1" (plist-get message :execution-id)))
+              (should (eq (cdr case) (plist-get message :wake))))
+            (should (equal (and (cdr case) (list root)) offered)))
+        (kill-buffer root))))
+  :doc "an agent's completion is queued unchanged and never wakes the root"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+        queued offered)
+    (cl-letf (((symbol-function 'mevedel-agent-runtime-queue-execution-completion)
+               (lambda (&rest args) (setq queued args) t))
+              ((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+               (lambda (buffer) (push buffer offered))))
+      (should
+       (mevedel-tool-exec-handle-execution-event
+        (list :type 'terminal :delivery 'mailbox :owner "/root/worker"
+              :facts '(:execution-id "exec-1" :termination exited)
+              :observation '(:output "done"))
+        'invocation)))
+    (should (equal '(invocation "/root/worker") (butlast queued)))
+    (should-not offered)
+    (should-not (mevedel-agent-control-context-mailbox session)))
+  :doc "a failed save reports no delivery and offers no wake"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+        offered)
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_session) (error "Disk full")))
+              ((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+               (lambda (buffer) (push buffer offered))))
+      (should-error
+       (mevedel-tool-exec-handle-execution-event
+        (list :type 'terminal :delivery 'mailbox :owner "/root"
+              :facts '(:execution-id "exec-1" :termination exited)
+              :observation '(:output "done"))
+        session)))
+    (should-not offered)
+    (should-not (mevedel-agent-control-context-mailbox session)))
+  :doc "a failure while offering the wake keeps the delivered waking mail"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+         (root (generate-new-buffer " *wake-root*")))
+    (unwind-protect
+        (progn
+          (mevedel-session-set-root-buffer session root)
+          (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                     (lambda (_buffer) (error "No timers"))))
+            (mevedel-test--with-captured-diagnostics nil
+              (should
+               (mevedel-tool-exec-handle-execution-event
+                (list :type 'terminal :delivery 'mailbox :owner "/root"
+                      :facts '(:execution-id "exec-1" :termination exited)
+                      :observation '(:output "done"))
+                session))))
+          (should (mevedel-agent-control-wake-pending-p session)))
+      (kill-buffer root))))
 
 (mevedel-deftest mevedel-tool-exec--bash
   (:quiet t)

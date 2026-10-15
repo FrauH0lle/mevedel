@@ -2480,7 +2480,89 @@
       (should (eq 'EXECUTION (plist-get message :type)))
       (should (equal "/root" (plist-get message :sender)))
       (should (equal "root execution complete"
-                     (plist-get message :payload))))))
+                     (plist-get message :payload)))
+      (should-not (plist-get message :wake))))
+  :doc "carries the execution identity and a runtime wake mark"
+  (let ((session (mevedel-agent-control-test--session)))
+    (mevedel-agent-control-enqueue-execution-result
+     session "/root" "done" "exec-1" t)
+    (let ((message (car (mevedel-agent-control-context-mailbox session))))
+      (should (equal "exec-1" (plist-get message :execution-id)))
+      (should (plist-get message :wake))))
+  :doc "a failed save leaves no record behind"
+  (let ((session (mevedel-agent-control-test--session)))
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_session) (error "Disk full"))))
+      (should-error (mevedel-agent-control-enqueue-execution-result
+                     session "/root" "done" "exec-1" t)))
+    (should-not (mevedel-agent-control-context-mailbox session))
+    (should-not (mevedel-agent-control-wake-pending-p session))))
+
+(mevedel-deftest mevedel-agent-control-enqueue-monitor-event ()
+  ,test
+  (test)
+  :doc "queues a root MONITOR record with its watch identity"
+  (let ((session (mevedel-agent-control-test--session)))
+    (should (mevedel-agent-control-enqueue-monitor-event
+             session "exec-1" "CI watch" "line one\n" t))
+    (let ((message (car (mevedel-agent-control-context-mailbox session))))
+      (should (eq 'MONITOR (plist-get message :type)))
+      (should (equal "/root" (plist-get message :recipient)))
+      (should (equal "exec-1" (plist-get message :execution-id)))
+      (should (equal "CI watch" (plist-get message :description)))
+      (should (plist-get message :wake))))
+  :doc "rejects records without identity"
+  (should-error (mevedel-agent-control-enqueue-monitor-event
+                 (mevedel-agent-control-test--session) nil "d" "x" t)))
+
+(mevedel-deftest mevedel-agent-control-wake-pending-p ()
+  ,test
+  (test)
+  :doc "is true only while an unread root record carries a wake mark"
+  (let ((session (mevedel-agent-control-test--session)))
+    (should-not (mevedel-agent-control-wake-pending-p session))
+    (mevedel-agent-control-enqueue-execution-result session "/root" "quiet")
+    (should-not (mevedel-agent-control-wake-pending-p session))
+    (mevedel-agent-control-enqueue-execution-result
+     session "/root" "done" "exec-1" t)
+    (should (eq t (mevedel-agent-control-wake-pending-p session)))
+    ;; Reading the mailbox at the next step consumes it.
+    (mevedel-agent-control-clear-context-mailbox session)
+    (should-not (mevedel-agent-control-wake-pending-p session)))
+  :doc "a nil session has nothing pending"
+  (should-not (mevedel-agent-control-wake-pending-p nil)))
+
+(mevedel-deftest mevedel-agent-control-clear-wake ()
+  ,test
+  (test)
+  :doc "clears only the named root execution's wake and keeps its mail"
+  (let ((session (mevedel-agent-control-test--session)))
+    (mevedel-agent-control-enqueue-execution-result
+     session "/root" "one" "exec-1" t)
+    (mevedel-agent-control-enqueue-execution-result
+     session "/root" "two" "exec-2" t)
+    (mevedel-agent-control-clear-wake session "/root" "exec-1")
+    (should (= 2 (length (mevedel-agent-control-context-mailbox session))))
+    (should (mevedel-agent-control-wake-pending-p session))
+    (mevedel-agent-control-clear-wake session "/root" "exec-2")
+    (should-not (mevedel-agent-control-wake-pending-p session)))
+  :doc "ignores agent owners"
+  (let ((session (mevedel-agent-control-test--session)))
+    (mevedel-agent-control-enqueue-execution-result
+     session "/root" "one" "exec-1" t)
+    (mevedel-agent-control-clear-wake session "/root/child" "exec-1")
+    (should (mevedel-agent-control-wake-pending-p session))))
+
+(mevedel-deftest mevedel-agent-control-monitor-unread-bytes ()
+  ,test
+  (test)
+  :doc "sums only the named monitor's unread payload bytes"
+  (let ((session (mevedel-agent-control-test--session)))
+    (should (= 0 (mevedel-agent-control-monitor-unread-bytes session "exec-1")))
+    (mevedel-agent-control-enqueue-monitor-event session "exec-1" "d" "abc" t)
+    (mevedel-agent-control-enqueue-monitor-event session "exec-1" "d" "é" t)
+    (mevedel-agent-control-enqueue-monitor-event session "exec-2" "d" "zzzz" t)
+    (should (= 5 (mevedel-agent-control-monitor-unread-bytes session "exec-1")))))
 
 (mevedel-deftest mevedel-agent-control-wake-root-user ()
   ,test

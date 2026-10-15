@@ -24,7 +24,7 @@
                   (now))
 
 ;; `mevedel-execution'
-(declare-function mevedel-execution-live-p "mevedel-execution" ())
+(declare-function mevedel-execution-working-p "mevedel-execution" ())
 
 ;; `mevedel-turn'
 (declare-function mevedel-busy-p "mevedel-turn" ())
@@ -76,7 +76,7 @@ evaluated must not keep the machine awake indefinitely."
       (append
        (and (featurep 'mevedel-turn) (mevedel-busy-p)
             (list "request running"))
-       (and (featurep 'mevedel-execution) (mevedel-execution-live-p)
+       (and (featurep 'mevedel-execution) (mevedel-execution-working-p)
             (list "command running"))
        (and (fboundp 'mevedel-collaboration-sleep-reasons)
             (mevedel-collaboration-sleep-reasons (float-time))))

@@ -35,6 +35,7 @@
                   "mevedel-transport" (seconds function &rest args))
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk &optional on-cancel))
+(defvar mevedel-transport-remote-direct-async)
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
 (autoload 'mevedel-transport-call-with-spawn-channel "mevedel-transport")
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
@@ -43,9 +44,14 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--executable-find
                   "mevedel-utilities" (name &optional remote))
+(declare-function mevedel--run-periodic-timer
+                  "mevedel-utilities" (period function &rest arguments))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
+(declare-function mevedel--ui-timer-cancel "mevedel-utilities" (timer))
 (autoload 'mevedel--executable-find "mevedel-utilities")
+(autoload 'mevedel--run-periodic-timer "mevedel-utilities")
 (autoload 'mevedel--timer-pending-p "mevedel-utilities")
+(autoload 'mevedel--ui-timer-cancel "mevedel-utilities")
 
 (defcustom mevedel-execution-process-output-limit (* 64 1024 1024)
   "Maximum bytes retained from one child process."
@@ -60,6 +66,9 @@
 
 (defconst mevedel-execution-process--remote-control-timeout 5
   "Seconds allowed for one target process-control operation.")
+
+(defconst mevedel-execution-process--stderr-drain-timeout 0.1
+  "Seconds allowed to drain stderr after the main child settles.")
 
 (defconst mevedel-execution-process--environment
   '(("NO_COLOR" . "1")
@@ -143,10 +152,14 @@
   settle-timer
   spool-path
   started-at
+  stderr-buffer
+  stderr-function
+  stderr-process
   stop-p
   terminal-function
   termination
   timed-out-p
+  timeout-settle-timer
   timeout-timer
   tty-p
   watch-timer
@@ -154,13 +167,17 @@
 
 (cl-defun mevedel-execution-process-create
     (&key workdir tty spool-path filter-function output-function
-          terminal-function)
-  "Create an opaque child for WORKDIR without launching it."
+          stderr-function terminal-function)
+  "Create an opaque child for WORKDIR without launching it.
+OUTPUT-FUNCTION and STDERR-FUNCTION receive (CHILD RETAINED-CHUNK) after
+the shared spool cap.  Separated stderr bypasses FILTER-FUNCTION and
+OUTPUT-FUNCTION; otherwise both streams use the ordinary output path."
   (mevedel-execution-process--child-create
    :filter-function filter-function
    :output-function output-function
    :spool-path (or spool-path (make-temp-file "mevedel-execution-output-"))
    :started-at (float-time)
+   :stderr-function stderr-function
    :terminal-function terminal-function
    :tty-p (and tty t)
    :workdir workdir))
@@ -438,13 +455,15 @@ Incomplete identity, an unreachable target, or an unexpected exit is
             (zerop (signal-process (- group-id) 0))
           (error nil)))))))
 
-(defun mevedel-execution-process--consume-output (child chunk)
-  "Append bounded raw output CHUNK to CHILD and notify its consumer."
+(defun mevedel-execution-process--consume-output (child chunk &optional stderr)
+  "Append bounded raw output CHUNK to CHILD and notify its consumer.
+STDERR selects the separate consumer and bypasses stdout marker filtering."
   (unless (or (mevedel-execution-process--child-finished-p child)
               (mevedel-execution-process--child-output-limit-p child))
     (condition-case err
         (let* ((filter
-                (mevedel-execution-process--child-filter-function child))
+                (unless stderr
+                  (mevedel-execution-process--child-filter-function child)))
                (chunk (or (if filter (funcall filter child chunk) chunk) ""))
                (path (mevedel-execution-process--child-spool-path child))
                (current (file-attribute-size (file-attributes path)))
@@ -472,7 +491,9 @@ Incomplete identity, an unreachable target, or an unexpected exit is
             (let ((coding-system-for-write 'no-conversion))
               (write-region retained-bytes nil path t 'silent)))
           (when-let* ((function
-                       (mevedel-execution-process--child-output-function child)))
+                       (if stderr
+                           (mevedel-execution-process--child-stderr-function child)
+                         (mevedel-execution-process--child-output-function child))))
             (unless (string-empty-p retained)
               (funcall function child retained)))
           (when (> length remaining)
@@ -481,6 +502,64 @@ Incomplete identity, an unreachable target, or an unexpected exit is
       (error
        (setf (mevedel-execution-process--child-error child) err)
        (mevedel-execution-process-stop child 'output-write-failed)))))
+
+(defun mevedel-execution-process--drain-stderr (child &optional buffer-only)
+  "Drain CHILD's separate stderr buffer and any pending pipe output.
+The buffer may contain startup output received before installing the
+filter, or final output from an adapter that already deleted its pipe.
+BUFFER-ONLY consumes startup text without waiting on a running producer.
+Final pipe draining has a deadline: an escaped descendant can retain stderr
+after the owned process group settles, so EOF is not guaranteed."
+  (when-let* ((buffer (mevedel-execution-process--child-stderr-buffer child))
+              ((buffer-live-p buffer)))
+    (cl-labels ((drain-buffer
+                 ()
+                 (when (buffer-live-p buffer)
+                   (with-current-buffer buffer
+                     (unless (zerop (buffer-size))
+                       (let ((chunk (buffer-string))
+                             (inhibit-read-only t))
+                         (erase-buffer)
+                         (mevedel-execution-process--consume-output
+                          child chunk t)))))))
+      (drain-buffer)
+      (unless buffer-only
+        (when-let* ((process (mevedel-execution-process--child-stderr-process child))
+                    ((process-live-p process)))
+          (let ((deadline (+ (float-time)
+                             mevedel-execution-process--stderr-drain-timeout))
+                (filter (process-filter process)))
+            ;; Once output arrives, a single accept-process-output can keep
+            ;; reading until a gap, ignoring its timeout.  Enforce our budget
+            ;; inside the filter too, closing the owned pipe to end that read.
+            ;; Keep timers inhibited so settlement cannot reenter itself.
+            (unwind-protect
+                (progn
+                  (set-process-filter
+                   process
+                   (lambda (_process chunk)
+                     (mevedel-execution-process--consume-output child chunk t)
+                     (when (>= (float-time) deadline)
+                       (set-process-sentinel process #'ignore)
+                       (delete-process process))))
+                  (while (and (< (float-time) deadline)
+                              (process-live-p process)
+                              (accept-process-output process 0.01 nil 1))))
+              (when (process-live-p process)
+                (set-process-filter process filter)))))))))
+
+(defun mevedel-execution-process--attach-stderr (child)
+  "Attach CHILD's separate stderr filter without losing startup output."
+  (when-let* ((buffer (mevedel-execution-process--child-stderr-buffer child))
+              ((buffer-live-p buffer))
+              (process (get-buffer-process buffer)))
+    (setf (mevedel-execution-process--child-stderr-process child) process)
+    (set-process-query-on-exit-flag process nil)
+    (set-process-sentinel process #'ignore)
+    (set-process-filter
+     process (lambda (_process chunk)
+               (mevedel-execution-process--consume-output child chunk t))))
+  (mevedel-execution-process--drain-stderr child t))
 
 (defun mevedel-execution-process-read (child)
   "Return CHILD's complete decoded spooled output."
@@ -497,15 +576,28 @@ Incomplete identity, an unreachable target, or an unexpected exit is
   (let ((process (mevedel-execution-process--child-process child)))
     (dolist (timer
              (list (mevedel-execution-process--child-timeout-timer child)
+                   (mevedel-execution-process--child-timeout-settle-timer child)
                    (mevedel-execution-process--child-force-timer child)
                    (mevedel-execution-process--child-settle-timer child)
                    (mevedel-execution-process--child-watch-timer child)))
       (when (timerp timer) (mevedel--ui-timer-cancel timer)))
     (setf (mevedel-execution-process--child-process child) nil
           (mevedel-execution-process--child-timeout-timer child) nil
+          (mevedel-execution-process--child-timeout-settle-timer child) nil
           (mevedel-execution-process--child-force-timer child) nil
           (mevedel-execution-process--child-settle-timer child) nil
           (mevedel-execution-process--child-watch-timer child) nil)
+    (let* ((buffer (mevedel-execution-process--child-stderr-buffer child))
+           (stderr (or (mevedel-execution-process--child-stderr-process child)
+                       (and (buffer-live-p buffer)
+                            (get-buffer-process buffer)))))
+      (when stderr
+        (set-process-sentinel stderr #'ignore)
+        (set-process-filter stderr #'ignore)
+        (ignore-errors (delete-process stderr)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (setf (mevedel-execution-process--child-stderr-buffer child) nil
+            (mevedel-execution-process--child-stderr-process child) nil))
     (when process
       (set-process-query-on-exit-flag process nil)
       (ignore-errors (delete-process process)))
@@ -560,6 +652,7 @@ deferred work, so that case deletes immediately rather than leak."
     (when-let* ((process (mevedel-execution-process--child-process child))
                 ((memq (process-status process) '(exit signal))))
       (while (accept-process-output process 0.01 nil 1)))
+    (mevedel-execution-process--drain-stderr child)
     (setf (mevedel-execution-process--child-finished-p child) t
           (mevedel-execution-process--child-exit-code child) status)
     (let* ((path (mevedel-execution-process--child-spool-path child))
@@ -680,12 +773,16 @@ deferred work, so that case deletes immediately rather than leak."
 
 (defun mevedel-execution-process--time-out (child)
   "Mark CHILD timed out and terminate its process group."
-  (when (mevedel-execution-process-stop child 'timed-out)
+  (unless (or (mevedel-execution-process--child-finished-p child)
+              (mevedel-execution-process--child-stop-p child))
     (setf (mevedel-execution-process--child-timed-out-p child) t)
-    (mevedel-transport-run-at-time
-     (+ (* 2 mevedel-execution-process--child-kill-delay)
-        (* 4 mevedel-execution-process--remote-control-timeout))
-     #'mevedel-execution-process--settle-timed-out child)))
+    (mevedel-execution-process-stop child 'timed-out)
+    (unless (mevedel-execution-process--child-finished-p child)
+      (setf (mevedel-execution-process--child-timeout-settle-timer child)
+            (mevedel-transport-run-at-time
+             (+ (* 2 mevedel-execution-process--child-kill-delay)
+                (* 4 mevedel-execution-process--remote-control-timeout))
+             #'mevedel-execution-process--settle-timed-out child)))))
 
 (defun mevedel-execution-process--settle-main-exit (child)
   "Drain descendants or settle CHILD after its main process exits."
@@ -757,8 +854,11 @@ one is noticed.  Checks share periodic host wakeups with housekeeping.
 The former 0.1 s timer repainted a whole pgtk frame ten times a second.")
 
 (cl-defun mevedel-execution-process-start
-    (child &key name command target coding timeout confined)
-  "Launch COMMAND in CHILD and return CHILD, or nil on failure."
+    (child &key name command target coding timeout confined separate-stderr)
+  "Launch COMMAND in CHILD and return CHILD, or nil on failure.
+SEPARATE-STDERR retains stderr in the shared bounded spool without stdout
+filtering or notifications.  It uses a native buffer-backed stderr pipe,
+which also works with TRAMP's sh and direct-async adapters."
   (let* ((workdir (mevedel-execution-process--child-workdir child))
          (remote (file-remote-p workdir))
          (command
@@ -789,6 +889,9 @@ The former 0.1 s timer repainted a whole pgtk frame ten times a second.")
                              (mevedel--executable-find executable remote)
                            (executable-find executable)))
               (signal 'file-missing (list "Executable not found" executable)))
+            (when separate-stderr
+              (setf (mevedel-execution-process--child-stderr-buffer child)
+                    (generate-new-buffer " *mevedel-execution-stderr*")))
             (setf (mevedel-execution-process--child-launch-attempted-p child)
                   t
                   (mevedel-execution-process--child-process child)
@@ -797,6 +900,7 @@ The former 0.1 s timer repainted a whole pgtk frame ten times a second.")
                    (lambda ()
                      (make-process
                       :name name :buffer nil :command command :coding coding
+                      :stderr (mevedel-execution-process--child-stderr-buffer child)
                       :connection-type
                       (if (mevedel-execution-process--child-tty-p child)
                           'pty
@@ -814,6 +918,7 @@ The former 0.1 s timer repainted a whole pgtk frame ten times a second.")
             (setf (mevedel-execution-process--child-group-id child)
                   (process-id
                    (mevedel-execution-process--child-process child))))
+          (mevedel-execution-process--attach-stderr child)
           (let ((process (mevedel-execution-process--child-process child)))
             (when (and (not (mevedel-execution-process--child-tty-p child))
                        (process-live-p process))

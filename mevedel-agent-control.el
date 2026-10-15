@@ -683,19 +683,73 @@ Return the resolved recipient path.  Sending never activates a turn."
            :timestamp (current-time)))
     recipient))
 
-(defun mevedel-agent-control-enqueue-execution-result (session owner body)
+(defun mevedel-agent-control-enqueue-execution-result
+    (session owner body &optional execution-id wake)
   "Queue yielded execution BODY for its OWNER in SESSION.
-The owner reads it at its next provider request, like the root does."
+The owner reads it at its next provider request, like the root does.
+EXECUTION-ID correlates the record with its execution while Emacs runs.
+WAKE marks a root record that should start a turn when the model is idle;
+the mark is runtime state and never persisted."
   (unless (and (mevedel-agent-path-p owner) (stringp body))
     (error "Invalid execution result"))
   (mevedel-agent-control--enqueue
    session owner
-   (list :type 'EXECUTION
-         :sender owner
-         :recipient owner
-         :payload body
-         :timestamp (current-time)))
+   (append
+    (list :type 'EXECUTION
+          :sender owner
+          :recipient owner
+          :payload body
+          :timestamp (current-time))
+    (and execution-id (list :execution-id execution-id))
+    (and wake (list :wake t))))
   t)
+
+(defun mevedel-agent-control-enqueue-monitor-event
+    (session execution-id description body wake)
+  "Queue one Monitor BODY for SESSION's root.
+EXECUTION-ID and DESCRIPTION identify the monitor.  WAKE marks the record
+as one that starts a turn when the model is idle."
+  (unless (and (stringp execution-id) (stringp description) (stringp body))
+    (error "Invalid monitor event"))
+  (mevedel-agent-control--enqueue
+   session "/root"
+   (append
+    (list :type 'MONITOR
+          :sender "/root"
+          :recipient "/root"
+          :execution-id execution-id
+          :description description
+          :payload body
+          :timestamp (current-time))
+    (and wake (list :wake t))))
+  t)
+
+(defun mevedel-agent-control-wake-pending-p (session)
+  "Return non-nil while SESSION's root mailbox holds an unread waking record.
+Reading the mailbox consumes the record, so a result the model already saw
+never wakes it."
+  (and session
+       (cl-some (lambda (record) (plist-get record :wake))
+                (mevedel-session-messages session))
+       t))
+
+(defun mevedel-agent-control-clear-wake (session owner execution-id)
+  "Stop OWNER's unread records for EXECUTION-ID in SESSION from waking.
+The model already received that result through another path."
+  (when (and session (equal owner "/root") execution-id)
+    (dolist (record (mevedel-session-messages session))
+      (when (and (plist-get record :wake)
+                 (equal (plist-get record :execution-id) execution-id))
+        (plist-put record :wake nil)))))
+
+(defun mevedel-agent-control-monitor-unread-bytes (session execution-id)
+  "Return the payload bytes of EXECUTION-ID's unread Monitor records in SESSION."
+  (let ((bytes 0))
+    (dolist (record (and session (mevedel-session-messages session)))
+      (when (and (eq (plist-get record :type) 'MONITOR)
+                 (equal (plist-get record :execution-id) execution-id))
+        (cl-incf bytes (string-bytes (plist-get record :payload)))))
+    bytes))
 
 (defun mevedel-agent-control-list-agents (session &optional path-prefix)
   "Return SESSION's minimal roster, optionally below PATH-PREFIX."

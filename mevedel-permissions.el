@@ -358,7 +358,8 @@ happen for a non-read-only tool."
            :specifier-value specifier-value
            :protected-path (plist-get context :protected-path-p)
            :workspace-root workspace-root
-           :rule-tool (if workspace-boundary-p "*" tool-name)
+           :rule-tool (if workspace-boundary-p "*"
+                        (mevedel-permission-policy-tool-name tool-name))
            :rule-key rule-key
            :rule-value rule-value
            :include-always (not (null workspace))
@@ -368,10 +369,17 @@ happen for a non-read-only tool."
            :persistent-rules persistent-rules
            :permission-request permission-request))))
 
+(defun mevedel-permission-policy-tool-name (tool-name)
+  "Return the permission policy identity of TOOL-NAME.
+Monitor executes Bash commands under Bash rules and execution authority.
+Keep the original name in invocation contexts and presentation metadata."
+  (if (equal tool-name "Monitor") "Bash" tool-name))
+
 (defun mevedel-permission--checker-args (context)
   "Return `mevedel-check-permission' keyword args for CONTEXT."
   (let ((content (plist-get context :args))
-        (tool-name (plist-get context :tool-name)))
+        (tool-name (mevedel-permission-policy-tool-name
+                    (plist-get context :tool-name))))
     (when (and (member tool-name '("Bash" "Eval"))
                (listp content)
                (keywordp (car-safe content)))
@@ -442,9 +450,13 @@ session-owned work descendants; workspace-owned shared files are excluded."
            (buckets
             (mevedel-permission-rules-collect-buckets
              invocation-rules request-rules session-rules persistent-rules))
+           (policy-tool (mevedel-permission-policy-tool-name tool-name))
            (deny-bucket
-            (mevedel-permission-rules-first-deny-bucket
-             buckets tool-name path pattern domain name))
+            (or (mevedel-permission-rules-first-deny-bucket
+                 buckets policy-tool path pattern domain name)
+                (and (not (equal policy-tool tool-name))
+                     (mevedel-permission-rules-first-deny-bucket
+                      buckets tool-name path pattern domain name))))
            (early-decision
             (cond
              (deny-bucket

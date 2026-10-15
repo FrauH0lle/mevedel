@@ -415,6 +415,21 @@ attributed to the agent. These records commit together; workflow result
 handlers consume only the `RESULT`. Bash
 completion does not wake `WaitAgent` before settlement, and starts no model request.
 
+The root's own completions differ: a root `EXECUTION` record from a command
+that ended on its own, and a root `MONITOR` event batch or terminal notice
+from the [Monitor](tools.md#monitor) tool, also start an idle root turn, as
+described under terminal delivery in [tools](tools.md). A stopped execution's
+record, and records whose result `WriteStdin` or `StopExecution` already
+returned, are delivered without waking. Like any root mail they release an
+active root `WaitAgent`. A `MONITOR` record carries its `execution_id` and
+the monitor's `description`; the model receives it as
+`<agent-message type="MONITOR" sender="/root" recipient="/root"
+execution_id="..." description="...">` with the description XML-escaped, and
+the view shows it as a `Monitor: DESCRIPTION` card. The transcript parser
+treats it like other agent mail, never as user input. Records are saved with
+the session; their wake mark is runtime state and is dropped, so after a
+restart unread records reach the model at its next turn without waking it.
+
 ## Review and verify commands
 
 `mevedel-review` / `/review` and `mevedel-verify` / `/verify` run

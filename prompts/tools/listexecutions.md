@@ -1,4 +1,4 @@
-List yielded Bash executions owned by this agent.
+List live yielded Bash and Monitor executions owned by this agent.
 
 ### When to use `ListExecutions`
 
@@ -12,7 +12,8 @@ List yielded Bash executions owned by this agent.
 ### How to use `ListExecutions`
 
 - Takes no arguments. Returns execution facts and IDs, or "No yielded executions."
-  Other agents' commands are outside this tool's scope.
+  Only live caller-owned executions are listed; completed executions and other
+  agents' commands are excluded. Monitors are root-owned.
 - Use a returned ID with WriteStdin for unread output or StopExecution to stop it.
 
 ### Examples of bad usage
@@ -20,7 +21,7 @@ List yielded Bash executions owned by this agent.
 <example>
 ListExecutions() to inspect a sibling agent's running test
 <reasoning>
-Only the caller's yielded commands are listed. Ask that agent for the needed
+Only the caller's live yielded executions are listed. Ask that agent for the needed
 information through the agent communication tools.
 </reasoning>
 </example>

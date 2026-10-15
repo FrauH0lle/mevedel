@@ -2315,9 +2315,15 @@ holds one operating-system sleep inhibitor. The work that counts is:
 
 - a root or agent turn that is running or settling (`mevedel-busy-p`),
   including one waiting on a permission prompt;
-- a live managed command, including a yielded one that outlives its turn;
+- a live managed command other than Monitor, including a yielded Bash command
+  that outlives its turn (`mevedel-execution-working-p`);
 - an open collaboration share or lobby within its idle allowance (see
   [collaboration](collaboration.md)).
+
+Monitors are excluded from the working-execution predicate: waiting for an
+event alone must not keep the machine awake. A request awakened by a Monitor
+event or Bash completion is still a running or settling turn and holds the
+inhibitor normally.
 
 Only sleep is blocked. Screen blanking, locking and idle detection are
 unaffected. The inhibitor announces its reasons, such as

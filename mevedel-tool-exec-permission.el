@@ -231,6 +231,8 @@ PERMISSION-CONTEXT supplies rules and the effective permission mode."
     (entry permission-context &optional session)
   "Submit ENTRY through PERMISSION-CONTEXT's request boundary.
 Fall back to direct queue admission for callers outside the tool pipeline."
+  (when-let* ((tool-name (plist-get permission-context :tool-name)))
+    (setq entry (plist-put entry :tool-name tool-name)))
   (setq entry
         (plist-put entry :permission-mode-effective
                    (mevedel-bash-policy-effective-permission-mode
@@ -1307,7 +1309,9 @@ Admission and queued rechecks share this one ordering."
 Return `allow', `deny', or `ask' without prompting or executing.  Already
 granted capabilities are checked again; admission's missing subset does not
 describe the complete authority needed at settlement."
-  (let ((detail (or (plist-get entry :command)
+  (let ((tool-name (mevedel-permission-policy-tool-name
+                    (plist-get context :tool-name)))
+        (detail (or (plist-get entry :command)
                     (plist-get entry :expression)
                     (plist-get entry :detail)
                     (plist-get context :pattern)))
@@ -1318,16 +1322,16 @@ describe the complete authority needed at settlement."
      (t
       (plist-get
        (mevedel-tool-exec-permission--decide
-        (plist-get context :tool-name) detail
+        tool-name detail
         (plist-put
          (if (eq (plist-get entry :kind) 'generic)
              (mevedel-tool-exec-permission-effective-sandbox-request
-              (plist-get entry :args) (plist-get context :tool-name) detail
-              (and (equal (plist-get context :tool-name) "Eval")
+              (plist-get entry :args) tool-name detail
+              (and (equal tool-name "Eval")
                    (mevedel-tool-exec-permission-eval-mode (plist-get entry :args)))
               context)
            (list :sandbox-permissions (plist-get entry :sandbox-permissions)
-                 :eval-mode (and (equal (plist-get context :tool-name) "Eval")
+                 :eval-mode (and (equal tool-name "Eval")
                                  (if (equal (plist-get entry :mode) "live")
                                      'live 'batch))
                  :additional-permissions

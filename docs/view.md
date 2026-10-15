@@ -968,7 +968,8 @@ leaves zone text, point, and held overlay references untouched.
 Unregistering a descriptor, or a rebuild that drops one, closes that
 interaction. When a root view's last pending interaction closes while its
 session is idle, the zone offers the session's held idle work again: queued
-follow-ups first, otherwise an active Goal's continuation. The choice is made
+follow-ups first, then a background-event turn, otherwise an active Goal's
+continuation. The choice is made
 after the closing command, so a permission sibling rendered by the same
 settlement still holds the work, and each offered path rechecks its own gates.
 Interaction keybindings are active only when point is on the interaction text;
@@ -2342,6 +2343,23 @@ Permission, Ask, Plan, and other user-input overlays do not disable either
 queue. An unresolved interaction merely postpones steering injection and
 follow-up dispatch; closing the last one, including a child agent's card
 answered while the root session is idle, offers queued follow-ups again.
+
+Background work also produces idle work. When a yielded root command ends on
+its own, or a [Monitor](tools.md#monitor) reports, its mailbox record wakes the
+idle model (see terminal delivery in [tools](tools.md)). Idle work runs in a
+fixed order: queued follow-ups, then one background-event turn, then Goal
+continuation; the turn each starts continues an active Goal when it settles
+successfully, and a failed background-event turn does not wake again. A
+background-event turn waits for an idle transport and then rechecks every
+follow-up hold below, plus queued follow-ups and any pending permission, Ask,
+or Plan interaction, so it never replaces a draft or interrupts a decision;
+deleting the draft or closing the last interaction offers it again. No live
+root view means no wake. The turn's header reads `Background event` instead
+of `You`: a hidden attribution record, the same mechanism a collaboration
+guest's `NAME (guest)` heading uses, keeps it across rerender, archive, and
+restore. Its prompt is fixed and says it is not a user message, and the
+permission reviewer reads it as the latest user turn on those terms; the
+reported output arrives as mailbox records, which never count as user input.
 
 Automatic follow-up delivery also waits while the composer holds a draft, so
 a queued turn never replaces or clears text the user is still writing. The

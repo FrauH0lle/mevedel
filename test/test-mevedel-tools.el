@@ -1346,15 +1346,31 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
     (unwind-protect
         (let ((visible (mevedel-tools-visibility (cdr owner))))
           (should (funcall visible "Eval"))
+          (should (funcall visible "Monitor"))
           (should (funcall visible "CreateGoal"))
           (should-not (funcall visible "UpdateGoal"))
           (setf (mevedel-session-plan-mode session) t)
           (setq visible (mevedel-tools-visibility (cdr owner)))
           (should (funcall visible "Read"))
+          (should (funcall visible "Monitor"))
           (should (funcall visible "ApplyPatch"))
           (should-not (funcall visible "Eval"))
           (should-not (funcall visible "CreateGoal"))
           (should (funcall visible "GetGoal")))
+      (kill-buffer (car owner))))
+
+  :doc "hides inherited Monitor tools from native and external agent owners"
+  (let* ((session (mevedel-tools-test--make-session))
+         (owner (mevedel-tools-test--native-owner session))
+         (invocation (mevedel-agent-invocation--create :parent-session session))
+         (info (list :buffer (car owner) :mevedel-agent-invocation invocation)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-request-context (cdr owner)) info)
+          (dolist (turn-owner (list (cdr owner) (gptel-make-fsm :info info)))
+            (let ((visible (mevedel-tools-visibility turn-owner)))
+              (should-not (funcall visible "Monitor"))
+              (should (funcall visible "Bash")))))
       (kill-buffer (car owner)))))
 
 (mevedel-deftest mevedel-tools-native-roster

@@ -17,6 +17,11 @@
 
 (require 'mevedel-structs)
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-monitor-unread-bytes
+                  "mevedel-agent-control" (session execution-id))
+(autoload 'mevedel-agent-control-monitor-unread-bytes "mevedel-agent-control")
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-runtime-settled-p
@@ -299,14 +304,26 @@ row redraws a second.")
   child
   delivery-pending-p
   delivery-state
+  description
   error-data
   execution-id
   exit-code
+  expires-at
   finished-p
+  kind
   last-byte-newline-p
   marker
   marker-buffer
   marker-seen-p
+  (monitor-count 0)
+  monitor-lines
+  (monitor-bytes 0)
+  (monitor-omitted 0)
+  (monitor-partial "")
+  (monitor-partial-length 0)
+  monitor-last-char
+  monitor-times
+  monitor-timer
   mutating-p
   mutation-armed-p
   newline-count
@@ -335,6 +352,7 @@ row redraws a second.")
   stop-p
   termination
   timed-out-p
+  timeout-ms
   teardown-function
   telemetry-context
   terminal-observation
@@ -679,12 +697,14 @@ whose remote work is long finished recovers on its own."
   "Release RECORD's child and managed timers.
 The process spool remains owned by RECORD until registry cleanup."
   (dolist (timer (list (mevedel-execution--record-observer-timer record)
+                       (mevedel-execution--record-monitor-timer record)
                        (mevedel-execution--record-progress-timer record)
                        (mevedel-execution--record-retire-timer record)
                        (mevedel-execution--record-yield-timer record)))
     (when (timerp timer)
       (mevedel--ui-timer-cancel timer)))
   (setf (mevedel-execution--record-observer-timer record) nil
+        (mevedel-execution--record-monitor-timer record) nil
         (mevedel-execution--record-progress-timer record) nil
         (mevedel-execution--record-retire-timer record) nil
         (mevedel-execution--record-yield-timer record) nil)
@@ -887,6 +907,9 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
    :output-function
    (lambda (_child chunk)
      (mevedel-execution--managed-append record chunk))
+   :stderr-function
+   (lambda (_child chunk)
+     (mevedel-execution--managed-append record chunk t))
    :terminal-function
    (lambda (child result)
      (mevedel-execution--managed-process-terminal record child result))))
@@ -966,19 +989,111 @@ retained in the transcript and output artifacts."
           (setq chunk "")))
       chunk)))
 
-(defun mevedel-execution--managed-append (record chunk)
-  "Record process-owned CHUNK in RECORD's managed previews."
+(defun mevedel-execution--managed-append (record chunk &optional stderr)
+  "Record bounded CHUNK in RECORD's previews, framing stdout, not STDERR."
   (unless (or (mevedel-execution--record-finished-p record)
               (string-empty-p chunk))
     (when (zerop (or (mevedel-execution--record-output-chars record) 0))
       (mevedel-execution--telemetry
        record 'execution-first-output :chunk-bytes (string-bytes chunk)))
     (mevedel-execution--retain-output record chunk)
-    (mevedel-execution--hasten-progress record)
+    (if (eq (mevedel-execution--record-kind record) 'monitor)
+        (unless (or stderr (mevedel-execution--record-stop-p record))
+          (mevedel-execution--monitor-frame record chunk))
+      (mevedel-execution--hasten-progress record))
     (cl-incf (mevedel-execution--record-newline-count record)
              (cl-count ?\n chunk))
     (setf (mevedel-execution--record-last-byte-newline-p record)
           (eq (aref chunk (1- (length chunk))) ?\n))))
+
+(defun mevedel-execution--monitor-body (record)
+  "Return RECORD's bounded pending event batch without consuming it."
+  (concat
+   (mapconcat #'identity
+              (reverse (mevedel-execution--record-monitor-lines record)) "\n")
+   (when (mevedel-execution--record-monitor-lines record) "\n")
+   (when (> (mevedel-execution--record-monitor-omitted record) 0)
+     (format "\n[%d more event lines in the output file]\n"
+             (mevedel-execution--record-monitor-omitted record)))))
+
+(defun mevedel-execution--monitor-flush (record)
+  "Secure RECORD's pending batch in its mailbox, retaining it on failure."
+  (setf (mevedel-execution--record-monitor-timer record) nil)
+  (unless (or (mevedel-execution--record-finished-p record)
+              (mevedel-execution--record-stop-p record)
+              (eq (mevedel-execution--record-delivery-state record) 'discarded))
+    (let ((body (mevedel-execution--monitor-body record)))
+      (unless (string-empty-p body)
+        (let ((event (mevedel-execution--event record 'monitor-batch :body body)))
+          (when (mevedel-execution--deliver-mailbox-event record event)
+            (setf (mevedel-execution--record-monitor-lines record) nil
+                  (mevedel-execution--record-monitor-bytes record) 0
+                  (mevedel-execution--record-monitor-omitted record) 0)
+            (mevedel-execution--emit-event event)
+            (mevedel-execution--notify-state-change record)
+            (when (> (mevedel-agent-control-monitor-unread-bytes
+                      (mevedel-execution--origin-session
+                       (mevedel-execution--record-origin record))
+                      (mevedel-execution--record-execution-id record))
+                     (* 64 1024))
+              (mevedel-execution--stop-process record 'flood))))))))
+
+(defun mevedel-execution--monitor-line (record &optional final)
+  "Complete RECORD's bounded partial line and update its event limits.
+FINAL retains the last line at settlement without stopping or arming a timer."
+  (let* ((length (mevedel-execution--record-monitor-partial-length record))
+         (length (if (eq (mevedel-execution--record-monitor-last-char record) ?\r)
+                     (1- length) length))
+         (partial (mevedel-execution--record-monitor-partial record))
+         (retained (min length (length partial)))
+         (line (concat (substring partial 0 retained)
+                       (when (> length retained)
+                         (format " [%d characters truncated]" (- length retained)))))
+         (bytes (1+ (string-bytes line)))
+         (now (float-time)))
+    (cl-incf (mevedel-execution--record-monitor-count record))
+    (setf (mevedel-execution--record-monitor-partial record) ""
+          (mevedel-execution--record-monitor-partial-length record) 0
+          (mevedel-execution--record-monitor-last-char record) nil
+          (mevedel-execution--record-monitor-times record)
+          (cons now (cl-delete-if
+                     (lambda (time) (<= time (- now 60)))
+                     (mevedel-execution--record-monitor-times record))))
+    ;; Reserve room for the omitted-line summary in the 8 KiB batch.
+    (if (and (zerop (mevedel-execution--record-monitor-omitted record))
+             (<= (+ bytes (mevedel-execution--record-monitor-bytes record))
+                 (- 8192 128)))
+        (progn
+          (push line (mevedel-execution--record-monitor-lines record))
+          (cl-incf (mevedel-execution--record-monitor-bytes record) bytes))
+      (cl-incf (mevedel-execution--record-monitor-omitted record)))
+    (unless final
+      (if (> (length (mevedel-execution--record-monitor-times record)) 100)
+          (mevedel-execution--stop-process record 'flood)
+        (unless (or (mevedel-execution--record-monitor-timer record)
+                    (mevedel-execution--record-stop-p record))
+          (setf (mevedel-execution--record-monitor-timer record)
+                (mevedel-transport-run-at-time
+                 0.2 #'mevedel-execution--monitor-flush record)))))))
+
+(defun mevedel-execution--monitor-frame (record chunk)
+  "Frame stdout CHUNK into RECORD's bounded partial line and pending batch."
+  (let ((start 0) end)
+    (while (and (< start (length chunk))
+                (not (mevedel-execution--record-stop-p record)))
+      (setq end (or (string-search "\n" chunk start) (length chunk)))
+      (let* ((count (- end start))
+             (partial (mevedel-execution--record-monitor-partial record))
+             (keep (min count (- 2000 (length partial)))))
+        (setf (mevedel-execution--record-monitor-partial record)
+              (concat partial (substring chunk start (+ start keep))))
+        (cl-incf (mevedel-execution--record-monitor-partial-length record) count)
+        (when (> count 0)
+          (setf (mevedel-execution--record-monitor-last-char record)
+                (aref chunk (1- end)))))
+      (when (< end (length chunk))
+        (mevedel-execution--monitor-line record))
+      (setq start (1+ end)))))
 
 (defun mevedel-execution--managed-lines (record)
   "Return the retained logical line count for RECORD."
@@ -1069,7 +1184,12 @@ execution's progress cost."
          (termination (mevedel-execution--termination record))
          (outcome-function
           (mevedel-execution--record-outcome-function record)))
-    (list :execution-id
+    (list :kind (or (mevedel-execution--record-kind record) 'bash)
+          :description (mevedel-execution--record-description record)
+          :expires-at (mevedel-execution--record-expires-at record)
+          :event-count (and (eq (mevedel-execution--record-kind record) 'monitor)
+                            (mevedel-execution--record-monitor-count record))
+          :execution-id
           (and (mevedel-execution--record-yielded-p record)
                (mevedel-execution--record-execution-id record))
           :command
@@ -1333,6 +1453,8 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
           record 'terminal
           :delivery delivery
           :observation observation
+          :monitor-output (when (eq (mevedel-execution--record-kind record) 'monitor)
+                            (mevedel-execution--monitor-body record))
           :whole-output-truncated-p
           (> (or (mevedel-execution--record-output-chars record) 0)
              mevedel-execution-inline-output-limit)
@@ -1468,6 +1590,17 @@ returning: their callers expect the outcome settled."
                child-result (mevedel-execution--record-workdir record))))
       (when preparation
         (mevedel-sandbox-cleanup preparation))
+      ;; A short-lived monitor can exit inside process startup (notably TRAMP).
+      ;; It still has an execution identity and owes one terminal mailbox notice.
+      (when (and (eq (mevedel-execution--record-kind record) 'monitor)
+                 (not (mevedel-execution--record-error-data record))
+                 (not (eq (mevedel-execution--record-delivery-state record) 'discarded))
+                 (mevedel-execution-process-launch-attempted-p
+                  (mevedel-execution--record-child record)))
+        (mevedel-execution--yield-managed record))
+      (when (and (eq (mevedel-execution--record-kind record) 'monitor)
+                 (> (mevedel-execution--record-monitor-partial-length record) 0))
+        (mevedel-execution--monitor-line record t))
       (setf (mevedel-execution--record-finished-p record) t
             (mevedel-execution--record-delivery-pending-p record) t)
       (mevedel-execution--settle-mutation record)
@@ -1507,10 +1640,14 @@ returning: their callers expect the outcome settled."
              (lambda ()
                (unwind-protect
                    (if (mevedel-execution--record-yielded-p record)
-                       (if (mevedel-execution--record-observer record)
+                       (if (and (mevedel-execution--record-observer record)
+                                (not (eq (mevedel-execution--record-kind record)
+                                         'monitor)))
                            (mevedel-execution--deliver-observer record)
                          (when mevedel-execution-mailbox-delivery-function
-                           (mevedel-execution--deliver-independent record)))
+                           (mevedel-execution--deliver-independent record))
+                         (when (mevedel-execution--record-observer record)
+                           (mevedel-execution--deliver-observer record)))
                      (let ((callback (mevedel-execution--record-callback record)))
                        (unless (eq (mevedel-execution--record-delivery-state record)
                                    'discarded)
@@ -1564,8 +1701,9 @@ process-filter appends use the published path."
   "Deliver RECORD's initial running observation and detach it from request."
   (unless (or (mevedel-execution--record-finished-p record)
               (mevedel-execution--record-yielded-p record))
-    (when (mevedel-execution-process-live-p
-           (mevedel-execution--record-child record))
+    (when (or (eq (mevedel-execution--record-kind record) 'monitor)
+              (mevedel-execution-process-live-p
+               (mevedel-execution--record-child record)))
       (mevedel-execution--publish-yielded-artifact record)
       (setf (mevedel-execution--record-yielded-p record) t
             (mevedel-execution--record-retained-p record) t)
@@ -1575,11 +1713,16 @@ process-filter appends use the published path."
       (mevedel-execution--emit-event
        (mevedel-execution--event record 'yield))
       (funcall (mevedel-execution--record-callback record)
-               (mevedel-execution--observation record)))))
+               (if (eq (mevedel-execution--record-kind record) 'monitor)
+                   ;; Monitor stdout belongs to its mailbox batches, including
+                   ;; output that arrived during a synchronous remote startup.
+                   (mevedel-execution--range-observation record '(:output ""))
+                 (mevedel-execution--observation record))))))
 
 (defun mevedel-execution--arm-managed-timers (record)
   "Arm RECORD's progress and yield clocks."
-  (when (and mevedel-execution-event-functions
+  (when (and (not (eq (mevedel-execution--record-kind record) 'monitor))
+             mevedel-execution-event-functions
              (mevedel-execution--origin-tool-use-id
               (mevedel-execution--record-origin record)))
     (setf (mevedel-execution--record-progress-timer record)
@@ -1587,12 +1730,14 @@ process-filter appends use the published path."
            (max 0 mevedel-execution-progress-delay)
            nil
            #'mevedel-execution--emit-progress record)))
-  (when-let* ((yield-time-ms
-               (mevedel-execution--record-yield-time-ms record)))
-    (setf (mevedel-execution--record-yield-timer record)
-          (run-at-time
-           (/ yield-time-ms 1000.0)
-           nil #'mevedel-execution--yield-managed record))))
+  (if (eq (mevedel-execution--record-kind record) 'monitor)
+      (mevedel-execution--yield-managed record)
+    (when-let* ((yield-time-ms
+                (mevedel-execution--record-yield-time-ms record)))
+      (setf (mevedel-execution--record-yield-timer record)
+            (run-at-time
+             (/ yield-time-ms 1000.0)
+             nil #'mevedel-execution--yield-managed record)))))
 
 (defun mevedel-execution--managed-process-terminal (record child result)
   "Settle RECORD from the exact current CHILD terminal RESULT."
@@ -1643,11 +1788,18 @@ process-filter appends use the published path."
       (let* ((origin (mevedel-execution--record-origin record))
              (session (mevedel-execution--origin-session origin))
              (child (mevedel-execution--record-child record)))
+        (when (eq (mevedel-execution--record-kind record) 'monitor)
+          (setf (mevedel-execution--record-expires-at record)
+                (+ (float-time) (/ (mevedel-execution--record-timeout-ms record)
+                                   1000.0))))
         (mevedel-execution-process-start
          child
          :name "mevedel-bash" :command command
          :target (mevedel-session-execution-target session)
          :coding 'utf-8-unix
+         :separate-stderr (eq (mevedel-execution--record-kind record) 'monitor)
+         :timeout (when (eq (mevedel-execution--record-kind record) 'monitor)
+                    (/ (mevedel-execution--record-timeout-ms record) 1000.0))
          :confined
          (eq 'bubblewrap
              (plist-get (mevedel-execution--record-sandbox-facts record)
@@ -1768,7 +1920,7 @@ process-filter appends use the published path."
               writable-roots temporary-root
               additional-permissions sandbox-permissions artifact-directory
               outcome-function read-only-p tool-args tool-use-id tty
-              permission-approvals
+              permission-approvals (kind 'bash) description (timeout-ms 300000)
               (yield-time-ms 10000))
   "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
 
@@ -1786,10 +1938,19 @@ PERMISSION-APPROVALS is trusted display metadata snapshotted at admission,
 not execution authority.
 TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
-terminal settlement."
+terminal settlement.  KIND `monitor' yields immediately, frames stdout lines,
+and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
   (unless session
     (signal 'mevedel-execution-error
             (list "Managed Bash requires an active session")))
+  (when (eq kind 'monitor)
+    (unless (equal (or owner "/root") "/root")
+      (error "Monitor is available only to /root"))
+    (when tty (error "Monitor does not support TTY execution"))
+    (unless (and (stringp description) (not (string-empty-p (string-trim description))))
+      (error "Monitor requires a non-empty description"))
+    (unless (and (integerp timeout-ms) (<= 1000 timeout-ms 3600000))
+      (error "Monitor timeout_ms must be between 1000 and 3600000")))
   (when (and tty (eq system-type 'windows-nt))
     (signal 'mevedel-execution-input-error
             (list "PTY execution is unavailable on Windows")))
@@ -1841,6 +2002,7 @@ terminal settlement."
            (record
             (mevedel-execution--record-create
              :callback callback :execution-id id
+             :kind kind :description description :timeout-ms timeout-ms
              :marker-buffer nil :newline-count 0
              :origin
              (mevedel-execution--origin-create
@@ -2191,6 +2353,21 @@ not active work and cannot keep session transfer or history changes blocked."
          (maphash (lambda (_id record)
                     (when (mevedel-execution--managed-live-p record)
                       (throw 'live t)))
+                  (mevedel-execution--state-records state))))
+     mevedel-execution--sessions)
+    nil))
+
+(defun mevedel-execution-working-p ()
+  "Return non-nil for live managed work, excluding waiting monitors."
+  (catch 'working
+    (maphash
+     (lambda (session _present)
+       (when-let* ((state (mevedel-session-execution-state session)))
+         (maphash (lambda (_id record)
+                    (when (and (not (eq (mevedel-execution--record-kind record)
+                                        'monitor))
+                               (mevedel-execution--managed-live-p record))
+                      (throw 'working t)))
                   (mevedel-execution--state-records state))))
      mevedel-execution--sessions)
     nil))

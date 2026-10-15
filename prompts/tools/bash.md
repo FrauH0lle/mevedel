@@ -31,9 +31,10 @@ Execute Bash commands for builds, tests, version control, and system operations.
   read `mevedel://tools/execution.md`. If unavailable, use the known contract
   or report missing guidance instead of guessing authority fields.
 - After `yield_time_ms` (10 seconds by default), a running command returns an
-  `execution_id`. Poll unread output with WriteStdin and empty `chars`;
-  ListExecutions lists your commands and StopExecution stops one. Commands have
-  no automatic timeout; use the native `timeout` command for a deadline.
+  `execution_id`. Root-owned completion automatically wakes an idle root, so
+  polling just to keep the task moving is unnecessary. Use WriteStdin for unread
+  output, ListExecutions for live executions, and StopExecution to stop one.
+  Commands have no automatic timeout; use the native `timeout` command for a deadline.
 - Pipe stdin is closed. Use `tty=true` for interactive input or required terminal
   behavior. Avoid shell backgrounding (`&`); lower `yield_time_ms` to yield early.
 - Results preserve exit codes. Simple grep/rg no-match, diff differences, and
@@ -44,7 +45,8 @@ Execute Bash commands for builds, tests, version control, and system operations.
 <example>
 - Build, then test only if the build succeeds:
 Bash(command="make build && make test")
-If it yields an execution_id, poll that execution to obtain completion and remaining output.
+If it yields an execution_id, continue other work or end the turn; root completion
+arrives automatically. Use WriteStdin if intermediate output is needed.
 </example>
 
 ### Examples of bad usage
@@ -53,7 +55,7 @@ If it yields an execution_id, poll that execution to obtain completion and remai
 Bash(command="make test &")
 <reasoning>
 Shell backgrounding is rejected. Use Bash(command="make test", yield_time_ms=1000)
-to yield through the managed execution lifecycle. If it returns an execution_id,
-use that returned ID with WriteStdin to observe completion; yielding is not success.
+to yield through the managed execution lifecycle. Completion arrives automatically
+for root-owned commands; yielding itself is not success.
 </reasoning>
 </example>

@@ -35,6 +35,34 @@
 (defvar battery-status-function)
 (defvar battery-update-functions)
 
+(mevedel-deftest mevedel-view-stream-ensure-progress-for-fsm/cold-load ()
+  ,test
+  (test)
+  :doc "request progress loads its agent predicate before any composer exists"
+  (with-temp-buffer
+    (let ((status
+           (call-process
+            (expand-file-name invocation-name invocation-directory)
+            nil t nil "--batch" "-Q" "--eval"
+            (prin1-to-string
+             `(progn
+                (setq load-path ',load-path load-prefer-newer t)
+                (require 'ert)
+                (require 'gptel-request)
+                (require 'mevedel-view-stream)
+                (should-not (featurep 'mevedel-view-composer))
+                (with-temp-buffer
+                  (setq-local mevedel--view-buffer nil
+                              mevedel--agent-invocation nil)
+                  (let ((fsm (gptel-make-fsm
+                              :info (list :buffer (current-buffer)))))
+                    (should-not
+                     (mevedel-view-stream-ensure-progress-for-fsm fsm))
+                    (should (featurep 'mevedel-view-composer)))))))))
+      (ert-info ((buffer-string))
+        (should (equal 0 status))
+        (should (equal "" (buffer-string)))))))
+
 (defmacro mevedel-view-stream-test--without-battery-load (&rest body)
   "Run BODY with `battery' treated as loaded and other features delegated.
 A power poll requires `battery'; loading it for real initializes D-Bus
