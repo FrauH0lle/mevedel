@@ -36,8 +36,9 @@ export async function renderImageEdit(snapshot, edit) {
 
 /* GETIMAGE returns the selected image's snapshot, or a promise of it.
    PREPARE turns a snapshot and edit into the changes COMMIT applies;
-   documents render the edited pixels, boards keep Excalidraw's crop fields. */
-export function imageTools(parent, getImage, commit, report, prepare = renderImageEdit) {
+   documents render the edited pixels, boards keep Excalidraw's crop fields.
+   RETURNED gives the editor its focus back when the crop dialog closes. */
+export function imageTools(parent, getImage, commit, report, prepare = renderImageEdit, returned = () => {}) {
   let busy = false;
   const buttons = [];
   const button = (label, action) => {
@@ -58,7 +59,7 @@ export function imageTools(parent, getImage, commit, report, prepare = renderIma
   const rotate = edit => ({...edit,rotation:(edit.rotation+90)%360,flipX:edit.flipY,flipY:edit.flipX});
   button('Crop image', async () => {
     const snapshot = await getImage(); if (!snapshot || busy) return;
-    try { await cropDialog(snapshot,apply,rotate); } catch (error) { report(error.message); }
+    try { await cropDialog(snapshot,apply,rotate,returned); } catch (error) { report(error.message); }
   });
   button('Rotate 90°', change(rotate));
   button('Flip horizontal', change(e => ({...e,flipX:!e.flipX})));
@@ -66,7 +67,7 @@ export function imageTools(parent, getImage, commit, report, prepare = renderIma
   button('Reset image', change(() => null));
 }
 
-async function cropDialog(snapshot, apply, rotate) {
+async function cropDialog(snapshot, apply, rotate, returned) {
   const original = new Image(); original.src = snapshot.src; await original.decode();
   let edit = structuredClone(snapshot.imageEdit || defaults()); delete edit.src;
   const dialog = document.createElement('dialog'); dialog.className = 'editor-dialog image-crop-dialog';
@@ -150,6 +151,8 @@ async function cropDialog(snapshot, apply, rotate) {
     finally {applying = false;controls.forEach(el => {el.disabled = false;});}
   };
   dialog.addEventListener('keydown', event => event.stopPropagation());
-  dialog.addEventListener('close', () => dialog.remove(),{once:true});
+  // Focus would stay on the toolbar, with the page's selection outside the
+  // editor; the next click on the image would then lose it.
+  dialog.addEventListener('close', () => { dialog.remove(); returned(); },{once:true});
   document.body.append(dialog);dialog.showModal();update();
 }

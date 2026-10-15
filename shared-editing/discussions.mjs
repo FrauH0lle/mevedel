@@ -49,11 +49,15 @@ export class DiscussionPanel {
     this.sending = new Set();
     this.conversation = { records: [], own: [], busy: false, connected: true };
     $('question').value = this.draft.text;
+    this.current = 'discussions';
     $('ask-toggle').onclick = () => {
-      if ($('assistant').hidden && !this.draft.attachment) this.begin('whole');
-      else this.toggle($('assistant').hidden);
+      if (!$('assistant').hidden && this.current === 'discussions') this.toggle(false);
+      else if (!this.draft.attachment) this.begin('whole');
+      else { this.tab('discussions'); this.toggle(true); }
     };
     $('assistant-close').onclick = () => this.toggle(false);
+    $('discussions-tab').onclick = () => this.tab('discussions');
+    $('library-tab').onclick = () => this.tab('library');
     $('whole-question').onclick = () => this.begin('whole');
     $('selected-question').onclick = () => {
       if (!this.draft.selectionAttachment) return;
@@ -123,9 +127,6 @@ export class DiscussionPanel {
     fitWidth();
     this.layout = () => {
       fitWidth();
-      const container = document.querySelector($('assistant').hidden ? 'footer' : '.assistant-compose');
-      if ($('context-actions').parentElement !== container) container.prepend($('context-actions'));
-      if (innerHeight < 500 && document.activeElement === $('question')) $('attached-context').open = false;
       for (const node of document.body.children)
         if (node !== $('assistant')) node.inert = !$('assistant').hidden && innerWidth < 800;
     };
@@ -165,14 +166,32 @@ export class DiscussionPanel {
     $('assistant-notice').dataset.error = String(error);
   }
   find(id) { return this.discussions.find(d => d.id === id); }
+  /* Show sidebar tab NAME: the discussions, or the whiteboard's library. */
+  tab(name) {
+    this.current = name;
+    for (const tab of ['discussions', 'library']) {
+      $(`${tab}-tab`).setAttribute('aria-selected', String(tab === name));
+      $(`${tab}-panel`).hidden = tab !== name;
+    }
+    document.querySelector('.show-resolved').hidden = name !== 'discussions';
+    this.toggles();
+    if (name === 'library') this.onLibrary?.();
+  }
+  /* The canvas or toolbar buttons say which tab the open sidebar shows. */
+  toggles() {
+    const shown = !$('assistant').hidden;
+    $('ask-toggle').setAttribute('aria-expanded', String(shown && this.current === 'discussions'));
+    $('library-toggle')?.setAttribute('aria-expanded', String(shown && this.current === 'library'));
+  }
   card(id) { return [...$('discussions').children].find(n => n.dataset.discussionId === id); }
   toggle(shown, focus = true) {
     $('assistant').hidden = !shown;
     document.body.classList.toggle('assistant-open', shown);
-    $('ask-toggle').setAttribute('aria-expanded', String(shown));
+    this.toggles();
     this.renderDraft();
     this.layout();
-    if (!shown) $('ask-toggle').focus({preventScroll:true});
+    if (!shown) $(this.current === 'library' ? 'library-toggle' : 'ask-toggle')?.focus({preventScroll:true});
+    else if (focus && this.current === 'library') $('library-tab').focus({preventScroll:true});
     else if (focus) (this.state().readOnly ? $('assistant-scroll') : $('question')).focus({preventScroll:true});
   }
   /* Open the composer about SCOPE: the whole item, or the current selection,
@@ -187,36 +206,41 @@ export class DiscussionPanel {
       draft.attachment = attachment;
       draft.opId = crypto.randomUUID();
       this.notice('');
+      this.tab('discussions');
       this.toggle(true);
     } catch (error) {
+      this.tab('discussions');
       this.toggle(true);
       this.notice(error.message, true);
     }
   }
+  /* The composer says what its message is about in one chip: the whole
+     item, or a new discussion about the selection, with a switch to the
+     other when there is one. */
   renderDraft() {
     const a = this.draft.attachment, selection = a?.snapshot.scope === 'selection';
     const documentItem = document.body.dataset.kind === 'document';
+    const kind = documentItem ? 'document' : 'whiteboard';
     const toAssistant = this.draft.toAssistant !== false;
     const part = (selection ? a : this.draft.selectionAttachment)?.snapshot.region ? 'area' : anchorTerms().part;
-    $('context-title').textContent = a
-      ? `${selection ? 'New discussion · selected ' + (a.snapshot.region ? 'area' : anchorTerms().part) : 'Whole ' + a.snapshot.kind} · ${a.snapshot.title}`
-      : 'Choose content to discuss';
-    $('attached-context').open = selection;
-    $('context-quote').textContent = a?.quote || '';
-    $('context-detail').textContent = a ? JSON.stringify(a.snapshot, null, 2) : '';
-    $('whole-question').textContent = documentItem ? 'Whole document' : 'Whole whiteboard';
-    $('selected-question').textContent = 'Selected ' + part;
-    $('whole-question').setAttribute('aria-pressed', String(a?.snapshot.scope === 'whole'));
-    $('selected-question').setAttribute('aria-pressed', String(selection));
-    $('selected-question').disabled = !this.draft.selectionAttachment && !selection;
-    $('selected-question').title = $('selected-question').disabled ? 'Select content and choose Discuss first.' : 'Discuss the content already attached to this message.';
+    $('context-title').textContent = selection ? `Selected ${part}` : `Whole ${kind}`;
+    $('context-title').title = selection ? `Starts a new discussion about the selected ${part}` : `Writes to the discussion about the whole ${kind}`;
+    $('context-title').dataset.scope = selection ? 'selection' : 'whole';
+    $('context-quote').textContent = selection ? a.quote || '' : '';
+    $('context-quote').hidden = !selection || !a.quote;
+    $('whole-question').textContent = `Whole ${kind}`;
+    $('whole-question').hidden = !selection;
+    $('selected-question').textContent = `Selected ${part}`;
+    $('selected-question').hidden = selection || !this.draft.selectionAttachment;
+    $('selected-question').title = 'Discuss the content already attached to this message';
     $('ask-assistant').checked = toAssistant;
     $('question').placeholder = !selection ? `Write about the whole ${documentItem ? 'document' : 'whiteboard'}…`
       : toAssistant ? `Start a discussion, or leave empty to send the selected ${part} as your request…`
       : `Start a discussion about the selected ${part}…`;
     $('question-send').textContent = selection ? 'Start discussion' : 'Post';
     $('question-send').disabled = this.sending.has('new');
-    $('ask').hidden = $('context-scope').hidden = this.state().readOnly;
+    $('ask').hidden = $('compose-about').hidden = this.state().readOnly;
+    if (this.state().readOnly) $('context-quote').hidden = true;
     this.changed();
   }
   /* Post the composer's message: to the discussion about the whole item, or
@@ -357,6 +381,7 @@ export class DiscussionPanel {
     } catch (error) { this.notice(error.message, true); }
   }
   openDiscussion(id) {
+    this.tab('discussions');
     this.toggle(true, false);
     const card = this.card(id);
     if (card) {
@@ -429,9 +454,13 @@ export class DiscussionPanel {
     const kind = document.body.dataset.kind === 'document' ? 'document' : 'whiteboard';
     const anchored = this.discussions.filter(d => d.id !== GENERAL);
     const open = anchored.filter(d => !d.resolved).length;
-    $('discussion-title').textContent = open ? `Discussions (${open})` : 'Discussions';
+    for (const count of [$('discussion-count'), $('ask-count')]) {
+      count.textContent = String(open);
+      count.hidden = !open;
+    }
+    $('ask-toggle').setAttribute('aria-label', open ? `Discussions, ${open} open` : 'Discussions');
     $('discussions-hint').textContent = anchorTerms().empty;
-    $('discussions-hint').hidden = anchored.some(d => !d.resolved || $('show-resolved').checked);
+    $('discussions-hint').hidden = readOnly || anchored.some(d => !d.resolved || $('show-resolved').checked);
     const previous = new Map([...list.children].map(n => [n.dataset.discussionId, n]));
     for (const node of [...previous.values()])
       if (!this.find(node.dataset.discussionId)) { node.remove(); previous.delete(node.dataset.discussionId); }
@@ -569,11 +598,13 @@ export class DiscussionPanel {
     whole.querySelector('.conversation-empty')?.remove();
     if (!whole.querySelector('.thread-message, .thread-tail > *'))
       whole.querySelector('.thread-tail').before(el('p', 'Discuss this item with the room and the assistant. Messages and answers are shared with everyone.', 'conversation-empty'));
+    // The status line speaks only when there is something to say.
     $('conversation-state').textContent = !connected ? 'Disconnected · drafts kept'
       : busy ? `Assistant working${model ? ' · ' + model : ''}`
       : paused ? `Queue paused on host${own.length ? ' · ' + own.length + ' waiting' : ''}`
       : own.length ? `${own.length} message${own.length === 1 ? '' : 's'} queued for the assistant`
-      : records.at(-1)?.status === 'failed' ? 'Assistant request failed · see the discussion' : 'Ready';
+      : records.at(-1)?.status === 'failed' ? 'Assistant request failed · see the discussion' : '';
+    $('conversation-state').hidden = !$('conversation-state').textContent;
     $('conversation-state').classList.toggle('assistant-working', Boolean(connected && busy));
     $('ask-toggle').classList.toggle('assistant-working', Boolean(connected && busy));
     if (follow) scroll.scrollTop = scroll.scrollHeight;

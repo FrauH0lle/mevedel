@@ -125,7 +125,11 @@ test('board tools', async (t) => {
 
   await t.test('the library inserts built-in and personal items and installs public libraries', async () => {
     const {page, frame} = await open({content:[{id:'box', type:'rectangle', x:0, y:0, width:100, height:60}]});
-    await frame.locator('#library-menu > summary').click();
+    // The library is a tab of the sidebar, beside Discussions.
+    await frame.locator('#library-toggle').click();
+    assert.equal(await frame.locator('#library-tab').getAttribute('aria-selected'), 'true');
+    assert.equal(await frame.locator('#library-toggle').getAttribute('aria-expanded'), 'true');
+    assert.equal(await frame.locator('#discussions-panel').isVisible(), false);
     const section = name => frame.locator('.library-section > summary').filter({hasText:name});
     assert.equal(await frame.getByRole('button', {name:'Insert Database', exact:true}).isVisible(), false,
       'libraries other than My library start collapsed');
@@ -136,15 +140,16 @@ test('board tools', async (t) => {
     const cylinder = content.filter(e => e.groupIds?.length);
     assert.equal(cylinder.length, 4, 'the built-in database cylinder is four grouped elements');
     assert.equal(new Set(cylinder.map(e => e.groupIds.at(-1))).size, 1);
-    // Selected objects become a personal item, kept by the host.
-    await frame.locator('#library-menu > summary').click();
+    // The sidebar stays open beside the board; selected objects become a
+    // personal item, kept by the host.
+    assert.equal(await frame.locator('#library-panel').isVisible(), true);
     await frame.getByRole('button', {name:'Add selection', exact:true}).click();
     await frame.getByRole('button', {name:'Remove item from the library', exact:true}).waitFor();
     assert.equal(JSON.parse(library.requests.findLast(r => r.action === 'library-add').text).libraryItems[0].elements.length, 4);
     await frame.getByRole('button', {name:'Remove item from the library', exact:true}).click();
     await frame.getByText('Select objects and choose Add selection', {exact:false}).waitFor();
     // An .excalidrawlib file imports into the personal library.
-    await frame.locator('#library-menu input[type=file]').setInputFiles({name:'clouds.excalidrawlib',
+    await frame.locator('#library-panel input[type=file]').setInputFiles({name:'clouds.excalidrawlib',
       mimeType:'application/json', buffer:Buffer.from(catalogText)});
     await frame.getByRole('button', {name:'Insert Cloud', exact:true}).waitFor();
     // The public collection sorts, previews and installs through the host.
@@ -175,9 +180,15 @@ test('board tools', async (t) => {
     await saved(frame);
     content = await read(page);
     assert.equal(content.filter(e => e.type === 'ellipse').length, 2, 'an installed item inserts as new elements');
-    await frame.locator('#library-menu > summary').click();
     await frame.getByRole('button', {name:'Remove library Clouds', exact:true}).click();
     await frame.getByRole('heading', {name:'Clouds', exact:true}).waitFor({state:'detached'});
+    // The library toggle closes its own tab; Discussions opens in its place.
+    await frame.locator('#ask-toggle').click();
+    assert.equal(await frame.locator('#discussions-tab').getAttribute('aria-selected'), 'true');
+    assert.equal(await frame.locator('#library-toggle').getAttribute('aria-expanded'), 'false');
+    await frame.locator('#library-toggle').click();
+    await frame.locator('#library-toggle').click();
+    assert.equal(await frame.locator('#assistant').isVisible(), false);
     await page.close();
   });
 
@@ -215,24 +226,26 @@ test('board tools', async (t) => {
     await saved(frame);
     assert.ok((await read(page)).filter(e => ['a', 'b'].includes(e.id)).every(e => !e.groupIds), 'ungrouped');
     // A locked element cannot be picked until it is unlocked.
+    // Lock is a selection action; Unlock all is in the editor menu.
     await click(50, 30);
-    await frame.locator('#object-menu > summary').click();
     await frame.getByRole('button', {name:'Lock', exact:true}).click();
     await click(50, 30);
     assert.deepEqual(await selectedIds(frame), []);
-    await frame.locator('#object-menu > summary').click();
+    await frame.locator('#menu > summary').click();
     await frame.getByRole('button', {name:'Unlock all', exact:true}).click();
     await click(50, 30);
     assert.deepEqual(await selectedIds(frame), ['a']);
     // Arrowheads and fonts come from the style panel.
     await page.mouse.click(...await at(page, frame, 200, 30));
     assert.deepEqual(await selectedIds(frame), ['link']);
-    assert.equal(await frame.locator('#properties').evaluate(e => e.open), true, 'a selection opens Style');
+    assert.equal(await frame.locator('#properties').isVisible(), true, 'a selection opens its panel');
     await frame.getByRole('button', {name:'End arrowhead: Triangle', exact:true}).click();
     await frame.getByRole('button', {name:'Start arrowhead: Circle', exact:true}).click();
-    await frame.locator('#properties > summary').click();
+    // Closed, the panel uncovers the board until the selection changes.
+    await frame.getByRole('button', {name:'Close the selection panel', exact:true}).click();
+    assert.equal(await frame.locator('#properties').isVisible(), false);
     await click(15, 210);
-    await frame.locator('#properties > summary').click();
+    assert.equal(await frame.locator('#properties').isVisible(), true, 'a new selection opens it again');
     await frame.getByRole('button', {name:'Normal', exact:true}).click();
     await saved(frame);
     content = await read(page);
@@ -276,9 +289,9 @@ test('board tools', async (t) => {
     assert.deepEqual(await selectedIds(frame), ['g1', 'g2'], 'Escape leaves the group selected');
     // Eight resize handles and a rotation handle surround a lone shape.
     await page.keyboard.press('Escape');
-    await frame.locator('#properties').evaluate(e => { e.open = false; });
     await page.mouse.click(...await at(page, frame, 50, 30));
-    await frame.locator('#properties').evaluate(e => { e.open = false; });
+    // The selection panel covers the board's left; closed, it stays out of the way.
+    await frame.getByRole('button', {name:'Close the selection panel', exact:true}).click();
     assert.equal(await frame.locator('#selection [data-handle]').count(), 9);
     const e = await handleAt('e');
     await dragFrom(e, [e[0] + 60, e[1] + 40]);

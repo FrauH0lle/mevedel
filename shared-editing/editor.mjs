@@ -6,7 +6,7 @@ import { documentControls } from './document-controls.mjs';
 import { imageTools } from './image-controls.mjs';
 import { captureContext, readDiscussions } from './context.mjs';
 import { Editor, Extension } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
@@ -84,6 +84,8 @@ let tool = 'select',
   boardPresence,
   boardPreviews,
   outgoingPreview = null,
+  /* Loads the whiteboard's library the first time its tab shows. */
+  loadLibrary = null,
   refresh = () => {};
 /* Style of the next drawn element in Excalidraw's fields; the panel edits it
    alongside the selection. `roundness` holds the panel's round/sharp choice. */
@@ -542,13 +544,21 @@ function drawDiscussionMarkers(scene, scale) {
   if (!peek.hidden && ![...$('discussion-markers').children].some((m) => m.dataset.discussionId === peek.dataset.discussionId))
     peek.hidden = true;
 }
-/* Show board BOX whole, clear of the zoom control floating over the canvas foot. */
+/* Show board BOX whole, clear of the controls floating over the canvas's top
+   and foot, and no larger than its actual size, as Excalidraw's fit does. */
 function frame(box) {
-  const c = $('canvas').getBoundingClientRect(), zoom = document.querySelector('.zoom-tools')?.getBoundingClientRect();
-  const room = c.height - (zoom ? Math.max(0, c.bottom - zoom.top) : 0);
+  const c = $('canvas').getBoundingClientRect();
+  let top = 0, bottom = 0;
+  for (const node of document.querySelectorAll('#board .island:not(.selection-panel)')) {
+    const r = node.getBoundingClientRect();
+    if (!r.height) continue;
+    if (r.top + r.height / 2 < c.top + c.height / 2) top = Math.max(top, r.bottom - c.top);
+    else bottom = Math.max(bottom, c.bottom - r.top);
+  }
+  const room = c.height - top - bottom;
   if (!c.width || room <= 0) { view = box; return; }
-  const [x, y, w, h] = box, scale = Math.min(c.width / w, room / h);
-  view = [x - (c.width / scale - w) / 2, y - (room / scale - h) / 2, c.width / scale, c.height / scale];
+  const [x, y, w, h] = box, scale = Math.min(1, c.width / w, room / h);
+  view = [x - (c.width / scale - w) / 2, y - top / scale - (room / scale - h) / 2, c.width / scale, c.height / scale];
 }
 function revealObjects(discussion) {
   const scene = currentScene(), box = discussionAnchor(discussion, scene);
@@ -1082,7 +1092,7 @@ function board() {
     undo.stopCapturing();
     doc.transact(() => putElement(doc, after), local);
     undo.stopCapturing();
-  }, message => status(message, true), boardImageChanges);
+  }, message => status(message, true), boardImageChanges, () => $('canvas').focus({preventScroll:true}));
   const tools = [
     ['pan', 'Hand', 'H'],
     ['select', 'Selection', 'V'],
@@ -1115,14 +1125,17 @@ function board() {
     laser: 'm3 21 10-10 3 3L6 24ZM17 7l3-3M14 5V2M21 10h3',
     discuss: 'M4 4h16v12H10l-5 4v-4H4Z',
   };
-  const commands = document.createElement('div');
-  commands.className = 'board-commands';
-  $('tools').append(commands);
-  const objectMenu = document.createElement('details');
-  objectMenu.className = 'popover board-menu';
-  objectMenu.id = 'object-menu';
-  objectMenu.innerHTML = '<summary>Objects</summary><div class="editor-menu"></div>';
-  commands.append(objectMenu);
+  // The board's controls float over the canvas in islands, as Excalidraw's do.
+  const island = (className, label, parent = $('board')) => {
+    const node = document.createElement('div');
+    node.className = `island ${className}`;
+    node.setAttribute('role', 'group');
+    node.setAttribute('aria-label', label);
+    parent.append(node);
+    return node;
+  };
+  island('island-menu', 'Editor menu').append($('menu'));
+  const panels = island('island-panels', 'Panels');
   const strip = document.createElement('div');
   strip.className = 'drawing-tools';
   strip.setAttribute('role', 'group');
@@ -1154,17 +1167,24 @@ function board() {
       lock.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="${toolLocked ? 'M8 11V7a4 4 0 0 1 8 0v4' : 'M8 11V7a4 4 0 0 1 7.7-1.5'}"/></svg><kbd>Q</kbd>`;
     };
     lock.id = 'board-tool-lock';
-    lock.className = 'tool-group-start';
+    strip.prepend(lock);
+    strip.children[1].classList.add('tool-group-start');
     lock.title = 'Keep the tool after drawing (Q)';
     lock.setAttribute('aria-label', 'Keep the tool after drawing');
     lock.setAttribute('aria-keyshortcuts', 'Q');
     showLock();
   }
-  const properties = document.createElement('details');
+  // The selection panel: the selection's style, layers and actions, and
+  // Discuss; with nothing selected, the style of the next drawn object.
+  const properties = document.createElement('section');
   properties.id = 'properties';
-  properties.className = 'popover';
-  properties.innerHTML = '<summary>Style</summary><div class="menu-body"></div>';
-  commands.append(properties);
+  properties.className = 'island selection-panel';
+  properties.setAttribute('aria-label', 'Selection');
+  properties.hidden = true;
+  properties.innerHTML = '<div class="panel-head"><p class="property-caption"></p>'
+    + '<button type="button" class="panel-close" aria-label="Close the selection panel" title="Close">×</button></div>'
+    + '<div class="menu-body"></div>';
+  $('board').append(properties);
   const panel = properties.lastElementChild;
   const TEXTUAL = ['fontSize', 'fontFamily', 'textAlign', 'verticalAlign'];
   /* The elements a style KEY changes for the selection: the selected
@@ -1379,9 +1399,7 @@ function board() {
           .join(''),
       ) +
       section('opacity', 'Opacity', '<input type="range" min="0" max="100" step="5" aria-label="Opacity"><output>100</output>');
-    const caption = document.createElement('p');
-    caption.className = 'property-caption';
-    panel.prepend(caption);
+    const caption = properties.querySelector('.property-caption');
     panel.onclick = (event) => {
       const b = event.target.closest('[data-prop]');
       if (b) {
@@ -1411,9 +1429,9 @@ function board() {
         textAlign: kinds.has('text') || labelled || (!shapes.length && tool === 'text'),
         verticalAlign: labelsOf(new Set(shapes.filter((s) => s.type !== 'arrow').map((s) => s.id))).length > 0,
         opacity: kinds.size > 0,
+        layers: shapes.length > 0,
+        actions: shapes.length > 0,
       });
-      properties.firstElementChild.setAttribute('aria-disabled', String(!kinds.size));
-      if (!kinds.size) properties.open = false;
       const name = typeNames[shapes[0]?.type || tool] || 'Element';
       caption.textContent = shapes.length > 1 ? `${shapes.length} objects` : shapes.length ? name : `New ${name.toLowerCase()}`;
       for (const sec of panel.querySelectorAll('.sec')) sec.hidden = !show[sec.dataset.sec];
@@ -1427,7 +1445,6 @@ function board() {
       range.nextElementSibling.value = value('opacity');
     };
   }
-  properties.hidden = readOnly;
   const canvas = $('canvas');
   const actions = [];
   const all = () => { selected = new Set(shapeList().filter(s => !s.locked && !(s.containerId && s.type === 'text')).map(s => s.id)); selectionRegion = null; selectTool('select'); };
@@ -1440,42 +1457,54 @@ function board() {
       shape.set('geometry', { ...geometry, x: geometry.x + dx * step, y: geometry.y + dy * step });
     }
   }, local);
-  const action = (parent, label, run, enabled, shortcut = '', keepOpen = false) => {
-    const b = button(parent, label, event => {
-      undo?.stopCapturing();
-      if (!keepOpen) { objectMenu.open = false; canvas.focus({preventScroll:true}); }
-      run(event);
-      undo?.stopCapturing();
-    });
+  const ICONS = {
+    back: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+    front: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>',
+    duplicate: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+    group: '<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 2"/><rect x="7" y="7" width="5" height="5"/><rect x="12" y="12" width="5" height="5"/>',
+    ungroup: '<rect x="3" y="3" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    remove: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  };
+  /* An icon command on the selection, enabled while ENABLED holds. */
+  const action = (parent, label, run, enabled, icon, shortcut = '') => {
+    const b = button(parent, '', () => { undo?.stopCapturing(); run(); undo?.stopCapturing(); });
+    b.className = 'opt';
+    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[icon]}</svg>`;
+    b.title = shortcut ? `${label} (${shortcut})` : label;
     b.setAttribute('aria-label', label);
-    if (shortcut) { const key = document.createElement('kbd'); key.textContent = shortcut; b.append(key); }
     actions.push([b, enabled]);
     return b;
   };
-  const objectBody = objectMenu.lastElementChild;
-  action(objectBody, 'Select all', all, () => shapeList().length > 0, '⌘ / Ctrl A');
-  action(objectBody, 'Clear selection', clear, () => selected.size > 0, 'Esc');
+  const row = (key, title) => {
+    const sec = document.createElement('div');
+    sec.className = 'sec';
+    sec.dataset.sec = key;
+    sec.innerHTML = `<h4>${title}</h4><div class="row"></div>`;
+    panel.append(sec);
+    return sec.lastElementChild;
+  };
+  // Commands on the whole board sit in the editor menu.
+  const command = (label, run, enabled) => {
+    const b = button($('board-commands'), label, () => { $('menu').open = false; run(); canvas.focus({preventScroll:true}); });
+    actions.push([b, enabled]);
+  };
+  $('board-commands').hidden = false;
+  command('Select all', all, () => shapeList().length > 0);
   if (!readOnly) {
-    action(objectBody, 'Edit text', () => editText([...selected][0]), () => selected.size === 1, 'Enter').classList.add('menu-divider');
-    action(objectBody, 'Duplicate', duplicate, () => selected.size > 0, '⌘ / Ctrl D');
-    action(objectBody, 'Group', () => regroup(true), () => selected.size > 1, '⌘ / Ctrl G');
-    action(objectBody, 'Ungroup', () => regroup(false), () => shapeList().some(s => selected.has(s.id) && s.groupIds?.length), '⌘ / Ctrl ⇧ G');
-    action(objectBody, 'Lock', lock, () => selected.size > 0);
-    action(objectBody, 'Unlock all', unlockAll, () => shapeList().some(s => s.locked));
-    const arrange = document.createElement('details');
-    arrange.className = 'object-arrange';
-    arrange.innerHTML = '<summary>Arrange & move</summary><div></div>';
-    objectBody.append(arrange);
-    action(arrange.lastElementChild, 'Bring to front', () => reorder(true), () => selected.size > 0);
-    action(arrange.lastElementChild, 'Send to back', () => reorder(false), () => selected.size > 0);
-    const nudges = document.createElement('div'); nudges.className = 'board-nudges';
-    arrange.lastElementChild.append(nudges);
-    for (const [label, dx, dy, glyph] of [['Move left',-1,0,'←'],['Move up',0,-1,'↑'],['Move down',0,1,'↓'],['Move right',1,0,'→']]) {
-      const b = action(nudges, label, event => move(dx, dy, event.shiftKey ? 10 : 1), () => selected.size > 0, '', true);
-      b.textContent = glyph; b.title = `${label} 1px (Shift: 10px)`;
-    }
-    const help = document.createElement('p'); help.textContent = 'Move 1px. Hold Shift for 10px.'; arrange.lastElementChild.append(help);
-    action(objectBody, 'Delete', remove, () => selected.size > 0, 'Del').classList.add('danger');
+    command('Unlock all', unlockAll, () => shapeList().some(s => s.locked));
+    const layers = row('layers', 'Layers');
+    action(layers, 'Send to back', () => reorder(false), () => selected.size > 0, 'back');
+    action(layers, 'Bring to front', () => reorder(true), () => selected.size > 0, 'front');
+    const tools = row('actions', 'Actions');
+    action(tools, 'Duplicate', duplicate, () => selected.size > 0, 'duplicate', 'Ctrl / ⌘ D');
+    action(tools, 'Group', () => regroup(true), () => selected.size > 1, 'group', 'Ctrl / ⌘ G');
+    action(tools, 'Ungroup', () => regroup(false), () => shapeList().some(s => selected.has(s.id) && s.groupIds?.length),
+      'ungroup', 'Ctrl / ⌘ Shift G');
+    action(tools, 'Lock', lock, () => selected.size > 0, 'lock');
+    action(tools, 'Delete', remove, () => selected.size > 0, 'remove', 'Del').classList.add('danger');
+    panel.append($('image-tools'));
+    properties.querySelector('.panel-head').insertBefore($('discuss-selection'), properties.querySelector('.panel-close'));
   }
   const hints = {
     select: 'Drag across empty canvas to box-select (Alt: touched objects). Shift adds. Double-click edits text.',
@@ -1492,12 +1521,11 @@ function board() {
   refresh = () => {
     refreshStyle();
     for (const [b, enabled] of actions) b.disabled = !enabled();
-    const label = selected.size ? `${selected.size} object${selected.size === 1 ? '' : 's'} selected` : tools.find(([value]) => value === tool)?.[1];
-    if ($('document-stat').textContent !== label) $('document-stat').textContent = label;
-    $('hint').textContent = readOnly ? 'View only · Select objects or use the hand to explore.' : hints[tool] || 'Drag to draw. Choose Style to change the next object.';
+    $('hint').textContent = readOnly ? 'View only · Select objects or use the hand to explore.'
+      : hints[tool] || 'Drag to draw. The panel sets the style of the next object.';
   };
   const library = readOnly ? null : libraryPanel({
-    parent: commands, request, report: (message) => status(message, true),
+    parent: $('library-panel'), request, report: (message) => status(message, true),
     selection: () => shapeList().filter((s) => selected.has(s.id) || (s.type === 'text' && selected.has(s.containerId))),
     download: (text) => port.postMessage({ type: 'recovery', result: { text, mime: 'application/vnd.excalidrawlib+json', extension: 'excalidrawlib' } }),
     insert: (elements) => {
@@ -1508,48 +1536,45 @@ function board() {
       undo.stopCapturing();
       selected = new Set(placed.filter((e) => !e.containerId).map((e) => e.id));
       selectTool('select');
+      // A phone's sidebar covers the board; show where the item landed.
+      if (innerWidth < 800) assistant?.toggle(false, false);
     },
   });
-  const menus = [objectMenu, properties, ...(library ? [library] : [])];
-  const place = (menu) => {
-    const body = menu.lastElementChild;
-    body.style.marginLeft = '0px';
-    const rect = body.getBoundingClientRect();
-    body.style.marginLeft = `${Math.max(8 - rect.left, Math.min(0, innerWidth - 8 - rect.right))}px`;
-  };
-  // Style opens with a new selection on wide screens, as Excalidraw's panel
-  // does, and closes with it; closing it keeps it closed for that selection.
-  let styleKey = '', styleAuto = false, styleDismissed = false;
-  autoStyle = () => {
-    if (drag) return;
-    const key = [...selected].sort().join(' ');
-    if (key === styleKey) return;
-    styleKey = key;
-    if (!key) {
-      if (styleAuto) properties.open = false;
-      styleAuto = styleDismissed = false;
-      return;
-    }
-    if (readOnly || styleDismissed || properties.open || menus.some((m) => m.open)
-        || !matchMedia('(min-width: 1100px)').matches) return;
-    properties.open = styleAuto = true;
-    place(properties);
-  };
-  for (const menu of menus) {
-    const summary = menu.firstElementChild;
-    summary.addEventListener('click', event => {
-      event.preventDefault();
-      if (summary.getAttribute('aria-disabled') === 'true') return;
-      menu.open = !menu.open;
-      if (menu === properties) { styleAuto = false; styleDismissed = !menu.open && selected.size > 0; }
-      if (!menu.open) return;
-      for (const other of menus) if (other !== menu) other.open = false;
-      place(menu);
+  loadLibrary = library?.load || null;
+  $('library-tab').hidden = !library;
+  if (library) {
+    const toggle = button(panels, 'Library', () => {
+      if (!$('assistant').hidden && assistant.current === 'library') assistant.toggle(false);
+      else { assistant.tab('library'); assistant.toggle(true); }
     });
-    menu.addEventListener('keydown', event => {
-      if (event.key === 'Escape') { event.stopPropagation(); menu.open = false; summary.focus(); }
-    });
+    toggle.id = 'library-toggle';
+    toggle.setAttribute('aria-controls', 'assistant');
+    toggle.setAttribute('aria-expanded', 'false');
   }
+  panels.append($('ask-toggle'));
+  // The panel follows the selection and, on a wide board, the drawing tool;
+  // closing it keeps it closed until either changes.
+  let panelKey = '', panelClosed = false;
+  autoStyle = () => {
+    if (readOnly || drag) return;
+    const key = [...selected].sort().join(' ') || (selectionRegion ? 'region' : '')
+      || (drawable.includes(tool) ? `tool:${tool}` : '');
+    if (key !== panelKey) {
+      panelKey = key;
+      panelClosed = false;
+    }
+    // Styling the next object before drawing it costs canvas only a wide board can spare.
+    const wide = $('board').clientWidth >= 1100;
+    properties.hidden = panelClosed || !(selected.size || selectionRegion || (wide && drawable.includes(tool)));
+    $('discuss-selection').hidden = !(selected.size || selectionRegion);
+    document.body.classList.toggle('panel-open', !properties.hidden);
+  };
+  properties.querySelector('.panel-close').onclick = () => {
+    panelClosed = true;
+    properties.hidden = true;
+    document.body.classList.remove('panel-open');
+    canvas.focus({preventScroll:true});
+  };
   const shortcuts = document.createElement('dialog');
   shortcuts.id = 'board-shortcuts'; shortcuts.className = 'editor-dialog';
   shortcuts.setAttribute('aria-labelledby', 'board-shortcuts-title');
@@ -1562,22 +1587,30 @@ function board() {
     ${readOnly ? '' : '<div><dt>Edit text</dt><dd>Enter / double-click</dd></div><div><dt>Finish text</dt><dd>Ctrl / ⌘ Enter</dd></div><div><dt>Cancel text</dt><dd>Esc</dd></div><div><dt>Resize</dt><dd>Drag the corner handle</dd></div><div><dt>Move 1px / 10px</dt><dd>Arrows / Shift + arrows</dd></div><div><dt>Duplicate</dt><dd>Ctrl / ⌘ D</dd></div><div><dt>Group / ungroup</dt><dd>Ctrl / ⌘ G / Shift G</dd></div><div><dt>Delete</dt><dd>Del / Backspace</dd></div><div><dt>Undo / redo</dt><dd>Ctrl / ⌘ Z / Shift Z</dd></div><div><dt>Insert image</dt><dd>Drop / paste an image</dd></div><div><dt>Discuss the selection</dt><dd>Ctrl / ⌘ Alt M</dd></div>'}
     </dl></section></div><div class="dialog-actions"><button>Close</button></div></form>`;
   document.body.append(shortcuts);
-  button($('tools'), 'Shortcuts', () => shortcuts.showModal()).className = 'board-help';
-  const zoom = document.createElement('div');
-  zoom.className = 'zoom-tools';
-  zoom.setAttribute('role', 'group'); zoom.setAttribute('aria-label', 'Canvas zoom');
-  $('tools').append(zoom);
+  const help = button(island('island-help', 'Help'), '?', () => shortcuts.showModal());
+  help.className = 'board-help';
+  help.title = 'Keyboard shortcuts';
+  help.setAttribute('aria-label', 'Keyboard shortcuts');
+  const cluster = document.createElement('div');
+  cluster.className = 'island-cluster';
+  $('board').append(cluster);
+  const zoom = island('zoom-tools', 'Canvas zoom', cluster);
   const zoomBy = factor => {
     const next = Math.max(100, Math.min(100000, view[2] * factor));
     factor = next / view[2];
     view = [view[0] + view[2] * (1 - factor) / 2, view[1] + view[3] * (1 - factor) / 2, next, view[3] * factor];
     draw();
   };
-  button(zoom, 'Fit', () => { frame(bounds(shapeList(), currentScene())); draw(); }).title = 'Fit all objects';
   button(zoom, '−', () => zoomBy(1.2)).setAttribute('aria-label', 'Zoom out');
   const percentage = button(zoom, '100%', () => zoomBy(canvas.getScreenCTM()?.a || 1));
   percentage.id = 'board-zoom'; percentage.title = 'Reset zoom to 100%'; percentage.setAttribute('aria-label', 'Reset zoom to 100%');
   button(zoom, '+', () => zoomBy(1 / 1.2)).setAttribute('aria-label', 'Zoom in');
+  const fit = button(zoom, 'Fit', () => { frame(bounds(shapeList(), currentScene())); draw(); });
+  fit.title = 'Fit all objects';
+  fit.className = 'zoom-fit';
+  const history = island('island-history', 'History', cluster);
+  history.append($('undo'), $('redo'));
+  history.hidden = readOnly;
   boardPresence = new BoardPresence(canvas, $('presence'));
   boardPreviews = new BoardPreviews(()=>{ draw(); saved(); });
   new ResizeObserver(() => draw()).observe(canvas);
@@ -2064,6 +2097,20 @@ function documentEditor() {
           return [
             new Plugin({
               props: {
+                // Pressing an image selects it for its tools. Its node view
+                // keeps the press from ProseMirror, so the browser would
+                // otherwise place a caret wherever the page's selection was.
+                handleDOMEvents: {
+                  mousedown(view, event) {
+                    if (event.button !== 0 || event.target.tagName !== 'IMG') return false;
+                    const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });
+                    if (!hit || hit.inside < 0 || view.state.doc.nodeAt(hit.inside)?.type.name !== 'image') return false;
+                    event.preventDefault();
+                    view.focus();
+                    view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, hit.inside)));
+                    return true;
+                  },
+                },
                 decorations(state) {
                   const decorations = [];
                   if ($('show-agent').checked)
@@ -2137,7 +2184,9 @@ function documentEditor() {
   editor.view.dom.setAttribute('aria-label', 'Document content');
   const wordCount = () => {
     const text = editor.getText().trim();
-    $('document-stat').textContent = `${text ? text.split(/\s+/u).length : 0} words`;
+    const words = text ? text.split(/\s+/u).length : 0;
+    $('document-stat').textContent = `${words} word${words === 1 ? '' : 's'}`;
+    $('document-stat').hidden = false;
   };
   editor.on('update', wordCount);
   wordCount();
@@ -2207,7 +2256,9 @@ function documentEditor() {
     if (!editor.view.dom.contains(event.target) && !$('selection-actions').contains(event.target))
       $('selection-actions').hidden = true;
   });
+  // The bubble is placed in the viewport; scrolling or resizing leaves it stale.
   $('document').addEventListener('scroll', () => { $('selection-actions').hidden = true; });
+  window.addEventListener('resize', () => { $('selection-actions').hidden = true; });
   editor.on('blur', captureDocumentSelection);
 }
 function captureAttachment(scope, previous) {
@@ -2262,9 +2313,6 @@ async function start(event) {
   port = event.ports[0];
   item = event.data.item;
   document.documentElement.dataset.kind = item.kind;
-  $('discussion-title').textContent = item.kind === 'document' ? 'Document discussion' : 'Whiteboard assistant';
-  $('assistant').setAttribute('aria-label', $('discussion-title').textContent);
-  $('assistant-close').setAttribute('aria-label', 'Close discussion');
   participant = event.data.name || 'You';
   readOnly = event.data.readOnly;
   online = event.data.online !== false;
@@ -2386,13 +2434,8 @@ async function start(event) {
     });
   });
   report({ title: item.title });
-  $('undo').textContent = '↶';
-  $('undo').setAttribute('aria-label', 'Undo');
-  $('redo').textContent = '↷';
-  $('redo').setAttribute('aria-label', 'Redo');
   $('show-agent').onchange = refreshAgentHighlights;
-  $('undo').disabled = readOnly;
-  $('redo').disabled = readOnly;
+  $('undo').hidden = $('redo').hidden = readOnly;
   // The room confirms and deletes; the editor only asks.
   $('delete-item').hidden = readOnly;
   $('delete-item').textContent = item.kind === 'whiteboard' ? 'Delete whiteboard…' : 'Delete document…';
@@ -2491,6 +2534,7 @@ async function start(event) {
     // Only the pins' working rings follow the conversation.
     onConversation: () => { if (!editor && doc && workingPins() !== drawnWorking) draw(); },
   });
+  assistant.onLibrary = () => loadLibrary?.();
   assistant.renderDraft();
   if (editor && matchMedia('(min-width:1100px)').matches) {
     if (assistant.draft.attachment) assistant.toggle(true);
@@ -2498,14 +2542,7 @@ async function start(event) {
     document.activeElement?.blur();
   } else if (!editor) requestAnimationFrame(() => { frame(bounds(shapeList())); draw(); });
   setDiscussions(item.discussions || []);
-  $('discuss-selection').hidden = readOnly;
-  if (editor) {
-    $('document').after($('selection-actions'));
-    $('selection-actions').classList.add('document-selection-actions');
-    $('selection-actions').hidden = true;
-  }
-  $('hint').textContent = editor ? 'Select text to discuss it with the room and the assistant.'
-    : 'Select objects or drag across an area to discuss them with the room and the assistant.';
+  if (readOnly) $('discuss-selection').hidden = true;
   $('discuss-selection').onclick = () => assistant.begin('selection');
   $('document').addEventListener('click', event => {
     const id = event.target.closest('[data-discussion-id]')?.dataset.discussionId;

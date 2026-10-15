@@ -18,13 +18,16 @@ export function documentControls(editor, undo, readOnly, report) {
     summary.textContent = label;
     const body = document.createElement('div'); body.className = 'editor-menu';
     details.append(summary, body); parent.append(details);
+    // The menu drops below its button in the viewport, so a toolbar row
+    // that scrolls sideways does not clip it.
     summary.addEventListener('click', event => {
       event.preventDefault();
       details.open = !details.open;
       if (!details.open) return;
-      body.style.marginLeft = '0px';
-      const bounds = body.getBoundingClientRect();
-      body.style.marginLeft = `${Math.max(8 - bounds.left, Math.min(0, innerWidth - 8 - bounds.right))}px`;
+      const anchor = summary.getBoundingClientRect();
+      body.style.top = `${anchor.bottom + 6}px`;
+      body.style.maxHeight = `${Math.max(120, innerHeight - anchor.bottom - 14)}px`;
+      body.style.left = `${Math.max(8, Math.min(anchor.left, innerWidth - body.offsetWidth - 8))}px`;
     });
     details.addEventListener('keydown', event => {
       if (event.key === 'Escape') {
@@ -46,6 +49,7 @@ export function documentControls(editor, undo, readOnly, report) {
     return el;
   };
   const formatting = $('formatting'), styles = document.createElement('select');
+  formatting.addEventListener('scroll', closeMenus, {passive: true});
   styles.setAttribute('aria-label', 'Paragraph style');
   for (const [label, level] of [['Body',0],['Title · H1',1],['Heading · H2',2],['Subheading · H3',3],['Heading 4',4],['Heading 5',5],['Heading 6',6]])
     styles.add(new Option(label, level));
@@ -160,7 +164,7 @@ export function documentControls(editor, undo, readOnly, report) {
       : {...node,...(node.content ? {content:node.content.map(replace)} : {})};
     validateDocument(replace(editor.getJSON()));
     run(c => c.setNodeSelection(position).updateAttributes('image',changes));
-  },report);
+  },report,undefined,() => editor.view.focus());
   action($('image-tools'), 'Delete image', c => c.deleteSelection(), {danger:true});
   for (const id of ['link-dialog','image-dialog']) {
     $(id).addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });

@@ -61,7 +61,13 @@ panel preserves drafts, captured context, and editor position. The editor
 follows the visible viewport above the keyboard; Escape closes the panel, and
 Ctrl/Command+Enter submits its composer.
 Downloads, recovery, retry, contribution history, and assistant highlighting
-are in the editor's **☰** menu.
+are in the editor's **☰** menu, with a document's word count. A document's
+toolbar row holds its formatting, then undo, redo, **Discussions** and **☰**;
+on a phone the formatting scrolls sideways while those actions stay, the
+Discussions button shows its icon and count, and the page runs edge to edge.
+The formatting menus open below their buttons, clear of the scrolling row.
+Pressing an image selects it for its tools, and closing the crop dialog
+returns to the document or board.
 
 A whiteboard's **Canvas background** in that menu offers the theme's board
 colour, Excalidraw's white, grey, blue, yellow and rose canvases, and a custom
@@ -133,6 +139,15 @@ strokes and fills from each element's seed, perfect-freehand drawing, and
 Excalidraw's fonts and text layout. Every browser, the host's PNGs and the
 exports draw the same wobble.
 
+The whiteboard's controls float over its canvas in islands, as Excalidraw's
+do: the editor menu (☰) at the top left, the drawing tools centred at the top
+with the current tool's hint below them, **Library** and **Discussions** at the
+top right, zoom with undo and redo at the bottom left, and the keyboard
+shortcuts (**?**) at the bottom right. Where the board is narrower than 1,100
+pixels, as beside the sidebar, the tools move to its foot and the hint goes;
+on a phone-sized board the tools scroll sideways along the foot and **?**
+goes too.
+
 The drawing menu follows Excalidraw: hand (H), selection (V), rectangle (R),
 diamond (D), ellipse (O), sticky note (N), arrow (A), line (L), freehand
 drawing (P or X), **Shape from drawing** (Shift+X), text (T) and eraser (E),
@@ -182,7 +197,7 @@ the container when it no longer fits. Arrows carry labels the same way, with a
 gap cut into the line behind them. Clicking a label selects its container.
 Finishing a shape returns to selection with the shape selected, so a
 double-click edits it instead of creating more shapes. Freehand drawing keeps
-its tool, as strokes come in runs. The lock button (Q) after the tools keeps any
+its tool, as strokes come in runs. The lock button (Q) before the tools keeps any
 drawing tool active after each shape; it belongs to the browser, not the board. Text is shared while typing; blur or Ctrl/Command+Enter
 finishes, and Escape cancels if another writer has not changed that text.
 Finishing with no text removes the label or text element.
@@ -198,7 +213,14 @@ wherever the pen lifted. The result takes the current
 style and is an ordinary edit, so Undo restores the board as it was before the
 strokes. Strokes smaller than 25 screen pixels are not converted.
 
-The **Style** panel follows Excalidraw: stroke and background colours,
+The selection panel follows Excalidraw's: it opens at the board's left with a
+selection, or an area left by a box selection, and on a board at least 1,100
+pixels wide also with a drawing tool, for the next object. Its header names
+the selection and offers **Discuss**; × closes it until the selection or tool
+changes. On a phone-sized board it is a sheet over the board's foot, in place
+of the tools and zoom. It holds the style, the selection's **Layers** (send to
+back, bring to front) and **Actions** (duplicate, group, ungroup, lock and
+delete), and for a lone image the image tools. The style follows Excalidraw: stroke and background colours,
 hachure/cross-hatch/solid fill, stroke width, solid/dashed/dotted strokes,
 sloppiness (architect, artist, cartoonist), sharp or round edges, the arrow
 type (sharp, curved or elbow), start and end arrowheads (none, arrow,
@@ -206,9 +228,7 @@ triangle, circle, bar), font (hand-drawn Excalifont, normal Nunito, code Comic
 Shanns), font size, text alignment, vertical alignment for a label inside a
 shape, and opacity. It shows only the sections that apply to the selection or
 the active drawing tool, changes the selected objects and their labels, and
-remembers the choices for new ones. On screens at least 1,100 pixels wide it
-opens by itself when something is selected and closes when the selection is
-cleared; closing it keeps it closed until then.
+remembers the choices for new ones.
 A curved arrow runs through its points; switching a straight arrow to curved
 adds a bend to drag. An elbow arrow leaves and enters its bound shapes at the
 facing side and runs in horizontal and vertical segments between them,
@@ -221,18 +241,20 @@ Pointer input repeats and jitters, and every sample costs storage, sync and
 model context. Elements stored before this rule keep their points until next
 written. Elements imported with other Excalidraw values, such as
 the cardinality arrowheads, keep and draw them.
-**Objects** exposes Select all, Clear selection, Edit text, Duplicate
-(Ctrl/Command+D), Group (Ctrl/Command+G), Ungroup (Ctrl/Command+Shift+G), Lock,
-Unlock all, Delete, and **Arrange & move** for layer order and precise nudges.
+The editor menu adds **Select all** and **Unlock all** for the whole board.
+Duplicate (Ctrl/Command+D), Group (Ctrl/Command+G), Ungroup
+(Ctrl/Command+Shift+G), Delete, Escape to clear the selection, Enter or a
+double-click to edit text, and the arrow keys to nudge by 1 or, with Shift,
+10 pixels work from the keyboard as well.
 Clicking any member of a group selects the whole group. A locked element
 cannot be selected, moved or erased until **Unlock all**. Duplicates and
 copies keep the bindings and labels among themselves and drop the others.
-**Shortcuts** lists the canvas keys. Selection handles retain their screen
+**?** lists the canvas keys. Selection handles retain their screen
 size as the view changes.
 Scrolling pans the board, and Shift turns a mouse wheel sideways;
 Ctrl/Command+scroll and a trackpad pinch zoom at the pointer, in proportion to
 the scroll. Panning, zooming, the zoom buttons, Fit, and the percentage button
-(reset to 100%) affect only the local viewport. The board fits existing objects once on opening; Fit and opening keep them clear of the floating zoom controls.
+(reset to 100%) affect only the local viewport. The board fits existing objects once on opening. Fit and opening keep them clear of the controls floating over the canvas's top and foot, and zoom in no further than 100%, as Excalidraw's fit does.
 Both whiteboards and documents accept PNG, JPEG, and WebP through the board's
 image button or **Insert → Image…**, clipboard paste, or file drag-and-drop. Dropped images land at the board pointer or document insertion
 position; multiple files insert together and support Undo/Redo. Images are
@@ -269,14 +291,17 @@ geometry; a binding to a deleted element is drawn unbound.
 
 ## Element library
 
-**Library** offers the libraries kept on the session host: **My library**,
+**Library** opens the sidebar's Library tab, beside Discussions; each toggle
+closes its own tab. It offers the libraries kept on the session host: **My library**,
 installed libraries, and mevedel's **Built-in** library. Each library is a
 collapsible section; My library starts open, the others closed, and the
 editor remembers which sections a participant opened while it stays loaded.
 The search field matches item names and library names across every library,
 opening the sections with matches. Clicking an item
 inserts copies with fresh identities at the centre of the view, selected for
-moving; groups, labels and bindings within the item are kept.
+moving; groups, labels and bindings within the item are kept. The sidebar
+stays open beside the board; on a phone, where it covers the board, it closes
+to show the inserted item. The libraries load when the tab first shows.
 
 Each library is an `.excalidrawlib` file in `mevedel-shared-library-directory`,
 by default `~/.mevedel/whiteboard-libraries/`, named after the file. **Add
@@ -439,12 +464,14 @@ browser closed and never silently start a share.
 ### Discussions in the editor
 
 Whiteboards and documents follow the room's [discussion](collaboration.md#discussions)
-model. **Discussions** opens the editor's panel: the discussion about the
-whole item first, then one card per discussion about part of it, with its
-target, messages and the assistant's answers beneath the messages they answer.
-The panel heading counts the open discussions, and **Show resolved** brings
-resolved ones back. The panel shows the session's queued, paused, working,
-disconnected, or provider-failure state.
+model. **Discussions** opens the sidebar's Discussions tab: the discussion
+about the whole item first, then one card per discussion about part of it,
+with its target, messages and the assistant's answers beneath the messages
+they answer. The tab and the **Discussions** button count the open
+discussions, and **Resolved** brings resolved ones back. A status line under
+the tabs reports the session's queued, paused, working, disconnected, or
+provider-failure state, and stays away while there is nothing to report.
+The explanations of how to discuss show only while there is no discussion.
 While the session is working, a spinner accompanies the status and the panel's
 toolbar button. The room chat shows **Assistant working…** in its status strip.
 These indicators follow the host's session activity, including tool execution,
@@ -453,12 +480,15 @@ the spinning animation. A paused follow-up queue does not conceal a running turn
 Posted messages and assistant answers are shared with the room; drafts stay
 in the current browser's recovery storage. View participants can read them.
 
-The panel has one composer. It writes about the **Whole document** or **Whole
-whiteboard**, which posts to the general discussion, or about the **Selected
-passage**, **Selected objects** or **Selected area**, which starts a new
-discussion. **Discuss** (Ctrl/Command+Alt+M) opens the composer for the current
-selection: selecting document text shows it beside the passage, and a board
-shows it in the footer. **Ask assistant**, checked by default, also sends the
+The panel has one composer. A chip above it names what the message is about:
+the **Whole document** or **Whole whiteboard**, which posts to the general
+discussion, or the **Selected passage**, **Selected objects** or **Selected
+area**, which starts a new discussion and shows its quote. Beside the chip, a
+link switches to the other subject when there is one, and **Refresh** attaches
+the content as it is now. **Discuss** (Ctrl/Command+Alt+M) opens the composer
+for the current selection: selecting document text shows it beside the
+passage, and a board shows it in the selection panel. **Ask assistant**,
+checked by default, also sends the
 message to the assistant; the choice is kept for the next message. After a
 discussion starts, its card opens and the composer returns to the whole item.
 Each card has a reply form with its own **Ask assistant** choice, **Send to

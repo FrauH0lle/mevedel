@@ -22,13 +22,12 @@ const SORTS = {
   name: ['Name', (a, b) => a.name.localeCompare(b.name)],
 };
 
-/* The library popover in PARENT. REQUEST reaches the host; SELECTION
-   returns the selected elements; INSERT places an item's elements. */
+/* The library in PARENT, the sidebar's Library tab. REQUEST reaches the
+   host; SELECTION returns the selected elements; INSERT places an item's
+   elements. LOAD, called when the tab first shows, lists the libraries. */
 export function libraryPanel({ parent, request, report, selection, insert, download }) {
-  const menu = node('details', { className: 'popover board-menu library', id: 'library-menu' });
-  const body = node('div', { className: 'editor-menu library-body' });
-  menu.append(node('summary', { textContent: 'Library' }), body);
-  parent.append(menu);
+  const body = node('div', { className: 'library-body' });
+  parent.append(body);
   let libraries = [], catalog = null, loaded = false, query = '';
   /* Which library sections the participant opened or closed; My library starts open. */
   const expanded = new Map();
@@ -48,7 +47,7 @@ export function libraryPanel({ parent, request, report, selection, insert, downl
     const place = node('button', { type: 'button', className: 'library-insert', title: `Insert ${item.name || 'item'}` },
       thumbnail(item), node('span', { textContent: item.name || 'Untitled' }));
     place.setAttribute('aria-label', `Insert ${item.name || 'library item'}`);
-    place.onclick = () => { menu.open = false; insert(item.elements); };
+    place.onclick = () => insert(item.elements);
     card.append(place, ...actions);
     return card;
   };
@@ -172,11 +171,12 @@ export function libraryPanel({ parent, request, report, selection, insert, downl
       node('p', { className: 'hint', textContent: 'From libraries.excalidraw.com, fetched by the session host. Installed libraries are available in every whiteboard.' }), list);
     show();
   }
-  menu.addEventListener('toggle', () => {
-    if (!menu.open || loaded) return;
-    loaded = true;
-    run(() => listing({ action: 'library' }));
-  });
   render();
-  return menu;
+  return {
+    load() {
+      if (loaded) return;
+      loaded = true;
+      run(() => listing({ action: 'library' }));
+    },
+  };
 }

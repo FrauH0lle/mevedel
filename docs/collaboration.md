@@ -610,8 +610,8 @@ item has one general discussion about the whole item. It always exists, stays
 open and has no marker; the room's discussion tab for the item and the top of
 the editor's Discussions panel show it. A discussion about part of an item
 starts with its first message. Participants with edit authority resolve and
-reopen it; resolving hides its marker for everyone, and **Show resolved**
-brings it back into view. Reopen a resolved discussion before writing to it.
+reopen it; resolving hides its marker for everyone, and **Resolved** in an
+editor's Discussions tab brings it back into view. Reopen a resolved discussion before writing to it.
 View participants read discussions but cannot write.
 
 Every place that discusses an item works the same way. **Discuss** picks the

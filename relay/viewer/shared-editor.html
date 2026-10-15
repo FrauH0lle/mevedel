@@ -11,32 +11,37 @@
     <link rel="stylesheet" href="/shared-editor-layout.css">
   </head>
   <body class="editor">
-    <header>
-      <button id="ask-toggle" type="button" aria-expanded="false" aria-controls="assistant">Discussions</button>
-      <button id="undo" title="Undo your last edit (Ctrl+Z)">Undo</button
-      ><button id="redo">Redo</button>
-      <details id="menu" class="popover">
-        <summary aria-label="Editor menu" title="Editor menu">☰</summary>
-        <div class="menu-body">
-          <label
-            >Download as
-            <select id="export" aria-label="Download format"></select
-          ></label>
-          <button id="download">Download</button>
-          <button id="recovery">Recovery copy</button>
-          <button id="retry">Retry save</button>
-          <button id="delete-item" class="danger" hidden>Delete…</button>
-          <label><input id="show-agent" type="checkbox" checked /> Highlight recent assistant edits</label>
-          <div id="canvas-background" class="canvas-section" hidden><h4>Canvas background</h4><div class="row"></div></div>
-          <details id="history">
-            <summary>Contributions</summary>
-            <div id="contributions"></div>
-          </details>
-        </div>
-      </details>
-    </header>
-    <div id="tools" role="toolbar" aria-label="Drawing tools"></div>
-    <div id="formatting" role="toolbar" aria-label="Document formatting" hidden></div>
+    <!-- A document's toolbar row: formatting, then the item's own actions.
+         A whiteboard places those actions on its canvas instead. -->
+    <div id="editor-bar" class="editor-bar">
+      <div id="formatting" role="toolbar" aria-label="Document formatting" hidden></div>
+      <div id="item-actions" class="item-actions" role="group" aria-label="Item">
+        <button id="undo" type="button" aria-label="Undo" title="Undo your last edit (Ctrl+Z)">↶</button
+        ><button id="redo" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)">↷</button>
+        <button id="ask-toggle" type="button" aria-expanded="false" aria-controls="assistant"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H10l-5 4v-4H4Z"/></svg><span class="toggle-label">Discussions</span><span id="ask-count" class="count" hidden></span></button>
+        <details id="menu" class="popover">
+          <summary aria-label="Editor menu" title="Editor menu">☰</summary>
+          <div class="menu-body">
+            <p id="document-stat" class="menu-stat" hidden></p>
+            <label
+              >Download as
+              <select id="export" aria-label="Download format"></select
+            ></label>
+            <button id="download" type="button">Download</button>
+            <button id="recovery" type="button">Recovery copy</button>
+            <button id="retry" type="button">Retry save</button>
+            <div id="board-commands" class="menu-group" hidden></div>
+            <button id="delete-item" type="button" class="danger" hidden>Delete…</button>
+            <label><input id="show-agent" type="checkbox" checked /> Highlight recent assistant edits</label>
+            <div id="canvas-background" class="canvas-section" hidden><h4>Canvas background</h4><div class="row"></div></div>
+            <details id="history">
+              <summary>Contributions</summary>
+              <div id="contributions"></div>
+            </details>
+          </div>
+        </details>
+      </div>
+    </div>
     <div id="table-tools" role="group" aria-label="Table tools" hidden><span class="table-label">Table</span></div>
     <div id="link-tools" class="context-bar" role="group" aria-label="Link tools" hidden><span id="link-address"></span></div>
     <div id="image-tools" class="context-bar" role="group" aria-label="Image tools" hidden><span>Image</span><span id="image-size"></span></div>
@@ -48,50 +53,56 @@
         <g id="presence"></g>
       </svg>
       <div id="discussion-peek" role="tooltip" hidden></div>
+      <div id="tools" class="island island-top island-tools" role="toolbar" aria-label="Drawing tools"></div>
+      <p id="hint" class="board-hint"></p>
     </main>
     <main id="document" hidden tabindex="0" aria-label="Shared document"></main>
-    <footer>
-      <div id="context-actions" class="context-actions">
-        <div id="context-scope" role="group" aria-label="What the message is about"><button id="selected-question" type="button" aria-pressed="false" disabled>Selected passage</button><button id="whole-question" type="button" aria-pressed="false">Whole document</button></div>
-        <div id="selection-actions" role="toolbar" aria-label="Selected content">
-          <button id="discuss-selection" type="button" disabled>Discuss</button>
+    <!-- Beside selected text: start a discussion about it. -->
+    <div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Selected text" hidden>
+      <button id="discuss-selection" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H10l-5 4v-4H4Z"/></svg>Discuss</button>
+    </div>
+    <aside id="assistant" aria-label="Sidebar" hidden>
+      <div id="discussion-resize" role="separator" tabindex="0" aria-label="Resize sidebar" aria-orientation="vertical" aria-controls="assistant" title="Drag to resize. Use the left and right arrow keys, or double-click to reset."></div>
+      <div class="assistant-head">
+        <div class="sidebar-tabs" role="tablist" aria-label="Sidebar">
+          <button id="discussions-tab" type="button" role="tab" aria-selected="true" aria-controls="discussions-panel"><span id="discussion-title">Discussions</span><span id="discussion-count" class="count" hidden></span></button>
+          <button id="library-tab" type="button" role="tab" aria-selected="false" aria-controls="library-panel" hidden>Library</button>
         </div>
+        <label class="show-resolved"><input id="show-resolved" type="checkbox" /> Resolved</label>
+        <button id="assistant-close" type="button" aria-label="Close sidebar">×</button>
       </div>
-      <span id="document-stat"></span><span id="hint">Select text to discuss it.</span>
-    </footer>
-    <aside id="assistant" aria-label="Discussions" hidden>
-      <div id="discussion-resize" role="separator" tabindex="0" aria-label="Resize discussion" aria-orientation="vertical" aria-controls="assistant" title="Drag to resize. Use the left and right arrow keys, or double-click to reset."></div>
-      <div class="assistant-head"><h2 id="discussion-title">Discussions</h2><label class="show-resolved"><input id="show-resolved" type="checkbox" /> Show resolved</label><button id="assistant-close" type="button" aria-label="Close discussions">×</button></div>
-      <div id="conversation-state" role="status">Ready</div>
-      <div id="assistant-scroll" tabindex="0" aria-label="Discussion history">
-      <p id="conversation-context" class="conversation-context">This item has its own conversation. Earlier room context can be retrieved when needed.</p>
-      <div id="conversation-history-notice" class="conversation-context" role="status" hidden></div>
-        <div id="discussions" role="log" aria-label="Discussions about this item"></div>
-        <p id="discussions-hint"></p>
-      </div>
-      <div class="assistant-compose" id="question-compose">
-        <details id="attached-context" open>
-          <summary id="context-title">Choose content to discuss</summary>
-          <blockquote id="context-quote" tabindex="0" aria-label="Attached passage"></blockquote>
-          <details hidden><summary>Full attached context</summary><pre id="context-detail"></pre></details>
-          <button id="refresh-context" type="button">Refresh context</button>
-        </details>
-        <form id="ask" autocomplete="off">
-          <label id="compose-label" for="question">Message</label>
-          <textarea id="question" placeholder="Write about the whole document…" maxlength="10000" rows="3"></textarea>
-          <div id="question-attachments" class="attachments"></div>
-          <div class="ask-row">
-            <input id="question-files" type="file" multiple hidden
-                   accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
-            <label class="assistant-choice"><input id="ask-assistant" type="checkbox" checked> Ask assistant</label>
-            <button id="question-attach" type="button" title="Attach files — images, PDFs, logs and patches"
-                    aria-label="Attach files">Attach</button>
-            <button id="question-send" type="submit">Post</button>
+      <div id="discussions-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="discussions-tab">
+        <div id="conversation-state" role="status" hidden></div>
+        <div id="assistant-scroll" tabindex="0" aria-label="Discussion history">
+          <div id="conversation-history-notice" class="conversation-context" role="status" hidden></div>
+          <div id="discussions" role="log" aria-label="Discussions about this item"></div>
+          <p id="discussions-hint" class="discussions-empty" hidden></p>
+        </div>
+        <div class="assistant-compose" id="question-compose">
+          <div id="compose-about" class="compose-about">
+            <span id="context-title" class="about-chip">Whole item</span>
+            <button id="selected-question" type="button" hidden>Selection</button>
+            <button id="whole-question" type="button" hidden>Whole item</button>
+            <button id="refresh-context" type="button" title="Attach the content as it is now">Refresh</button>
           </div>
-        </form>
-        <small class="shared-notice">Discussions are shared with everyone in this room. With Ask assistant, the assistant answers in the discussion.</small>
+          <blockquote id="context-quote" tabindex="0" aria-label="Attached content" hidden></blockquote>
+          <form id="ask" autocomplete="off">
+            <label id="compose-label" for="question" class="visually-hidden">Message</label>
+            <textarea id="question" placeholder="Write about the whole document…" maxlength="10000" rows="3"></textarea>
+            <div id="question-attachments" class="attachments"></div>
+            <div class="ask-row">
+              <input id="question-files" type="file" multiple hidden
+                     accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
+              <label class="assistant-choice"><input id="ask-assistant" type="checkbox" checked> Ask assistant</label>
+              <button id="question-attach" type="button" title="Attach files — images, PDFs, logs and patches"
+                      aria-label="Attach files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11 12 19a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7"/></svg></button>
+              <button id="question-send" type="submit">Post</button>
+            </div>
+          </form>
+        </div>
+        <div id="assistant-notice" role="status"></div>
       </div>
-      <div id="assistant-notice" role="status"></div>
+      <div id="library-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="library-tab" hidden></div>
     </aside>
     <textarea id="shape-text" aria-label="Shape text" maxlength="10000" wrap="off" spellcheck="false" hidden></textarea>
     <dialog id="link-dialog" aria-labelledby="link-dialog-title" class="editor-dialog">

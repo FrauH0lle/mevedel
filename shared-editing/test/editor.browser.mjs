@@ -34,7 +34,7 @@ test('editor interaction regressions', async (t) => {
         preview:{opId:'moving',shapes:[{id:'ellipse',box:[140,130,300,160]}]}}));
       await show();
       await frame.locator('[data-live-preview="true"]').waitFor();
-      assert.ok((await shape.boundingBox()).x>before.x+50);
+      assert.ok((await shape.boundingBox()).x>before.x+30);
       assert.equal(await page.locator('#saved').innerText(),'Live movement · not saved yet');
       const geometry=({x,y,width,height})=>[x,y,width,height];
       assert.deepEqual(geometry((await page.evaluate(()=>window.apply({action:'read'}))).content[0]),[100,100,300,160]);
@@ -270,12 +270,13 @@ test('editor interaction regressions', async (t) => {
           conversationError:'Archive is unavailable',records:[],own:[]}));
         await frame.locator('#conversation-history-notice').getByText('Earlier conversation unavailable: Archive is unavailable',{exact:true}).waitFor();
         assert.equal(await frame.locator('#question').inputValue(),'> Preserved question\nsecond line');
-        assert.match(await frame.locator('#conversation-context').innerText(),/own conversation/);
         for (const activity of [{connected:true,busy:true,paused:true}, {connected:true,busy:false}, {connected:false,busy:true}]) {
           await page.evaluate(activity=>window.port.postMessage({type:'conversation',records:[],own:[],...activity}),activity);
           const active = activity.connected && activity.busy;
           if (active) await state.getByText('Assistant working',{exact:true}).waitFor();
-          else await state.getByText(activity.connected ? 'Ready' : 'Disconnected · drafts kept',{exact:true}).waitFor();
+          // An idle, connected session has nothing to report.
+          else if (activity.connected) await state.waitFor({state:'hidden'});
+          else await state.getByText('Disconnected · drafts kept',{exact:true}).waitFor();
           assert.equal(await state.evaluate(e=>e.classList.contains('assistant-working')),active);
           assert.equal(await frame.locator('#ask-toggle').evaluate(e=>e.classList.contains('assistant-working')),active);
         }
@@ -486,9 +487,11 @@ test('editor interaction regressions', async (t) => {
       assert.deepEqual(await chosen(), ['a']);
       assert.equal(await frame.locator('#selection .selection-region').count(), 0, 'the box disappears on release');
       assert.equal(await frame.locator('#discuss-selection').isDisabled(), false);
-      await drag([-20,-20], [320,150], 'Alt');
+      // With a selection the panel covers the board's left, so these boxes
+      // start at their right; a box selects the same either way round.
+      await drag([320,150], [-20,-20], 'Alt');
       assert.deepEqual(await chosen(), ['a','b']);
-      await drag([-20,280], [150,450], 'Shift');
+      await drag([150,450], [-20,280], 'Shift');
       assert.deepEqual(await chosen(), ['a','b','c']);
       await drag([140,140], [260,260]);
       assert.deepEqual(await chosen(), []);
@@ -519,12 +522,13 @@ test('editor interaction regressions', async (t) => {
       await page.mouse.up();
       await frame.locator('#discuss-selection').click();
       assert.equal(await frame.locator('#selection .selection-region').count(), 1, 'the attached area shows again');
-      assert.match(await frame.locator('#context-title').innerText(), /New discussion · selected area/);
+      assert.equal(await frame.locator('#context-title').innerText(), 'Selected area');
+      assert.equal(await frame.locator('#question-send').innerText(), 'Start discussion');
       assert.equal(await frame.locator('#selected-question').innerText(), 'Selected area');
       assert.match(await frame.locator('#context-quote').textContent(), /^Area \d+ × \d+ at -2\d, -2\d\n1 object\nrectangle: A$/);
       await frame.locator('#whole-question').click();
       await frame.locator('#selected-question').click();
-      assert.match(await frame.locator('#context-title').innerText(), /selected area/,
+      assert.match(await frame.locator('#context-title').innerText(), /Selected area/,
         'switching scopes retains the captured area');
       await frame.locator('#question').fill('Put a legend here');
       await frame.locator('#question-send').click();
@@ -579,7 +583,7 @@ test('editor interaction regressions', async (t) => {
       await anchored(frame).locator('.thread-message p.alone')
         .getByText('Sent the selection as the request', {exact: true}).waitFor();
       // The whole board has nothing of its own to say: it needs a message.
-      assert.equal(await frame.locator('#whole-question').getAttribute('aria-pressed'), 'true');
+      assert.equal(await frame.locator('#context-title').getAttribute('data-scope'), 'whole');
       await frame.locator('#question-send').click();
       assert.match(await frame.locator('#assistant-notice').innerText(), /Write a message, or select content/);
       assert.equal((await sent(page, 'post')).length, 1);
@@ -715,19 +719,21 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('#discussion-markers .discussion-pin').count(), 1, 'a removed target has no marker');
       await page.close();
     });
-    await t.test('whole and selection actions stay together beside the composer', async () => {
+    await t.test('the composer names its subject in one chip, with a switch to the other', async () => {
       const {page, frame} = await open();
       await frame.locator('#scene [data-shape="ellipse"]').click({position:{x:150,y:80}});
       await frame.locator('#discuss-selection').click();
-      const selection = await frame.locator('#selected-question').boundingBox();
-      const whole = await frame.locator('#whole-question').boundingBox();
-      assert.ok(Math.abs(selection.y - whole.y) < 45);
-      assert.equal(await frame.locator('#context-scope button:visible').count(), 2);
-      assert.ok(Math.abs(selection.x - whole.x) < 200);
-      assert.match(await frame.locator('#context-title').innerText(), /selected objects/);
+      assert.equal(await frame.locator('#context-title').innerText(), 'Selected objects');
+      assert.equal(await frame.locator('#context-title').getAttribute('data-scope'), 'selection');
+      assert.equal(await frame.locator('#selected-question').isVisible(), false);
+      const chip = await frame.locator('#context-title').boundingBox();
+      const other = await frame.locator('#whole-question').boundingBox();
+      assert.ok(Math.abs(chip.y - other.y) < 30, 'the switch sits beside the chip');
       if (process.env.MEVEDEL_EDITOR_SCREENSHOTS) await page.screenshot({path:'.scratch/shared-editing-followup/context-buttons.png'});
       await frame.locator('#whole-question').click();
-      assert.match(await frame.locator('#context-title').innerText(), /Whole whiteboard/);
+      assert.equal(await frame.locator('#context-title').innerText(), 'Whole whiteboard');
+      assert.equal(await frame.locator('#whole-question').isVisible(), false);
+      assert.equal(await frame.locator('#selected-question').isVisible(), true, 'the attached selection stays one click away');
       await page.close();
     });
     await t.test('drawing a shape returns to selection for immediate text editing', async () => {
@@ -820,9 +826,9 @@ test('editor interaction regressions', async (t) => {
     });
     await t.test('style panel changes selected shapes and subsequent drawings', async () => {
       const { page, frame } = await open({viewport:{width:1280,height:700}});
-      assert.equal(await frame.locator('#properties > summary').getAttribute('aria-disabled'), 'true', 'nothing to style');
+      assert.equal(await frame.locator('#properties').isVisible(), false, 'nothing to style');
       await frame.locator('#scene [data-shape="ellipse"] path').click({ force: true });
-      assert.equal(await frame.locator('#properties').evaluate(e => e.open), true, 'selecting opens Style');
+      assert.equal(await frame.locator('#properties').isVisible(), true, 'selecting opens the panel');
       const shown = async () =>
         frame.locator('.sec:not([hidden]) h4').allTextContents();
       assert.deepEqual(await shown(), [
@@ -832,6 +838,8 @@ test('editor interaction regressions', async (t) => {
         'Stroke style',
         'Sloppiness',
         'Opacity',
+        'Layers',
+        'Actions',
       ]);
       await frame.getByRole('button', { name: 'Background: #a5d8ff', exact: true }).click();
       assert.equal(
@@ -843,12 +851,12 @@ test('editor interaction regressions', async (t) => {
       const artist = await outline();
       await frame.getByRole('button', { name: 'Cartoonist', exact: true }).click();
       assert.notEqual(await outline(), artist, 'sloppiness redraws the outline');
-      await frame.locator('#properties > summary').click();
       await frame.locator('#board-zoom').click();
+      // On a wide board the panel styles the next object of a drawing tool.
       await frame.getByRole('button', { name: 'Rectangle', exact: true }).click();
-      await frame.locator('#properties > summary').click();
+      assert.equal(await frame.locator('.property-caption').innerText(), 'New rectangle');
       assert.equal(await frame.locator('.sec[data-sec="roundness"]').isHidden(), false);
-      await frame.locator('#properties > summary').click();
+      assert.equal(await frame.locator('.sec[data-sec="actions"]').isHidden(), true, 'nothing to act on yet');
       const box = await frame.locator('#canvas').boundingBox();
       await page.mouse.move(box.x + 650, box.y + 180);
       await page.mouse.down();
@@ -856,17 +864,13 @@ test('editor interaction regressions', async (t) => {
       await page.mouse.up();
       const rect = frame.locator('#scene [data-shape]:not([data-shape="ellipse"])');
       assert.equal(await rect.locator('g > path').first().getAttribute('stroke'), '#a5d8ff', 'the new rectangle is hatched blue');
-      await frame.locator('#object-menu > summary').click();
-      await frame.locator('.object-arrange > summary').click();
       await frame.getByRole('button', { name: 'Send to back', exact: true }).click();
       assert.equal(
         await frame.locator('#scene [data-shape]').first().getAttribute('data-shape'),
         await rect.getAttribute('data-shape'),
       );
-      await frame.locator('#object-menu > summary').click();
       await frame.getByRole('button', { name: 'Duplicate', exact: true }).click();
       assert.equal(await frame.locator('#scene [data-shape]').count(), 3);
-      await frame.locator('#object-menu > summary').click();
       await frame.getByRole('button', { name: 'Delete', exact: true }).click();
       assert.equal(await frame.locator('#scene [data-shape]').count(), 2);
       await page.close();
@@ -899,7 +903,9 @@ test('editor interaction regressions', async (t) => {
       assert.ok(messages.some(m => m.type === 'presence' && m.mode === 'laser'));
       assert.ok(messages.some(m => m.trail?.some(s => s[3] > 0)), 'held samples carry ink indices');
       assert.equal(messages.filter(m => m.type === 'request').length, 0);
-      await page.mouse.move(box.x + 10, 5);
+      // Moving onto the board's controls leaves the canvas.
+      const menu = await frame.locator('#menu > summary').boundingBox();
+      await page.mouse.move(menu.x + menu.width / 2, menu.y + menu.height / 2);
       await frame.locator('#presence > g').waitFor({ state: 'detached' });
       assert.equal(await page.evaluate(() => window.messages.at(-1).mode), 'clear');
       await page.close();
@@ -1262,7 +1268,7 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#question-send').click();
       await frame.locator('#assistant-notice').getByText(/Content changed/).waitFor();
       assert.equal(await frame.locator('#question').inputValue(), 'What does this shape mean?');
-      assert.match(await frame.locator('#context-title').innerText(), /selected objects/);
+      assert.match(await frame.locator('#context-title').innerText(), /Selected objects/);
       await frame.locator('#refresh-context').click();
       assert.match(await frame.locator('#context-quote').innerText(), /Changed remotely/);
       await page.evaluate(() => window.port.postMessage({type:'offline'}));
@@ -1323,7 +1329,6 @@ test('editor interaction regressions', async (t) => {
       const general = (await page.evaluate(()=>window.apply({action:'read'}))).discussions
         .find(d => d.id === 'general');
       assert.equal(general?.messages.length ?? 0,0);
-      await frame.locator('#context-title').click();
       await frame.locator('#refresh-context').click();
       await frame.locator('#question-send').click();
       await askedCount(page,1);

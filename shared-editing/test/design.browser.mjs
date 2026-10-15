@@ -174,14 +174,13 @@ test('approved editor controls on the production bundle', async t => {
     const draft=await page.evaluate(()=>window.messages.filter(m=>m.type==='draft').at(-1).draft.assistant);
     const restored=await open({kind:'document',content,assistantDraft:draft,viewport:{width:1600,height:1000}});
     assert.equal(await restored.frame.locator('#question').inputValue(),'Keep my question');
-    assert.equal(await restored.frame.locator('#selected-question').getAttribute('aria-pressed'),'true');
+    assert.equal(await restored.frame.locator('#context-title').getAttribute('data-scope'),'selection','the restored draft is about the passage');
     await restored.page.close();await page.close();
   });
   await t.test('whiteboard object commands, shortcuts and zoom are exposed and edits stay undoable', async () => {
     const {page,frame}=await open();
     await frame.locator('#scene [data-shape="ellipse"]').click();
-    await frame.locator('#object-menu > summary').click();
-    await frame.getByRole('button',{name:/^Duplicate/}).click();
+    await frame.getByRole('button',{name:'Duplicate',exact:true}).click();
     assert.equal(await frame.locator('#scene [data-shape]').count(),2);
     await frame.locator('#undo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),1);
     await frame.locator('#redo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),2);
@@ -191,7 +190,7 @@ test('approved editor controls on the production bundle', async t => {
     await frame.locator('#undo').click();assert.equal(await frame.locator('#scene [data-shape]').count(),2);
     await frame.getByRole('button',{name:'Zoom in',exact:true}).click();
     await frame.locator('#board-zoom').click();assert.equal(await frame.locator('#board-zoom').innerText(),'100%');
-    await frame.getByRole('button',{name:'Shortcuts',exact:true}).click();await frame.locator('#board-shortcuts').waitFor();
+    await frame.getByRole('button',{name:'Keyboard shortcuts',exact:true}).click();await frame.locator('#board-shortcuts').waitFor();
     await page.keyboard.press('Escape');assert.equal(await frame.locator('#board-shortcuts').isVisible(),false);
     await page.close();
   });

@@ -183,6 +183,16 @@ the room header wrapping to three rows (about 155 pixels) on a phone. Every
 page now uses the room's header: the editor reports the item's title and save
 state over its item port, the tab shows and renames them there, and actions
 that would squeeze the title fold into a **⋯** menu instead of wrapping.
+The same review measured a phone whiteboard's canvas at about half the
+screen: below the headers sat a commands row (Objects, Style, Library,
+Shortcuts), two rows of tools and a footer repeating Discuss, the selection
+count and a hint. The canvas now takes everything below the header, with its
+controls floating over it as Excalidraw's do. Objects and Style became one
+selection panel that opens with a selection, Library a tab of the sidebar, and
+the footer went: Discuss lives in the selection panel and, for a document,
+beside the selected text, and the composer names its subject in one chip.
+A larger canvas made Fit magnify small boards past their actual size, so Fit
+now stops at 100%, as Excalidraw's does.
 
 The trial also showed that a contribution row per 300 ms save was unreadable.
 Keep those commits and their exact inverse records; group their presentation

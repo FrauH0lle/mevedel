@@ -213,7 +213,8 @@ test(
         await p.mouse.move(b.x + x + 100, b.y + y + 60);
         await p.mouse.up();
       }
-      await Promise.all([rectangle(pages[0], 130, 120), rectangle(pages[1], 350, 140)]);
+      // Clear of the selection panel, which a wide board shows for a drawing tool.
+      await Promise.all([rectangle(pages[0], 330, 120), rectangle(pages[1], 550, 140)]);
       await until(
         async () =>
           (await frame(pages[0]).locator('#scene [data-shape]').count()) === 2 &&
@@ -461,7 +462,11 @@ test(
       await until(async () => (await documentText(pages[1])).includes('An agent added this.'));
       const captured = JSON.parse((await agent('ReadShared', { id: documentId })).result);
       if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
-      await frame(pages[0]).locator('#whole-question').click();
+      // The switch to the whole item shows only while the composer is on a
+      // selection; Refresh attaches the item as it is now.
+      if (await frame(pages[0]).locator('#whole-question').isVisible()) await frame(pages[0]).locator('#whole-question').click();
+      else await frame(pages[0]).locator('#refresh-context').click();
+      assert.equal(await frame(pages[0]).locator('#context-title').getAttribute('data-scope'), 'whole');
       await frame(pages[0]).locator('#question').fill('Review the current notes');
       await frame(pages[0]).locator('#question-send').click();
       const queued = await until(async () => {
@@ -648,14 +653,20 @@ test(
       );
       if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
       await frame(pages[0]).locator('#question').fill('Private recovered question');
-      const capturedContext = await frame(pages[0]).locator('#context-detail').innerText();
       await pages[0].waitForFunction(() => Object.keys(localStorage).some(k=>k.startsWith('mevedel-editing:') && JSON.parse(localStorage[k]).assistant?.question?.text === 'Private recovered question'));
+      // The context the question captured, as the editor keeps it with its draft.
+      const attached = () => pages[0].evaluate(() => JSON.stringify(Object.keys(localStorage)
+        .filter(k => k.startsWith('mevedel-editing:'))
+        .map(k => JSON.parse(localStorage[k]).assistant?.question?.attachment)
+        .find(Boolean)?.snapshot));
+      const capturedContext = await attached();
+      assert.ok(capturedContext, 'the question carries its context');
       for (let reload = 0; reload < 2; reload++) {
         await pages[0].reload();
         await frame(pages[0]).locator('[data-tool="rectangle"]').waitFor({state:'visible'});
         if (!await frame(pages[0]).locator('#assistant').isVisible()) await frame(pages[0]).locator('#ask-toggle').click();
         assert.equal(await frame(pages[0]).locator('#question').inputValue(),'Private recovered question',JSON.stringify({reload,storage:await pages[0].evaluate(()=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith('mevedel-editing:')).map(k=>[k,JSON.parse(localStorage[k]).assistant])))}));
-        assert.equal(await frame(pages[0]).locator('#context-detail').innerText(),capturedContext);
+        assert.equal(await attached(),capturedContext);
       }
       await frame(pages[0]).locator('#assistant-close').click();
       await pages[0].reload();
@@ -974,7 +985,7 @@ test(
       );
       const priorRevision = JSON.parse((await agent('ReadShared', { id: transferred.id })).result).revision;
       await agent('StorageWritable', { writable: false });
-      await rectangle(ownerPage, 150, 160);
+      await rectangle(ownerPage, 350, 160);
       await until(
         async () =>
           (await ownerPage.locator('#editing-saved').getAttribute('data-error')) === 'true',
