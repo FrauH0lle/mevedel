@@ -60,7 +60,7 @@ test('the header keeps one line and folds actions into its menu', async t => {
   await page.setViewportSize({width:1280,height:800});await settle(page);
   assert.equal(await head(page).locator('.head-more').isVisible(),false);
   const order=await head(page).locator('.header-actions > *:not(.head-more)').evaluateAll(nodes=>nodes.map(n=>n.id||n.className));
-  assert.deepEqual(order.filter(Boolean),['you-menu','presence keep','appearance-menu','invite-button','notify-button'],'actions return in order');
+  assert.deepEqual(order.filter(Boolean),['you-menu','presence keep','room-button','appearance-menu','invite-button','notify-button'],'actions return in order');
   assert.deepEqual(errors,[]);
 });
 
@@ -84,5 +84,31 @@ test('Invite shows a tier as a QR code only when asked', async t => {
   assert.equal(await sheet.locator('#invite-qr svg rect').getAttribute('fill'),'#fff');
   await buttons.nth(2).click();
   assert.equal(await sheet.locator('#invite-qr').isVisible(),false,'pressing again hides the code');
+  assert.deepEqual(errors,[]);
+});
+
+test('a phone opens In this room as a sheet, from the header when short', async t => {
+  const {page,errors}=await room(t,'SNT Prevalence/Incidence Architecture Planning');
+  const box=page.locator('#session-box');
+  await page.setViewportSize({width:390,height:844});await settle(page);
+  assert.equal(await page.locator('#room-button').isVisible(),false,'a taller phone keeps the row');
+  const row=await box.boundingBox();
+  assert.ok(row.height<=48,`one compact row: ${row.height}`);
+  await box.locator(':scope > summary').click();
+  const sheet=await box.boundingBox();
+  assert.equal(Math.round(sheet.y+sheet.height),844,'the sheet rests on the foot of the screen');
+  assert.equal(await box.evaluate(node=>getComputedStyle(node).position),'fixed');
+  // A tap outside closes it.
+  await page.mouse.click(195,60);
+  assert.equal(await box.getAttribute('open'),null);
+
+  await page.setViewportSize({width:375,height:629});await settle(page);
+  assert.equal(await box.isVisible(),false,'a short phone gives the row back to the conversation');
+  assert.equal(await page.locator('#modeline').isVisible(),false,'a connected status line with nothing else hides');
+  await page.locator('#room-button').click();
+  assert.equal(await box.isVisible(),true);
+  await page.locator('#room-button[aria-expanded="true"]').waitFor();
+  await page.locator('#room-button').click();
+  assert.equal(await box.isVisible(),false);
   assert.deepEqual(errors,[]);
 });

@@ -195,7 +195,12 @@ remove button. Removing a selection preserves the message draft.
 
 At viewport widths of 1100px and above, the navigation occupies an independently
 scrolling right column. At smaller widths and increased browser zoom, it becomes
-a disclosure above the composer. Conversation text and the composer share a
+a disclosure above the composer. On a phone (640px or narrower) that disclosure
+is one row with its counts, and it opens as a sheet over the room, closed by ×
+or a tap outside it. On a phone shorter than 700px, such as an iPhone mini in
+Safari, the row leaves the dock for an **In this room** button in the header,
+and the status line under the composer hides while it only says that the room
+is connected. A phone's composer starts at one line and grows with its message. Conversation text and the composer share a
 bounded reading width. The message and name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
 
@@ -217,7 +222,8 @@ The guest's independent browser ID continues to identify its queued work.
 ### Who else is here
 
 The header, the artifact panel and the editor tab's header show initials for
-the other people on the same page, with their names on hover. A page is the
+the other people on the same page, with their names on hover, each in a colour
+of its own derived from the name. A page is the
 store artifact a tab has open -- a whiteboard, document, HTML page or image --
 or otherwise the tab's room. An artifact page spans every room and the lobby
 of the workspace, because one whiteboard can be open from a session's room and

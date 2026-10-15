@@ -10,6 +10,13 @@
       .map(word => [...word][0]).join('').toUpperCase() || '?';
   }
 
+  // A hue of its own per name, so people tell each other's chips apart.
+  function hue(name) {
+    let hash = 0;
+    for (const char of name) hash = (hash * 31 + char.codePointAt(0)) >>> 0;
+    return hash % 360;
+  }
+
   function create({send, el, page}) {
     let reported = null;
 
@@ -41,6 +48,7 @@
           const chip = el('span', `presence-chip${person.active === true ? '' : ' away'}`,
                           initials(person.name));
           chip.title = label[index];
+          chip.style?.setProperty('--hue', String(hue(person.name)));
           return chip;
         }));
         if (people.length > 4) holder.append(el('span', 'presence-more', `+${people.length - 4}`));

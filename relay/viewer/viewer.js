@@ -29,6 +29,7 @@
   const modeline = document.getElementById('modeline');
   const sessionBox = document.getElementById('session-box');
   const sessionSummary = document.getElementById('session-summary');
+  const roomButton = document.getElementById('room-button');
   const transportApi = window.mevedelViewerTransport;
   const notificationsApi = window.mevedelViewerNotifications;
   const {base64urlDecode, base64urlEncode, importKey, parseFragment} = transportApi;
@@ -151,7 +152,8 @@
     summaryWarnings[key] = warning === true;
     const bits = Object.values(summaryParts).filter(Boolean);
     sessionBox.hidden = bits.length === 0;
-    sessionSummary.textContent = ['Session', ...bits].join(' · ');
+    if (roomButton) roomButton.hidden = sessionBox.hidden;
+    sessionSummary.textContent = bits.join(' · ');
     sessionSummary.dataset.warning =
       Object.values(summaryWarnings).some(Boolean) ? 'true' : 'false';
     document.getElementById('activity').hidden = !summaryParts.agents && !summaryParts.tasks;
@@ -1481,6 +1483,17 @@
   const desktopSidebar = window.matchMedia('(min-width:1100px)');
   sessionBox.open = desktopSidebar.matches;
   desktopSidebar.addEventListener('change', event => { sessionBox.open = event.matches; });
+  // On a phone In this room opens as a sheet: the header's button on a short
+  // screen opens it, and a tap outside closes it.
+  const phone = window.matchMedia('(max-width:640px)');
+  roomButton?.addEventListener('click', () => { sessionBox.open = !sessionBox.open; });
+  sessionBox.addEventListener('toggle', () => {
+    roomButton?.setAttribute('aria-expanded', String(sessionBox.open));
+  });
+  document.addEventListener('pointerdown', event => {
+    if (phone.matches && sessionBox.open && !sessionBox.contains(event.target)
+        && !roomButton?.contains(event.target)) sessionBox.open = false;
+  });
   skillSearch.addEventListener('input', renderSkillChips);
   initSettings();
   skillsButton.addEventListener('click', () => {

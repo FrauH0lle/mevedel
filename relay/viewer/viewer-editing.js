@@ -248,7 +248,11 @@ window.mevedelEditingView = {
         (item) => attached.has(item.id) || item.local || item.id === current);
       for (const item of shown) {
         const button = el('button', 'btn quiet');
-        const symbol = el('span', `item-symbol${item.kind === 'whiteboard' ? ' board' : ''}`, item.kind === 'whiteboard' ? 'MAP' : 'DOC');
+        // A whiteboard's mark is shapes on a board; a document's, lines of text.
+        const symbol = el('span', `item-symbol${item.kind === 'whiteboard' ? ' board' : ''}`);
+        symbol.innerHTML = item.kind === 'whiteboard'
+          ? '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15l3.5-4 3 3L17 9"/></svg>'
+          : '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6Z"/><path d="M9 11h6M9 15h6M9 7h3"/></svg>';
         symbol.setAttribute('aria-hidden', 'true');
         button.append(symbol, el('span', '', `${item.title}${item.local ? ' (local recovery)' : ''}`));
         button.dataset.itemId = item.id;

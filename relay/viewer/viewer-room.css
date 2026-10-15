@@ -90,7 +90,7 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .prose p:last-child { margin-bottom:0; }
 .turn.cont { margin-top:-12px; }
 .artifact-card { max-width:none; min-height:68px; padding:12px 16px; gap:14px; border:0; border-bottom:1px solid var(--line); border-radius:3px; }
-.artifact-card::before { content:'DOC'; font:11px var(--font-mono); display:grid; place-items:center; flex:none; width:36px; height:40px; color:var(--accent); background:var(--accent-soft); }
+.artifact-card::before { content:attr(data-type); font:11px var(--font-mono); display:grid; place-items:center; flex:none; width:40px; height:40px; color:var(--accent); background:var(--accent-soft); overflow:hidden; }
 .artifact-name { font-weight:600; color:var(--ink); font-size:13px; }
 .artifact-card:hover { background:color-mix(in srgb,var(--accent-soft) 40%,var(--surface)); }
 .artifact-size { font-size:11px; }
@@ -140,7 +140,8 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 #editing-box { display:flex; flex-direction:column; }
 #editing-items { padding:0; gap:0; }
 #editing-items .btn { background:none; color:var(--ink); border:0; border-bottom:1px solid var(--line); border-radius:0; min-height:57px; font-weight:500; font-size:14px; padding:12px 0; display:flex; align-items:center; gap:12px; }
-.item-symbol { flex:none; width:28px; height:32px; display:grid; place-items:center; color:var(--accent); background:var(--accent-soft); font:11px var(--font-mono); }
+.item-symbol { flex:none; width:30px; height:30px; display:grid; place-items:center; border-radius:4px; color:var(--accent); background:var(--accent-soft); }
+.item-symbol svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .item-symbol.board { color:var(--artifact-secondary); background:var(--artifact-secondary-soft); }
 #editing-box .editing-create { padding:12px 0 0; gap:6px; }
 #editing-box .editing-create .btn { font-size:12px; font-weight:500; min-height:32px; padding:5px 7px; color:var(--muted); border:1px solid var(--line); border-radius:3px; background:transparent; }
@@ -235,6 +236,20 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
   .composer-identity { display:none; }
   .you-menu > summary { padding:3px; border-color:transparent; }
   .you-label { display:none; }
+  /* In this room is one compact row that opens as a sheet over the room. */
+  #session-box { padding:0 14px; border-radius:6px; }
+  #session-box > summary { display:flex; align-items:center; gap:10px; min-height:42px; padding:0; }
+  #session-box > summary::after { content:'›'; margin-left:8px; color:var(--muted); }
+  #session-box .sidebar-title { font-size:14px; }
+  #session-summary { display:block; margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--muted); }
+  #session-box[open] { position:fixed; left:0; right:0; bottom:0; z-index:40; max-width:none; max-height:78dvh; overflow-y:auto; padding:0 16px calc(16px + env(safe-area-inset-bottom)); border-radius:12px 12px 0 0; box-shadow:0 -8px 28px rgb(0 0 0 / 22%); }
+  #session-box[open] > summary { position:sticky; top:0; z-index:1; min-height:52px; margin-bottom:8px; background:var(--surface); border-bottom:1px solid var(--line); }
+  #session-box[open] > summary::after { content:'×'; margin-left:auto; font-size:20px; }
+  #session-box[open] #session-summary { display:none; }
+  #session-box[open] .dock-disclosure-body { max-height:none; overflow:visible; }
+  /* The composer starts at one line and grows with its message. */
+  .composer-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  .composer textarea { min-height:44px; field-sizing:content; max-height:30dvh; }
   .composer-row > .btn { font-size:11px; padding:6px 9px; }
   .sheet-form { padding:20px; }
   .modeline { font-size:12px; gap:8px; }
@@ -253,6 +268,21 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .presence { display:flex; align-items:center; }
 .presence-chip, .presence-more { display:grid; place-items:center; flex:none; width:28px; height:28px; margin-left:-6px; border:2px solid var(--surface); border-radius:50%; font:600 11px/1 var(--font-ui); cursor:default; }
 .presence > :first-child { margin-left:0; }
-.presence-chip { color:var(--on-accent); background:var(--accent); }
+.presence-chip { --hue:220; color:#fff; background:hsl(var(--hue) 52% 42%); }
+:root[data-theme="dark"] .presence-chip { color:#111; background:hsl(var(--hue) 60% 72%); }
+@media (prefers-color-scheme:dark) { :root:not([data-theme="light"]) .presence-chip { color:#111; background:hsl(var(--hue) 60% 72%); } }
+:root[data-accents="minimal"] .presence-chip { color:var(--ink); background:var(--surface-2); }
 .presence-chip.away { opacity:.45; }
 .presence-more { color:var(--ink); background:var(--surface-2); }
+
+/* A short phone, such as an iPhone mini in Safari, keeps its rows for the
+   conversation: In this room opens from the header, and a connected status
+   line with nothing else to say gives way. */
+.room-button { display:none; }
+@media (max-width:640px) and (max-height:700px) {
+  .room-button { display:grid; place-items:center; min-width:36px; min-height:36px; padding:0; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--ink); }
+  .room-button[aria-expanded="true"] { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+  .room-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linejoin:round; }
+  #session-box:not([open]) { display:none; }
+  #modeline:has(.conn.connected):not(:has(.settings-button,.ml.plan,.ml.tail:not(:empty))) { display:none; }
+}

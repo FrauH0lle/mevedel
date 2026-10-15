@@ -413,7 +413,7 @@ test('editor interaction regressions', async (t) => {
       }
       await page.close();
     });
-    await t.test('room session navigation sits beside wide conversations and above narrow composers', async () => {
+    await t.test('room session navigation sits beside wide conversations, above narrow composers and over a phone', async () => {
       const page = await browser.newPage();
       await page.goto(`${url}/menu`);
       await page.evaluate(() => {
@@ -428,6 +428,8 @@ test('editor interaction regressions', async (t) => {
         const menu = await page.locator('#session-box').boundingBox();
         const composer = await page.locator('#composer').boundingBox();
         if (width >= 1280) assert.ok(menu.x >= composer.x + composer.width);
+        // A phone opens it as a sheet over the foot of the room.
+        else if (width <= 640) assert.equal(Math.round(menu.y + menu.height), 800);
         else assert.ok(menu.y + menu.height <= composer.y);
         assert.ok(menu.x >= 0 && menu.x + menu.width <= width);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

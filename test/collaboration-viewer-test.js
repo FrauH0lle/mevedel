@@ -1433,7 +1433,7 @@ async function main() {
   assert.equal(nodes['agents-done-list'].children.length, 1);
   assert.equal(nodes['session-box'].hidden, false);
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 3 commands · 1 agent · 1 finished · invite · Shared');
+               '3 commands · 1 agent · 1 finished · Shared');
   const agentFetchBefore = first.sent.length;
   nodes.agents.children[0].dispatch('click');
   await waitFor(() => first.sent.length === agentFetchBefore + 1,
@@ -1454,7 +1454,7 @@ async function main() {
   nodes['agent-close'].dispatch('click');
   await deliver({t: 'agents', agents: []});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 3 commands · invite · Shared');
+               '3 commands · Shared');
 
   // The session task list renders as a collapsible summary with one
   // line per task: in-progress first, completed last and counted.
@@ -1485,13 +1485,13 @@ async function main() {
     {path: '/root/worker-1', role: 'worker', status: 'blocked'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 3 commands · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · invite · Shared');
+               '3 commands · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · Shared');
   await deliver({t: 'tasks', total: 1, completed: 0, omitted: 0,
     omittedActive: 0, tasks: [
     {id: 1, subject: 'Still going', status: 'pending'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 3 commands · 1 agent · 0/1 tasks · invite · Shared');
+               '3 commands · 1 agent · 0/1 tasks · Shared');
   assert.equal(nodes['session-summary'].dataset.warning, 'true');
   await deliver({t: 'agents', agents: []});
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
@@ -1499,14 +1499,14 @@ async function main() {
   await deliver({t: 'tasks', total: 0, completed: 0, omitted: 0,
     omittedActive: 0, tasks: []});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 3 commands · invite · Shared');
+               '3 commands · Shared');
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
   // The superseded tasks-only frame is rejected instead of inferred.
   await deliver({t: 'tasks', tasks: [
     {id: 1, subject: 'Legacy task', status: 'pending'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 3 commands · invite · Shared');
+               '3 commands · Shared');
   assert.equal(nodes['tasks-list'].children.length, 0);
 
   // Routed artifact frames likewise reach the artifact controller.
@@ -1731,7 +1731,7 @@ async function main() {
                      workspace: 'ws'},
                     {room: 'third', name: 'handed-over',
                      secret: thirdSecret, workspace: 'ws'}]);
-  assert.match(textOf(nodes['session-summary']), /2 rooms · invite/);
+  assert.match(textOf(nodes['session-summary']), /2 rooms/);
   // The same room twice is one room: a reconnect re-offering it must not
   // stack a second card.
   await deliver({t: 'room', name: 'handed-over',

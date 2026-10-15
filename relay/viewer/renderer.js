@@ -474,6 +474,9 @@
   // opens it never downloads it.
   function renderArtifactCard(record, onArtifactOpen) {
     const card = el('div', 'artifact-card');
+    // The badge names the file's type, from its extension.
+    const extension = /\.([A-Za-z0-9]{1,5})$/.exec(record.artifact || '')?.[1];
+    card.dataset.type = extension ? extension.toUpperCase() : 'FILE';
     card.append(el('span', 'artifact-name', record.artifact || 'artifact'));
     if (record.missing === true) {
       card.append(el('span', 'artifact-size', 'deleted on the host'));

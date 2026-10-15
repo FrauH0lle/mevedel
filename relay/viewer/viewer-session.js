@@ -303,16 +303,12 @@
       return open;
     }
 
-    // The Rooms and Invite buttons live in the Session menu, so the menu
-    // has to know when either is worth opening for.
+    // The Rooms button lives in In this room, whose summary counts them.
     let roomCount = 0;
     let inviteShown = false;
     function reportRoom() {
       if (!summarize) return;
-      summarize('room', [
-        roomCount ? `${roomCount} room${roomCount === 1 ? '' : 's'}` : '',
-        inviteShown ? 'invite' : '',
-      ].filter(Boolean).join(' · '));
+      summarize('room', roomCount ? `${roomCount} room${roomCount === 1 ? '' : 's'}` : '');
     }
 
     function renderRooms() {
