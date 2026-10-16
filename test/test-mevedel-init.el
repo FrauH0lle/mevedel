@@ -66,6 +66,10 @@
             (should-not (string-match-p "CLAUDE\\.md" prompt))
             (should (string-match-p "put it in `sample` for every option" prompt))
             (should-not (string-match-p "preview:" prompt))
+            (let ((case-fold-search t))
+              (should-not (string-match-p "slash" prompt)))
+            (should (string-match-p (regexp-quote "invoke skills as `$name`")
+                                    prompt))
             (should (string-match-p "User-provided focus: prefer hooks"
                                     prompt))))
       (kill-buffer data-buffer))))

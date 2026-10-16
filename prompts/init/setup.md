@@ -36,7 +36,7 @@ Good first questions:
   - `{ label: "Both project + personal", description: "Shared guidance plus private preferences." }`
 - Optional mevedel artifacts:
   - `{ label: "Skills + hooks (Recommended)", description: "Add reusable workflows and lifecycle automation when the repo justifies them." }`
-  - `{ label: "Skills only", description: "Add slash-invocable workflows without hooks." }`
+  - `{ label: "Skills only", description: "Add $name-invocable workflows without hooks." }`
   - `{ label: "Hooks only", description: "Add lifecycle automation without skills." }`
   - `{ label: "Neither, just instructions", description: "Only write instruction files." }`
 
@@ -128,8 +128,9 @@ only for reusable personal workflows.
 
 Each skill should have a `SKILL.md` with concise frontmatter and a body
 that tells the model when to use the workflow, what to inspect, what to
-produce, and which checks matter. Use `disable-model-invocation: true`
-when a skill is meant for explicit slash use only.
+produce, and which checks matter. Users invoke skills as `$name`; `/`
+names only built-in commands. Use `disable-model-invocation: true` when
+a skill is meant for explicit user invocation only.
 
 For durable model memory, prefer project memory under
 `{{PROJECT_MEMORY_DIR}}` and user memory under `{{USER_MEMORY_DIR}}`
@@ -139,7 +140,9 @@ only for mevedel-specific memories.
 ## Phase 7: Write Hooks
 
 Create hooks only when automation has a clear payoff. Prefer simple
-project hooks in `{{HOOKS_FILE}}` plus scripts in `{{HOOKS_DIR}}`.
+project hooks in `{{HOOKS_FILE}}` plus scripts in `{{HOOKS_DIR}}`;
+mevedel also loads project hooks from `.agents/hooks.json` and
+`.agents/hooks.el`.
 Make hook behavior inspectable and bounded. If adding project hooks,
 tell the user they must review and trust them with
 `M-x mevedel-hooks-trust-project`.
