@@ -46,6 +46,12 @@ Memory proposals, journal captures and running consolidation expose their own
 content groups. The memory index moves above the reader in narrow windows.
 Opening and refreshing inspectors preserve the composer and table state.
 
+Compact execution and pending-input rows in the chat are local disclosures,
+not implicit cockpit entry points. Named management links open their table
+cockpits. Pending input's Manage queue link explicitly says it pauses delivery;
+expanding a preview does not. This separates quick inspection from management
+side effects and avoids navigating away from the conversation unexpectedly.
+
 ## Rationale and consequences
 
 Text that can grow should not become a transient header. Resource lists need

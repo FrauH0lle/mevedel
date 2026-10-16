@@ -256,6 +256,7 @@
                   "mevedel-view-interaction" ())
 (declare-function mevedel-view--interaction-register
                   "mevedel-view-interaction" (descriptor))
+(defvar mevedel-view--interaction-overlays)
 
 ;; `seq'
 (declare-function seq-take "seq" (sequence n))
@@ -365,7 +366,8 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
 (defun mevedel-view--pending-input-preview (input)
   "Return a one-line preview for pending INPUT."
   (let ((preview (string-trim
-                  (replace-regexp-in-string "[ \t\n\r]+" " " input t t))))
+                  (replace-regexp-in-string "[ \t\n\r]+" " "
+                                            (substring-no-properties input) t t))))
     (if (> (length preview) 96)
         (concat (substring preview 0 93) "...")
       preview)))
@@ -376,26 +378,114 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
 
 (defvar-keymap mevedel-view--pending-inputs-map
   :doc "Keymap on the pending-input summary."
-  "RET" #'mevedel-pending-inputs-open
-  "<return>" #'mevedel-pending-inputs-open
-  "<mouse-1>" #'mevedel-pending-inputs-open
-  "<mouse-2>" #'mevedel-pending-inputs-open)
+  "RET" #'mevedel-pending-inputs-preview-activate
+  "<return>" #'mevedel-pending-inputs-preview-activate
+  "<mouse-1>" #'mevedel-pending-inputs-preview-activate
+  "<mouse-2>" #'mevedel-pending-inputs-preview-activate)
 
-(defun mevedel-view--pending-input-category-body (label entries)
-  "Return compact pending-input summary for LABEL and ENTRIES."
+(defun mevedel-pending-inputs--preview-selection (session entries)
+  "Return SESSION's expanded visible entry identity among ENTRIES, or nil.
+The disposable interaction overlay owns this presentation state.  Removing
+the summary removes its state; rebuilding an unchanged summary retains it."
+  (when-let* ((overlay (and (hash-table-p mevedel-view--interaction-overlays)
+                          (gethash 'pending-inputs
+                                   mevedel-view--interaction-overlays)))
+              ((overlay-buffer overlay)))
+    (let ((selection (overlay-get overlay 'mevedel-pending-input-preview)))
+      (if (and (eq (car selection) session)
+               (cdr selection)
+               (cl-find (cdr selection) entries
+                        :key (lambda (entry) (plist-get entry :id))))
+          (cdr selection)
+        (overlay-put overlay 'mevedel-pending-input-preview nil)
+        nil))))
+
+(defun mevedel-pending-inputs-preview-activate (&optional event)
+  "Inspect the pending input at point or mouse EVENT without holding delivery.
+Only the explicitly labeled management action opens the queue cockpit."
+  (interactive (list last-nonmenu-event))
+  (when (mouse-event-p event)
+    (mouse-set-point event))
+  (when-let* ((target (get-text-property (point) 'mevedel-pending-input-target))
+              (session (mevedel-view--session))
+              ((eq (car target) session))
+              (overlay (get-text-property
+                        (point) 'mevedel-view-interaction-overlay))
+              ((overlayp overlay))
+              ((eq (overlay-buffer overlay) (current-buffer)))
+              ((<= (overlay-start overlay) (point)))
+              ((< (point) (overlay-end overlay))))
+    (if (eq (cdr target) 'manage)
+        (mevedel-pending-inputs-open)
+      (when-let* ((id (cdr target))
+                  ((cl-find id
+                            (append (mevedel-session-pending-steering session)
+                                    (mevedel-session-pending-follow-ups session))
+                            :key (lambda (entry) (plist-get entry :id)))))
+        (overlay-put overlay 'mevedel-pending-input-preview
+                     (unless (equal target (overlay-get
+                                            overlay 'mevedel-pending-input-preview))
+                       target))
+        (mevedel-view--pending-inputs-render session)))))
+
+(defun mevedel-pending-inputs--preview-detail (entry)
+  "Return ENTRY's plain input, bounded to ten width-limited display lines.
+Long inputs are explicitly labeled partial.  Text is never interpreted as
+buttons, Markdown, or interaction authority."
+  (let* ((text (substring-no-properties (mevedel-view--pending-input-text entry)))
+         (width (max 1 (min 80 (- (window-body-width
+                                  (get-buffer-window (current-buffer) t))
+                                 6))))
+         (position 0)
+         (lines 0)
+         parts)
+    (while (and (< position (length text)) (< lines 10))
+      ;; Inspect only a bounded prefix, even for a single enormous line.
+      (let* ((sample (substring text position
+                                (min (length text) (+ position (* 2 width)))))
+             (newline (string-search "\n" sample))
+             (line (substring sample 0 newline))
+             (visible (truncate-string-to-width line width))
+             (count (length visible)))
+        (when (and (= count 0) (not (string-empty-p line)))
+          (setq visible (substring line 0 1) count 1))
+        (push (concat "    " visible "\n") parts)
+        (cl-incf position count)
+        (when (and newline (= count newline)) (cl-incf position))
+        (cl-incf lines)))
+    (concat (if parts (apply #'concat (nreverse parts)) "    (Empty input)\n")
+            (when (< position (length text))
+              "    [Partial preview: 10 lines maximum; Manage queue for full input.]\n"))))
+
+(defun mevedel-view--pending-input-category-body (label entries &optional session selected)
+  "Return compact pending-input summary for LABEL and ENTRIES.
+SESSION and SELECTED identify the locally expanded entry."
   (let ((index 0)
         lines)
     (dolist (entry (seq-take entries 3))
       (cl-incf index)
-      (push (format "  %d. %s"
-                    index
-                    (concat
-                     (when-let* ((scope (plist-get entry :scope)))
-                       (format "[◆ %s] "
-                               (mevedel-view-composer-scope-label scope)))
-                     (mevedel-view--pending-input-preview
-                      (mevedel-view--pending-input-text entry))))
-            lines))
+      (let* ((id (plist-get entry :id))
+             (expanded (and id (equal id selected)))
+             (text (format "%d. %s %s"
+                           index (if expanded "[-]" "[+]")
+                           (concat
+                            (when-let* ((scope (plist-get entry :scope)))
+                              (format "[◆ %s] "
+                                      (mevedel-view-composer-scope-label scope)))
+                            (mevedel-view--pending-input-preview
+                             (mevedel-view--pending-input-text entry))))))
+        (when (and session id)
+          (add-text-properties
+           0 (length text)
+           (list 'mevedel-pending-input-target (cons session id)
+                 'mouse-face 'highlight
+                 'help-echo "Expand or collapse input preview; delivery continues")
+           text))
+        (push (concat "  " text
+                      (when expanded
+                        (concat "\n" (string-remove-suffix
+                                      "\n" (mevedel-pending-inputs--preview-detail entry)))))
+              lines)))
     (when (> (length entries) 3)
       (push (format "  %d more" (- (length entries) 3)) lines))
     (concat "\n" label "\n"
@@ -404,16 +494,23 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
 
 (defun mevedel-view--pending-inputs-body (session)
   "Return the main-view pending-input summary for SESSION."
-  (concat
-   (when (mevedel-session-pending-input-failure-paused session)
-     "\nPending-input delivery stopped after turn failure; review required\n")
-   (when (mevedel-session-pending-input-paused session)
-     "\nPending-input delivery paused\n")
-   (when-let* ((entries (mevedel-session-pending-steering session)))
-     (mevedel-view--pending-input-category-body "Steering" entries))
-   (when-let* ((entries (mevedel-session-pending-follow-ups session)))
-     (mevedel-view--pending-input-category-body "Follow-ups" entries))
-   "\nRET or C-c C-e manage pending inputs\n"))
+  (let ((selected
+         (mevedel-pending-inputs--preview-selection
+          session (append (seq-take (mevedel-session-pending-steering session) 3)
+                          (seq-take (mevedel-session-pending-follow-ups session) 3)))))
+    (concat
+     (when (mevedel-session-pending-input-failure-paused session)
+       "\nPending-input delivery stopped after turn failure; review required\n")
+     (when (mevedel-session-pending-input-paused session)
+       "\nPending-input delivery paused\n")
+     (when-let* ((entries (mevedel-session-pending-steering session)))
+       (mevedel-view--pending-input-category-body "Steering" entries session selected))
+     (when-let* ((entries (mevedel-session-pending-follow-ups session)))
+       (mevedel-view--pending-input-category-body "Follow-ups" entries session selected))
+     "\n"
+     (propertize "Manage queue…" 'mevedel-pending-input-target (cons session 'manage)
+                 'mouse-face 'highlight 'face 'link)
+     " (pauses delivery; C-c C-e)\n")))
 
 (defun mevedel-view--pending-inputs-render (&optional session)
   "Render SESSION pending input into the interaction zone."
@@ -426,9 +523,8 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
          (list :kind 'pending-input
                :id 'pending-inputs
                :count (length entries)
-               :body (mevedel-view--pending-inputs-body session)
-               :keymap mevedel-view--pending-inputs-map
-               :help-echo "Open Pending Inputs cockpit"))))))
+               :body (lambda () (mevedel-view--pending-inputs-body session))
+               :keymap mevedel-view--pending-inputs-map))))))
 
 (cl-defun mevedel-view-enqueue-external-follow-up
     (data-buffer text &key guest-name guest-id paths directive-id invoke

@@ -113,6 +113,7 @@ Chat / view
   mevedel-context-summary.el  stateless validated continuation/handoff/digest summary generation
   mevedel-view.el             view mode, zones, and session coordination
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
+  mevedel-view-execution.el   inline background-work inspection and explicit execution actions
   mevedel-view-composer.el    composer geometry, submission, root dispatch, fork/send flow
   mevedel-view-input-files.el local file drops and clipboard-image input
   mevedel-view-animation.el   prepared status frames, styles, and bounded color cache

@@ -1200,7 +1200,9 @@ The workspace root uses Emacs path abbreviation normally, truncates to
 the final directory when space is tight, and disappears before the
 right-side state is dropped. Clickable parts route to session cockpit
 surfaces such as top, mode, model, and tools. The request state is
-plain status text. The view must not copy or proxy gptel's clickable
+plain status text. Goal status/turns and the model name are separate links:
+the model always opens Model, even when a Goal is active or completed.
+The view must not copy or proxy gptel's clickable
 data-buffer header line; gptel-owned header controls stay in the raw
 data buffer. The request state is `settling` while a lost turn's deferred
 terminal work still owns the session. The tab line is evaluated on every
@@ -1407,17 +1409,32 @@ draft-preserving view machinery as root redraws. `/btw` requires an accepted
 parent prompt and is available only from the live root chat or Plan composer;
 directive, historical, agent, and side scopes cannot create one.
 
-While yielded (background) Bash commands are live, the status zone lists up to
-five of them by command and owner, followed by `+N more`. Activating a command
-line opens that command's result exactly like a breadcrumb's `[Show result]`:
-its original Bash row, opening the owning agent's transcript first. The live
-snapshot carries the originating tool ID, including nested Bash children, so
-activation does not rediscover that identity by parsing transcript history.
-Activating `+N more` opens the execution cockpit. A managed-zone body line keeps
-its own activation; the fragment's activation applies only to lines without one. The
-main cockpit exposes the same surface as `Executions`, and `/ps` opens it
-directly. Its Elapsed and Bytes columns sort by their numbers, not their text. Execution start and settlement reconcile this fragment through the
-normal managed-zone path, preserving composer text, point, and windows.
+The status zone groups yielded Bash commands and Monitors as **Background work**.
+Click or RET anywhere on an item row, including its indentation or line end,
+expands a bounded output preview in place; activating it again collapses it.
+Only one item is expanded at a time. The preview is not another transcript or
+process owner: it projects execution snapshots and passive progress/terminal
+events without consuming model output. It shows at most three output lines,
+each limited to 100 columns. It labels its output bounds and distinguishes
+no output yet from unavailable output. An expanded item stays visible after
+completion until collapsed or replaced, so settlement does not close something
+the user is reading. Closed completed items leave the status area; their durable
+results remain in the conversation.
+
+The expanded item has explicit **Full output**, **Show in conversation**, and
+live-only **Stop** actions. Full output opens a read-only inspection buffer;
+Show in conversation reveals the original tool row, opening the owning agent's
+transcript when necessary. The captured tool ID includes nested ToolCall children.
+The **All…** and overflow actions explicitly open the execution cockpit; blank
+space does nothing. The status area lists up to five live items plus the selected
+inspector when needed. Monitor expiry is a fixed timestamp, not a new countdown
+timer. Existing execution events refresh the preview through managed-zone
+reconciliation, preserving composer text, point, selection, and windows.
+Quiet progress that changes no visible row or preview text updates the selected
+facts without rebuilding the status area.
+
+The main cockpit's `Executions` entry and `/ps` still open the full management
+surface. Its Elapsed and Bytes columns sort by numbers rather than text.
 
 ## Live browser collaboration
 
@@ -2131,8 +2148,8 @@ I'll inspect the associated files.
 -- 1 pending input --------------------------------------------
 
 Follow-ups
-  1. Also check the docs.
-  RET or C-c C-e manage pending inputs
+  1. [+] Also check the docs.
+  Manage queue… (pauses delivery; C-c C-e)
 
 Working... · 42s
 
@@ -2201,10 +2218,10 @@ Allow Bash?
   npx @emacs-eask/cli test ert test/test-mevedel-view.el
 
 Steering
-  1. Keep the request spinner pinned above the composer.
+  1. [+] Keep the request spinner pinned above the composer.
 Follow-ups
-  1. Also include a full mockup with agents and permissions.
-  RET or C-c C-e manage pending inputs
+  1. [+] Also include a full mockup with agents and permissions.
+  Manage queue… (pauses delivery; C-c C-e)
 
 Waiting for input · 2m 14s · 1 agent blocked · 1 agent running
 
@@ -2333,9 +2350,18 @@ priority over follow-ups regardless of submission order; FIFO applies within
 each category. While idle, both send keys perform an ordinary immediate send.
 Slash commands cannot become pending input.
 
-The interaction zone shows compact per-category previews. `RET` on that
-summary or `C-c C-e` opens the Pending Inputs cockpit and pauses automatic
-delivery. The cockpit edits one entry in the composer without losing an
+The interaction zone shows up to three compact previews per category. Click or
+`RET` on an entry expands its input locally, with one entry open at a time.
+Inspection does not pause delivery or clear a failure-review hold. The preview
+follows the entry's stable identity through reordering and closes when the entry
+leaves the visible summary; it never silently switches to a new entry occupying
+the same position. Expanded text is plain, bounded to ten width-limited lines,
+and explicitly labeled partial when more remains.
+
+**Manage queue…** or `C-c C-e` opens the Pending Inputs cockpit and pauses
+automatic delivery; the link labels that consequence. Blank summary space is
+inert. Use the cockpit to inspect the rest of a long input. The cockpit edits
+one entry in the composer without losing an
 existing draft, reorders entries within their category, converts entries
 between steering and follow-up, marks and deletes selected entries, and clears
 all pending input with `C-c C-q`. Saving an edit updates the entry in place;

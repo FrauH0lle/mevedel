@@ -215,8 +215,8 @@ temporary one."
                      (should-not (featurep 'mevedel-view-audit))
                      (with-current-buffer view
                        ;; The call can yield before its source row arrives.
-                       ;; Activation must cold-load the evidence owner too.
-                       (mevedel-view-show-live-execution
+                       ;; Explicit navigation cold-loads the evidence owner.
+                       (mevedel-view-execution-show-in-conversation
                         '(:execution-id "cold-exec" :tool-use-id "cold-tool"
                           :owner "/root" :command "printf cold"
                           :execution-output "cold retained output")))

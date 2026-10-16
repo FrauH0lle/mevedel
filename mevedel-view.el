@@ -32,6 +32,7 @@
 (require 'mevedel-transport)
 (require 'mevedel-utilities)
 (require 'mevedel-view-animation)
+(require 'mevedel-view-execution)
 (require 'mevedel-view-zone)
 
 ;; `adaptive-wrap'
@@ -49,42 +50,20 @@
                   "mevedel-agent-control" (session))
 (autoload 'mevedel-agent-control-teardown-session "mevedel-agent-control")
 
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
-(defvar mevedel--agent-invocation)
-
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
 ;; `mevedel-execution'
-(declare-function mevedel-execution-count-user "mevedel-execution" (session))
-(declare-function mevedel-execution-list-user "mevedel-execution" (session))
-
-;; `mevedel-view-audit'
-(declare-function mevedel-view-audit-show-result
-                  "mevedel-view-audit" (record))
-(autoload 'mevedel-view-audit-show-result "mevedel-view-audit")
-
-;; `mevedel-view-agent'
-(declare-function mevedel-view-open-agent-transcript
-                  "mevedel-view-agent" (agent-path))
 (declare-function mevedel-execution-teardown-session
                   "mevedel-execution" (session))
 (declare-function mevedel-execution-unsettled-mutation-p
                   "mevedel-execution" (session))
-(defvar mevedel-execution-state-change-hook)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-label
                   "mevedel-execution-target" (target &optional directory))
 (declare-function mevedel-execution-target-native-root
                   "mevedel-execution-target" (cl-x) t)
-
-;; `mevedel-executions-list'
-(declare-function mevedel-executions-list-open
-                  "mevedel-executions-list" (&optional context))
-(autoload 'mevedel-executions-list-open "mevedel-executions-list" nil t)
 
 ;; `mevedel-journal-capture'
 (declare-function mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture"
@@ -1426,10 +1405,6 @@ when one of them changes."
                        permission-label))
                (scope (mevedel-view-composer-scope-label))
                (model (if model (gptel--model-name model) "model none"))
-               (phase-model
-                (if goal
-                    (format "%s · %d turns · %s" goal-status goal-turns model)
-                  model))
                (tools (format "%d tool%s"
                               tool-count
                               (if (= tool-count 1) "" "s")))
@@ -1456,9 +1431,12 @@ when one of them changes."
                          state 'face (if (string= state "running")
                                          'success
                                        'shadow))
+                        (and goal
+                             (mevedel-view--status-strip-button
+                              (format "Goal %s · %d turns" goal-status goal-turns)
+                              'goal "Open Goal cockpit"))
                         (mevedel-view--status-strip-button
-                         phase-model (if goal 'goal 'model)
-                         (if goal "Open Goal cockpit" "Open model cockpit"))
+                         model 'model "Open model cockpit")
                         (and preset-name
                              (mevedel-view--status-strip-button
                               (format "preset %s" preset-name)
@@ -1893,119 +1871,12 @@ issue, so a stale control cannot dismiss a later failure with the same id."
         (when suffix
           (setq fragment (plist-put fragment :body-suffix suffix)))
         (push fragment fragments)))
-    (when-let* ((session (plist-get model :session))
-                ;; The count is O(1); this zone renders on every live update.
-                ((> (mevedel-execution-count-user session) 0))
-                (body (mevedel-view--status-executions-body session)))
-      (progn
-        (push (list :namespace 'status
-                    :id 'executions
-                    :priority 50
-                    :body body
-                    ;; Without this the row sits flush against the
-                    ;; agents separator below it and reads as that
-                    ;; rule's caption.  A blank line cannot go in
-                    ;; `:body' -- the zone trims it to one newline.
-                    :body-suffix "\n"
-                    :keymap (mevedel-view--display-fragment-keymap)
-                    :navigatable t
-                    :activate #'mevedel-view-open-executions
-                    :entry 'executions)
-              fragments)))
+    (when-let* ((fragment (mevedel-view-execution-fragment
+                          (plist-get model :session))))
+      (push fragment fragments))
     (when-let* ((fragment (mevedel-view-agent-status-fragment)))
       (push fragment fragments))
     (nreverse fragments)))
-
-(defvar mevedel-view--status-executions-visible-max 5
-  "Most background executions listed by name in the status zone.")
-
-(defun mevedel-view--status-execution-line (snapshot)
-  "Return the status line for live execution SNAPSHOT.
-It names the command and owner without output: the original Bash row owns
-progress, and RET jumps there."
-  (let* ((owner (plist-get snapshot :owner))
-         (monitor-p (eq (plist-get snapshot :kind) 'monitor))
-         (command (replace-regexp-in-string
-                   "[\n\r\t]+" " "
-                   (if monitor-p
-                       (concat "Watching: " (plist-get snapshot :description))
-                     (or (plist-get snapshot :command) "Bash"))))
-         (line (concat
-                "  "
-                (propertize "●" 'font-lock-face 'mevedel-view-agent-running)
-                " "
-                (truncate-string-to-width command 72 nil nil "…")
-                (when monitor-p
-                  (concat
-                   (when-let* ((expires (plist-get snapshot :expires-at)))
-                     (format " · expires %s"
-                             (format-time-string "%H:%M:%S" expires)))
-                   (format " · %d events" (or (plist-get snapshot :event-count) 0))))
-                (if (equal owner "/root") "" (format " · %s" owner))
-                "\n")))
-    (add-text-properties
-     2 (1- (length line))
-     (list 'mouse-face 'highlight
-           'help-echo "RET: show the running command's execution row"
-           'mevedel-view-zone-activate
-           (lambda () (mevedel-view-show-live-execution snapshot)))
-     line)
-    line))
-
-(defun mevedel-view--status-executions-body (session)
-  "Return status lines for SESSION's background executions, or nil.
-Foreground commands already show as the pending call they belong to."
-  (when-let* ((live (cl-remove-if-not
-                     (lambda (snapshot) (plist-get snapshot :yielded))
-                     (mevedel-execution-list-user session))))
-    (let ((hidden (- (length live) mevedel-view--status-executions-visible-max)))
-      (concat
-       (mapconcat #'mevedel-view--status-execution-line
-                  (seq-take live mevedel-view--status-executions-visible-max)
-                  "")
-       (when (> hidden 0)
-         (propertize (format "  +%d more\n" hidden)
-                     'font-lock-face 'shadow))))))
-
-(defun mevedel-view-show-live-execution (snapshot)
-  "Show the originating Bash row identified by live execution SNAPSHOT."
-  (let ((owner (plist-get snapshot :owner))
-        (record (list :execution-id (plist-get snapshot :execution-id)
-                      :tool-use-id (plist-get snapshot :tool-use-id)
-                      :facts snapshot)))
-    (if (equal owner "/root")
-        (mevedel-view-audit-show-result record)
-      (mevedel-view-open-agent-transcript owner)
-      (with-current-buffer (window-buffer (selected-window))
-        (mevedel-view-audit-show-result record)))))
-
-(defun mevedel-view-open-executions ()
-  "Open the current session's live execution cockpit."
-  (interactive)
-  (mevedel-executions-list-open))
-
-(defun mevedel-view--execution-state-changed (session data-buffer)
-  "Refresh main views owned by SESSION after live executions change."
-  (when (buffer-live-p data-buffer)
-    (let* ((invocation
-            (buffer-local-value 'mevedel--agent-invocation data-buffer))
-           (main-data-buffer
-            (if invocation
-                (mevedel-agent-invocation-parent-data-buffer invocation)
-              data-buffer))
-           (view-buffer
-            (and (buffer-live-p main-data-buffer)
-                 (buffer-local-value 'mevedel--view-buffer
-                                     main-data-buffer))))
-      (when (buffer-live-p view-buffer)
-        (with-current-buffer view-buffer
-          (when (and (derived-mode-p 'mevedel-view-mode)
-                     (not mevedel-view--agent-transcript-p)
-                     (eq session (mevedel-view--status-session)))
-            (mevedel-view--render-status)))))))
-
-(add-hook 'mevedel-execution-state-change-hook
-          #'mevedel-view--execution-state-changed)
 
 (defun mevedel-view--render-status (&optional data-buf)
   "Render task, execution, and aggregate agent status for DATA-BUF.

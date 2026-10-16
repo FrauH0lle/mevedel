@@ -35,7 +35,13 @@ transcript receives it at its end. Appending at the end during a running turn
 put every completion behind the turn's final answer: one session stacked
 twelve completions, emitted over eighty minutes, just before the next prompt,
 where no activity group could count them. Running
-background commands are listed only transiently, in the view's status zone. Its identity is scoped to session, owner, and execution, not
+background commands and monitors are listed transiently in the view's status
+zone. Activating a row expands one local bounded inspector; transcript navigation,
+full output, stopping, and opening the management list are explicit actions.
+The inspector projects existing execution snapshots and passive events without
+claiming output, and retains only the selected item's final presentation until
+collapsed or replaced. It adds no process registry or execution timer.
+Its identity is scoped to session, owner, and execution, not
 command text. Execution IDs carry a fresh per-state prefix so resumed sessions
 cannot reuse the earlier state's counter in durable records or output paths.
 Foreground completion never produces a breadcrumb. Execution
@@ -91,6 +97,13 @@ of the same command remain independently navigable.
 
 ## Decision history
 
+- **Local inspection (2026-10).** Status rows previously jumped to their
+  originating transcript entry, while their margins inherited an action opening
+  the execution cockpit. The user found a named row unexpectedly opening a
+  management screen and chose expansion in place over navigation. Commands and
+  monitors now share one local-inspection interaction; the original transcript
+  entry remains available through an explicitly named action. This preserves
+  conversational context and keeps an open inspector visible through settlement.
 - **Completion wake (2026-10).** Originally a yielded completion started no
   model request: the root saw it only at its next turn, so a model waiting for
   a build or test run had to poll with `WriteStdin` or ask the user to nudge

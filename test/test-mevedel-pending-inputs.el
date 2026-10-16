@@ -111,6 +111,161 @@
       (mevedel-view--interaction-rebuild)
       (should (string-search "delivery stopped" (buffer-string))))))
 
+(defun mevedel-pending-inputs-test--preview-command (text &optional mouse)
+  "Activate rendered TEXT with its real RET or MOUSE binding."
+  (goto-char (point-min))
+  (search-forward text)
+  (backward-char (length text))
+  (let* ((event (and mouse (list 'mouse-1
+                                (list (selected-window) (point) '(0 . 0) 0))))
+         (last-nonmenu-event event)
+         (command (key-binding (if mouse [mouse-1] (kbd "RET")))))
+    (should (eq command #'mevedel-pending-inputs-preview-activate))
+    (call-interactively command)))
+
+(mevedel-deftest mevedel-pending-inputs-preview-activate ()
+  ,test
+  (test)
+  :doc "RET and mouse inspect one entry without pausing, saving, consuming or approving"
+  (mevedel-pending-inputs-test--with-session
+    (let ((first (mevedel-session-enqueue-pending-input
+                  session 'steering '(:input "first\ncomplete first text")))
+          (second (mevedel-session-enqueue-pending-input
+                   session 'follow-up '(:input "second\ncomplete second text")))
+          (saves 0))
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (mevedel-view--interaction-rebuild)
+        (cl-letf (((symbol-function 'mevedel-recovery-save)
+                   (lambda (_) (cl-incf saves)))
+                  ((symbol-function 'mevedel-pending-inputs-open)
+                   (lambda (&rest _) (ert-fail "Preview opened management"))))
+          (mevedel-pending-inputs-test--preview-command "1. [+] first")
+          (should (string-search "    first\n    complete first text" (buffer-string)))
+          (mevedel-pending-inputs-test--preview-command "1. [+] second" t)
+          (should (string-search "    second\n    complete second text" (buffer-string)))
+          (should-not (string-search "    complete first text" (buffer-string)))
+          (mevedel-pending-inputs-test--preview-command "1. [-] second")
+          (should-not (string-search "    complete second text" (buffer-string)))
+          (should-not (mevedel-session-pending-input-paused session))
+          (should-not (mevedel-view-interaction-blocking-p))
+          (should (= saves 0))
+          (should (eq first (car (mevedel-session-pending-steering session))))
+          (should (eq second (car (mevedel-session-pending-follow-ups session))))))))
+
+  :doc "only the explicit management link pauses delivery; whitespace and detail stay inert"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "queued\n\nplain body"))
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (mevedel-view--interaction-rebuild)
+      (mevedel-pending-inputs-test--preview-command "1. [+] queued")
+      (dolist (text '("  1." "    plain body" "\n\nManage" " (pauses delivery"))
+        (goto-char (point-min))
+        (search-forward text)
+        (backward-char (length text))
+        (should-not (get-text-property (point) 'mevedel-pending-input-target))
+        (let ((last-nonmenu-event nil))
+          (call-interactively (key-binding (kbd "RET"))))
+        (should-not (mevedel-session-pending-input-paused session)))
+      (mevedel-pending-inputs-test--preview-command "Manage queue…" t)
+      (should (derived-mode-p 'mevedel-pending-inputs-mode))
+      (should (mevedel-session-pending-input-paused session))))
+
+  :doc "reordering and conversion retain identity; removal or another session closes preview"
+  (mevedel-pending-inputs-test--with-session
+    (let ((first (mevedel-session-enqueue-pending-input
+                  session 'follow-up '(:input "first\nfirst details")))
+          (second (mevedel-session-enqueue-pending-input
+                   session 'follow-up '(:input "second\nsecond details"))))
+      (with-current-buffer view-buf
+        (mevedel-view--interaction-rebuild)
+        (mevedel-pending-inputs-test--preview-command "2. [+] second")
+        (mevedel-session-set-pending-inputs session 'follow-up (list second first))
+        (mevedel-view--interaction-rebuild)
+        (should (string-search "1. [-] second" (buffer-string)))
+        (should (string-search "    second details" (buffer-string)))
+        (let ((third (mevedel-session-enqueue-pending-input
+                      session 'follow-up '(:input "third")))
+              (fourth (mevedel-session-enqueue-pending-input
+                       session 'follow-up '(:input "fourth"))))
+          (mevedel-session-set-pending-inputs
+           session 'follow-up (list first third fourth second))
+          (mevedel-view--interaction-rebuild)
+          (should-not (string-search "    second details" (buffer-string)))
+          (should (string-search "1 more" (buffer-string)))
+          (mevedel-session-set-pending-inputs session 'follow-up (list second first))
+          (mevedel-view--interaction-rebuild)
+          (should (string-search "1. [+] second" (buffer-string)))
+          (mevedel-pending-inputs-test--preview-command "1. [+] second"))
+        (mevedel-session-set-pending-inputs session 'follow-up (list first))
+        (mevedel-session-set-pending-inputs session 'steering (list second))
+        (mevedel-view--interaction-rebuild)
+        (should (string-search "Steering\n  1. [-] second" (buffer-string)))
+        ;; Delivery removes the selected identity, not merely its old index.
+        (mevedel-session-set-pending-inputs session 'steering nil)
+        (mevedel-view--interaction-rebuild)
+        (should-not (string-search "[-]" (buffer-string)))
+        (mevedel-pending-inputs-test--preview-command "1. [+] first")
+        (let ((other (mevedel-session-create "other" workspace)))
+          (mevedel-session-enqueue-pending-input
+           other 'follow-up '(:input "other\nother details"))
+          (with-current-buffer data-buf (setq-local mevedel--session other))
+          (setq-local mevedel--session other)
+          (mevedel-view--interaction-rebuild)
+          (should (string-search "1. [+] other" (buffer-string)))
+          (should-not (string-search "    other details" (buffer-string)))))))
+
+  :doc "queue rerenders preserve a multiline greater-than draft, mark and window position"
+  (mevedel-pending-inputs-test--with-session
+    (let ((entry (mevedel-session-enqueue-pending-input
+                  session 'follow-up '(:input "queued\nfull queued text"))))
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (mevedel-view--interaction-rebuild)
+        (mevedel-pending-inputs-test--preview-command "1. [+] queued")
+        (mevedel-pending-inputs-test--replace-composer
+         view-buf (propertize "> draft\nsecond line\n> third" 'draft-test 'kept))
+        (goto-char (+ (mevedel-view--input-start) 12))
+        (set-mark (+ (mevedel-view--input-start) 2))
+        (setq mark-active t)
+        (set-window-start (selected-window) (point-min))
+        (let ((draft (buffer-substring (mevedel-view--input-start) (point-max)))
+              (start (window-start)))
+          (mevedel-session-enqueue-pending-input
+           session 'steering '(:input "newly queued"))
+          (mevedel-view--interaction-rebuild)
+          (should (equal-including-properties
+                   draft (buffer-substring (mevedel-view--input-start) (point-max))))
+          (should (= 12 (- (point) (mevedel-view--input-start))))
+          (should (= 2 (- (mark) (mevedel-view--input-start))))
+          (should mark-active)
+          (should (= start (window-start)))
+          (should (string-search "    full queued text" (buffer-string)))
+          (mevedel-session-set-pending-inputs session 'follow-up nil)
+          (mevedel-view--interaction-rebuild)
+          (should-not (string-search "full queued text" (buffer-string)))
+          (should (= 12 (- (point) (mevedel-view--input-start))))
+          ;; A fresh queue must not inherit the old overlay's disclosure.
+          (mevedel-session-set-pending-inputs session 'steering nil)
+          (mevedel-view--interaction-rebuild)
+          (mevedel-session-set-pending-inputs session 'follow-up (list entry))
+          (mevedel-view--interaction-rebuild)
+          (should (string-search "1. [+] queued" (buffer-string)))))))
+
+  :doc "oversized plain input is bounded and labels omitted content honestly"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up (list :input (concat "large\n" (make-string 10000 ?x) "TAIL")))
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-rebuild)
+      (mevedel-pending-inputs-test--preview-command "1. [+] large")
+      (should (string-search "Partial preview: 10 lines maximum" (buffer-string)))
+      (should-not (string-search "TAIL" (buffer-string)))
+      (should (< (- (mevedel-view--input-start) (point-min)) 1500))
+      (should (string-search "Manage queue… (pauses delivery; C-c C-e)" (buffer-string))))))
+
 (mevedel-deftest mevedel-pending-inputs-follow-up-changed ()
   ,test
   (test)

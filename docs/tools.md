@@ -1237,11 +1237,14 @@ unavailable, a read-only retained-evidence view reports what is available or
 explicitly identifies missing evidence. Parent transcripts keep their own
 child-attributed completion breadcrumb alongside the agent answer.
 
-The view's status zone lists each background (yielded) command, with its
-owner when it is not `/root`, while it runs; RET on a line shows that
-command's Bash row, which alone carries its output. The lines disappear when
-the command finishes, and more than five collapse into a `+N more` line that
-opens the `/ps` list.
+The view's **Background work** area lists yielded commands and Monitors, with
+their owner when it is not `/root`. Click or RET expands one item's bounded
+output preview locally, without navigating away from the composer. Explicit
+actions open full output read-only, show the original conversation entry, or
+stop the live item. Inspection never consumes model output. An expanded item
+remains after completion until collapsed or replaced; other finished rows leave
+the area. **All…** and the overflow link open the `/ps` list. The original tool
+row remains the durable owner of execution output and status.
 
 Users have a separate session-wide control surface. `/ps` and the session
 cockpit's `Executions` row open a

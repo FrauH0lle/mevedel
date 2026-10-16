@@ -1306,7 +1306,7 @@
         (let ((line (mevedel-view--status-strip)))
           (should (string-match-p "active · 5 turns" line))
           (should (string-match-p "preset team" line))
-          (dolist (area '(goal preset))
+          (dolist (area '(goal model preset))
             (should (text-property-any
                      0 (length line) 'mevedel-view-cockpit-area area line)))))))
 
@@ -1341,6 +1341,29 @@
               (setq called nil)
               (funcall command nil)
               (should (eq called area))))))))
+
+  :doc "model and Goal labels keep separate click destinations with an active or finished Goal"
+  (mevedel-view-test--with-buffers
+    (let* ((goal (mevedel-goal--create :status 'active :turns-run 2))
+           (session (mevedel-session--create :name "main" :goal goal))
+           called)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session gptel-model 'gpt-5.6-sol))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-menu-open)
+                   (lambda (area) (setq called area))))
+          (dolist (status '(active complete))
+            (setf (mevedel-goal-status goal) status)
+            (let ((line (mevedel-view--status-strip)))
+              (dolist (label '(("Goal " . goal) ("gpt-5.6-sol" . model)))
+                (let* ((pos (string-search (car label) line))
+                       (map (and pos (get-text-property pos 'local-map line))))
+                  (should pos)
+                  (should (eq (cdr label)
+                              (get-text-property pos 'mevedel-view-cockpit-area line)))
+                  (setq called nil)
+                  (funcall (lookup-key map [tab-line mouse-1]) nil)
+                  (should (eq called (cdr label)))))))))))
 
   :doc "status strip clicks do not call gptel transients directly"
   (mevedel-view-test--with-buffers
@@ -1424,8 +1447,9 @@
                  (plist-get executions :priority)))
       (should (> (plist-get executions :priority)
                  (plist-get agents :priority)))
-      (should (equal (concat "  ● make test\n"
-                             "  ● make lint · /root/child\n")
+      (should (equal (concat "  Background work · All…\n"
+                             "  ▸ Running · make test\n"
+                             "  ▸ Running · make lint · /root/child\n")
                      (substring-no-properties
                       (plist-get executions :body))))
       ;; The row needs a blank line under it or it reads as a caption
@@ -1433,7 +1457,7 @@
       ;; to one newline, so the blank has to travel as a suffix.
       (should (equal "\n" (plist-get executions :body-suffix)))))))
 
-(mevedel-deftest mevedel-view--execution-state-changed ()
+(mevedel-deftest mevedel-view-execution-state-changed-integration ()
   ,test
   (test)
   :doc "live-execution redraw preserves a multiline leading-> composer draft"
@@ -1455,12 +1479,12 @@
                                 :command "make test"))))
                 ((symbol-function 'mevedel-view-agent-status-fragment)
                  #'ignore))
-        (mevedel-view--execution-state-changed session data-buf))
+        (mevedel-view-execution--state-changed session data-buf))
       (with-current-buffer view-buf
         (should (string= draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
         (should (string-match-p
-                 "● make test"
+                 "Running · make test"
                  (buffer-substring-no-properties
                   (point-min) (mevedel-view--input-start)))))))
   :doc "routes an agent execution update to its parent session view"
@@ -1485,66 +1509,59 @@
                                       :command "make test"))))
                       ((symbol-function 'mevedel-view-agent-status-fragment)
                        #'ignore))
-              (mevedel-view--execution-state-changed session agent-data))
+              (mevedel-view-execution--state-changed session agent-data))
             (with-current-buffer view-buf
               (should (string-match-p
-                       "● make test"
+                       "Running · make test"
                        (buffer-substring-no-properties
                         (point-min) (mevedel-view--input-start))))))
         (kill-buffer agent-data)))))
 
-(mevedel-deftest mevedel-view--status-executions-body ()
+(mevedel-deftest mevedel-view-execution-fragment-integration ()
   ,test
   (test)
-  :doc "caps listed commands and jumps from a line to its Bash row"
-  (let ((mevedel-view--status-executions-visible-max 1)
-        (session (mevedel-session-create
-                  "main"
-                  (mevedel-workspace--create
-                   :type 'project :id "/tmp/status-executions/"
-                   :root "/tmp/status-executions/" :name "status-executions")))
-        shown opened)
-    (cl-letf (((symbol-function 'mevedel-execution-list-user)
-               (lambda (_)
-                 '((:execution-id "e1" :owner "/root" :yielded t
-                    :tool-use-id "bash-1" :command "make test")
-                   (:execution-id "e2" :owner "/root" :yielded t
-                    :command "make lint"))))
-              ((symbol-function 'mevedel-execution-count-user) (lambda (_) 2))
-              ((symbol-function 'mevedel-view-agent-status-fragment) #'ignore)
-              ((symbol-function 'mevedel-executions-list-open)
-               (lambda (&optional _context) (setq opened t)))
-              ((symbol-function 'mevedel-view-audit-show-control-result)
-               (lambda (_) (error "Live activation scanned transcript history")))
-              ((symbol-function 'mevedel-view-audit-show-result)
-               (lambda (record)
-                 (setq shown (list (plist-get record :execution-id)
-                                   (plist-get record :tool-use-id))))))
-      (let ((body (mevedel-view--status-executions-body session)))
-        (should (equal "  ● make test\n  +1 more\n"
-                       (substring-no-properties body)))
-        (should-not (get-text-property (1- (length "  ● make test\n"))
-                                       'mouse-face body)))
-      ;; Activate the rendered zone text, which is what RET and clicks read.
-      (with-temp-buffer
-        (insert "> draft")
-        (setq-local mevedel-view--status-marker (copy-marker (point-min) t))
-        (setq-local mevedel-view--interaction-marker
-                    (copy-marker (point-min) t))
-        (setq-local mevedel-view--input-marker (copy-marker (point-min) nil))
-        (mevedel-view-zone-reconcile
-         'status (point-min) (point-min)
-         (mevedel-view--status-fragments (list :session session)))
-        (goto-char (point-min))
-        (search-forward "make test")
-        (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
-        (should (equal '("e1" "bash-1") shown))
-        (should-not opened)
-        (search-forward "more")
-        (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
-        (should opened)))))
+  :doc "caps listed commands, expands locally, and offers explicit navigation and overflow management"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "status-executions"))
+          shown opened)
+      (with-current-buffer data-buf (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'mevedel-execution-list-user)
+                 (lambda (_)
+                   (cl-loop for n from 1 to 6 collect
+                            (list :execution-id (format "e%d" n)
+                                  :owner "/root" :yielded t
+                                  :tool-use-id (format "bash-%d" n)
+                                  :output-tail "sample output" :state 'running
+                                  :command (format "command %d" n)))))
+                ((symbol-function 'mevedel-execution-count-user) (lambda (_) 6))
+                ((symbol-function 'mevedel-view-agent-status-fragment) #'ignore)
+                ((symbol-function 'mevedel-executions-list-open)
+                 (lambda (&optional _context) (setq opened t)))
+                ((symbol-function 'mevedel-view-audit-show-control-result)
+                 (lambda (_) (error "Live activation scanned transcript history")))
+                ((symbol-function 'mevedel-view-audit-show-result)
+                 (lambda (record)
+                   (setq shown (list (plist-get record :execution-id)
+                                     (plist-get record :tool-use-id))))))
+        (with-current-buffer view-buf
+          (mevedel-view--render-status)
+          (should-not (string-search "command 6" (buffer-string)))
+          (goto-char (point-min))
+          (search-forward "command 1")
+          (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
+          (should (string-search "sample output" (buffer-string)))
+          (should-not shown)
+          (should-not opened)
+          (goto-char (point-min))
+          (search-forward "Show in conversation")
+          (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
+          (should (equal '("e1" "bash-1") shown))
+          (goto-char (point-min))
+          (search-forward "+1 more")
+          (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
+          (should opened))))))
 
-(mevedel-deftest mevedel-view-show-live-execution ()
+(mevedel-deftest mevedel-view-execution-show-in-conversation-integration ()
   ,test
   (test)
   :doc "agent navigation uses the captured child tool identity in its owning view"
@@ -1562,7 +1579,7 @@
                      (lambda (record)
                        (should (eq (current-buffer) agent-view))
                        (setq shown record))))
-            (mevedel-view-show-live-execution
+            (mevedel-view-execution-show-in-conversation
              '(:execution-id "exec-child" :tool-use-id "outer/1/1"
                :owner "/root/worker"))
             (should (equal opened "/root/worker"))
@@ -1570,15 +1587,24 @@
             (should (equal (plist-get shown :execution-id) "exec-child"))))
       (kill-buffer agent-view))))
 
-(mevedel-deftest mevedel-view-open-executions ()
+(mevedel-deftest mevedel-view-execution-all-integration ()
   ,test
   (test)
   :doc "opens the live execution cockpit"
-  (let (opened)
-    (cl-letf (((symbol-function 'mevedel-executions-list-open)
-               (lambda (&optional _context) (setq opened t))))
-      (mevedel-view-open-executions))
-    (should opened)))
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "all")) opened)
+      (with-current-buffer data-buf (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'mevedel-executions-list-open)
+                 (lambda (&optional _context) (setq opened t)))
+                ((symbol-function 'mevedel-execution-count-user) (lambda (_) 1))
+                ((symbol-function 'mevedel-execution-list-user)
+                 (lambda (_) '((:execution-id "e" :owner "/root" :yielded t)))))
+        (with-current-buffer view-buf
+          (mevedel-view--render-status)
+          (goto-char (point-min))
+          (search-forward "All…")
+          (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))))
+      (should opened))))
 
 ;;
 ;;; View lifecycle

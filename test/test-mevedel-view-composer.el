@@ -5474,7 +5474,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (< partial queued))
           (should (< queued prompt)))))))
 
-  :doc "pending-input UI shows the queue-management key hint"
+  :doc "pending-input UI names queue management, its pause effect and key hint"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'file :id "vq-hint" :root "/tmp/vq" :name "vq"
@@ -5489,8 +5489,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--interaction-rebuild)
-        (should (string-match-p "C-c C-e manage pending inputs"
-                                (buffer-string))))))
+        (should (string-search "Manage queue… (pauses delivery; C-c C-e)"
+                               (buffer-string))))))
 
   :doc "queued skill hooks run once at dispatch and not while queueing"
   (mevedel-view-test--with-source-skills

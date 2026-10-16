@@ -358,10 +358,11 @@
   (let* ((facts '(:kind monitor :description "builds" :owner "/root"
                   :expires-at 1700000000.0 :event-count 7 :state running
                   :wall-time-seconds 123456))
-         (line (mevedel-view--status-execution-line facts))
+         (line (mevedel-view-execution--line facts))
          (metadata (mevedel-tool-exec-format-execution-metadata facts)))
+    (should (string-match-p "Watching · builds" line))
+    (should (string-match-p "Watching: builds" metadata))
     (dolist (text (list line metadata))
-      (should (string-match-p "Watching: builds" text))
       (should (string-match-p "expires " text))
       (should (string-match-p "7 events" text))
       (should-not (string-match-p "123456" text))))

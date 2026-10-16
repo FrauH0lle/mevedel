@@ -30,6 +30,21 @@ turn, so the live tail's next incremental render shows it in place instead of
 a projection into settled history; a closed or historical view reconstructs it through its own
 source instead of borrowing the live view's projection.
 
+The Background work status area offers a bounded, on-demand preview of one
+execution or Monitor without navigating the conversation. Its ephemeral selected
+snapshot follows existing passive execution events and remains inspectable after
+completion until closed. This does not duplicate durable output ownership or
+consume model delivery. The managed zone preserves the draft and reader state;
+no additional timer or transcript rebuild is needed for inspection updates.
+
+Pending-input previews likewise expand locally, with one bounded plain-text
+disclosure identified by session and entry ID rather than list position. This
+is disposable presentation state, not a queue mutation or delivery hold.
+Only the explicit Manage queue action enters the cockpit and pauses delivery;
+failure-review holds remain unchanged. The old whole-summary management link
+made inspection unexpectedly pause delivery, so inspection and management now
+have separate controls.
+
 Streaming updates retain completed semantic units and reconcile the mutable
 tail. Every section, hook audits included, renders in its remembered fold
 state, so restoration is a fallback that normally toggles nothing. Disclosure
