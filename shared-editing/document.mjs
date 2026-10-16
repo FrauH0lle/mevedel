@@ -81,6 +81,10 @@ export const extensions = [
   }),
 ];
 export const schema = getSchema(extensions);
+// Validation errors name what the schema allows, so a writer can correct a
+// rejected block from the message alone.
+const allowed = (names) => names.filter((n) => n !== 'doc' && n !== 'text').join(', ');
+const attrsOf = (spec) => Object.keys(spec.attrs || {}).join(', ') || 'none';
 export const markdown = new MarkdownManager({ extensions });
 export const documentJSON = (doc) => yXmlFragmentToProsemirrorJSON(doc.getXmlFragment('document'));
 export function selectionPositions(doc, range, parsed) {
@@ -114,11 +118,14 @@ export function selectedText(doc, range) {
     context,
   };
 }
-export function validateDocument(json) {
+/* Check JSON's node, attribute and mark names and values against the schema,
+   returning its embedded image size as {imageBytes, pixels}. */
+function checkNodes(json) {
   let count = 0, imageBytes = 0, pixels = 0;
   const visit = (node, depth) => {
     if (!node || depth > 48 || ++count > 10000) throw new Error('Document is too complex');
-    if (!schema.nodes[node.type]) throw new Error('Unknown document node');
+    if (!schema.nodes[node.type])
+      throw new Error(`Unknown document node ${JSON.stringify(node.type)}; nodes: ${allowed(Object.keys(schema.nodes))}`);
     if (Object.keys(node).some((k) => !['type', 'attrs', 'content', 'marks', 'text'].includes(k)))
       throw new Error('Unknown document property');
     if (node.type === 'image') {
@@ -134,7 +141,8 @@ export function validateDocument(json) {
     if (node.attrs) {
       const attrs = schema.nodes[node.type].spec.attrs || {};
       for (const key of Object.keys(node.attrs))
-        if (!(key in attrs)) throw new Error('Unknown document attribute');
+        if (!(key in attrs))
+          throw new Error(`Unknown ${node.type} attribute ${JSON.stringify(key)}; attributes: ${attrsOf(schema.nodes[node.type].spec)}`);
       if (node.attrs.id != null && !/^[a-zA-Z0-9_-]{1,80}$/.test(node.attrs.id))
         throw new Error('Invalid block identity');
       if (
@@ -164,29 +172,42 @@ export function validateDocument(json) {
     for (const mark of node.marks || []) {
       if (Object.keys(mark).some((k) => !['type', 'attrs'].includes(k)))
         throw new Error('Unknown mark property');
-      if (!schema.marks[mark.type]) throw new Error('Unknown document mark');
+      if (!schema.marks[mark.type])
+        throw new Error(`Unknown document mark ${JSON.stringify(mark.type)}; marks: ${Object.keys(schema.marks).join(', ')}`);
       if (mark.type === 'link' && !/^(https?:|mailto:|#)/i.test(mark.attrs?.href || ''))
         throw new Error('Unsafe document link');
       for (const key of Object.keys(mark.attrs || {}))
         if (!(key in (schema.marks[mark.type].spec.attrs || {})))
-          throw new Error('Unknown mark attribute');
+          throw new Error(`Unknown ${mark.type} attribute ${JSON.stringify(key)}; attributes: ${attrsOf(schema.marks[mark.type].spec)}`);
     }
     for (const child of node.content || []) visit(child, depth + 1);
   };
   visit(json, 0);
+  return { imageBytes, pixels };
+}
+export function validateDocument(json) {
+  const { imageBytes, pixels } = checkNodes(json);
   const node = schema.nodeFromJSON(json);
-  node.check();
+  try {
+    node.check();
+  } catch (error) {
+    // ProseMirror names the node but not what it may contain.
+    const type = /for node (\w+)/.exec(error.message)?.[1];
+    const expects = type && schema.nodes[type]?.spec.content;
+    throw expects ? new Error(`${error.message}; ${type} contains ${expects}`) : error;
+  }
   if (pixels > 32000000 || imageBytes > 12 * 1024 * 1024)
     throw new Error('Document images exceed 32 megapixels or 12 MB of embedded data');
   if (new TextEncoder().encode(JSON.stringify(json)).length - imageBytes > 1024 * 1024)
     throw new Error('Document is too large');
   const ids = (json.content || []).map((n) => n.attrs?.id);
-  if (ids.some((id) => !id)) throw new Error('Missing block identity');
+  if (ids.some((id) => !id)) throw new Error('Missing block identity: every top-level block needs attrs.id');
   if (new Set(ids).size !== ids.length) throw new Error('Duplicate block identity');
   return node.toJSON();
 }
 export function initializeDocument(doc, json = { type: 'doc', content: [{ type: 'paragraph' }] }) {
   if (doc.getXmlFragment('document').length) throw new Error('Document already initialized');
+  checkNodes(json); // before id generation, which rejects unknown names tersely
   json = validateDocument(generateUniqueIds(json, extensions));
   prosemirrorJSONToYXmlFragment(schema, json, doc.getXmlFragment('document'));
   seedEmptyText(doc);

@@ -146,6 +146,16 @@ test('Excalidraw fields validate by value and fractional indices order the scene
   putElement(doc, { id: 'unplaced', type: 'diamond', x: 0, y: 0, width: 100, height: 50 });
   assert.deepEqual(inspect(doc).content.map((s) => s.id), ['back', 'middle', 'front', 'unplaced'],
     'elements without an index draw above indexed ones');
+  // A patch's new elements without an index stack in the order listed, above
+  // everything, whatever their ids; an explicit index is kept.
+  patch(doc, [
+    { id: 'zlane', before: null, after: rect('zlane', 0) },
+    { id: 'anode', before: null, after: rect('anode', 0) },
+    { id: 'pinned', before: null, after: rect('pinned', 0, { index: 'a05' }) },
+  ]);
+  assert.deepEqual(inspect(doc).content.map((s) => s.id),
+    ['back', 'pinned', 'middle', 'front', 'zlane', 'anode', 'unplaced']);
+  assert.ok(inspect(doc).content.find((s) => s.id === 'zlane').index > 'a2', 'stored with its index');
   for (const [bad, message] of [
     [{ strokeStyle: 'wavy' }, /Invalid rectangle strokeStyle/],
     [{ fillStyle: 'dots' }, /fillStyle/],
@@ -226,5 +236,39 @@ test('a document patch can anchor insertions to blocks it inserts', async () => 
   assert.throws(() => patchDocument(doc, [{ id: 'x', before: null, after: p('x', 'X'), afterId: 'later' },
     { id: 'later', before: null, after: p('later', 'L') }]), /Stale insertion anchor/,
     'an anchor must come earlier in the patch');
+  doc.destroy();
+});
+
+test('every block SharedEdit describes is accepted and rejections say what is allowed', async () => {
+  const { initializeDocument, documentJSON, patchDocument } = await import('../document.mjs');
+  const doc = new Y.Doc();
+  initializeDocument(doc);
+  const text = (t, marks) => ({ type: 'text', text: t, ...(marks ? { marks } : {}) });
+  const para = (...content) => ({ type: 'paragraph', content });
+  const cell = (type, t) => ({ type, content: [para(text(t))] });
+  // The blocks and marks the tool description lists; nested nodes carry no id.
+  const blocks = [
+    { type: 'heading', attrs: { id: 'h', level: 2 }, content: [text('Plan')] },
+    { type: 'paragraph', attrs: { id: 'p' }, content: [text('b', [{ type: 'bold' }]), text('i', [{ type: 'italic' }]),
+      text('u', [{ type: 'underline' }]), text('s', [{ type: 'strike' }]), text('c', [{ type: 'code' }]),
+      { type: 'hardBreak' }, text('l', [{ type: 'link', attrs: { href: 'https://example.org' } }])] },
+    { type: 'blockquote', attrs: { id: 'q' }, content: [para(text('quoted'))] },
+    { type: 'codeBlock', attrs: { id: 'c', language: 'elisp' }, content: [text('(+ 1 2)')] },
+    { type: 'horizontalRule', attrs: { id: 'r' } },
+    { type: 'bulletList', attrs: { id: 'b' }, content: [{ type: 'listItem', content: [para(text('one'))] }] },
+    { type: 'orderedList', attrs: { id: 'o', start: 3 }, content: [{ type: 'listItem', content: [para(text('three'))] }] },
+    { type: 'table', attrs: { id: 't' }, content: [{ type: 'tableRow', content: [cell('tableHeader', 'A')] },
+      { type: 'tableRow', content: [cell('tableCell', '1')] }] },
+  ];
+  patchDocument(doc, blocks.map((after) => ({ id: after.attrs.id, before: null, after })));
+  assert.deepEqual(documentJSON(doc).content.slice(1).map((b) => b.attrs.id), blocks.map((b) => b.attrs.id));
+  const reject = (after) => () => patchDocument(doc, [{ id: 'x', before: null, after: { attrs: { id: 'x' }, ...after } }]);
+  assert.throws(reject({ type: 'callout' }), /Unknown document node "callout"; nodes: paragraph, .*table/);
+  assert.throws(reject({ type: 'heading', attrs: { id: 'x', level: 2, color: 'red' }, content: [text('x')] }),
+    /Unknown heading attribute "color"; attributes: id, level/);
+  assert.throws(reject({ type: 'paragraph', content: [text('x', [{ type: 'strong' }])] }),
+    /Unknown document mark "strong"; marks: link, bold/);
+  assert.throws(reject({ type: 'bulletList', content: [{ type: 'listItem', content: [text('x')] }] }),
+    /Invalid content for node listItem.*; listItem contains paragraph block\*/);
   doc.destroy();
 });

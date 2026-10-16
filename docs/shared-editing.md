@@ -232,7 +232,11 @@ remembers the choices for new ones.
 A curved arrow runs through its points; switching a straight arrow to curved
 adds a bend to drag. An elbow arrow leaves and enters its bound shapes at the
 facing side and runs in horizontal and vertical segments between them,
-rerouted as the shapes move. The route does not avoid other shapes.
+rerouted as the shapes move. When a shape stands in the way, the route detours
+around it with as few bends as it can, leaving and entering its shapes by
+whichever sides suit the detour; a shape behind either end, such as a lane
+holding the node, is not in the way. Text, lines, drawings and frames never
+block a route.
 Freehand drawing records a pen's pressure for every sample the browser
 reports; mouse and touch strokes simulate pressure from their speed. Stored
 line, arrow and stroke points keep 0.1 board units, and a freehand stroke drops

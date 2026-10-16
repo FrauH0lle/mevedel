@@ -2,6 +2,7 @@
    Whiteboards hold Excalidraw elements and their image files. */
 import * as Y from 'yjs';
 import { equalityDeep } from 'lib0/function';
+import { generateNKeysBetween } from 'fractional-indexing';
 import { documentJSON, validateDocument } from './document.mjs';
 import { validateImage } from './image.mjs';
 
@@ -321,6 +322,20 @@ export function patch(doc, changes) {
       check(change.after.type !== 'image' || !change.after.fileId ||
         doc.getMap('files').has(change.after.fileId), 'Images must reference an existing file');
     }
+  }
+  // New elements without an index stack above everything in patch order, so
+  // a region listed before its nodes stays behind them.
+  const unplaced = changes.filter((c) => c.before === null && c.after && !c.after.index);
+  if (unplaced.length) {
+    let top = null;
+    for (const e of elements.values()) {
+      const index = e.get('index');
+      if (index && (!top || index > top)) top = index;
+    }
+    for (const c of changes) if (c.after?.index && (!top || c.after.index > top)) top = c.after.index;
+    const keys = generateNKeysBetween(top, null, unplaced.length);
+    const placed = new Map(unplaced.map((c, n) => [c, { ...c.after, index: keys[n] }]));
+    changes = changes.map((c) => (placed.has(c) ? { ...c, after: placed.get(c) } : c));
   }
   doc.transact(() => {
     for (const change of changes) {

@@ -108,10 +108,28 @@ grows by the fonts and roughjs; the editor CSP gains `font-src data:`, so the
 relay must be rebuilt and redeployed. Constant-width freedraw approximates
 Excalidraw's laser-pointer stroke with perfect-freehand, and sticky notes omit
 the lifted corner and date footer. Elbow arrows take a fixed orthogonal route
-between the facing sides of their shapes instead of Excalidraw's A* router,
-so they do not avoid other shapes.
+between the facing sides of their shapes while it is clear, and otherwise an
+A* search over lines along the padded edges of the shapes in the way, from
+and to any side of the bound shapes, where a bend costs as much as the
+distance between the ends, so few bends beat a shorter zigzag. Excalidraw's
+own router only avoids the arrow's two shapes; this one avoids every shape,
+except one enclosing an end's shape, such as a lane. Every render,
+including each drag frame, resolves the routes again, so a clear route costs
+one box test per shape, and a detour is reused while every box it depended on
+is unchanged and nothing blocks it.
 
 ## Decision history
+
+Elbow arrows first took the fixed route alone, assuming obstacle avoidance
+would come from porting Excalidraw's A* router when a board needed it. Reading
+that router (`packages/element/src/elbowArrow.ts`) showed it builds obstacles
+from the start and end shapes only, so a port would still cross every other
+shape. Routing around all shapes is our own search; keeping the fixed route
+whenever it is clear leaves unobstructed arrows exactly as they were. A detour
+kept to the facing sides overlapped the row's own arrowheads and took four
+bends where leaving by another side takes two, so detours choose their sides.
+On a 10×8 board with 80 elbow arrows, a drag frame resolves in about 1.2 ms
+(0.4 ms with the fixed route); searching every frame without reuse took 4.5 ms.
 
 The first version kept one personal library file, `mevedel-shared-library-file`,
 and "Add all to my library" merged public libraries into it. In use, the user

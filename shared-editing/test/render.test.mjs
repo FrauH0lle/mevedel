@@ -68,6 +68,80 @@ test('bound arrows meet shape outlines at the binding gap and follow moves', () 
     assert.ok(path([{ ...from, ...box }, to, arrow]).flat().every(Number.isFinite));
 });
 
+test('elbow arrows route around shapes in their way', () => {
+  const from = rect('from', 0, 0, 100, 100), to = rect('to', 400, 0, 100, 100);
+  const bind = (elementId) => ({ elementId, fixedPoint: [0.5001, 0.5001], mode: 'orbit' });
+  const arrow = { id: 'arrow', type: 'arrow', x: 0, y: 0, width: 0, height: 0, points: [[0, 0], [1, 0]],
+    elbowed: true, startBinding: bind('from'), endBinding: bind('to') };
+  const path = (...elements) => resolveScene([from, to, arrow, ...elements]).byId.get('arrow').path;
+  const orthogonal = (route) => route.every((p, i) => !i || p[0] === route[i - 1][0] || p[1] === route[i - 1][1]);
+  // Whether ROUTE passes through the interior of the rectangle SHAPE.
+  const through = (route, { x, y, width, height }) => route.some((p, i) => {
+    if (!i) return false;
+    const q = route[i - 1];
+    return Math.min(p[0], q[0]) < x + width && Math.max(p[0], q[0]) > x
+      && Math.min(p[1], q[1]) < y + height && Math.max(p[1], q[1]) > y;
+  });
+  close(path(), [[106, 50], [394, 50]], 'a clear route stays direct');
+  close(path(rect('aside', 200, 300, 100, 100)), [[106, 50], [394, 50]], 'shapes off the route leave it alone');
+
+  const wall = rect('wall', 200, -100, 100, 400);
+  const around = path(wall);
+  assert.ok(orthogonal(around), JSON.stringify(around));
+  assert.ok(!through(around, wall), `avoids the wall: ${JSON.stringify(around)}`);
+  for (const shape of [from, to]) assert.ok(!through(around, shape), `stays out of ${shape.id}`);
+  // A detour may use any side: over the wall from top to top, two bends.
+  close(around, [[50, -6], [50, -115], [450, -115], [450, -6]], 'over the wall');
+
+  // A shape beside the obvious detour is found once the detour runs into it.
+  const cap = rect('cap', 150, -200, 200, 90);
+  const wider = path(wall, cap);
+  for (const shape of [wall, cap, from, to]) assert.ok(!through(wider, shape), `avoids ${shape.id}: ${JSON.stringify(wider)}`);
+  assert.equal(wider.length, 4, `still two bends: ${JSON.stringify(wider)}`);
+
+  // Detours are reused between renders, but never past a change that opens a
+  // better route: lifting the cap off a low wall brings the short way back.
+  const low = rect('low', 200, -50, 100, 400), lid = rect('lid', 150, -150, 200, 90);
+  const over = [[50, -6], [50, -65], [450, -65], [450, -6]];
+  close(path(low), over, 'over the low wall');
+  close(path(low, lid), [[50, -6], [50, -165], [450, -165], [450, -6]], 'over the lid too');
+  // Nothing blocks that higher route without the lid; it would linger if the
+  // reuse ignored the lid it was routed around.
+  close(path(low), over, 'over again once the lid is gone');
+  close(path(), [[106, 50], [394, 50]], 'direct once the wall is gone');
+
+  // A shape beside a node, on the short run to its stub, is in the way too.
+  const tiny = rect('tiny', 107, 45, 1, 10);
+  assert.ok(!through(path(tiny), tiny), `avoids a shape next to the node: ${JSON.stringify(path(tiny))}`);
+
+  // Rotated shapes stay obstacles for their own arrows, and a shape crowding
+  // a stub is avoided rather than taken for a lane.
+  const turned = (shape) => ({ ...shape, angle: Math.PI / 4 });
+  const inTurned = ([px, py], { x, y, width, height }) => {
+    const [cx, cy] = [x + width / 2, y + height / 2], c = Math.cos(-Math.PI / 4), s = Math.sin(-Math.PI / 4);
+    const [lx, ly] = [(px - cx) * c - (py - cy) * s, (px - cx) * s + (py - cy) * c];
+    return Math.abs(lx) < width / 2 - 0.5 && Math.abs(ly) < height / 2 - 0.5;
+  };
+  const sampled = (route) => route.flatMap((p, i) => !i ? [] : Array.from({ length: 101 }, (_, k) =>
+    [route[i - 1][0] + (p[0] - route[i - 1][0]) * k / 100, route[i - 1][1] + (p[1] - route[i - 1][1]) * k / 100]));
+  for (const extra of [rect('bar', 177, -34, 82, 19), rect('crowd', 343, -39, 38, 16)]) {
+    const route = resolveScene([turned(from), turned(to), arrow, extra]).byId.get('arrow').path;
+    for (const shape of [from, to]) assert.ok(!sampled(route).some((p) => inTurned(p, shape)), `${extra.id}: stays out of ${shape.id}: ${JSON.stringify(route)}`);
+    assert.ok(!through(route.slice(1, -1), extra), `${extra.id}: avoided: ${JSON.stringify(route)}`);
+  }
+  const rotatedAround = resolveScene([turned(from), turned(to), arrow, wall]).byId.get('arrow').path;
+  assert.ok(!through(rotatedAround, wall), `rotated ends detour too: ${JSON.stringify(rotatedAround)}`);
+
+  // A lane behind both ends is a background, not an obstacle.
+  close(path(rect('lane', -50, -50, 600, 200)), [[106, 50], [394, 50]], 'an enclosing lane is ignored');
+  // A bypass past a node in a row leaves the side the row's own arrows use:
+  // its ends and arrowheads stay apart from theirs.
+  const bypass = path(rect('middle', 200, 0, 100, 100), rect('lane', -50, -50, 600, 250));
+  close(bypass, [[50, 106], [50, 126], [450, 126], [450, 106]], 'below the middle node');
+  // Straight and curved arrows keep the points they were given.
+  close(resolveScene([from, to, { ...arrow, elbowed: false }, wall]).byId.get('arrow').path, [[106, 50], [394, 50]], 'sharp');
+});
+
 test('labels wrap inside their containers and arrows cut a gap around theirs', () => {
   const container = rect('box', 0, 0, 120, 80);
   const label = { id: 'label', type: 'text', x: 0, y: 0, width: 0, height: 0, text: 'A label that wraps', containerId: 'box' };
