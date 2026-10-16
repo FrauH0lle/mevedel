@@ -117,7 +117,7 @@
   :doc "blank suffix and header margins are inert, All is explicit"
   (mevedel-view-execution-test--with-view
     (mevedel-view--render-status)
-    (mevedel-view-execution-test--at "  Background work")
+    (mevedel-view-execution-test--at " ─── background work")
     (should-not (get-text-property (point) 'mevedel-view-zone-activate))
     (mevedel-view-execution-test--at "  ▸ Running")
     (forward-line 1)
@@ -135,6 +135,52 @@
     (mevedel-view-execution-test--activate "  ▸ Running")
     (should (equal "e2" (plist-get mevedel-view-execution--selected :execution-id)))
     (should (= 1 (mevedel-view-test--count-substring "Preview (not full output)" (buffer-string))))))
+
+(mevedel-deftest mevedel-view-execution--header ()
+  ,test
+  (test)
+  :doc "rule counts running and watching work and links All…"
+  (mevedel-view-execution-test--with-view
+    (let* ((header (mevedel-view-execution--header
+                    session '((:kind bash) (:kind monitor) (:kind monitor))))
+           (all (string-search "All…" header)))
+      (should (string-prefix-p " ─── background work · 1 running · 2 watching · All… ─"
+                               header))
+      (should (eq 'mevedel-view-zone-separator (get-text-property 1 'font-lock-face header)))
+      (should (eq 'link (get-text-property all 'font-lock-face header)))
+      (should (functionp (get-text-property all 'mevedel-view-zone-activate header)))))
+  :doc "a clipped narrow rule keeps All… reachable"
+  (mevedel-view-execution-test--with-view
+    (cl-letf (((symbol-function 'mevedel-view--zone-separator)
+               (lambda (_) " ─── background w… ─\n")))
+      (let ((header (mevedel-view-execution--header session nil)))
+        (should (equal " All… background w… ─\n" (substring-no-properties header)))
+        (should (get-text-property 1 'mevedel-view-zone-activate header))))))
+
+(mevedel-deftest mevedel-view-execution--state-face ()
+  (dolist (case '(((:state running) . mevedel-view-agent-running)
+                  ((:state running :kind monitor) . mevedel-view-agent-running)
+                  ((:state stopping) . mevedel-view-tool-warning)
+                  ((:state lost) . error)
+                  ((:state completed :termination exited :exit-code 0) . success)
+                  ((:state completed :termination exited :exit-code 7) . error)
+                  ((:terminal-p t :termination user-stop) . mevedel-view-tool-warning)
+                  ((:unavailable-p t) . mevedel-view-tool-metadata)))
+    (should (eq (cdr case) (mevedel-view-execution--state-face (car case))))))
+
+(mevedel-deftest mevedel-view-execution--line-presentation ()
+  ,test
+  (test)
+  :doc "state carries its outcome face and a single Monitor event is singular"
+  (mevedel-view-execution-test--with-view
+    (let ((line (mevedel-view-execution--line
+                 '(:owner "/root" :execution-id "m1" :kind monitor :state running
+                   :description "watch" :event-count 1))))
+      (should (equal "  ▸ Watching · watch · 1 event\n" (substring-no-properties line)))
+      (should (eq 'mevedel-view-agent-running
+                  (get-text-property (string-search "Watching" line) 'font-lock-face line)))
+      (should (eq 'mevedel-view-tool-metadata
+                  (get-text-property (string-search "▸" line) 'font-lock-face line))))))
 
 (mevedel-deftest mevedel-view-execution--preview ()
   ,test

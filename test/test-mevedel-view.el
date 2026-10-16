@@ -1476,11 +1476,12 @@
                  (plist-get executions :priority)))
       (should (> (plist-get executions :priority)
                  (plist-get agents :priority)))
-      (should (equal (concat "  Background work · All…\n"
-                             "  ▸ Running · make test\n"
-                             "  ▸ Running · make lint · /root/child\n")
-                     (substring-no-properties
-                      (plist-get executions :body))))
+      (should (string-match-p
+               (concat "\\` ─── background work · 2 running · All… ─+\n"
+                       "  ▸ Running · make test\n"
+                       "  ▸ Running · make lint · /root/child\n\\'")
+               (substring-no-properties
+                (plist-get executions :body))))
       ;; The row needs a blank line under it or it reads as a caption
       ;; for the agents separator that follows.  A zone trims `:body'
       ;; to one newline, so the blank has to travel as a suffix.

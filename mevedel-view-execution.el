@@ -40,6 +40,7 @@
 (declare-function mevedel-view--display-fragment-keymap "mevedel-view" (&rest maps))
 (declare-function mevedel-view--render-status "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--status-session "mevedel-view" (&optional data-buf))
+(declare-function mevedel-view--zone-separator "mevedel-view" (label))
 (defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-audit'
@@ -90,6 +91,16 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
               'mouse-face 'highlight
               'mevedel-view-zone-activate function))
 
+(defun mevedel-view-execution--face (text face)
+  "Return TEXT displayed with FACE, whether or not font-lock is active."
+  (propertize text 'face face 'font-lock-face face))
+
+(defun mevedel-view-execution--button (text function help)
+  "Return link-styled TEXT activating FUNCTION, described by HELP."
+  (propertize (mevedel-view-execution--action
+               (mevedel-view-execution--face text 'link) function)
+              'help-echo help))
+
 (defun mevedel-view-execution--callback (action session &optional owner id)
   "Build ACTION for SESSION, OWNER and ID, retaining no volatile snapshot."
   (lambda ()
@@ -125,6 +136,23 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
      ((eq (plist-get snapshot :kind) 'monitor) "Watching")
      (t "Running"))))
 
+(defun mevedel-view-execution--state-face (snapshot)
+  "Return the face signalling SNAPSHOT's lifecycle outcome."
+  (let ((state (plist-get snapshot :state))
+        (termination (plist-get snapshot :termination))
+        (exit (plist-get snapshot :exit-code)))
+    (cond
+     ((eq state 'stopping) 'mevedel-view-tool-warning)
+     ((memq state '(lost failed)) 'error)
+     ((or (plist-get snapshot :terminal-p) (eq state 'completed))
+      (cond
+       ((and (eq termination 'exited) (eql exit 0)) 'success)
+       ((eq termination 'exited) 'error)
+       (termination 'mevedel-view-tool-warning)
+       (t 'success)))
+     ((plist-get snapshot :unavailable-p) 'mevedel-view-tool-metadata)
+     (t 'mevedel-view-agent-running))))
+
 (defun mevedel-view-execution--line (snapshot)
   "Return a whole clickable status row for SNAPSHOT."
   (let* ((session (mevedel-view--status-session))
@@ -133,18 +161,29 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
          (monitor (eq (plist-get snapshot :kind) 'monitor))
          (owner (plist-get snapshot :owner))
          (label (or (and monitor (plist-get snapshot :description))
-                    (plist-get snapshot :command) "Bash")))
+                    (plist-get snapshot :command) "Bash"))
+         (dot (mevedel-view-execution--face " · " 'mevedel-view-tool-metadata))
+         (events (or (plist-get snapshot :event-count) 0)))
     (mevedel-view-execution--action
-     (concat "  " (if selected "▾ " "▸ ")
-             (mevedel-view-execution--state-label snapshot) " · "
+     (concat "  "
+             (mevedel-view-execution--face (if selected "▾ " "▸ ")
+                                           'mevedel-view-tool-metadata)
+             (mevedel-view-execution--face
+              (mevedel-view-execution--state-label snapshot)
+              (mevedel-view-execution--state-face snapshot))
+             dot
              (truncate-string-to-width
               (replace-regexp-in-string "[\n\r\t]+" " " label) 72 nil nil "…")
-             (when monitor
-               (concat
-                (when-let* ((expires (plist-get snapshot :expires-at)))
-                  (format " · expires %s" (format-time-string "%H:%M:%S" expires)))
-                (format " · %d events" (or (plist-get snapshot :event-count) 0))))
-             (unless (equal owner "/root") (format " · %s" owner)) "\n")
+             (mevedel-view-execution--face
+              (concat
+               (when monitor
+                 (concat
+                  (when-let* ((expires (plist-get snapshot :expires-at)))
+                    (format " · expires %s" (format-time-string "%H:%M:%S" expires)))
+                  (format " · %d %s" events (if (= events 1) "event" "events"))))
+               (unless (equal owner "/root") (format " · %s" owner)))
+              'mevedel-view-tool-metadata)
+             "\n")
      (mevedel-view-execution--callback
       'toggle session owner (plist-get snapshot :execution-id)))))
 
@@ -157,18 +196,25 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
          (truncated (or (plist-get snapshot :output-preview-truncated-p)
                         (plist-get snapshot :whole-output-truncated-p)
                         (> (length lines) 3)
-                        (cl-some (lambda (line) (> (string-width line) 100)) lines))))
+                        (cl-some (lambda (line) (> (string-width line) 100)) lines)))
+         (quiet (lambda (text)
+                  (concat "    " (mevedel-view-execution--face
+                                   text '(mevedel-view-muted italic))
+                          "\n"))))
     (concat
-     "    Preview (not full output)"
-     (when truncated " — truncated") ":\n"
+     "    "
+     (mevedel-view-execution--face
+      (concat "Preview (not full output)" (when truncated " — truncated") ":")
+      'mevedel-view-tool-metadata)
+     "\n"
      (cond
       ((or (not (stringp output))
            (and (string-empty-p output)
                 (or (eq (plist-get snapshot :state) 'lost)
                     (> (or (plist-get snapshot :output-bytes) 0) 0))))
-       "    Output unavailable.\n")
+       (funcall quiet "Output unavailable."))
       ((string-empty-p output)
-       (if terminal "    No output.\n" "    No output yet.\n"))
+       (funcall quiet (if terminal "No output." "No output yet.")))
       (t (concat
           (mapconcat (lambda (line)
                        (concat "    " (truncate-string-to-width
@@ -177,7 +223,11 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
                      (last lines (min 3 (length lines))) "\n") "\n")))
      (when (or (eq (plist-get snapshot :termination) 'output-limit)
                (> (or (plist-get snapshot :omitted-output-bytes) 0) 0))
-       "    Warning: output was truncated; retained output may omit content.\n"))))
+       (concat "    "
+               (mevedel-view-execution--face
+                "Warning: output was truncated; retained output may omit content."
+                'mevedel-view-tool-warning)
+               "\n")))))
 
 (defun mevedel-view-execution--full-output (session snapshot)
   "Inspect full output for SESSION's SNAPSHOT without visiting its spool."
@@ -239,25 +289,54 @@ LIVE indicates current public live membership, not retained selection state."
   (concat
    (mevedel-view-execution--preview snapshot)
    "    "
-   (mevedel-view-execution--action
+   (mevedel-view-execution--button
     "[Full output]" (mevedel-view-execution--callback
                      'output session (plist-get snapshot :owner)
-                     (plist-get snapshot :execution-id)))
+                     (plist-get snapshot :execution-id))
+    "RET: open the full retained output")
    "  "
-   (mevedel-view-execution--action
+   (mevedel-view-execution--button
     "[Show in conversation]"
     (mevedel-view-execution--callback
      'conversation session (plist-get snapshot :owner)
-     (plist-get snapshot :execution-id)))
+     (plist-get snapshot :execution-id))
+    "RET: show the tool call that started this execution")
    (when live
      (concat
       "  "
-      (mevedel-view-execution--action
+      (mevedel-view-execution--button
        "[Stop]"
        (mevedel-view-execution--callback
         'stop session (plist-get snapshot :owner)
-        (plist-get snapshot :execution-id)))))
+        (plist-get snapshot :execution-id))
+       "RET: stop this execution")))
    "\n"))
+
+(defun mevedel-view-execution--header (session live)
+  "Return SESSION's background-work rule, counting LIVE snapshots.
+The rule matches the task and agent status headers; its `All…' label
+opens the executions list."
+  (let* ((watching (cl-count 'monitor live
+                             :key (lambda (item) (plist-get item :kind))))
+         (running (- (length live) watching))
+         (all "All…")
+         (header (mevedel-view--zone-separator
+                  (string-join
+                   (delq nil (list "background work"
+                                   (when (> running 0) (format "%d running" running))
+                                   (when (> watching 0) (format "%d watching" watching))
+                                   all))
+                   " · "))))
+    ;; A narrow rule may clip the label.  Keep the link reachable by
+    ;; replacing the rule's leading dashes, as the agent header does.
+    (unless (string-search all header)
+      (setq header (concat (substring header 0 1) all (substring header 4))))
+    (let ((start (string-search all header)))
+      (concat (substring header 0 start)
+              (mevedel-view-execution--button
+               all (mevedel-view-execution--callback 'all session)
+               "RET: list all background executions")
+              (substring header (+ start (length all)))))))
 
 (defun mevedel-view-execution-fragment (session)
   "Return the background execution status fragment for SESSION, or nil."
@@ -280,10 +359,7 @@ LIVE indicates current public live membership, not retained selection state."
     (when (and selected-live (not (member selected-live rows)))
       (setq rows (append (seq-take rows 4) (list selected-live))))
     (when (or rows mevedel-view-execution--selected)
-      (let* ((all (mevedel-view-execution--action
-                   "All…"
-                   (mevedel-view-execution--callback 'all session)))
-             (body (concat "  Background work · " all "\n")))
+      (let ((body (mevedel-view-execution--header session live)))
         (when (and mevedel-view-execution--selected (not selected-live))
           (setq rows (append rows (list mevedel-view-execution--selected))))
         (dolist (snapshot rows)
@@ -292,9 +368,11 @@ LIVE indicates current public live membership, not retained selection state."
             (setq body (concat body (mevedel-view-execution--details
                                      session snapshot selected-live)))))
         (when (> (length live) 5)
-          (setq body (concat body "  " (mevedel-view-execution--action
+          (setq body (concat body "  " (mevedel-view-execution--button
                                        (format "+%d more / all" (- (length live) 5))
-                                       (get-text-property 0 'mevedel-view-zone-activate all)) "\n")))
+                                       (mevedel-view-execution--callback 'all session)
+                                       "RET: list all background executions")
+                             "\n")))
         (list :namespace 'status :id 'executions :priority 50 :body body
               :body-suffix "\n" :navigatable t :entry 'executions)))))
 
