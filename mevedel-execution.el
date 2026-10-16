@@ -807,12 +807,12 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
 
 (defun mevedel-execution--preparation-authority (session roots &optional request invocation)
   "Snapshot mutable launch authority for SESSION and local discovery ROOTS.
-Only scalar policy and path facts are serialized, never live runtime objects."
+Only scalar policy and path facts are copied, never live runtime objects.
+Compare snapshots with `equal'.  A deep copy, unlike printed text, cannot
+depend on the printer state of the context that takes it."
   (let* ((authority (and session (mevedel-execution--mutation-target session)))
-         (workspace (and authority (mevedel-session-workspace authority)))
-         (print-length nil)
-         (print-level nil))
-    (prin1-to-string
+         (workspace (and authority (mevedel-session-workspace authority))))
+    (copy-tree
      (list
       (mevedel-permission-mode-effective session nil nil request invocation)
       (mevedel-sandbox-mode-effective
@@ -831,7 +831,8 @@ Only scalar policy and path facts are serialized, never live runtime objects."
                   (list (file-truename root)
                         (file-attribute-inode-number attributes)
                         (file-attribute-device-number attributes))))
-              roots)))))
+              roots))
+     t)))
 
 (defun mevedel-execution--prepare
     (callback command workdir roots additional permissions session owner

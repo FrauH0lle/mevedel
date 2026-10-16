@@ -87,6 +87,27 @@
       (setq mevedel--current-request (mevedel-request--create :session session))
       (should (equal snapshot (mevedel-execution--preparation-authority
                                session (list temporary-file-directory) request)))
+      ;; Rules sharing structure must not make the snapshot depend on the
+      ;; caller's printer state: admission and settlement bind it differently.
+      (let* ((tail (list :recursive t))
+             (rules (list (list "Bash" :file-system
+                                (list (append (list :path "/a" :access 'write) tail))
+                                :action 'allow)
+                          (list "Read" :file-system
+                                (list (append (list :path "/b" :access 'read) tail))
+                                :action 'allow))))
+        (setf (mevedel-session-permission-rules session) rules)
+        (setq snapshot (let ((print-circle t))
+                         (mevedel-execution--preparation-authority
+                          session (list temporary-file-directory) request)))
+        (should (equal snapshot
+                       (let ((print-circle nil))
+                         (mevedel-execution--preparation-authority
+                          session (list temporary-file-directory) request))))
+        ;; An in-place change to live authority is still detected.
+        (setcar (cdr tail) nil)
+        (should-not (equal snapshot (mevedel-execution--preparation-authority
+                                     session (list temporary-file-directory) request))))
       (setf (mevedel-session-permission-rules session) '(("Bash" :action deny)))
       (should-not (equal snapshot (mevedel-execution--preparation-authority
                                    session (list temporary-file-directory) request)))))
