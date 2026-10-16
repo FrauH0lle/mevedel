@@ -1387,6 +1387,9 @@
     } else if (frame.t === 'bye' && frame.reason === 'artifact-deleted') {
       showTerminal('Artifact deleted', 'This artifact was deleted together with '
                    + 'its conversation. Its project lobby lists the others.');
+    } else if (frame.t === 'bye' && frame.reason === 'session-deleted') {
+      showTerminal('Session deleted', 'This session was deleted from its '
+                   + 'project lobby. The lobby lists the others.');
     } else if (frame.t === 'bye') {
       showTerminal('Session ended', 'The host has ended this shared session. '
                    + 'Ask the host for a new invitation to continue.');

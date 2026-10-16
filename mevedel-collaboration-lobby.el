@@ -130,6 +130,10 @@
 (declare-function mevedel-session-persistence-without-dedicated
                   "mevedel-session-persistence" (workspace entries))
 (defvar mevedel-session-persistence--reclaim-stale-locks)
+
+;; `mevedel-turn'
+(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
+(autoload 'mevedel-turn-busy-p "mevedel-turn")
 (autoload 'mevedel-session-persistence-delete "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-without-dedicated
   "mevedel-session-persistence")
@@ -451,9 +455,10 @@ already; PEER receives the room at its own tier."
 ;;; Deleting a session
 
 (defun mevedel-collaboration-lobby--delete-failure (lobby guest id)
-  "Delete LOBBY's saved session ID for GUEST; return why not, or nil.
-A session live in Emacs is refused, since its buffer would save it
-straight back, and so is one another client may still hold."
+  "Delete LOBBY's session ID for GUEST; return why not, or nil.
+A session live in Emacs is closed first, ending its room, unless a turn
+is still running there; its buffer would otherwise save it straight
+back.  One another client may still hold is refused."
   (let* ((workspace (plist-get lobby :workspace))
          (live (assoc id (mevedel-collaboration-lobby--live-sessions
                           workspace)))
@@ -463,10 +468,17 @@ straight back, and so is one another client may still hold."
       "Only an owner link can delete sessions")
      ((not (and (stringp id) (not (string-empty-p id))))
       "No session named")
-     (live (format "Close %s in Emacs first" (cadr live)))
-     ((not (setq entry (mevedel-collaboration-lobby--saved-entry
-                        workspace id)))
-      "No such session")
+     ((and live (mevedel-turn-busy-p (cddr live)))
+      (format "%s is still working; stop it first" (cadr live)))
+     ((progn
+        (when live
+          (let ((kill-buffer-query-functions nil)
+                (mevedel-collaboration-stop-reason 'session-deleted))
+            (kill-buffer (cddr live))))
+        (not (setq entry (mevedel-collaboration-lobby--saved-entry
+                          workspace id))))
+      ;; A live session that was never saved is gone with its buffer.
+      (unless live "No such session"))
      ((not (mevedel-session-persistence-delete
             workspace (plist-get entry :save-path)))
       "The session is still in use elsewhere"))))

@@ -615,29 +615,38 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
       (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-collaboration-lobby--handle-delete
-  (:doc "deletes an owner's saved session and relists it for every guest")
+  (:doc "deletes an owner's session, closing a live one, and relists it")
   (let* ((guests (make-hash-table :test #'eql))
          (lobby (list :transport 'transport :guests guests :workspace 'ws))
          (live (generate-new-buffer " *lobby-delete-live*"))
          (in-use nil)
-         sent deleted)
+         (busy nil)
+         (saved '((:save-path "/sessions/old/" :summary (:session-id "old"))
+                  (:save-path "/sessions/live/" :summary (:session-id "live"))))
+         sent deleted stop-reason)
     (unwind-protect
         (progn
           (with-current-buffer live
             (setq-local mevedel--session
-                        (mevedel-collaboration-lobby-test--session "live")))
+                        (mevedel-collaboration-lobby-test--session "live"))
+            (add-hook 'kill-buffer-hook
+                      (lambda () (setq stop-reason mevedel-collaboration-stop-reason))
+                      nil t))
           (puthash 2 '(:name "Writer" :writable t) guests)
           (puthash 3 '(:name "Owner" :writable t :owner t) guests)
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport peer frame)
                        (push (cons peer frame) sent) t))
                     ((symbol-function 'mevedel--workspace-sessions)
-                     (lambda (_workspace) `(("draw" . ,live))))
+                     (lambda (_workspace)
+                       (and (buffer-live-p live) `(("draw" . ,live)))))
+                    ((symbol-function 'mevedel-turn-busy-p)
+                     (lambda (&optional buffer)
+                       (should (eq live buffer))
+                       busy))
                     ((symbol-function
                       'mevedel-session-persistence-list-sessions)
-                     (lambda (_workspace &optional _cached)
-                       '((:save-path "/sessions/old/"
-                          :summary (:session-id "old")))))
+                     (lambda (_workspace &optional _cached) saved))
                     ((symbol-function 'mevedel-session-persistence-delete)
                      (lambda (workspace path)
                        (should (eq 'ws workspace))
@@ -652,9 +661,12 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
                             (plist-get (cdar (last sent)) :message))))
               (should (equal "Only an owner link can delete sessions"
                              (funcall delete 2 "old")))
-              ;; Its buffer would save a live session straight back.
-              (should (equal "Close draw in Emacs first"
+              ;; A running turn keeps its session.
+              (setq busy t)
+              (should (equal "draw is still working; stop it first"
                              (funcall delete 3 "live")))
+              (should (buffer-live-p live))
+              (setq busy nil)
               (should (equal "No such session" (funcall delete 3 "../x")))
               (should (equal "No session named" (funcall delete 3 nil)))
               (setq in-use t)
@@ -673,8 +685,23 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
               (should (equal '(2 3) (sort (mapcar #'car (butlast sent)) #'<)))
               (should (cl-every (lambda (entry)
                                   (equal "lobby" (plist-get (cdr entry) :t)))
-                                (butlast sent))))))
-      (kill-buffer live))))
+                                (butlast sent)))
+              ;; A live session is closed, ending its room, before deletion,
+              ;; since its buffer would save it straight back.
+              (should-not (funcall delete 3 "live"))
+              (should-not (buffer-live-p live))
+              (should (eq 'session-deleted stop-reason))
+              (should (equal '("/sessions/live/" "/sessions/old/") deleted))
+              ;; One never saved is gone with its buffer.
+              (setq live (generate-new-buffer " *lobby-delete-unsaved*")
+                    saved nil deleted nil)
+              (with-current-buffer live
+                (setq-local mevedel--session
+                            (mevedel-collaboration-lobby-test--session "live")))
+              (should-not (funcall delete 3 "live"))
+              (should-not (buffer-live-p live))
+              (should-not deleted))))
+      (when (buffer-live-p live) (kill-buffer live)))))
 
 (mevedel-deftest mevedel-collaboration-lobby--on-frame
   (:doc "admits guests, routes lobby frames, and contains failures")

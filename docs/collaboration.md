@@ -466,10 +466,12 @@ has no session in which to ask the host. For the same reason only an owner's
 listing carries the models it may create a session on.
 
 Deleting removes a saved session's directory for good, under the safety rules
-of expired-session cleanup without its age cap: a session live in this Emacs
-is refused (close it first, or its buffer would save it back), and so is one
-whose lock or lease another client may still hold or whose journal captures
-are pending. After a deletion every lobby guest receives a fresh listing.
+of expired-session cleanup without its age cap. A session live in this Emacs
+is closed first, since its buffer would save it back; its room ends, so guests
+there see "Session deleted". One still running a turn is refused until the
+turn stops, and so is one whose lock or lease another client may still hold or
+whose journal captures are pending. After a deletion every lobby guest
+receives a fresh listing.
 
 Each row carries the session id, display name, last save time, a prompt
 preview of at most 160 characters, and whether the session is live in Emacs
