@@ -403,10 +403,14 @@ fire-count and payload."
   ()
   ,test
   (test)
-  :doc "default role keeps request defaults and inherited reasoning"
-  (let ((gptel-include-reasoning 'ignore))
-    (should (equal '(:use-tools t :context nil :include-reasoning ignore)
-                   (mevedel-agent-exec--request-preset "default" nil))))
+  :doc "default role keeps request defaults, inherited reasoning and tools"
+  (let* ((gptel-include-reasoning 'ignore)
+         (preset (mevedel-agent-exec--request-preset "default" nil)))
+    (should (equal '(:use-tools t :context nil) (seq-take preset 4)))
+    (should (eq 'ignore (plist-get preset :include-reasoning)))
+    (should (equal '(inherited)
+                   (funcall (plist-get (plist-get preset :tools) :function)
+                            '(inherited)))))
 
   :doc "named role contributes its own prompt and tools"
   (let* ((agent (mevedel-agent--create :name "role" :system-prompt "Role prompt."))
@@ -614,7 +618,23 @@ fire-count and payload."
            (mevedel-agent-configuration-request-locals configuration))))
     (should (= 1 prompt-calls))
     (should (equal "1/frozen-model" prompt))
-    (should (equal prompt (mevedel-agent-system-prompt frozen-agent)))))
+    (should (equal prompt (mevedel-agent-system-prompt frozen-agent))))
+
+  :doc "the default role inherits native tools and adds native SendMessage"
+  (let* ((read (mevedel-tool-gptel-tool (mevedel-tool-get "Read" "mevedel")))
+         (gptel-tools (list read))
+         (invocation (mevedel-agent-invocation-create (mevedel-agent-default)))
+         (configuration
+          (progn
+            (setf (mevedel-agent-invocation-tool-catalog invocation)
+                  '((("mevedel" "SendMessage") . "Message")))
+            (mevedel-agent-exec-freeze-configuration
+             "default" invocation
+             '(:backend frozen-backend :model frozen-model :effort high))))
+         (tools (alist-get 'gptel-tools
+                           (mevedel-agent-configuration-request-locals
+                            configuration))))
+    (should (equal '("Read" "SendMessage") (mapcar #'gptel-tool-name tools)))))
 
 
 (mevedel-deftest mevedel-agent-exec-acknowledge-provider ()
@@ -707,6 +727,7 @@ fire-count and payload."
 		             :agent (mevedel-agent-default)))
 		       (parent-tiers '((custom)))
 		       (parent-workloads '((explorer :tier custom)))
+		       (parent-tool (gptel--make-tool-internal :name "parent-tool"))
 		       captured-buffer
 		       captured-include-reasoning
 		       captured-system
@@ -728,7 +749,7 @@ fire-count and payload."
 				 (mevedel-model-workloads parent-workloads)
 				 (gptel-system-prompt "parent system")
 				 (gptel-use-tools nil)
-				 (gptel-tools '(parent-tool))
+				 (gptel-tools (list parent-tool))
 				 (gptel-use-context nil)
 				 (gptel-context nil)
 				 (gptel-use-curl nil)
@@ -768,7 +789,7 @@ fire-count and payload."
 			 (should (eq captured-buffer agent-buf))
 			 (should (eq captured-include-reasoning t))
 			 (should (equal captured-system "parent system"))
-			 (should (equal captured-tools '(parent-tool)))
+			 (should (equal captured-tools (list parent-tool)))
 			 (should (equal '((custom)) captured-tiers))
 			 (should (equal '((explorer :tier custom))
 					captured-workloads))

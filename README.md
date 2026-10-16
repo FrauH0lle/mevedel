@@ -727,17 +727,18 @@ accept native media, and can render selected PDF pages through Poppler.
 **User interaction:** `Ask` (ask the user a question with optional file/line
 navigation)
 
-**Tasks:** `TaskCreate`, `TaskUpdate`, `TaskNote`, `TaskList`, `TaskGet` (a
-structured task list with statuses, dependencies, owner status notes, and an
-optional task status fragment; use `mevedel-toggle-tasks` or `TAB`/`RET` on the
-fragment to show or hide completed tasks)
+**Tasks:** `TaskWrite` (create or update tasks in one batch and set owner status
+notes) and `TaskList` (list tasks or read one in full): a structured task list
+with statuses, dependencies, owner status notes, and an optional task status
+fragment; use `mevedel-toggle-tasks` or `TAB`/`RET` on the fragment to show or
+hide completed tasks
 
 **Sub-agents:** `Agent` (start a retained asynchronous child, optionally with
 task-focused generated background), `FollowupAgent`
 (continue or steer a retained child), `ListAgents` (inspect retained paths),
 `SendMessage` (queue mail without starting a turn), `WaitAgent` (wait for mail,
 steering, or timeout), `InterruptAgent` (abort one current turn without removing
-the agent), and `ToolSearch` (look up deferred tool schemas on demand)
+the agent), and `ToolSearch` (retrieve a specialist's full contract)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp
 evaluation: live Eval asks unless explicitly allowed in `ask` and `edits`;
@@ -749,10 +750,14 @@ YouTube descriptions and transcripts)
 
 **Skills:** `Skill` (invoke an active skill by name from the model side)
 
-The native Emacs introspection tools are also available on
-demand via the deferred-tool mechanism — they don't appear in the schema until
-the LLM searches for them through `ToolSearch`, keeping the default tool list
-short.
+**Emacs introspection:** `EmacsDescribe` (a symbol's or library's documentation,
+source, location, manual section, or global value; values always ask),
+`EmacsFind` (function, command, variable, and library name search),
+`EmacsManual` (Info manuals)
+
+Specialist tools are not native schemas. Each conversation receives a short
+listing of the ones it may call, with their argument shapes; the model calls
+them through `ToolCall` and uses `ToolSearch` for full contracts.
 
 ### Agents
 

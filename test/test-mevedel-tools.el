@@ -1757,6 +1757,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (should (equal result repeat))
       (mevedel-tools--tool-search (lambda (s) (setq result s)) "probes")
       (should (string-search "Found 21 tools; showing the first 20" result))
+      (should (string-search "- (Probe00 :value string) - Probe summary" result))
       (should-not (string-search "Complete contract body" result))
       (should-not (string-search "Probe20" result))
       (should (string-search "one or two exact names" result))
@@ -1818,6 +1819,101 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
         (should-not (string-search hidden result)))
       (mevedel-tools--tool-search (lambda (s) (setq result s)) "category00")
       (should (string-search "Allowed contract" result))))))
+
+(mevedel-deftest mevedel-tools-listing-section
+  (:before-each
+   (progn
+     (mevedel-tool-clear-registry)
+     (mevedel-tool-ensure "ToolCall")
+     (mevedel-define-tool
+      :name "ListedProbe" :handler #'ignore :summary "Probe summary"
+      :description "Listed probe contract"
+      :args ((value string :required "Probe value")
+             (mode string :optional "Probe mode")))
+     (mevedel-define-tool
+      :name "OtherProbe" :handler #'ignore :description "Other probe. Detail.")
+     (mevedel-define-tool
+      :name "NativeProbe" :handler #'ignore :description "Native probe"))
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "lists callable catalog tools with their shapes, excluding native tools"
+  (with-temp-buffer
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :tool-catalog '((("mevedel" "ListedProbe") . "s")
+                                 (("mevedel" "OtherProbe") . "s")
+                                 (("mevedel" "NativeProbe") . "s")
+                                 (("mevedel" "Ghost") . "s"))))
+    (setq-local gptel-tools
+                (mapcar (lambda (name) (mevedel-tool-gptel-tool (mevedel-tool-get name)))
+                        '("ToolCall" "NativeProbe")))
+    (let ((section (mevedel-tools-listing-section)))
+      (should (string-prefix-p "## Tools\n" section))
+      (should (string-search
+               "- (ListedProbe :value string [:mode string]) - Probe summary" section))
+      (should (string-search "- (OtherProbe) - Other probe." section))
+      (should-not (string-search "NativeProbe" section))
+      (should-not (string-search "Ghost" section))
+      (should-not (string-search "more tools are omitted" section))))
+
+  :doc "follows the current request's ToolCall restriction"
+  (with-temp-buffer
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :tool-catalog '((("mevedel" "ListedProbe") . "s")
+                                 (("mevedel" "OtherProbe") . "s")))
+                mevedel--current-request
+                (mevedel-request--create :ptc-primitives '("OtherProbe")))
+    (setq-local gptel-tools
+                (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
+    (let ((section (mevedel-tools-listing-section)))
+      (should (string-search "(OtherProbe)" section))
+      (should-not (string-search "ListedProbe" section))))
+
+  :doc "lists an agent's own catalog, not its root session's"
+  (with-temp-buffer
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :tool-catalog '((("mevedel" "ListedProbe") . "s"))))
+    (setq-local mevedel--agent-invocation
+                (mevedel-agent-invocation--create
+                 :tool-catalog '((("mevedel" "OtherProbe") . "s"))))
+    (setq-local gptel-tools
+                (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
+    (let ((section (mevedel-tools-listing-section)))
+      (should (string-search "(OtherProbe)" section))
+      (should-not (string-search "ListedProbe" section))))
+
+  :doc "names omitted tools when the budget cannot hold every entry"
+  (with-temp-buffer
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :tool-catalog '((("mevedel" "OtherProbe") . "s")
+                                 (("mevedel" "ListedProbe") . "s"))))
+    (setq-local gptel-tools
+                (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
+    (let* ((mevedel-model-context-limit 100)
+           (gptel-model nil)
+           ;; 100 tokens * 4 chars * 0.1 = 40 chars: room for one short entry.
+           (mevedel-tools-listing-budget 0.1)
+           (section (mevedel-tools-listing-section)))
+      (should (string-search "(OtherProbe)" section))
+      (should-not (string-search "ListedProbe" section))
+      (should (string-search "1 more tools are omitted; find them with ToolSearch."
+                             section))))
+
+  :doc "offers no listing without native ToolCall or callable specialists"
+  (with-temp-buffer
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :tool-catalog '((("mevedel" "ListedProbe") . "s"))))
+    (setq-local gptel-tools nil)
+    (should-not (mevedel-tools-listing-section))
+    (setq-local gptel-tools
+                (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
+    (setf (mevedel-session-tool-catalog mevedel--session) nil)
+    (should-not (mevedel-tools-listing-section))))
 
 (provide 'test-mevedel-tools)
 ;;; test-mevedel-tools.el ends here

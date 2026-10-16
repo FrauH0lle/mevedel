@@ -364,7 +364,13 @@ Skill-scoped model and effort policy applies to direct skill dispatches."
 (defun mevedel-agent-exec--request-preset (agent-type invocation)
   "Return the effective request preset for AGENT-TYPE and INVOCATION."
   (let ((agent-spec
-         (unless (equal agent-type "default")
+         (if (equal agent-type "default")
+             (list :tools
+                   (list :function
+                         (apply-partially
+                          #'mevedel-agent-default-native-tools
+                          (and invocation
+                               (mevedel-agent-invocation-tool-catalog invocation)))))
            (when-let* ((agent (mevedel-agent-invocation-agent invocation)))
              (cdr (mevedel-agent-to-gptel-spec agent))))))
     (nconc (list :use-tools t :context nil)

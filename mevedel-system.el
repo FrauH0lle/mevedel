@@ -87,6 +87,8 @@
 (autoload 'mevedel-tool-prompt-source "mevedel-tool-registry")
 
 ;; `mevedel-tools'
+(declare-function mevedel-tools-listing-section "mevedel-tools" ())
+(autoload 'mevedel-tools-listing-section "mevedel-tools")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--environment-info-string "mevedel-utilities"
@@ -648,6 +650,16 @@ present."
      session
      (mevedel-system-context-refresh-buffer context))))
 
+(defun mevedel-system--tools-prompt (context)
+  "Return the specialist tool listing for CONTEXT's conversation, or nil.
+The refresh buffer identifies the conversation, so an agent sees its own
+catalog rather than its root session's."
+  (when-let* (((mevedel-system--context-session context))
+              (buffer (mevedel-system-context-refresh-buffer context))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (mevedel-tools-listing-section))))
+
 (defun mevedel-system--join-parts (&rest parts)
   "Join nonblank prompt PARTS with stable section spacing."
   (string-join
@@ -710,6 +722,9 @@ present."
 (mevedel-define-prompt-component skills
   :producer #'mevedel-system--skills-prompt)
 
+(mevedel-define-prompt-component tools
+  :producer #'mevedel-system--tools-prompt)
+
 (mevedel-define-prompt-component active-goal
   :producer (lambda (context)
               (when (fboundp 'mevedel-goal-active-context)
@@ -723,7 +738,7 @@ present."
                 (mevedel-system-render-prompt-file "prompts/goals/policy.md"))))
 
 (defconst mevedel-system-retained-components
-  '(workspace-config memory journal environment skills active-goal goal-policy resources)
+  '(workspace-config memory journal environment tools skills active-goal goal-policy resources)
   "Named observations delivered in conversation history for retained requests.")
 
 (mevedel-define-prompt-component resources
@@ -770,6 +785,7 @@ present."
                 memory
                 journal
                 environment
+                tools
                 skills
                 active-goal
                 goal-policy))

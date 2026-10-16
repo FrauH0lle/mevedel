@@ -1,8 +1,8 @@
-Call one or more tools using the calling expressions supplied by ToolSearch.
+Call one or more tools using the shapes in the tool listing or ToolSearch contracts.
 
 ### When to use `ToolCall`
 
-- Invoke a specialist found through ToolSearch.
+- Invoke a specialist from the tool listing or found through ToolSearch.
 - Compose dependent calls, parallel batches, or light result processing.
 
 ### When NOT to use `ToolCall`
@@ -13,7 +13,8 @@ Call one or more tools using the calling expressions supplied by ToolSearch.
 ### How to use `ToolCall`
 
 - `expression` is a Lisp call with keyword arguments, or multiple forms whose
-  last value is returned. Use the tool name and contract supplied by ToolSearch.
+  last value is returned. Use the tool name and argument shape from the tool
+  listing or a ToolSearch contract.
 - Tools marked standalone-only must be the entire expression. Their result
   needs a model turn before further work.
 - Composed calls keep intermediate results inside the expression. Tool failures

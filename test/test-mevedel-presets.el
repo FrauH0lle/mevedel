@@ -410,7 +410,8 @@
               (mevedel-tool-resolve (plist-get metadata :tool-specs)))
              (active
               (mapcar #'mevedel-tool-name (plist-get resolved :active))))
-        (should (equal '("ApplyPatch" "Bash" "Glob" "Grep" "Read" "ToolCall" "ToolSearch")
+        (should (equal '("ApplyPatch" "Bash" "Glob" "Grep" "Monitor" "Read"
+                         "ToolCall" "ToolSearch" "WriteStdin")
                        (sort active #'string<))))))
 
   :doc "defers task, agent, and shared editing tools in the implementation preset"
@@ -424,12 +425,15 @@
            (active (mapcar #'mevedel-tool-name (plist-get resolved :active)))
            (deferred
             (mapcar #'mevedel-tool-name (plist-get resolved :discoverable))))
-      (dolist (name '("TaskCreate" "TaskUpdate" "TaskNote" "TaskList"
-                      "TaskGet" "Agent" "FollowupAgent" "ListAgents"
+      (dolist (name '("TaskWrite" "TaskList" "Agent" "FollowupAgent" "ListAgents"
                       "InterruptAgent" "SendMessage" "WaitAgent"
-                      "SharedCreate" "SharedEdit" "Monitor"))
+                      "SharedCreate" "SharedEdit"))
         (should (member name deferred))
         (should-not (member name active)))
+      ;; Execution follow-up tools are native, not looked up through search.
+      (dolist (name '("WriteStdin" "Monitor"))
+        (should (member name active))
+        (should-not (member name deferred)))
       (should (member "ToolSearch" active))))
 
   :doc "makes directive discussion a hard read-only capability"
@@ -865,20 +869,26 @@
              (schemas (gptel--json-encode
                        (gptel--parse-tools backend gptel-tools)))
              (native (copy-sequence gptel-tools)))
-        (dolist (key '("elisp" "code" "tasks" "agents" "web"))
-          (should (string-search (concat "`" key "`")
-                                 (gptel-tool-description search))))
-        (dolist (case '(("emacs" "Found 16 tools" "function_documentation"
-                        "variable_value" "always asks")
-                       ("tasks" "Found 5 tools" "- TaskCreate: "
-                        "- TaskUpdate: " "- TaskNote: " "- TaskList: "
-                        "- TaskGet: ")
-                       ("plan" "TaskCreate" "Calling signature:")
-                       ("checklist" "TaskCreate")
-                       ("dependencies" "TaskCreate" "TaskUpdate" "TaskList")
-                       ("ownership" "TaskUpdate")
-                       ("function_documentation" "Calling signature:"
-                        "mevedel-introspection/function_documentation :function")))
+        ;; The listing offers callable shapes, so known specialists need no
+        ;; search; native execution tools are not repeated there.
+        (let ((listing (mevedel-tools-listing-section)))
+          (dolist (shape '("- (TaskWrite [:tasks array]" "- (Imenu :file_path string)"
+                           "- (EmacsDescribe :symbol string :aspect string [:kind string])"
+                           "- (Agent :task_name string :message string"
+                           "- (SendMessage :target string :message string)"))
+            (should (string-search shape listing)))
+          (dolist (native '("(WriteStdin" "(Monitor" "(Bash" "(ToolCall"))
+            (should-not (string-search native listing))))
+        (should-not (string-search "Useful search keys"
+                                   (gptel-tool-description search)))
+        (dolist (case '(("emacs" "EmacsDescribe" "EmacsFind" "EmacsManual")
+                       ("tasks" "TaskWrite" "TaskList" "Calling signature:")
+                       ("plan" "TaskWrite" "Calling signature:")
+                       ("checklist" "TaskWrite")
+                       ("dependencies" "TaskWrite" "TaskList")
+                       ("owners" "TaskWrite" "TaskList")
+                       ("EmacsDescribe" "Calling signature:"
+                        "(EmacsDescribe :symbol")))
           (let (result)
             (funcall (gptel-tool-function search)
                      (lambda (value) (setq result value)) (car case))
@@ -892,6 +902,7 @@
         ;; A capability hint must not add tools to a narrower role or request.
         (mevedel-preset--refresh-tools 'mevedel-discuss)
         (mevedel-preset--setup-catalog 'mevedel-discuss)
+        (should-not (string-search "TaskWrite" (mevedel-tools-listing-section)))
         (dolist (query '("emacs" "plan" "dependencies"))
           (let (result)
             (funcall (gptel-tool-function search)
@@ -904,8 +915,7 @@
           (funcall (gptel-tool-function search)
                    (lambda (value) (setq result value)) "dependencies")
           (should (string-search "TaskList" result))
-          (should-not (string-search "TaskCreate" result))
-          (should-not (string-search "TaskUpdate" result)))))))
+          (should-not (string-search "TaskWrite" result)))))))
 
 (mevedel-deftest mevedel-preset--parent-chain-to
   (:after-each
@@ -1295,11 +1305,12 @@
   :doc "explorer agent is registered and read-only"
   (should (mevedel-agent-get "explorer"))
 
-  :doc "task-capable agents include the standalone task note tool"
+  :doc "task-capable agents include both task tools"
   (dolist (name '("worker" "explorer"))
     (let ((agent (mevedel-agent-get name)))
-      (should (member '(:discoverable (:tool "TaskNote"))
-                      (mevedel-agent-tools agent)))))
+      (dolist (tool '("TaskWrite" "TaskList"))
+        (should (member `(:discoverable (:tool ,tool))
+                        (mevedel-agent-tools agent))))))
 
   :doc "planner agent is no longer a first-class built-in agent"
   (should-not (mevedel-agent-get "planner")))

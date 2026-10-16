@@ -1972,7 +1972,7 @@ cover, so the permission step's warning about it is captured here."
                    :tool-catalog '((("mevedel" "Imenu") . "outline")
                                    (("mevedel" "XrefReferences") . "references")
                                    (("mevedel" "Treesitter") . "syntax")
-                                   (("mevedel" "function_source") . "source"))))
+                                   (("mevedel" "EmacsDescribe") . "source"))))
          (tool (mevedel-tool--create
                 :name "Read" :read-only-p t
                 :args '((file_path string :required "Path"))

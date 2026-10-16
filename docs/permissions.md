@@ -1038,12 +1038,17 @@ reviewer's safety or achieved reduction in prompts.
 
 ## Introspection source reads
 
-`library_source` bypasses ordinary path arguments only for a simple library
-name whose resolved canonical file remains below a canonical local `load-path`
-entry. Absolute names, directory components, remote entries, and library
-symlinks that escape their load-path entry are denied before the upstream
-reader runs. Use the ordinary `Read` tool when source outside that closed set is
-needed; its path goes through the normal resource permission boundary.
+`EmacsDescribe` decides its own permission from its arguments, before allow
+rules. A `value` read always asks, even under a saved allow rule for the tool,
+because variables can hold private state. A library `source` read bypasses
+ordinary path arguments only for a simple library name whose resolved canonical
+file remains below a canonical local `load-path` entry. Absolute names,
+directory components, remote entries, and library symlinks that escape their
+load-path entry are denied before the reader runs. Use the ordinary `Read` tool
+when source outside that closed set is needed; its path goes through the normal
+resource permission boundary. A library `location` reads no file: it checks only
+simple names in local load-path directories, never remote entries. It and other
+introspection reads follow ordinary policy.
 
 ## Eval
 

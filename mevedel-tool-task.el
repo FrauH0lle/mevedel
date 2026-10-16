@@ -303,10 +303,12 @@ Returns the new `mevedel-task' struct."
                   :metadata metadata)))
       task)))
 
-(defun mevedel-tool-task--update-one (session id updates)
-  "Return task ID in SESSION after applying replacement fields.
-The argument UPDATES is the plist of replacement fields.
-Returns the updated task.  Signals an error if ID is unknown."
+(defun mevedel-tool-task--prepare-update (session id updates)
+  "Validate replacement UPDATES for task ID in SESSION; return an applier.
+UPDATES is the plist of replacement fields.  Every check runs here, so a
+batch can validate all its entries before mutating any task.  Calling the
+returned function applies the fields and returns the task.  Signals an
+error if ID is unknown or a field is invalid."
   (let ((task (mevedel-tool-task--find session id))
         (p (mevedel-tool-task--object-to-plist updates)))
     (unless task
@@ -345,24 +347,25 @@ Returns the updated task.  Signals an error if ID is unknown."
       (when (plist-member p :metadata)
         (setq metadata (plist-get p :metadata)
               metadata-p t))
-      (when subject-p
-        (setf (mevedel-task-subject task) subject))
-      (when description-p
-        (setf (mevedel-task-description task) description))
-      (when status-p
-        (let ((old-status (mevedel-task-status task)))
-          (setf (mevedel-task-status task) new-status)
-          (when (and (eq new-status 'completed)
-                     (not (eq old-status 'completed)))
-            (setf (mevedel-task-completed-turn task)
-                  (mevedel-current-turn session)))))
-      (when owner-p
-        (setf (mevedel-task-owner task) owner))
-      (when blocked-by-p
-        (setf (mevedel-task-blocked-by task) blocked-by))
-      (when metadata-p
-        (setf (mevedel-task-metadata task) metadata)))
-    task))
+      (lambda ()
+        (when subject-p
+          (setf (mevedel-task-subject task) subject))
+        (when description-p
+          (setf (mevedel-task-description task) description))
+        (when status-p
+          (let ((old-status (mevedel-task-status task)))
+            (setf (mevedel-task-status task) new-status)
+            (when (and (eq new-status 'completed)
+                       (not (eq old-status 'completed)))
+              (setf (mevedel-task-completed-turn task)
+                    (mevedel-current-turn session)))))
+        (when owner-p
+          (setf (mevedel-task-owner task) owner))
+        (when blocked-by-p
+          (setf (mevedel-task-blocked-by task) blocked-by))
+        (when metadata-p
+          (setf (mevedel-task-metadata task) metadata))
+        task))))
 
 (defun mevedel-tool-task-finalize-owner (session owner status)
   "Reconcile SESSION tasks owned by OWNER for terminal agent STATUS.
@@ -940,79 +943,77 @@ this runs after the task mutation it accompanies."
       (mevedel-tool-task--clear-inactive-status-notes session)
       (mevedel-tool-task--note-feedback owner note stored))))
 
-(defun mevedel-tool-task--handle-create (args)
-  "Handler for TaskCreate.  ARGS has :tasks."
-  (let* ((session (mevedel-tool-task--session))
-         (specs (mevedel-tool-task--tasks-arg args))
-         (next-id (mevedel-tool-task--next-id session))
-         (created nil)
-         (prepared-note
-          (mevedel-tool-task--prepare-note-arg
-           session args mevedel-tool-task--note-owner-keys))
-         note-feedback)
+(defun mevedel-tool-task--apply-specs (session specs)
+  "Apply task SPECS to SESSION; return (CREATED . UPDATED) task lists.
+A spec with an `id' updates that task; one without creates a task.  The
+whole batch applies or none of it does: every entry is validated before
+any task changes."
+  (let ((next-id (mevedel-tool-task--next-id session))
+        created appliers updated)
     (dolist (spec specs)
-      (push (mevedel-tool-task--create-one session spec next-id) created)
-      (cl-incf next-id))
+      (let* ((p (mevedel-tool-task--object-to-plist spec))
+             (id (plist-get p :id)))
+        (cond
+         ((and id (not (eq id :null)))
+          (unless (integerp id)
+            (error "Task id must be an integer, got %S" id))
+          (push (mevedel-tool-task--prepare-update
+                 session id
+                 (cl-loop for (k v) on p by #'cddr
+                          unless (eq k :id) nconc (list k v)))
+                appliers))
+         (t
+          (push (mevedel-tool-task--create-one session p next-id) created)
+          (cl-incf next-id)))))
+    (dolist (apply (nreverse appliers))
+      (cl-pushnew (funcall apply) updated))
     (setq created (nreverse created))
     (setf (mevedel-session-tasks session)
           (append (mevedel-session-tasks session) created))
-    (setq note-feedback
-          (mevedel-tool-task--apply-note-arg session prepared-note))
-    (mevedel-tool-task--mark-write session)
-    (mevedel-tool-task-refresh-display)
-    (let ((base (format "Created %d task%s:\n%s"
-                        (length created)
-                        (if (= 1 (length created)) "" "s")
-                        (mevedel-tool-task--format-for-llm created))))
-      (list :result
-            (if note-feedback
-                (concat base "\n" note-feedback)
-              base)))))
+    (cons created (nreverse updated))))
 
-(defun mevedel-tool-task--handle-update (args)
-  "Handler for TaskUpdate.  ARGS has :id and zero or more update fields."
+(defun mevedel-tool-task--handle-write (args)
+  "Handler for TaskWrite.  ARGS has optional :tasks, :note and :noteOwner."
   (let* ((session (mevedel-tool-task--session))
-         (id (plist-get args :id))
-         ;; Build an updates plist from the remaining keys.
-         (updates (cl-loop for (k v) on args by #'cddr
-                           unless (memq k (cons :id
-                                                (cons :note
-                                                      mevedel-tool-task--note-owner-keys)))
-                           nconc (list k v))))
-    (unless (integerp id)
-      (error "Parameter id is required and must be an integer"))
-    (let* ((prepared-note
-            (mevedel-tool-task--prepare-note-arg
-             session args mevedel-tool-task--note-owner-keys))
-           (task (mevedel-tool-task--update-one session id updates))
+         (specs (and (mevedel-tool-task--argument-value-present-p args :tasks)
+                     (mevedel-tool-task--tasks-arg args)))
+         (prepared-note
+          (mevedel-tool-task--prepare-note-arg
+           session args mevedel-tool-task--note-owner-keys)))
+    (unless (or specs prepared-note
+                (mevedel-tool-task--argument-value-present-p args :note))
+      (error "TaskWrite needs tasks or a note"))
+    (let* ((changes (mevedel-tool-task--apply-specs session specs))
+           (created (car changes))
+           (updated (cdr changes))
            (note-feedback
             (mevedel-tool-task--apply-note-arg session prepared-note)))
       (mevedel-tool-task--clear-inactive-status-notes session)
       (mevedel-tool-task--mark-write session)
       (mevedel-tool-task-refresh-display)
-      (let ((base (format "Updated task:\n%s"
-                          (mevedel-tool-task--format-for-llm
-                           (list task)))))
-        (list :result
-              (if note-feedback
-                  (concat base "\n" note-feedback)
-                base))))))
-
-(defun mevedel-tool-task--handle-note (args)
-  "Handler for TaskNote.  ARGS has :note and optional :owner."
-  (let ((session (mevedel-tool-task--session)))
-    (unless (mevedel-tool-task--argument-value-present-p args :note)
-      (error "Parameter note is required"))
-    (let* ((feedback
-            (mevedel-tool-task--apply-note-arg
-             session
-             (mevedel-tool-task--prepare-note-arg session args '(:owner)))))
-      (mevedel-tool-task--mark-write session)
-      (mevedel-tool-task-refresh-display)
-      (list :result feedback))))
+      (list :result
+            (string-join
+             (delq nil
+                   (list
+                    (when created
+                      (format "Created %d task%s:\n%s"
+                              (length created) (if (cdr created) "s" "")
+                              (mevedel-tool-task--format-for-llm created)))
+                    (when updated
+                      (format "Updated %d task%s:\n%s"
+                              (length updated) (if (cdr updated) "s" "")
+                              (mevedel-tool-task--format-for-llm updated)))
+                    note-feedback))
+             "\n")))))
 
 (defun mevedel-tool-task--handle-list (args)
-  "Handler for TaskList.  ARGS may include :status filter."
+  "Handler for TaskList.  ARGS may include an :id or a :status filter."
+  (if-let* ((id (mevedel-tool-task--optional-argument args :id)))
+      (mevedel-tool-task--handle-get id)
+    (mevedel-tool-task--handle-list-all args)))
+
+(defun mevedel-tool-task--handle-list-all (args)
+  "Return the session task list, filtered by ARGS' optional :status."
   (let* ((session (mevedel-tool-task--session))
          (filter-raw (mevedel-tool-task--optional-argument args :status))
          (filter (and filter-raw
@@ -1031,12 +1032,11 @@ this runs after the task mutation it accompanies."
                       (mevedel-tool-task--format-for-llm filtered))
             (mevedel-tool-task--format-for-llm filtered)))))
 
-(defun mevedel-tool-task--handle-get (args)
-  "Handler for TaskGet.  ARGS has :id."
-  (let* ((session (mevedel-tool-task--session))
-         (id (plist-get args :id)))
+(defun mevedel-tool-task--handle-get (id)
+  "Return full details of task ID."
+  (let ((session (mevedel-tool-task--session)))
     (unless (integerp id)
-      (error "Parameter id is required and must be an integer"))
+      (error "Parameter id must be an integer"))
     (let ((task (mevedel-tool-task--find session id)))
       (unless task
         (error "No task with id %s" id))
@@ -1088,45 +1088,51 @@ this runs after the task mutation it accompanies."
           :status (mevedel-tool-task--result-status result)
           :expandable-p nil)))
 
-(defun mevedel-tool-task--render-mutation (name _args result _render-data)
-  "Return collapsible mutation renderer for NAME and RESULT."
-  (when (stringp result)
-    (let* ((tool-name (or name "Task"))
-           (status (mevedel-tool-task--result-status result))
-           (fallback (format "%s: %s"
-                             tool-name
-                             (mevedel-tool-task--first-result-line result)))
-           (task-lines
-            (cl-loop for line in (split-string result "\n" t)
-                     for trimmed = (string-trim-left line)
-                     when (string-match
-                           "\\`#\\([0-9]+\\) \\[\\([^]]+\\)\\]" trimmed)
-                     collect (cons (string-to-number (match-string 1 trimmed))
-                                   (match-string 2 trimmed))))
-           (first (car task-lines))
-           (last-id (caar (last task-lines)))
-           (header
-            (cond
-             (status fallback)
-             ((and (equal name "TaskCreate") first)
-              (format "%s: %d created · %s"
-                      tool-name (length task-lines)
-                      (if (= (car first) last-id)
-                          (format "#%d" (car first))
-                        (format "#%d–#%d" (car first) last-id))))
-             ((and (equal name "TaskUpdate") first)
-              (format "%s: #%d updated · %s"
-                      tool-name (car first) (cdr first)))
-             (t fallback))))
-      (list :header header
-            :body result
-            :body-mode nil
-            :status status
-            :initially-collapsed-p t))))
+(defun mevedel-tool-task--section-ids (result heading)
+  "Return the task IDs listed in RESULT's HEADING section, in order."
+  (when (string-match (format "^%s [0-9]+ tasks?:\n" heading) result)
+    (cl-loop for line in (split-string (substring result (match-end 0)) "\n")
+             while (string-match "\\`#\\([0-9]+\\) \\[" line)
+             collect (string-to-number (match-string 1 line)))))
 
-(defun mevedel-tool-task--render-list (name args result _render-data)
-  "Return rendering plist for TaskList NAME, ARGS, and RESULT."
+(defun mevedel-tool-task--id-range (ids)
+  "Return IDS as a compact `#N' or `#N–#M' label."
+  (if (cdr ids)
+      (format "#%d–#%d" (apply #'min ids) (apply #'max ids))
+    (format "#%d" (car ids))))
+
+(defun mevedel-tool-task--render-mutation (name _args result _render-data)
+  "Return collapsible TaskWrite renderer for NAME and RESULT.
+The header counts created and updated tasks; a note-only write shows its
+feedback line."
   (when (stringp result)
+    (let* ((tool-name (or name "TaskWrite"))
+           (status (mevedel-tool-task--result-status result))
+           (created (mevedel-tool-task--section-ids result "Created"))
+           (updated (mevedel-tool-task--section-ids result "Updated"))
+           (parts (delq nil
+                        (list (and created
+                                   (format "%d created · %s" (length created)
+                                           (mevedel-tool-task--id-range created)))
+                              (and updated
+                                   (format "%d updated · %s" (length updated)
+                                           (mevedel-tool-task--id-range updated)))))))
+      (if (or status parts)
+          (list :header (if (and parts (not status))
+                            (format "%s: %s" tool-name (string-join parts " · "))
+                          (format "%s: %s" tool-name
+                                  (mevedel-tool-task--first-result-line result)))
+                :body result
+                :body-mode nil
+                :status status
+                :initially-collapsed-p t)
+        (mevedel-tool-task--render-event name nil result nil)))))
+
+(defun mevedel-tool-task--render-list (name args result render-data)
+  "Return rendering plist for TaskList NAME, ARGS, RESULT and RENDER-DATA."
+  (if (mevedel-tool-task--optional-argument args :id)
+      (mevedel-tool-task--render-get name args result render-data)
+    (when (stringp result)
     (let* ((status-filter (mevedel-tool-task--optional-argument
                            args :status))
            (count (mevedel-tool-task--task-line-count result))
@@ -1137,14 +1143,14 @@ this runs after the task mutation it accompanies."
             :body result
             :body-mode nil
             :status (mevedel-tool-task--result-status result)
-            :initially-collapsed-p t))))
+            :initially-collapsed-p t)))))
 
 (defun mevedel-tool-task--render-get (name args result _render-data)
-  "Return rendering plist for TaskGet NAME, ARGS, and RESULT."
+  "Return rendering plist for one TaskList task NAME, ARGS, and RESULT."
   (when (stringp result)
     (let ((id (plist-get args :id)))
       (list :header (format "%s: #%s"
-                            (or name "TaskGet")
+                            (or name "TaskList")
                             (or id "?"))
             :body result
             :body-mode nil
@@ -1159,15 +1165,16 @@ this runs after the task mutation it accompanies."
   "Register the task tracking tools."
 
   (mevedel-define-tool
-    :name "TaskCreate"
-    :description "Create one or more tasks in the session task list."
-    :summary "Track a plan or checklist with task status, owners, and dependencies."
-    :prompt-file "prompts/tools/taskcreate.md"
-    :handler #'mevedel-tool-task--handle-create
-    :args ((tasks array :required
-                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (canonical agent path or bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), metadata (object, optional)."
+    :name "TaskWrite"
+    :description "Create or update session tasks in one batch, and set an owner's status note."
+    :summary "Track a plan or checklist: create or update tasks with status, owners, and dependencies."
+    :prompt-file "prompts/tools/taskwrite.md"
+    :handler #'mevedel-tool-task--handle-write
+    :args ((tasks array :optional
+                  "Task objects. An object with id updates that task, changing only the fields it names; one without id creates a task and needs subject. Fields: id (integer), subject (string), description (string; empty clears), status (\"pending\"|\"in_progress\"|\"completed\"), owner (canonical agent path or bucket string; empty unassigns; use subjects/descriptions for workstream names), blockedBy (array of task IDs), metadata (object; activity fields supply a running task's display text)."
                   :items (:type object
-                          :properties (:subject (:type string)
+                          :properties (:id (:type integer)
+                                       :subject (:type string)
                                        :description (:type string)
                                        :status (:type string)
                                        :owner (:type string)
@@ -1177,87 +1184,28 @@ this runs after the task mutation it accompanies."
                                         :properties (:activity (:type string)
                                                      :activeForm (:type string)
                                                      :active-form (:type string)
-                                                     :active_form (:type string))))
-                          :required ["subject"])
-                  :minItems 1)
+                                                     :active_form (:type string))))))
            (note string :optional
-                 "Optional owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
+                 "Owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
            (noteOwner string :optional
                       "Owner for note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
     :groups (tasks)
     :renderer '((success . mevedel-tool-task--render-mutation)))
-
-  (mevedel-define-tool
-    :name "TaskUpdate"
-    :description "Update the status or fields of an existing task."
-    :summary "Update task status, ownership, and dependencies."
-    :prompt-file "prompts/tools/taskupdate.md"
-    :handler #'mevedel-tool-task--handle-update
-    :args ((id integer :required
-               "The integer ID of the task to update.")
-           (subject string :optional
-                    "New subject line for the task.")
-           (description string :optional
-                         "New description. Pass an empty string to clear.")
-           (status string :optional
-                   "New status: \"pending\", \"in_progress\", or \"completed\". When set to completed, the task is removed from the blocked-by lists of any dependent tasks.")
-           (owner string :optional
-                  "New canonical agent path or bucket. Pass an empty string to unassign; prefer subjects/descriptions for workstream names.")
-           (blockedBy array :optional
-                      "Array of task IDs blocking this task."
-                      :items (:type integer))
-           (metadata object :optional
-                     "Free-form metadata object. Activity fields supply the running task's display text."
-                     :properties (:activity (:type string)
-                                  :activeForm (:type string)
-                                  :active-form (:type string)
-                                  :active_form (:type string)))
-           (note string :optional
-                 "Optional owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
-           (noteOwner string :optional
-                      "Owner for note. Omit for the current caller, pass an empty string for Main."))
-    :read-only-p t
-    :groups (tasks)
-    :renderer '((success . mevedel-tool-task--render-mutation)))
-
-  (mevedel-define-tool
-    :name "TaskNote"
-    :description "Set or clear the current status note for an owner task group."
-    :summary "Set or clear an owner's progress note above open tasks."
-    :prompt-file "prompts/tools/tasknote.md"
-    :handler #'mevedel-tool-task--handle-note
-    :args ((note string :required
-                 "Owner-scoped status note to show above open tasks. Pass an empty string only when intentionally clearing.")
-           (owner string :optional
-                  "Owner for the note. Omit for the current caller, pass an empty string for Main."))
-    :read-only-p t
-    :groups (tasks)
-    :renderer '((success . mevedel-tool-task--render-event)))
 
   (mevedel-define-tool
     :name "TaskList"
-    :description "List the tasks currently tracked in the session."
-    :summary "List session tasks, progress, owners, and dependencies."
+    :description "List the session's tasks, or read one task's full details."
+    :summary "List session tasks, progress, owners, and dependencies, or read one task in full."
     :prompt-file "prompts/tools/tasklist.md"
     :handler #'mevedel-tool-task--handle-list
     :args ((status string :optional
-                   "Optional filter: \"pending\", \"in_progress\", or \"completed\"."))
+                   "Optional filter: \"pending\", \"in_progress\", or \"completed\".")
+           (id integer :optional
+               "Task ID whose full description and metadata to return."))
     :read-only-p t
     :groups (tasks)
-    :renderer '((success . mevedel-tool-task--render-list)))
-
-  (mevedel-define-tool
-    :name "TaskGet"
-    :description "Retrieve full details for a single task by ID."
-    :summary "Read one task's full description, status, ownership, and metadata."
-    :prompt-file "prompts/tools/taskget.md"
-    :handler #'mevedel-tool-task--handle-get
-    :args ((id integer :required
-               "The integer ID of the task to retrieve."))
-    :read-only-p t
-    :groups (tasks)
-    :renderer '((success . mevedel-tool-task--render-get))))
+    :renderer '((success . mevedel-tool-task--render-list))))
 
 (provide 'mevedel-tool-task)
 ;;; mevedel-tool-task.el ends here

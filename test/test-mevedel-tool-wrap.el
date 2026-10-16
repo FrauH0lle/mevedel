@@ -421,7 +421,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
   (let ((agent (mevedel-agent--create :name "other-agent" :tools '(read)))
         (mevedel-agent-extra-tool-specs nil))
     (should (equal '(read (:tool "ToolSearch") (:tool "ToolCall")
-                          (:discoverable (:tool "SendMessage"))
+                          (:tool "SendMessage")
                           (:discoverable (:tool "ListAgents")))
                    (mevedel-agent--effective-specs agent)))))
 

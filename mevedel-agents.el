@@ -193,7 +193,15 @@ See `mevedel-agent-configuration-model-metadata'."
   (mevedel-agent--create
    :name "default"
    :description "Agent inheriting its delegator's effective configuration.")
-  "Default retained-agent role configuration.")
+  "Default retained-agent role configuration.
+Its context observations are inherited when it freezes; see
+`mevedel-agent--effective-context-components'.")
+
+(defconst mevedel-agent--root-only-components
+  '(active-goal goal-policy journal)
+  "Root context observations that no delegated agent inherits.
+The Goal belongs to the root's continuation, and the journal map serves the
+root's memory review rather than delegated work.")
 
 (defun mevedel-agent-default ()
   "Return the default inherited agent role."
@@ -214,13 +222,30 @@ inside the agent can discover them."
   :type '(alist :key-type symbol :value-type (repeat sexp)))
 
 (defconst mevedel-agent--communication-tool-specs
-  '((:discoverable (:tool "SendMessage")) (:discoverable (:tool "ListAgents")))
-  "Tools available to every named role.")
+  '((:tool "SendMessage") (:discoverable (:tool "ListAgents")))
+  "Tools available to every named role.
+SendMessage is native because agents routinely report to their parent.")
 
 (defconst mevedel-agent--control-tool-specs
   '((:discoverable (:tool "FollowupAgent")) (:discoverable (:tool "WaitAgent"))
     (:discoverable (:tool "InterruptAgent")))
   "Tools added to every named role that possesses Agent.")
+
+(defun mevedel-agent-default-native-tools (catalog tools)
+  "Return inherited native TOOLS plus native communication tools in CATALOG.
+A default child inherits its delegator's native tools and its permitted
+specialist CATALOG.  A communication tool that named roles receive natively
+becomes native here too, but only when the inherited catalog permits it."
+  (cl-delete-duplicates
+   (append tools
+           (cl-loop for spec in mevedel-agent--communication-tool-specs
+                    for name = (and (eq (car spec) :tool) (cadr spec))
+                    when (and name
+                              (cl-some (lambda (entry)
+                                         (equal (car entry) (list "mevedel" name)))
+                                       catalog))
+                    collect (mevedel-tool-gptel-tool (mevedel-tool-ensure name))))
+   :test #'eq :from-end t))
 
 (defun mevedel-agent--specs-contain-tool-p (specs name)
   "Return non-nil when resolved SPECS contain a tool named NAME."
@@ -279,6 +304,27 @@ Freezing these explicit specs preserves membership on later invocations."
   (alist-get (if (symbolp name) (symbol-name name) name)
              mevedel-agent--registry nil nil #'equal))
 
+(defun mevedel-agent--effective-context-components (agent)
+  "Return the context observations AGENT receives.
+A named role selects its own.  The unfrozen default role inherits its
+delegator's: a delegating agent's own selection, or the root's observations
+except `mevedel-agent--root-only-components'.  The default role inherits the
+delegator's system prompt, whose changing parts arrive as these observations,
+so without them it would lack workspace guidance and environment facts."
+  (if (or (mevedel-agent-frozen-p agent)
+          (not (equal "default" (mevedel-agent-name agent))))
+      (mevedel-agent-context-components agent)
+    ;; Resolve the delegator from its buffer, as for inherited tool specs.
+    (let* ((mevedel-tools--current-engine nil)
+           (owner (mevedel-tools--current-context)))
+      (if (mevedel-agent-invocation-p owner)
+          (copy-sequence
+           (mevedel-agent-context-components
+            (mevedel-agent-invocation-agent owner)))
+        (cl-remove-if (lambda (name)
+                        (memq name mevedel-agent--root-only-components))
+                      mevedel-system-retained-components)))))
+
 (defun mevedel-agent-resolve-role (role)
   "Resolve optional ROLE to an agent definition or signal a user error."
   (cond
@@ -291,8 +337,9 @@ Freezing these explicit specs preserves membership on later invocations."
 (defun mevedel-agent-freeze (agent)
   "Return a frozen configuration snapshot of AGENT.
 
-Dynamic system instructions and user tool augmentation are materialized in
-the caller's current session context.  Reminders and hooks remain templates,
+Dynamic system instructions, inherited context observations, and user tool
+augmentation are materialized in the caller's current session context, so a
+retained follow-up keeps them.  Reminders and hooks remain templates,
 but are copied so later role redefinition cannot alter retained follow-ups.
 Every reminder must have a durable recipe because retained agents survive a
 cold session resume."
@@ -304,6 +351,8 @@ cold session resume."
        (mevedel-agent-reminders agent))
       (setf (mevedel-agent-tools frozen)
             (copy-tree (mevedel-agent--effective-specs agent))
+            (mevedel-agent-context-components frozen)
+            (mevedel-agent--effective-context-components agent)
             (mevedel-agent-system-prompt frozen)
             (cond
              ((stringp system-prompt) system-prompt)
@@ -603,21 +652,18 @@ delegation authority."
   :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
           (:discoverable read)
           (:tool "ApplyPatch") (:discoverable edit) (:tool "Bash")
+          (:tool "WriteStdin")
           (:discoverable code)
           (:discoverable web)
           (:discoverable elisp)
           (:discoverable (:tool "Eval"))
-          (:discoverable (:tool "WriteStdin"))
           (:discoverable (:tool "ListExecutions"))
           (:discoverable (:tool "StopExecution"))
           (:discoverable (:tool "Ask"))
           (:discoverable (:tool "Skill"))
           (:discoverable (:tool "ListSkills"))
-          (:discoverable (:tool "TaskCreate"))
-          (:discoverable (:tool "TaskUpdate"))
+          (:discoverable (:tool "TaskWrite"))
           (:discoverable (:tool "TaskList"))
-          (:discoverable (:tool "TaskGet"))
-          (:discoverable (:tool "TaskNote"))
           (:discoverable (:tool "Agent")))
   :system-components
   '((role :file "agents/worker.md")
@@ -631,6 +677,7 @@ delegation authority."
     memory
     environment
     skill-policy
+    tools
     skills))
 
 (mevedel-define-agent explorer
@@ -646,11 +693,8 @@ modifies files."
           (:discoverable (:tool "Ask"))
           (:discoverable (:tool "Skill"))
           (:discoverable (:tool "ListSkills"))
-          (:discoverable (:tool "TaskCreate"))
-          (:discoverable (:tool "TaskUpdate"))
+          (:discoverable (:tool "TaskWrite"))
           (:discoverable (:tool "TaskList"))
-          (:discoverable (:tool "TaskGet"))
-          (:discoverable (:tool "TaskNote"))
           (:discoverable (:tool "Agent")))
   :system-components
   '((role :file "agents/explorer.md")
@@ -661,6 +705,7 @@ modifies files."
     workspace-config
     environment
     skill-policy
+    tools
     skills))
 
 (mevedel-define-agent verifier
@@ -668,7 +713,7 @@ modifies files."
 tries to break implementations through edge cases, tests, and code \
 review.  Cannot edit, write, or create files."
   :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
-          (:discoverable read) (:tool "Bash")
+          (:discoverable read) (:tool "Bash") (:tool "WriteStdin")
           (:discoverable code)
           (:discoverable elisp)
           (:discoverable (:tool "Eval"))
@@ -680,13 +725,14 @@ review.  Cannot edit, write, or create files."
     tool-orchestration
     resources
     workspace-config
-    environment))
+    environment
+    tools))
 
 (mevedel-define-agent reviewer
   :description "Dedicated code review agent.  Read-only -- inspects diffs and \
 returns prioritized structured findings as JSON."
   :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
-          (:discoverable read) (:tool "Bash")
+          (:discoverable read) (:tool "Bash") (:tool "WriteStdin")
           (:discoverable code))
   :system-components
   '((role :file "agents/reviewer.md")
@@ -694,7 +740,8 @@ returns prioritized structured findings as JSON."
     tool-orchestration
     resources
     workspace-config
-    environment))
+    environment
+    tools))
 
 
 ;;

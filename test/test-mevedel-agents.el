@@ -254,6 +254,69 @@
     (should (member '(:tool "Eval") specs))
     (should-not (member '(:tool "SendMessage") specs))))
 
+(mevedel-deftest mevedel-agent-default-native-tools
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "makes a permitted SendMessage native once, keeping inherited tools first"
+  (let* ((read (mevedel-tool-gptel-tool (mevedel-tool-get "Read" "mevedel")))
+         (catalog '((("mevedel" "SendMessage") . "s") (("mevedel" "ListAgents") . "l")))
+         (tools (mevedel-agent-default-native-tools catalog (list read))))
+    (should (equal '("Read" "SendMessage") (mapcar #'gptel-tool-name tools)))
+    (should (equal tools (mevedel-agent-default-native-tools catalog tools))))
+  :doc "adds nothing the inherited catalog does not permit"
+  (let ((read (mevedel-tool-gptel-tool (mevedel-tool-get "Read" "mevedel"))))
+    (should (equal (list read)
+                   (mevedel-agent-default-native-tools
+                    '((("mevedel" "Imenu") . "i")) (list read))))))
+
+(mevedel-deftest mevedel-agent--effective-context-components
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "named and frozen roles keep their own selection"
+  (let ((worker (mevedel-agent-get "worker")))
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session--create :name "ctx"))
+      (should (equal (mevedel-agent-context-components worker)
+                     (mevedel-agent--effective-context-components worker)))
+      (let ((frozen (copy-mevedel-agent (mevedel-agent-default))))
+        (setf (mevedel-agent-frozen-p frozen) t
+              (mevedel-agent-context-components frozen) '(environment))
+        (should (equal '(environment)
+                       (mevedel-agent--effective-context-components frozen))))))
+
+  :doc "a default child of the root inherits root observations except root-only ones"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "ctx"))
+    (let ((components (mevedel-agent--effective-context-components
+                       (mevedel-agent-default))))
+      (dolist (name '(workspace-config memory environment tools skills resources))
+        (should (memq name components)))
+      (dolist (name mevedel-agent--root-only-components)
+        (should-not (memq name components)))))
+
+  :doc "a default child of an agent inherits that agent's selection"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "ctx")
+                mevedel--agent-invocation
+                (mevedel-agent-invocation--create
+                 :agent (mevedel-agent--create
+                         :name "delegator" :frozen-p t
+                         :context-components '(workspace-config environment tools))))
+    (should (equal '(workspace-config environment tools)
+                   (mevedel-agent--effective-context-components
+                    (mevedel-agent-default)))))
+
+  :doc "freezing the default role records the inherited selection"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "ctx"))
+    (should (memq 'workspace-config
+                  (mevedel-agent-context-components
+                   (mevedel-agent-freeze (mevedel-agent-default)))))
+    ;; The shared role definition itself is never changed.
+    (should-not (mevedel-agent-context-components (mevedel-agent-default)))))
+
 (mevedel-deftest mevedel-agent-resolve-role/test
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test
@@ -336,8 +399,22 @@
   :doc "worker has independent broad implementation capabilities"
   (let ((tools (test-mevedel-agents--resolved-tool-names "worker")))
     (dolist (tool '("Read" "ApplyPatch" "Bash" "Eval"
-                    "XrefDefinitions" "Skill" "TaskCreate"))
+                    "XrefDefinitions" "Skill" "TaskWrite"))
       (should (member tool tools))))
+
+  :doc "every named role reports natively; roles with Bash poll natively"
+  (dolist (name '("worker" "explorer" "reviewer" "verifier"))
+    (let* ((resolved (mevedel-tool-resolve
+                      (mevedel-agent--effective-specs (mevedel-agent-get name))))
+           (active (mapcar #'mevedel-tool-name (plist-get resolved :active)))
+           (catalog (mapcar #'mevedel-tool-name (plist-get resolved :discoverable))))
+      (should (member "SendMessage" active))
+      (should-not (member "SendMessage" catalog))
+      (should (member "ListAgents" catalog))
+      (if (member "Bash" active)
+          (should (member "WriteStdin" active))
+        (should-not (member "WriteStdin" active)))
+      (should-not (member "WriteStdin" catalog))))
 
   :doc "shared editing stays discoverable to the worker; every role reads through Read"
   (dolist (name '("worker" "explorer" "reviewer" "verifier"))

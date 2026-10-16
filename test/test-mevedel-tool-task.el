@@ -121,8 +121,8 @@
 ;;
 ;;; Task creation
 
-(mevedel-deftest mevedel-tool-task--handle-create
-  (:doc "`mevedel-tool-task--handle-create' creates and stores tasks")
+(mevedel-deftest mevedel-tool-task--handle-write
+  (:doc "`mevedel-tool-task--handle-write' creates and stores tasks")
   ,test
   (test)
   :doc "creates a batch of tasks with incrementing IDs"
@@ -130,7 +130,7 @@
     (setf (mevedel-session-turn-count session) 4)
     (let ((result
            (plist-get
-            (mevedel-tool-task--handle-create
+            (mevedel-tool-task--handle-write
              (list :tasks
                    (vector
                     (list :subject "first" :status "completed")
@@ -149,7 +149,7 @@
 
   :doc "creates a single task from a one-element array"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "only"))))
     (let ((tasks (mevedel-session-tasks session)))
       (should (= 1 (length tasks)))
@@ -158,7 +158,7 @@
 
   :doc "accepts a Lisp list of task plists as a batch"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (list (list :subject "A")
                         (list :subject "B"))))
     (let ((tasks (mevedel-session-tasks session)))
@@ -170,7 +170,7 @@
   (test-mevedel-tool-task--with-session session
     (let ((result
            (plist-get
-            (mevedel-tool-task--handle-create
+            (mevedel-tool-task--handle-write
              (list :tasks (vector (list :subject "active"))
                    :note "Implementing task notes"))
             :result)))
@@ -185,13 +185,13 @@
 
   :doc "ignores nil and json-false optional note placeholders"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "active"))
            :note "Keep this note"))
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "another"))
            :note nil :noteOwner nil))
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "third"))
            :note :json-false :noteOwner :json-false))
     (should (equal "Keep this note"
@@ -200,7 +200,7 @@
   :doc "completed task creation records completed-turn and expands on request"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-turn-count session) 4)
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "already done"
                                 :status "completed"))))
     (let ((task (car (mevedel-session-tasks session))))
@@ -216,10 +216,10 @@
 
   :doc "drops a blockedBy edge to an already-completed task"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "groundwork"))))
-    (mevedel-tool-task--handle-update (list :id 1 :status "completed"))
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed"))))
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "follow-up" :blockedBy (vector 1)))))
     (let ((follow-up (cadr (mevedel-session-tasks session))))
       ;; Nothing else would ever clear it: unblocking only fires on a
@@ -233,7 +233,7 @@
 
   :doc "preserves blockedBy and owner fields"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks
            (vector
             (list :subject "A" :owner "worker-1")
@@ -247,14 +247,14 @@
 
   :doc "uses the current canonical agent path when owner is omitted"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "main task"))))
     (let ((inv (mevedel-agent-invocation--create
                 :path "/root/explorer"
                 :agent-id "explorer--0123456789abcdef0123456789abcdef")))
       (test-mevedel-tool-task--register-agent session "/root/explorer")
       (let ((mevedel--agent-invocation inv))
-        (mevedel-tool-task--handle-create
+        (mevedel-tool-task--handle-write
          (list :tasks (vector (list :subject "agent task"))))))
     (let* ((tasks (mevedel-session-tasks session))
            (agent-task (cadr tasks))
@@ -287,7 +287,7 @@
                 :agent-id "explorer--0123456789abcdef0123456789abcdef")))
       (test-mevedel-tool-task--register-agent session "/root/explorer")
       (let ((mevedel--agent-invocation inv))
-        (mevedel-tool-task--handle-create
+        (mevedel-tool-task--handle-write
          (list :tasks (vector (list :subject "main task"
                                     :owner ""))))))
     (let ((task (car (mevedel-session-tasks session))))
@@ -296,7 +296,7 @@
   :doc "rejects unknown canonical owners at the TaskCreate boundary"
   (test-mevedel-tool-task--with-session session
     (should-error
-     (mevedel-tool-task--handle-create
+     (mevedel-tool-task--handle-write
       (list :tasks
             (vector (list :subject "orphan" :owner "/root/ghost")))))
     (should-not (mevedel-session-tasks session)))
@@ -304,13 +304,13 @@
   :doc "rejects tasks with a missing subject"
   (test-mevedel-tool-task--with-session session
     (should-error
-     (mevedel-tool-task--handle-create
+     (mevedel-tool-task--handle-write
       (list :tasks (vector (list :status "pending"))))))
 
   :doc "rejects a bad batch without partially creating tasks"
   (test-mevedel-tool-task--with-session session
     (should-error
-     (mevedel-tool-task--handle-create
+     (mevedel-tool-task--handle-write
       (list :tasks (vector (list :subject "valid")
                            (list :subject "bad" :status "bogus")))))
     (should (null (mevedel-session-tasks session)))
@@ -319,14 +319,14 @@
   :doc "rejects a subject that is blank once its whitespace is collapsed"
   (test-mevedel-tool-task--with-session session
     (should-error
-     (mevedel-tool-task--handle-create
+     (mevedel-tool-task--handle-write
       (list :tasks (vector (list :subject "\n\n")))))
     (should (null (mevedel-session-tasks session)))
     (should (null (mevedel-session-last-task-write-turn session))))
 
   :doc "stores a subject as the one display line the status fragment budgets"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "one\ntwo\tthree"))))
     (should
      (equal "one two three"
@@ -335,7 +335,7 @@
   :doc "an unknown noteOwner creates no task and no note"
   (test-mevedel-tool-task--with-session session
     (should-error
-     (mevedel-tool-task--handle-create
+     (mevedel-tool-task--handle-write
       (list :tasks (vector (list :subject "first"))
             :note "progress" :noteOwner "/root/ghost")))
     (should (null (mevedel-session-tasks session)))
@@ -346,21 +346,20 @@
 ;;
 ;;; Task update
 
-(mevedel-deftest mevedel-tool-task--handle-update
-  (:doc "`mevedel-tool-task--handle-update' modifies stored tasks")
+(mevedel-deftest mevedel-tool-task--handle-write/update
+  (:doc "`mevedel-tool-task--handle-write' entries with an id modify stored tasks")
   ,test
   (test)
   :doc "updates status and propagates completion to unblock dependents"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-turn-count session) 6)
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks
            (vector (list :subject "A")
                    (list :subject "B" :blockedBy (vector 1)))))
     (let ((tasks (mevedel-session-tasks session)))
       (should (equal '(1) (mevedel-task-blocked-by (cadr tasks)))))
-    (mevedel-tool-task--handle-update
-     (list :id 1 :status "completed"))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed"))))
     (let ((tasks (mevedel-session-tasks session)))
       (should (eq 'completed (mevedel-task-status (car tasks))))
       (should (= 7 (mevedel-task-completed-turn (car tasks))))
@@ -369,12 +368,11 @@
 
   :doc "updates owner and subject without touching other fields"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "Original"
                                 :description "desc"
                                 :owner "old"))))
-    (mevedel-tool-task--handle-update
-     (list :id 1 :subject "Renamed" :owner "new"))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "Renamed" :owner "new"))))
     (let ((task (car (mevedel-session-tasks session))))
       (should (equal "Renamed" (mevedel-task-subject task)))
       (should (equal "new" (mevedel-task-owner task)))
@@ -382,73 +380,63 @@
 
   :doc "empty owner means Main/unassigned"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "owned"
                                 :owner "worker"))))
-    (mevedel-tool-task--handle-update
-     (list :id 1 :owner ""))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :owner ""))))
     (should (null (mevedel-task-owner
                    (car (mevedel-session-tasks session))))))
 
   :doc "keeps status notes until an owner has no open tasks"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "A")
                           (list :subject "B"))))
-    (mevedel-tool-task--handle-update
-     (list :id 1 :status "in_progress" :note "Working on A"))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :status "in_progress")) :note "Working on A"))
     (should (equal "Working on A"
                    (mevedel-tool-task--status-note session nil)))
-    (mevedel-tool-task--handle-update
-     (list :id 1 :status "completed"))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed"))))
     (should (equal "Working on A"
                    (mevedel-tool-task--status-note session nil)))
-    (mevedel-tool-task--handle-update
-     (list :id 2 :note nil))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 2)) :note nil))
     (should (equal "Working on A"
                    (mevedel-tool-task--status-note session nil)))
-    (mevedel-tool-task--handle-update
-     (list :id 2 :note :json-false))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 2)) :note :json-false))
     (should (equal "Working on A"
                    (mevedel-tool-task--status-note session nil)))
-    (mevedel-tool-task--handle-update
-     (list :id 2 :status "completed"))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 2 :status "completed"))))
     (should (null (mevedel-tool-task--status-note session nil))))
 
   :doc "clears status notes on an explicit empty update note"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "A")
                           (list :subject "B"))))
-    (mevedel-tool-task--handle-update
-     (list :id 1 :note "Working through the task list"))
-    (mevedel-tool-task--handle-update
-     (list :id 2 :note ""))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1)) :note "Working through the task list"))
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :id 2)) :note ""))
     (should (null (mevedel-tool-task--status-note session nil))))
 
   :doc "errors on unknown task id"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-turn-count session) 2)
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "A"))))
     (let ((last-write (mevedel-session-last-task-write-turn session)))
       (should (= 3 last-write))
       (should-error
-       (mevedel-tool-task--handle-update
-        (list :id 99 :status "completed")))
+       (mevedel-tool-task--handle-write (list :tasks (vector (list :id 99 :status "completed")))))
       (should (= last-write
                  (mevedel-session-last-task-write-turn session)))))
 
   :doc "rejects malformed updates without partial mutation"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "Original"
                                 :status "pending"))))
     (let* ((task (car (mevedel-session-tasks session)))
            (last-write (mevedel-session-last-task-write-turn session)))
       (should-error
-       (mevedel-tool-task--handle-update
-        (list :id 1 :subject "Mutated" :status "bogus")))
+       (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "Mutated" :status "bogus")))))
       (should (equal "Original" (mevedel-task-subject task)))
       (should (eq 'pending (mevedel-task-status task)))
       (should (= last-write
@@ -456,36 +444,72 @@
 
   :doc "preserves completion turn when completed status is unchanged"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "A" :status "completed"))))
     (should-error
-     (mevedel-tool-task--handle-update
-      (list :id 99 :status "completed")))
+     (mevedel-tool-task--handle-write (list :tasks (vector (list :id 99 :status "completed")))))
     (let ((task (car (mevedel-session-tasks session))))
       (should (= 1 (mevedel-task-completed-turn task)))
-      (mevedel-tool-task--handle-update
-       (list :id 1 :status "completed"))
+      (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed"))))
       (should (= 1 (mevedel-task-completed-turn task)))))
 
-  :doc "requires an integer id"
+  :doc "an entry without an id creates a task and so needs a subject"
   (test-mevedel-tool-task--with-session session
     (should-error
-     (mevedel-tool-task--handle-update (list :status "completed"))))
+     (mevedel-tool-task--handle-write (list :tasks (vector (list :status "completed")))))
+    (should-not (mevedel-session-tasks session)))
+
+  :doc "rejects a non-integer id"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-write (list :tasks (vector (list :subject "A"))))
+    (should-error
+     (mevedel-tool-task--handle-write
+      (list :tasks (vector (list :id "1" :status "completed")))))
+    (should (eq 'pending (mevedel-task-status (car (mevedel-session-tasks session))))))
+
+  :doc "applies several updates and creations in one call"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-write
+     (list :tasks (vector (list :subject "A") (list :subject "B"))))
+    (let ((result (plist-get
+                   (mevedel-tool-task--handle-write
+                    (list :tasks (vector (list :id 1 :status "completed")
+                                         (list :id 2 :status "in_progress")
+                                         (list :subject "C"))))
+                   :result)))
+      (should (string-match-p "^Created 1 task:\n#3 " result))
+      (should (string-match-p "^Updated 2 tasks:\n#1 .*\n#2 " result))
+      (should (equal '(completed in-progress pending)
+                     (mapcar #'mevedel-task-status (mevedel-session-tasks session))))))
+
+  :doc "a failing entry leaves earlier updates in the batch unapplied"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-write
+     (list :tasks (vector (list :subject "A"))))
+    (let ((task (car (mevedel-session-tasks session)))
+          (last-write (mevedel-session-last-task-write-turn session)))
+      (should-error
+       (mevedel-tool-task--handle-write
+        (list :tasks (vector (list :id 1 :status "completed")
+                             (list :subject "bad" :status "bogus")))))
+      (should (eq 'pending (mevedel-task-status task)))
+      (should (= 1 (length (mevedel-session-tasks session))))
+      (should (= last-write (mevedel-session-last-task-write-turn session)))))
 
   :doc "rejects a blank or multiline subject and keeps the stored one"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "Original"))))
     (let ((task (car (mevedel-session-tasks session))))
       (should-error
-       (mevedel-tool-task--handle-update (list :id 1 :subject "")))
+       (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "")))))
       (should (equal "Original" (mevedel-task-subject task)))
-      (mevedel-tool-task--handle-update (list :id 1 :subject "one\ntwo"))
+      (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "one\ntwo"))))
       (should (equal "one two" (mevedel-task-subject task)))))
 
   :doc "an unknown noteOwner leaves the task and its dependents untouched"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "A")
                           (list :subject "B" :blockedBy (vector 1)))))
     (let* ((tasks (mevedel-session-tasks session))
@@ -493,9 +517,7 @@
            (second (cadr tasks))
            (last-write (mevedel-session-last-task-write-turn session)))
       (should-error
-       (mevedel-tool-task--handle-update
-        (list :id 1 :status "completed"
-              :note "progress" :noteOwner "/root/ghost")))
+       (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed")) :note "progress" :noteOwner "/root/ghost")))
       (should (eq 'pending (mevedel-task-status first)))
       (should (null (mevedel-task-completed-turn first)))
       (should (equal '(1) (mevedel-task-blocked-by second)))
@@ -1004,7 +1026,13 @@
          (rendering
           (mevedel-tool-task--render-list
            "TaskList" (list :status "done") result nil)))
-    (should (eq 'error (plist-get rendering :status)))))
+    (should (eq 'error (plist-get rendering :status))))
+
+  :doc "names the task a detail read returned"
+  (let ((rendering (mevedel-tool-task--render-list
+                    "TaskList" (list :id 4) "#4 [pending] sample\n" nil)))
+    (should (equal "TaskList: #4" (plist-get rendering :header)))
+    (should (plist-get rendering :initially-collapsed-p))))
 
 (mevedel-deftest mevedel-tool-task--status-line-budget
   (:doc "`mevedel-tool-task--status-line-budget' always widens when expanded")
@@ -1094,8 +1122,8 @@
   :doc "renders multi-task creates with a count and id range"
   (let* ((result "Created 3 tasks:\n#1 [pending] first\n#2 [in_progress] second\n#3 [pending] third")
          (rendering
-          (mevedel-tool-task--render-mutation "TaskCreate" nil result nil)))
-    (should (equal "TaskCreate: 3 created · #1–#3"
+          (mevedel-tool-task--render-mutation "TaskWrite" nil result nil)))
+    (should (equal "TaskWrite: 3 created · #1–#3"
                    (plist-get rendering :header)))
     (should (equal result (plist-get rendering :body)))
     (should-not (plist-get rendering :body-mode))
@@ -1106,30 +1134,50 @@
   :doc "renders single-task creates with the created task id"
   (let* ((result "Created 1 task:\n#7 [pending] only")
          (rendering
-          (mevedel-tool-task--render-mutation "TaskCreate" nil result nil)))
-    (should (equal "TaskCreate: 1 created · #7"
+          (mevedel-tool-task--render-mutation "TaskWrite" nil result nil)))
+    (should (equal "TaskWrite: 1 created · #7"
                    (plist-get rendering :header)))
     (should (equal result (plist-get rendering :body)))
     (should (plist-get rendering :initially-collapsed-p)))
 
-  :doc "renders updates with the updated id and status"
-  (let* ((result "Updated task:\n#2 [completed] Validate parsed values")
+  :doc "renders a mixed batch with both counts"
+  (let* ((result "Created 1 task:\n#5 [pending] new\nUpdated 2 tasks:\n#2 [completed] a\n#4 [in_progress] b\nStatus note for Main: busy")
          (rendering
-          (mevedel-tool-task--render-mutation "TaskUpdate" nil result nil)))
-    (should (equal "TaskUpdate: #2 updated · completed"
+          (mevedel-tool-task--render-mutation "TaskWrite" nil result nil)))
+    (should (equal "TaskWrite: 1 created · #5 · 2 updated · #2–#4"
                    (plist-get rendering :header)))
     (should (equal result (plist-get rendering :body)))
     (should (plist-get rendering :initially-collapsed-p)))
+
+  :doc "renders a note-only write as a compact event"
+  (let ((rendering (mevedel-tool-task--render-mutation
+                    "TaskWrite" nil "Status note for Main: busy" nil)))
+    (should (equal "TaskWrite: Status note for Main: busy"
+                   (plist-get rendering :header)))
+    (should (eq nil (plist-get rendering :expandable-p))))
 
   :doc "uses the first result line and error status for errors"
   (let* ((result "Error: No task with id 99")
          (rendering
-          (mevedel-tool-task--render-mutation "TaskUpdate" nil result nil)))
-    (should (equal "TaskUpdate: Error: No task with id 99"
+          (mevedel-tool-task--render-mutation "TaskWrite" nil result nil)))
+    (should (equal "TaskWrite: Error: No task with id 99"
                    (plist-get rendering :header)))
     (should (eq 'error (plist-get rendering :status)))
     (should (equal result (plist-get rendering :body)))
     (should (plist-get rendering :initially-collapsed-p))))
+
+(mevedel-deftest mevedel-tool-task--section-ids
+  (:doc "reads the task IDs listed under one result heading")
+  (let ((result "Created 2 tasks:\n#3 [pending] a\n#4 [pending] b\nUpdated 1 task:\n#1 [completed] c"))
+    (should (equal '(3 4) (mevedel-tool-task--section-ids result "Created")))
+    (should (equal '(1) (mevedel-tool-task--section-ids result "Updated")))
+    (should-not (mevedel-tool-task--section-ids "Status note for Main: x" "Created"))))
+
+(mevedel-deftest mevedel-tool-task--id-range
+  (:doc "labels one ID or the span of several")
+  (progn
+    (should (equal "#7" (mevedel-tool-task--id-range '(7))))
+    (should (equal "#2–#9" (mevedel-tool-task--id-range '(9 2 5))))))
 
 
 ;;
@@ -1142,7 +1190,7 @@
   :doc "inserts read-only task fragment text in the live view buffer"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
-      (mevedel-tool-task--handle-create
+      (mevedel-tool-task--handle-write
        (list :tasks (vector (list :subject "rendered task")))))
     (with-current-buffer view
       (should (string-match-p "rendered task" (buffer-string)))
@@ -1158,10 +1206,9 @@
   :doc "re-rendering replaces the previous task fragment region"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
-      (mevedel-tool-task--handle-create
+      (mevedel-tool-task--handle-write
        (list :tasks (vector (list :subject "one"))))
-      (mevedel-tool-task--handle-update
-       (list :id 1 :subject "two")))
+      (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "two")))))
     (with-current-buffer view
       (should-not (string-match-p "#1 one" (buffer-string)))
       (should (string-match-p "two" (buffer-string)))
@@ -1170,7 +1217,7 @@
   :doc "compact task fragment hides completed-only groups until expanded"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
-      (mevedel-tool-task--handle-create
+      (mevedel-tool-task--handle-write
        (list :tasks
              (vector (list :subject "main done" :status "completed")
                      (list :subject "worker active" :owner "worker")))))
@@ -1192,10 +1239,9 @@
                     (cl-incf changes))
                   nil t)
         (with-current-buffer data
-          (mevedel-tool-task--handle-create
+          (mevedel-tool-task--handle-write
            (list :tasks (vector (list :subject "quiet task"))))
-          (mevedel-tool-task--handle-update
-           (list :id 1 :subject "still quiet")))
+          (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "still quiet")))))
         (should (= 0 changes))
         (should (string-match-p "still quiet" (buffer-string))))))
 
@@ -1217,10 +1263,9 @@
              rear-nonsticky nil)))
         (goto-char (+ (mevedel-view--input-start) 4))
         (with-current-buffer data
-          (mevedel-tool-task--handle-create
+          (mevedel-tool-task--handle-write
            (list :tasks (vector (list :subject "one"))))
-          (mevedel-tool-task--handle-update
-           (list :id 1 :subject "two")))
+          (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :subject "two")))))
         (should (string= draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
         (should-not (get-text-property (mevedel-view--input-start)
@@ -1254,7 +1299,7 @@
         (set-marker mevedel-view--interaction-marker (point-max))
         (set-marker mevedel-view--input-marker (point-max))
         (with-current-buffer data
-          (mevedel-tool-task--handle-create
+          (mevedel-tool-task--handle-write
            (list :tasks (vector (list :subject "drift task")))))
         (mevedel-view-refresh-input-prompt)
         (should (string= draft (mevedel-view--input-text)))
@@ -1269,7 +1314,7 @@
   :doc "completed-only tasks do not render a status fragment"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
-      (mevedel-tool-task--handle-create
+      (mevedel-tool-task--handle-write
        (list :tasks (vector (list :subject "done only"
                                   :status "completed")))))
     (with-current-buffer view
@@ -1289,7 +1334,7 @@
   :doc "completing the last open task removes the fragment"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
-      (mevedel-tool-task--handle-create
+      (mevedel-tool-task--handle-write
        (list :tasks (vector (list :subject "last active")))))
     (with-current-buffer view
       (should (string-match-p "last active" (buffer-string)))
@@ -1298,8 +1343,7 @@
       (should (eq 'tasks (get-text-property
                           (1- (point)) 'mevedel-view-zone-id))))
     (with-current-buffer data
-      (mevedel-tool-task--handle-update
-       (list :id 1 :status "completed")))
+      (mevedel-tool-task--handle-write (list :tasks (vector (list :id 1 :status "completed")))))
     (with-current-buffer view
       (should-not (string-match-p "tasks" (buffer-string)))
       (should-not (string-match-p "last active" (buffer-string)))))
@@ -1307,7 +1351,7 @@
   :doc "TAB toggle hides and shows completed task detail"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
-      (mevedel-tool-task--handle-create
+      (mevedel-tool-task--handle-write
        (list :tasks (vector (list :subject "active body"
                                   :status "in_progress")
                             (list :subject "done body"
@@ -1335,7 +1379,7 @@
   :doc "task fragment keyboard bindings toggle but mouse clicks only place point"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
-      (mevedel-tool-task--handle-create
+      (mevedel-tool-task--handle-write
        (list :tasks (vector (list :subject "active body")
                             (list :subject "done body" :status "completed")))))
     (save-window-excursion
@@ -1368,7 +1412,7 @@
   :doc "shared fragment activation toggles completed task detail"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
-      (mevedel-tool-task--handle-create
+      (mevedel-tool-task--handle-write
        (list :tasks (vector (list :subject "active body"
                                   :status "in_progress")
                             (list :subject "done body"
@@ -1391,39 +1435,36 @@
 ;;
 ;;; Task notes
 
-(mevedel-deftest mevedel-tool-task--handle-note
-  (:doc "`mevedel-tool-task--handle-note' updates owner-scoped status notes")
+(mevedel-deftest mevedel-tool-task--handle-write/note
+  (:doc "`mevedel-tool-task--handle-write' notes update owner-scoped status")
   ,test
   (test)
   :doc "sets and clears the main status note"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "main active"))))
     (let ((result (plist-get
-                   (mevedel-tool-task--handle-note
-                    (list :note "Finishing task status polish"))
+                   (mevedel-tool-task--handle-write (list :note "Finishing task status polish"))
                    :result)))
       (should (string-match-p "Status note for Main" result))
       (should (equal "Finishing task status polish"
                      (mevedel-tool-task--status-note session nil))))
-    (mevedel-tool-task--handle-note (list :note ""))
+    (mevedel-tool-task--handle-write (list :note ""))
     (should (null (mevedel-tool-task--status-note session nil))))
 
   :doc "defaults agent notes to the current agent owner"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "main active"))))
     (test-mevedel-tool-task--register-agent session "/root/explorer")
     (let ((inv (mevedel-agent-invocation--create
                 :path "/root/explorer"
                 :agent-id "explorer--0123456789abcdef0123456789abcdef")))
       (let ((mevedel--agent-invocation inv))
-        (mevedel-tool-task--handle-create
+        (mevedel-tool-task--handle-write
          (list :tasks (vector (list :subject "agent active"))))
-        (mevedel-tool-task--handle-note
-         (list :note "Checking the agent-owned path" :owner nil))))
-    (mevedel-tool-task--handle-note
-     (list :note "Checking the main path"))
+        (mevedel-tool-task--handle-write (list :note "Checking the agent-owned path" :noteOwner nil))))
+    (mevedel-tool-task--handle-write (list :note "Checking the main path"))
     (let ((text (substring-no-properties
                  (mevedel-tool-task--format-groups session))))
       (should (string-prefix-p "Checking the main path\n" text))
@@ -1433,11 +1474,10 @@
 
   :doc "can target another owner explicitly"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "worker active"
                                 :owner "worker-2"))))
-    (mevedel-tool-task--handle-note
-     (list :owner "worker-2"
+    (mevedel-tool-task--handle-write (list :noteOwner "worker-2"
            :note "Waiting on the dependency result"))
     (should (equal "Waiting on the dependency result"
                    (mevedel-tool-task--status-note session "worker-2"))))
@@ -1445,16 +1485,17 @@
   :doc "does not store notes for owners without open tasks"
   (test-mevedel-tool-task--with-session session
     (let ((result (plist-get
-                   (mevedel-tool-task--handle-note
-                    (list :note "No open task"))
+                   (mevedel-tool-task--handle-write (list :note "No open task"))
                    :result)))
       (should (string-match-p "not shown" result))
       (should (null (mevedel-session-task-status-notes session)))))
 
-  :doc "requires a note parameter"
+  :doc "requires tasks or a note"
   (test-mevedel-tool-task--with-session session
     (should-error
-     (mevedel-tool-task--handle-note nil))))
+     (mevedel-tool-task--handle-write nil))
+    (should-error
+     (mevedel-tool-task--handle-write (list :tasks [])))))
 
 
 ;;
@@ -1472,7 +1513,7 @@
 
   :doc "returns all tasks when no filter is given"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "one" :status "completed")
                           (list :subject "two" :status "pending"))))
     (let ((result (plist-get (mevedel-tool-task--handle-list nil) :result)))
@@ -1481,7 +1522,7 @@
 
   :doc "treats a blank or placeholder status as no filter at all"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "done1" :status "completed")
                           (list :subject "pending1" :status "pending"))))
     ;; An empty string used to reach `--parse-status', which reads it as
@@ -1498,7 +1539,7 @@
 
   :doc "filters by status"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "done1" :status "completed")
                           (list :subject "pending1" :status "pending")
                           (list :subject "done2" :status "completed"))))
@@ -1510,18 +1551,18 @@
       (should (string-match-p "done2" result))
       (should-not (string-match-p "pending1" result)))))
 
-(mevedel-deftest mevedel-tool-task--handle-get
-  (:doc "`mevedel-tool-task--handle-get' returns task details")
+(mevedel-deftest mevedel-tool-task--handle-list/id
+  (:doc "`mevedel-tool-task--handle-list' with an id returns task details")
   ,test
   (test)
   :doc "returns subject, owner and description for a known id"
   (test-mevedel-tool-task--with-session session
-    (mevedel-tool-task--handle-create
+    (mevedel-tool-task--handle-write
      (list :tasks (vector (list :subject "sample"
                                 :description "details here"
                                 :owner "agent-x"))))
     (let ((result (plist-get
-                   (mevedel-tool-task--handle-get (list :id 1))
+                   (mevedel-tool-task--handle-list (list :id 1))
                    :result)))
       (should (string-match-p "sample" result))
       (should (string-match-p "details here" result))
@@ -1529,11 +1570,11 @@
 
   :doc "errors on unknown id"
   (test-mevedel-tool-task--with-session session
-    (should-error (mevedel-tool-task--handle-get (list :id 1))))
+    (should-error (mevedel-tool-task--handle-list (list :id 1))))
 
   :doc "requires an integer id"
   (test-mevedel-tool-task--with-session session
-    (should-error (mevedel-tool-task--handle-get nil))))
+    (should-error (mevedel-tool-task--handle-list (list :id "one")))))
 
 
 (provide 'test-mevedel-tool-task)

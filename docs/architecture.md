@@ -593,19 +593,21 @@ the renderer validates before dispatch.
 For retained conversations, named observations are delivered separately through
 `mevedel-context-delivery.el`. The table describes component selection across
 both channels: roles/policies remain stable system instructions, while workspace
-configuration, environment, memory indexes, skills, resource availability and
-Goal state become retained updates. Stateless profiles keep current snapshots.
+configuration, environment, memory indexes, the specialist tool listing, skills,
+resource availability and Goal state become retained updates. Stateless profiles
+keep current snapshots.
 See [retained instruction context](#retained-instruction-context).
 
 The built-in selection is deliberate:
 
 | Consumer | Role/tone/context |
 | --- | --- |
-| Main | Base role, task policy, main tone, memory use/save policy, tool orchestration, workspace config, memory data, environment, skills, Goal |
-| Worker | Worker role, task policy, report tone, memory use/save policy, tool orchestration, workspace config, memory data, environment, skills |
-| Explorer | Explorer role, task policy, report tone, tool orchestration, workspace config, environment, skills |
-| Verifier | Verifier role, task policy, report tone, tool orchestration, workspace config, environment |
-| Reviewer | Reviewer role, task policy, tool orchestration, workspace config, environment |
+| Main | Base role, task policy, main tone, memory use/save policy, tool orchestration, workspace config, memory data, environment, tool listing, skills, Goal |
+| Worker | Worker role, task policy, report tone, memory use/save policy, tool orchestration, workspace config, memory data, environment, tool listing, skills |
+| Explorer | Explorer role, task policy, report tone, tool orchestration, workspace config, environment, tool listing, skills |
+| Verifier | Verifier role, task policy, report tone, tool orchestration, workspace config, environment, tool listing |
+| Reviewer | Reviewer role, task policy, tool orchestration, workspace config, environment, tool listing |
+| Default agent | Inherited delegator instructions and context: a named delegator's selection, or the root's without Goal and journal |
 | Approval reviewer | Isolated approval policy; intent and authority arrive as quoted evidence |
 | Context summary | Fixed continuation/handoff summary contract only |
 | Buddy / Buddy guide | Respective role, memory use policy, workspace config, memory data, environment |
@@ -763,8 +765,9 @@ execution relative to Emacs. Labels use existing target metadata or parse the
 working directory without probing. Container, VM, and WSL environments beyond
 what the TRAMP method identifies are not detected.
 
-Environment, active Goal, skills, memory, journal and resource availability are
-retained as independent current-state sections. If one selected section changes, the next
+Environment, active Goal, the specialist tool listing, skills, memory, journal and
+resource availability are retained as independent current-state sections. If one
+selected section changes, the next
 request appends that section's complete current contents. Its notice explicitly
 replaces only that section and says other previously supplied state remains
 applicable. Unchanged sections are not repeated; unchanged turns add no update.
@@ -773,7 +776,9 @@ change repeats neither their instructions nor the other fact sections.
 
 `mevedel-context-delivery.el` owns this delivery boundary. Only components selected
 by an agent's frozen definition reach that agent. Workers do not inherit the
-root Goal or the main journal map. An instruction-only recipient receives no fact
+root Goal or the main journal map. The default role, which declares no
+components of its own, freezes its delegator's selection; a root child takes the
+root's minus Goal and journal. An instruction-only recipient receives no fact
 sections. Authored inline components remain in the system prompt even when named like a built-in
 observation. Stateless Buddy requests retain their current snapshot; the permission reviewer
 receives explicit quoted evidence without ambient instruction context;
@@ -823,6 +828,12 @@ names/descriptions and returns detailed discovery entries; Skill retrieves the
 body. The context-relative total catalog budget remains a final safeguard.
 Path-scoped discovery is optional and does not promote a skill into the shared
 catalog. Stable skill policy remains available even when that catalog is empty.
+
+The specialist tool listing names each tool the conversation may call through
+ToolCall but does not have natively, as its calling shape and one-line summary
+(see [Tools](tools.md#discovery-and-stable-native-tools)). It is rendered from
+the receiving conversation's own catalog and request restrictions, so an agent
+sees its own specialists, not its root's.
 
 ### Cache boundaries
 

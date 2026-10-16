@@ -535,8 +535,18 @@ uses Emacs source, documentation and Info APIs, with Orderless symbol matching.
 Source lookup for C primitives and variables requires a configured
 `find-function-C-source-directory`; missing configuration returns a tool error
 instead of opening an interactive directory prompt.
-`variable_value` always asks for permission; `library_source` must resolve
-inside a local load-path directory.
+There are three tools. `EmacsDescribe` reads one function's, variable's or
+library's documentation, source, location, Info manual section or global value;
+an omitted `kind` is inferred as a defined function, else a variable, else a
+library for source or location, and an unknown name returns a not-defined
+message without interning it. A library's location is its first file in local
+load-path directories, preferring source, plus whether its feature is loaded.
+`EmacsFind` only searches names: functions, commands, variables, or libraries in
+local load-path directories, matching an Orderless pattern. `EmacsManual` lists
+Info manuals, a manual's nodes, or one node's contents. A `value` read always
+asks for permission; library source must resolve inside a local load-path
+directory (see
+[Permissions](permissions.md#introspection-source-reads)).
 
 WebSearch queries DuckDuckGo's HTML endpoint, independent of EWW's
 `eww-search-prefix`, with two searches active at a time. It parses
@@ -662,29 +672,40 @@ freshness, and lifecycle contracts.
 
 Tools carry `:groups`. `(:discoverable GROUP)` in a preset or agent tool list
 adds that group to its ToolSearch/ToolCall catalog. The implementation native
-list is Read, Bash, Glob, Grep, ApplyPatch, ToolSearch and ToolCall. Other roles
-use the permitted core subset. Their other capabilities, including implicit
-agent communication tools and configured wrapped tools, remain discoverable.
+list is Read, Bash, WriteStdin, Monitor, Glob, Grep, ApplyPatch, ToolSearch and
+ToolCall. Other roles use the permitted core subset; named roles with Bash also
+get native WriteStdin. Every named role gets native SendMessage, and a default
+agent gets it natively when its inherited catalog permits it, so reporting to a
+parent needs no lookup. Other capabilities, including ListAgents and configured
+wrapped tools, remain discoverable.
 User extras use `mevedel-preset-extra-tool-specs` and
 `mevedel-agent-extra-tool-specs`; an explicitly native extra remains native.
 
-ToolSearch's static description gives a compact capability index with example
-search keys for Elisp introspection, code navigation, tasks, agents, web tools,
-goals, and shared whiteboards and documents. These are suitability cues, not a live availability roster or a required
-workflow. The current role and request still determine search results. A known,
-appropriate tool can be used directly; a generic tool's ability to reproduce an
-operation does not by itself make specialist discovery unnecessary.
+Each conversation receives a retained **specialist tool listing**: every catalog
+tool its current role and request may call through ToolCall, excluding native
+tools, as a calling shape and summary such as
+`- (Imenu :file_path string) - Fast outline of ...`. Bracketed arguments are
+optional. The listing lets the model call a known specialist without searching
+first; ToolSearch supplies full contracts when argument meaning or usage rules
+matter, and recovers after a failed call. `mevedel-tools-listing-section` renders
+it from the receiving conversation's catalog, so an agent sees its own
+specialists. It is delivered like the skill catalog: only when it changes, under
+a budget of `mevedel-tools-listing-budget` (default 2%) of the model's context
+window. Tools beyond the budget are counted and left to ToolSearch.
 
-Built-in summaries describe useful outcomes in ordinary vocabulary. In
-particular, introspection summaries identify Emacs, and task summaries expose
-plan/checklist tracking, ownership, and dependencies. These summaries serve both
-search matching and broad result listings; full prompts are not search indexes.
+Every registered tool has a summary. An omitted `:summary` defaults to the first
+sentence of the tool's description, at most 160 characters. Built-in summaries
+describe useful outcomes in ordinary vocabulary; for example, introspection
+summaries identify Emacs, and task summaries expose plan/checklist tracking,
+ownership, and dependencies. Summaries serve search matching, broad results and
+the listing; full prompts are not search indexes.
 
 ToolSearch performs case-insensitive OR matching over names, summaries,
 categories and groups. One to three matches return all contracts, arguments,
-signatures and manual references. Broader queries return at most 20 names and
-summaries, total/truncation information, and a request to narrow to one or two
-exact names. An exact name selects only that name for its term. Responses deduplicate identities; repeated
+signatures and manual references. Broader queries return at most 20 calling
+shapes with summaries, total/truncation information, and a request to narrow to
+one or two exact names for full contracts. A group keyword therefore yields
+callable shapes in one search. An exact name selects only that name for its term. Responses deduplicate identities; repeated
 searches return contracts again, including after compaction.
 Queries with no matches suggest at most 20 sorted categories/groups from the
 current callable catalog. An empty catalog produces no suggestions. This
@@ -692,9 +713,9 @@ recovery guidance appears only in the failed search result.
 
 Search does not load native schemas. Each session or retained invocation keeps
 only a `tool-catalog`, not pending/loaded/injected lists or a TTL. Search results
-are ordinary later transcript content. The native ToolSearch/ToolCall
-descriptions own discovery guidance; no duplicate availability reminder is
-prepended to task history. Calls use the current owner's catalog and request
+are ordinary later transcript content. The retained listing is the only
+availability roster; no per-turn availability reminder is prepended to task
+history. Calls use the current owner's catalog and request
 restrictions; search is not authorization. Wrapped tools use `category/name`
 identities, while built-ins use their short names. Unsupported category
 separators and language-name collisions require native exposure.
@@ -1354,9 +1375,9 @@ test/run-remote-acceptance.sh
 
 `Monitor` runs a watcher whose repeated stdout lines should reach the root model
 as events. For a single eventual result, use Bash (for example, an `until` loop)
-and let its completion wake the model instead. Monitor is discoverable in the
-root presets, hidden from retained agents, and rejected by the handler for any
-owner other than `/root`.
+and let its completion wake the model instead. Monitor is native in the
+implementation preset, hidden from retained agents, and rejected by the handler
+for any owner other than `/root`.
 
 The required arguments are `command` and a non-empty `description`, shown on
 every event. `timeout_ms` defaults to 300000 (five minutes) and must be an integer

@@ -198,9 +198,10 @@ Read-only role and report contracts live in the frozen agent prompt, restored
 for every request even when the transcript is compacted. They are not repeated
 as reminders. Explicitly configured role reminders retain their own lifetimes.
 
-Specialist tools are discoverable through ToolSearch by capability or name.
-Their descriptions and search results own suitability and call guidance.
-There is no generic ToolSearch/ToolCall availability reminder. The native descriptions deliver that stable guidance.
+Specialist tools appear in the retained tool listing with their calling shapes,
+and ToolSearch supplies full contracts by capability or name. The listing is a
+context observation that updates only when it changes, not a per-turn reminder.
+There is no generic ToolSearch/ToolCall availability reminder.
 Ordinary Read/Grep calls and open editor buffers do not trigger navigation
 workflow advice; a registered tool alone does not establish that its backend
 works for a particular file.

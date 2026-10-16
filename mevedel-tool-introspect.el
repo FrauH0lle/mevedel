@@ -7,12 +7,16 @@
 
 ;;; Commentary:
 
-;; Native Emacs introspection tools with mevedel permissions, result limits,
-;; persistence and rendering.  Available through the discoverable elisp group.
+;; Three native Emacs introspection tools with mevedel permissions, result
+;; limits, persistence and rendering: EmacsDescribe reads one symbol's or
+;; library's documentation, source, manual section or value; EmacsFind matches
+;; names, features and load-path entries; EmacsManual reads Info manuals.
+;; Available through the discoverable elisp group.
 
 ;;; Code:
 
 (eval-when-compile
+  (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
 (require 'info)
@@ -40,16 +44,9 @@
 ;;
 ;;; Permission helpers
 
-(defun mevedel-tool-introspect--variable-value-check (_tool _input)
-  "Always-ask permission for `variable_value'.
-
-Variables can hold auth tokens and other sensitive state, so every
-call prompts the user regardless of permission mode."
-  'ask)
-
 (defun mevedel-tool-introspect--library-source-check (_tool input)
   "Allow INPUT only when it names source inside a local `load-path'."
-  (let ((name (plist-get input :library))
+  (let ((name (plist-get input :symbol))
         source
         unsafe-predecessor-p)
     (if (and (stringp name)
@@ -85,6 +82,39 @@ call prompts the user regardless of permission mode."
         'allow
       '(deny . "Library must resolve inside a local load-path entry"))))
 
+(defun mevedel-tool-introspect--describe-kind (args)
+  "Return the kind EmacsDescribe ARGS address: function, variable or library.
+An omitted kind is a defined function, else a bound variable, else a library
+for a source read.  Return nil when nothing matches."
+  (let ((kind (plist-get args :kind))
+        (symbol (mevedel-tool-introspect--symbol args)))
+    (cond
+     ((member kind '("function" "variable" "library")) (intern kind))
+     ((and symbol (fboundp symbol)) 'function)
+     ((and symbol (boundp symbol)) 'variable)
+     ((member (plist-get args :aspect) '("source" "location")) 'library))))
+
+(defun mevedel-tool-introspect--describe-check (_tool input)
+  "Decide EmacsDescribe INPUT's own permission, or nil for ordinary policy.
+A value read always asks: variables can hold auth tokens and other private
+state.  A library source read must resolve inside a local `load-path', so it
+never reads a remote or escaping file.  A library location only searches
+local directories and reads no file, so ordinary policy covers it."
+  (pcase (plist-get input :aspect)
+    ("value" 'ask)
+    ("source"
+     (when (eq 'library (mevedel-tool-introspect--describe-kind input))
+       (mevedel-tool-introspect--library-source-check nil input)))))
+
+(defun mevedel-tool-introspect--present (value)
+  "Return VALUE when it is a non-empty string, else nil."
+  (and (stringp value) (not (string-empty-p value)) value))
+
+(defun mevedel-tool-introspect--symbol (args)
+  "Return the existing symbol ARGS name, never interning a new one."
+  (when-let* ((name (mevedel-tool-introspect--present (plist-get args :symbol))))
+    (intern-soft name)))
+
 
 ;;
 ;;; Renderers
@@ -92,24 +122,23 @@ call prompts the user regardless of permission mode."
 (defun mevedel-tool-introspect--primary-value (args)
   "Return the first meaningful primary value from introspection ARGS."
   (catch 'found
-    (dolist (key '(:symbol :function :variable :library :feature
-			   :manual :manual_name :node
-			   :function_prefix :command_prefix :variable_prefix))
+    (dolist (key '(:symbol :node :manual :pattern :kind))
       (let ((value (plist-get args key)))
         (when (and (stringp value) (not (string-empty-p value)))
           (throw 'found value))))
     nil))
 
-(defun mevedel-tool-introspect--body-kind (name)
-  "Return a display kind symbol for introspection tool NAME."
-  (cond
-   ((member name '("function_source" "variable_source" "library_source"))
-    'source)
-   ((member name '("function_documentation" "variable_documentation"
-                   "manual_node_contents" "symbol_manual_section"))
-    'documentation)
-   ((string-suffix-p "_completions" name) 'completions)
-   (t 'result)))
+(defun mevedel-tool-introspect--body-kind (name args)
+  "Return a display kind symbol for introspection tool NAME called with ARGS."
+  (pcase name
+    ("EmacsDescribe"
+     (pcase (plist-get args :aspect)
+       ("source" 'source)
+       ((or "documentation" "manual") 'documentation)
+       (_ 'result)))
+    ("EmacsManual" (if (plist-get args :node) 'documentation 'result))
+    ("EmacsFind" 'completions)
+    (_ 'result)))
 
 (defun mevedel-tool-introspect--line-count (result)
   "Return non-empty line count for RESULT."
@@ -122,7 +151,7 @@ call prompts the user regardless of permission mode."
   (list :kind 'introspection
         :tool name
         :target (mevedel-tool-introspect--primary-value args)
-        :body-kind (mevedel-tool-introspect--body-kind name)
+        :body-kind (mevedel-tool-introspect--body-kind name args)
         :lines (mevedel-tool-introspect--line-count result)
         :chars (length result)))
 
@@ -132,10 +161,10 @@ call prompts the user regardless of permission mode."
     (let* ((target (or (plist-get render-data :target)
                        (mevedel-tool-introspect--primary-value args)))
            (kind (or (plist-get render-data :body-kind)
-                     (mevedel-tool-introspect--body-kind name)))
+                     (mevedel-tool-introspect--body-kind name args)))
            (lines (or (plist-get render-data :lines)
                       (mevedel-tool-introspect--line-count result)))
-           (shown-name (replace-regexp-in-string "_" " " (or name "introspect")))
+           (shown-name (or name "introspect"))
            (status (and (string-prefix-p "Error:" result) 'error))
            (mode (and (memq kind '(source))
                       'emacs-lisp-mode)))
@@ -217,301 +246,185 @@ Missing C source configuration signals an error instead of prompting."
                      (t (error "Unexpected file mode"))))
              (point))))))))
 
+(defun mevedel-tool-introspect--describe (args)
+  "Return EmacsDescribe's result for ARGS."
+  (let* ((name (plist-get args :symbol))
+         (aspect (plist-get args :aspect))
+         (kind (mevedel-tool-introspect--describe-kind args))
+         (symbol (mevedel-tool-introspect--symbol args)))
+    (unless (mevedel-tool-introspect--present name)
+      (error "EmacsDescribe needs a symbol"))
+    (list
+     :result
+     (cond
+      ((equal aspect "manual")
+       (or (mevedel-tool-introspect--symbol-in-manual name)
+           (format "No Info manual section documents `%s'." name)))
+      ((null kind)
+       (format "No function or variable named `%s' is defined in this Emacs." name))
+      ((and (eq kind 'function) (not (and symbol (fboundp symbol))))
+       (format "No function named `%s' is defined in this Emacs." name))
+      ((and (eq kind 'variable) (not symbol))
+       (format "No variable named `%s' is known to this Emacs." name))
+      ((equal aspect "documentation")
+       (pcase kind
+         ('function (or (documentation symbol)
+                        (format "Function `%s' has no documentation." name)))
+         ('variable (or (custom-variable-documentation symbol)
+                        (format "Variable `%s' has no documentation." name)))
+         (_ (error "Libraries have no documentation aspect; read their source"))))
+      ((equal aspect "source")
+       (pcase kind
+         ('library (mevedel-tool-introspect--library-source name))
+         (_ (or (mevedel-tool-introspect--source
+                 name (and (eq kind 'variable) 'defvar))
+                (format "No source located for %s `%s'." kind name)))))
+      ((equal aspect "location")
+       (mevedel-tool-introspect--location name symbol kind))
+      ((equal aspect "value")
+       (cond
+        ((not (eq kind 'variable))
+         (error "Only variables have a value; `%s' is a %s" name kind))
+        ((boundp symbol) (default-value symbol))
+        (t (format "Variable `%s' has no global value." name))))
+      (t (error "Unknown EmacsDescribe aspect: %s" aspect))))))
+
+(defun mevedel-tool-introspect--location (name symbol kind)
+  "Return where NAME, interned as SYMBOL, of KIND is defined or found.
+A library location also says whether its feature is loaded."
+  (pcase kind
+    ('library
+     (let ((feature (intern-soft name)))
+       (if-let* ((file (mevedel-tool-introspect--local-library-file name)))
+           (format "Library `%s' is at %s; its feature is %s." name file
+                   (if (and feature (featurep feature)) "loaded" "not loaded"))
+         (format "Library `%s' is not found in local load-path directories%s." name
+                 (if (and feature (featurep feature)) ", but its feature is loaded" "")))))
+    (_
+     (or (symbol-file symbol (if (eq kind 'variable) 'defvar 'defun))
+         (format "No defining file is recorded for %s `%s'; it may be a C primitive or defined interactively."
+                 kind name)))))
+
+(defun mevedel-tool-introspect--local-load-path ()
+  "Return existing local `load-path' directories.
+Remote entries are skipped so a lookup never opens a connection."
+  (seq-filter (lambda (directory)
+                (and (stringp directory)
+                     (not (file-remote-p directory))
+                     (file-directory-p directory)))
+              load-path))
+
+(defun mevedel-tool-introspect--local-library-file (name)
+  "Return the first local `load-path' file for library NAME, or nil.
+Source is preferred over compiled files within one directory."
+  (when (and (not (file-name-absolute-p name))
+             (null (file-name-directory name)))
+    (cl-loop for directory in (mevedel-tool-introspect--local-load-path)
+             thereis (cl-loop for suffix in '(".el" ".el.gz" ".elc")
+                              for file = (expand-file-name (concat name suffix)
+                                                           directory)
+                              when (file-exists-p file) return file))))
+
+(defun mevedel-tool-introspect--library-names ()
+  "Return library names found in local `load-path' directories."
+  (let ((names (make-hash-table :test #'equal)))
+    (dolist (directory (mevedel-tool-introspect--local-load-path))
+      (dolist (file (directory-files directory nil "\\.elc?\\(?:\\.gz\\)?\\'"))
+        (puthash (replace-regexp-in-string "\\.elc?\\(?:\\.gz\\)?\\'" "" file)
+                 t names)))
+    (hash-table-keys names)))
+
+(defun mevedel-tool-introspect--find (args)
+  "Return EmacsFind's result for ARGS: names matching an Orderless pattern."
+  (let ((kind (plist-get args :kind))
+        (pattern (mevedel-tool-introspect--present (plist-get args :pattern))))
+    (unless pattern
+      (error "EmacsFind needs a pattern"))
+    (list
+     :result
+     (string-join
+      (pcase kind
+        ("function" (orderless-filter pattern obarray #'functionp))
+        ("command" (orderless-filter pattern obarray #'commandp))
+        ("variable" (orderless-filter pattern obarray #'boundp))
+        ("library" (sort (orderless-filter
+                          pattern (mevedel-tool-introspect--library-names))
+                         #'string<))
+        (_ (error "Unknown EmacsFind kind: %s" kind)))
+      "\n"))))
+
+(defun mevedel-tool-introspect--manual (args)
+  "Return EmacsManual's result for ARGS."
+  (let ((manual (mevedel-tool-introspect--present (plist-get args :manual)))
+        (node (mevedel-tool-introspect--present (plist-get args :node))))
+    (list
+     :result
+     (cond
+      (node
+       (unless manual (error "EmacsManual needs the manual containing node %s" node))
+       (mevedel-tool-introspect--manual-node-contents manual node))
+      (manual
+       (json-serialize (vconcat (mapcar #'car (Info-build-node-completions manual)))))
+      (t
+       (json-serialize
+        (vconcat (info--filter-manual-names (info--manual-names nil)))))))))
+
 
 ;;
 ;;; Registration
 
 ;;;###autoload
 (defun mevedel-tool-introspect--register ()
-  "Register the 16 native Emacs introspection tools."
+  "Register the three native Emacs introspection tools."
   (mevedel-define-tool
-   :name "symbol_exists"
-   :description "Check if a symbol is interned in obarray."
-   :summary "Check whether a symbol is interned in the running Emacs."
-   :prompt-file "prompts/tools/symbol_exists.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((name (plist-get args :symbol))) (intern-soft name))))
+   :name "EmacsDescribe"
+   :description "Read a symbol's or library's documentation, source, location, Info manual section, or global value from the running Emacs."
+   :summary "Read an Emacs function, variable or library's documentation, source, location, manual section or current value."
+   :prompt-file "prompts/tools/emacsdescribe.md"
+   :handler #'mevedel-tool-introspect--describe
    :args ((symbol string :required
-		  "A symbol that will be in `obarray' if they actually exist"))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size nil
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "load_paths"
-   :description "Return user load-path entries."
-   :summary "List the running Emacs's library load-path entries."
-   :prompt-file "prompts/tools/load_paths.md"
-   :handler (lambda (_args) (list :result (string-join load-path "\n")))
-   :args nil
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "features"
-   :description "Check whether a feature is loaded or available."
-   :summary "Check whether an Emacs feature is loaded or available."
-   :prompt-file "prompts/tools/features.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((feature (plist-get args :feature)))
-		      (if-let* ((feature-symbol (intern-soft feature)))
-			  (when (featurep feature-symbol) feature)
-			(find-library-name feature)))))
-   :args ((feature string :required "FEATURE to look for."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "manual_names"
-   :description "List available info manuals."
-   :summary "List Info manuals available to Emacs."
-   :prompt-file "prompts/tools/manual_names.md"
-   :handler (lambda (_args)
-	      (list :result
-		    (json-serialize
-		     (vconcat (info--filter-manual-names (info--manual-names nil))))))
-   :args nil
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "manual_nodes"
-   :description "List section nodes of an info manual."
-   :summary "List section nodes of an Info manual available to Emacs."
-   :prompt-file "prompts/tools/manual_nodes.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((name (plist-get args :manual)))
-		      (json-serialize
-		       (vconcat (mapcar #'car (Info-build-node-completions name)))))))
-   :args ((manual string :required
-		  "The name of the manual.\nExamples include \"cl\", \"elisp\", or \"transient\"."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "manual_node_contents"
-   :description "Read the contents of an info manual node."
-   :summary "Read an Info manual node through Emacs."
-   :prompt-file "prompts/tools/manual_node_contents.md"
-   :handler (lambda (args)
-	      (list :result
-		    (funcall #'mevedel-tool-introspect--manual-node-contents
-			     (plist-get args :manual_name) (plist-get args :node))))
-   :args ((manual_name string :required
-		       "The name of MANUAL.\nExamples manuals include \"cl\", \"elisp\", or \"transient\".")
-	  (node string :required
-		"The name of the NODE in a MANUAL.\nExample nodes from the elisp manual include \"Records\" or \"Sequences\nArrays Vectors\"."))
-   :category "mevedel-introspection"
+                  "Exact function, variable or library name, such as \"mapcar\", \"fill-column\" or \"subr-x\".")
+          (aspect string :required "What to read."
+                  :enum ["documentation" "source" "location" "manual" "value"])
+          (kind string :optional
+                "What SYMBOL names. Omit to infer: a defined function, else a variable, else a library for source or location."
+                :enum ["function" "variable" "library"]))
    :groups (elisp)
    :read-only-p t
    :max-result-size 50000
+   :check-permission #'mevedel-tool-introspect--describe-check
    :render-transform #'mevedel-tool-introspect--render-transform
    :renderer '((success . mevedel-tool-introspect--render)))
 
   (mevedel-define-tool
-   :name "symbol_manual_section"
-   :description "Find which manual section documents a symbol."
-   :summary "Find the Info manual section documenting an Emacs Lisp symbol."
-   :prompt-file "prompts/tools/symbol_manual_section.md"
-   :handler (lambda (args)
-	      (list :result
-		    (funcall #'mevedel-tool-introspect--symbol-in-manual
-			     (plist-get args :symbol))))
-   :args ((symbol string :required
-		  "Name of a SYMBOL, such as \"find-file-noselect\"."))
-   :category "mevedel-introspection"
+   :name "EmacsFind"
+   :description "Find Emacs function, command, variable or library names matching an Orderless pattern."
+   :summary "Find Emacs function, command, variable or library names in the running Emacs."
+   :prompt-file "prompts/tools/emacsfind.md"
+   :handler #'mevedel-tool-introspect--find
+   :args ((kind string :required "What to find."
+                :enum ["function" "command" "variable" "library"])
+          (pattern string :required
+                   "Orderless pattern; space-separated components match in any order."))
+   :groups (elisp)
+   :read-only-p t
+   :max-result-size 20000
+   :render-transform #'mevedel-tool-introspect--render-transform
+   :renderer '((success . mevedel-tool-introspect--render)))
+
+  (mevedel-define-tool
+   :name "EmacsManual"
+   :description "List Info manuals, list a manual's nodes, or read one node through Emacs."
+   :summary "Read Emacs Info manuals: list manuals, list a manual's nodes, or read a node."
+   :prompt-file "prompts/tools/emacsmanual.md"
+   :handler #'mevedel-tool-introspect--manual
+   :args ((manual string :optional
+                  "Info manual such as \"elisp\" or \"cl\". Omit to list manuals.")
+          (node string :optional
+                "Node of MANUAL such as \"Sequences Arrays Vectors\". Omit to list MANUAL's nodes."))
    :groups (elisp)
    :read-only-p t
    :max-result-size 50000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "function_completions"
-   :description "List function names matching an Orderless pattern."
-   :summary "Find Emacs function names matching an Orderless pattern."
-   :prompt-file "prompts/tools/function_completions.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((prefix (plist-get args :function_prefix)))
-		      (string-join (orderless-filter prefix obarray #'functionp)
-				   "\n"))))
-   :args ((function_prefix string :required
-			   "FUNCTION_PREFIX of functions you are searching for."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "command_completions"
-   :description "List interactive command names matching an Orderless pattern."
-   :summary "Find interactive Emacs commands matching an Orderless pattern."
-   :prompt-file "prompts/tools/command_completions.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((prefix (plist-get args :command_prefix)))
-		      (string-join (orderless-filter prefix obarray #'commandp)
-				   "\n"))))
-   :args ((command_prefix string :required
-			  "COMMAND_PREFIX of commands you are searching for."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "variable_completions"
-   :description "List variable names matching an Orderless pattern."
-   :summary "Find bound Emacs variable names matching an Orderless pattern."
-   :prompt-file "prompts/tools/variable_completions.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((prefix (plist-get args :variable_prefix)))
-		      (string-join (orderless-filter prefix obarray #'boundp) "\n"))))
-   :args ((variable_prefix string :required
-			   "VARIABLE_PREFIX of variables you are searching for."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "function_source"
-   :description "Read the source code for a function or macro."
-   :summary "Locate an Emacs function or macro's source definition."
-   :prompt-file "prompts/tools/function_source.md"
-   :handler (lambda (args)
-	      (list :result
-		    (mevedel-tool-introspect--source
-                     (plist-get args :function))))
-   :args ((function string :required
-		    "Name of a FUNCTION, such as \"find-file-noselect\"."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 30000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "variable_source"
-   :description "Read the source code for a variable."
-   :summary "Read an Emacs variable's source declaration, not its current value."
-   :prompt-file "prompts/tools/variable_source.md"
-   :handler (lambda (args)
-	      (list :result
-		    (mevedel-tool-introspect--source
-                     (plist-get args :variable) 'defvar)))
-   :args ((variable string :required
-		    "Name of a VARIABLE, such as \"last-kbd-macro\"."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 30000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "function_documentation"
-   :description "Read the docstring for a function or macro."
-   :summary "Read a function or macro docstring from the running Emacs."
-   :prompt-file "prompts/tools/function_documentation.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((symbol (plist-get args :function)))
-		      (when-let* ((symbol (intern-soft symbol)))
-			(documentation symbol)))))
-   :args ((function string :required "Name of a FUNCTION, such as \"mapcar\"."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "variable_documentation"
-   :description "Read the docstring for a variable."
-   :summary "Read a variable docstring from the running Emacs."
-   :prompt-file "prompts/tools/variable_documentation.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((symbol (plist-get args :variable)))
-		      (when-let* ((symbol (intern-soft symbol)))
-			(custom-variable-documentation symbol)))))
-   :args ((variable string :required
-		    "Name of a VARIABLE, such as \"cursor-type\"."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "library_source"
-   :description "Read the source code for a library."
-   :summary "Read library source resolved through Emacs load-path."
-   :prompt-file "prompts/tools/library_source.md"
-   :handler (lambda (args)
-	      (list :result
-		    (funcall #'mevedel-tool-introspect--library-source
-			     (plist-get args :library))))
-   :args ((library string :required "LIBRARY to look for."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 50000
-   :check-permission #'mevedel-tool-introspect--library-source-check
-   :render-transform #'mevedel-tool-introspect--render-transform
-   :renderer '((success . mevedel-tool-introspect--render)))
-
-  (mevedel-define-tool
-   :name "variable_value"
-   :description "Return a variable's global value (always asks)."
-   :summary "Inspect an Emacs variable's current global runtime value (always asks)."
-   :prompt-file "prompts/tools/variable_value.md"
-   :handler (lambda (args)
-	      (list :result
-		    (let ((symbol (plist-get args :variable)))
-		      (when-let* ((symbol (intern-soft symbol)))
-			(default-value symbol)))))
-   :args ((variable string :required
-		    "Name of a VARIABLE, such as \"last-kbd-macro\"."))
-   :category "mevedel-introspection"
-   :groups (elisp)
-   :read-only-p t
-   :max-result-size 20000
-   :check-permission #'mevedel-tool-introspect--variable-value-check
    :render-transform #'mevedel-tool-introspect--render-transform
    :renderer '((success . mevedel-tool-introspect--render))))
 

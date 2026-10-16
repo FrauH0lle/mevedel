@@ -257,11 +257,11 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-ask.el         Ask handler, result renderer, registration
   mevedel-tool-ask-ui.el      Ask form state, controllers, and presentation
   mevedel-tool-ui.el          Agent/InterruptAgent/ToolSearch/SendMessage assembly
-  mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
+  mevedel-tool-task.el        TaskWrite/TaskList + overlay
   mevedel-tool-goal.el        CreateGoal/GetGoal/UpdateGoal tools and root-request authority checks
   mevedel-tool-editing.el     SharedCreate/Edit/SaveImage tools, shared:// views
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
-  mevedel-tool-introspect.el  native Emacs introspection tools
+  mevedel-tool-introspect.el  EmacsDescribe/EmacsFind/EmacsManual introspection
   mevedel-buddy.el            edit recording, diff assembly, review requests
   mevedel-buddy-note.el       ephemeral note overlays and their model tools
   mevedel-tools.el            complete tool registration + stable discovery catalog

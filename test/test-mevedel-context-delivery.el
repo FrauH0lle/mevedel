@@ -167,14 +167,14 @@
                  (system (mevedel-system-build-prompt 'main :retained t
                                                       :session session)))
             (mevedel-context-delivery-stage fsm)
-            (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
+            (should (= 9 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
             ;; Retrying undelivered staging neither acknowledges nor duplicates it.
             (mevedel-context-delivery-stage fsm)
-            (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
+            (should (= 9 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
             (mevedel-reminders--handle-inject fsm)
             (let ((body (plist-get (car (last (append (plist-get data :messages) nil)))
                                    :content)))
-              (dolist (text '("## Environment\n" "## Active Goal\n" "## Skills\n"
+              (dolist (text '("## Environment\n" "## Active Goal\n" "## Tools\n" "## Skills\n"
                               "## Memory\n" "## Journal\n" "## Resources\n" "<env>"
                               "Unreviewed digests: 1" "journal lesson"
                               "Inspect fixture state." "### Available indexes"))
@@ -299,19 +299,20 @@
             (let ((text (buffer-string)))
               (with-temp-buffer
                 (insert text)
-                (should (= 8 (length (mevedel-context-delivery--previous
+                (should (= 9 (length (mevedel-context-delivery--previous
                                       '(context-workspace-config context-goal-policy context-environment
-                                        context-active-goal context-skills context-memory context-journal context-resources)))))))
+                                        context-active-goal context-tools context-skills context-memory
+                                        context-journal context-resources)))))))
             ;; Filtering payload history rearms delivery even if source is intact.
             (setf (plist-get data :messages) [(:role "user" :content "Selected new task")])
             (mevedel-context-delivery-stage fsm)
-            (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
+            (should (= 9 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
             (mevedel-reminders--handle-inject fsm)
             ;; Removing the retained observations (compaction or rewind) rearms delivery.
             (erase-buffer)
             (set-marker (plist-get (gptel-fsm-info fsm) :position) (point-max))
             (mevedel-context-delivery-stage fsm)
-            (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))))
+            (should (= 9 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))))
       (delete-directory root t)))
 
   :doc "expiry replaces a delivered journal observation even with a warm journal cache"
@@ -389,6 +390,49 @@
               (dolist (excluded '("## Active Goal\n" "ROOT-ONLY-OBJECTIVE"
                                   "## Skills\n" "## Memory\n" "## Resources\n"))
                 (should-not (string-search excluded body))))))
+      (delete-directory root t)))
+
+  :doc "a default agent inherits root context, minus Goal and journal, with its own tools"
+  (let* ((root (make-temp-file "mevedel-agent-tools-" t))
+         (workspace (mevedel-workspace--create :root (file-name-as-directory root)
+                                               :id root :type 'project :name "tools"))
+         (session (mevedel-session-create "tools" workspace)))
+    (unwind-protect
+        (with-temp-buffer
+          (mevedel-tools-register)
+          (write-region "PROJECT-RULE-7731" nil (file-name-concat root "AGENTS.md") nil 'silent)
+          (setf (mevedel-session-goal session)
+                (mevedel-goal--create :id "root-goal" :objective "ROOT-ONLY-OBJECTIVE"
+                                     :status 'active :tokens-used 100 :turns-run 1))
+          (setf (mevedel-session-tool-catalog session)
+                '((("mevedel" "TaskWrite") . "Track a plan")))
+          (setq-local mevedel--session session)
+          ;; Freezing in the root's buffer resolves the delegator, as dispatch does.
+          (let ((agent (mevedel-agent-freeze (mevedel-agent-default))))
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :agent agent
+                         :tool-catalog '((("mevedel" "Imenu") . "Outline")))))
+          (setq-local gptel-tools
+                      (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
+          (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+            (mevedel-context-delivery-stage fsm)
+            (let* ((entries (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
+                   (types (mapcar (lambda (entry) (plist-get entry :type)) entries))
+                   (body (mapconcat (lambda (entry) (plist-get entry :body)) entries "\n"))
+                   (tools (plist-get (cl-find 'context-tools entries
+                                              :key (lambda (entry) (plist-get entry :type)))
+                                     :body)))
+              (dolist (type '(context-workspace-config context-environment
+                              context-tools context-resources))
+                (should (memq type types)))
+              (dolist (type '(context-active-goal context-goal-policy context-journal))
+                (should-not (memq type types)))
+              (should (string-search "PROJECT-RULE-7731" body))
+              (should (string-search "<env>" body))
+              (should-not (string-search "ROOT-ONLY-OBJECTIVE" body))
+              (should (string-search "- (Imenu :file_path string)" tools))
+              (should-not (string-search "TaskWrite" tools)))))
       (delete-directory root t)))
 
   :doc "unacknowledged root path instructions reach the root, never a directive"

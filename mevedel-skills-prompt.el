@@ -216,7 +216,7 @@ rendering."
          :omitted-count (plist-get listing-result :omitted)
          :roster-chars (length listing)))
       (concat "## Skills\n"
-              "A skill is a reusable prompt recipe. Discover Skill and ListSkills through ToolSearch; invoke them through ToolCall. Skills without path restrictions are listed below by canonical invocation name; path-scoped skills are discoverable through matching-path notices and ListSkills.\n\n"
+              "A skill is a reusable prompt recipe. Call Skill and ListSkills through ToolCall. Skills without path restrictions are listed below by canonical invocation name; path-scoped skills are discoverable through matching-path notices and ListSkills.\n\n"
               listing
               "\n\nSearch ListSkills by purpose for full descriptions; invoke Skill to load its instructions."))))
 

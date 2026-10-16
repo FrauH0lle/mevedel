@@ -74,9 +74,9 @@ created as a side effect of registration and handles serialization."
   name              ; string: "Read", "ApplyPatch", "Bash"
   handler           ; function: the actual tool implementation
   description       ; string: short LLM-facing description (for schema, "ToolSearch")
-  summary           ; string or nil: ultra-short one-liner that ToolSearch
-                    ;   matches and lists.  When nil, search finds the
-                    ;   tool only by name, category or group.
+  summary           ; string: ultra-short one-liner that ToolSearch matches
+                    ;   and the specialist tool listing shows.  Defaults
+                    ;   to the description's first sentence.
   prompt            ; string or function: detailed instructions
   prompt-source     ; plist describing the prompt's registration provenance
   args              ; arg spec list in mevedel format
@@ -132,6 +132,8 @@ created as a side effect of registration and handles serialization."
     ("Ask" mevedel-tool-ask mevedel-tool-ask-register)
     ("Bash" "Eval" "ListExecutions" "Monitor" "StopExecution" "WriteStdin"
      mevedel-tool-exec-registration mevedel-tool-exec--register)
+    ("EmacsDescribe" "EmacsFind" "EmacsManual"
+     mevedel-tool-introspect mevedel-tool-introspect--register)
     ("Glob" "Grep" "Read"
      mevedel-tool-fs mevedel-tool-fs--register)
     ("ApplyPatch" mevedel-tool-patch-registration mevedel-tool-patch-register)
@@ -142,7 +144,7 @@ created as a side effect of registration and handles serialization."
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
      mevedel-tool-code mevedel-tool-code--register)
     ("ListSkills" "Skill" mevedel-tool-skills mevedel-tool-skills--register)
-    ("TaskCreate" "TaskGet" "TaskList" "TaskNote" "TaskUpdate"
+    ("TaskList" "TaskWrite"
      mevedel-tool-task mevedel-tool-task--register)
     ("WebFetch" "WebSearch"
      mevedel-tool-web-registration mevedel-tool-web--register))
@@ -730,6 +732,16 @@ Signals an error for any other type."
       result))
    (t (error "Tool prompt must be a string or function, got %S" prompt))))
 
+(defun mevedel-tool--default-summary (description)
+  "Return DESCRIPTION's first sentence as a one-line tool summary, or nil."
+  (when-let* (((stringp description))
+              (line (car (split-string description "[\n\r]+" t "[ \t]+"))))
+    (truncate-string-to-width
+     (if (string-match "[.!?]\\(?: \\|\\'\\)" line)
+         (substring line 0 (1+ (match-beginning 0)))
+       line)
+     160 nil nil "...")))
+
 
 ;;
 ;;; Registration macro
@@ -746,9 +758,9 @@ Required:
   :description  STRING   Short LLM-facing description
 
   :summary      STRING   Optional ultra-short one-liner that ToolSearch
-                         matches and lists.  Without one, search finds
-                         the tool only by name, category or group; full
-                         descriptions are not searched.
+                         matches and the specialist tool listing shows.
+                         Defaults to the description's first sentence;
+                         full descriptions are not searched.
 
 Wrap form (:wrap EXPR):
 
@@ -888,7 +900,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :name ,name
               :handler ,handler
               :description ,description
-              :summary ,summary
+              :summary (or ,summary (mevedel-tool--default-summary ,description))
               :prompt resolved-prompt
               :prompt-source ',prompt-source
               :args ',args
@@ -1034,7 +1046,7 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
              :name source-name
              :handler handler
              :description description
-             :summary summary
+             :summary (or summary (mevedel-tool--default-summary description))
              :prompt resolved-prompt
              :prompt-source
              (or prompt-source

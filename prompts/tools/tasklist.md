@@ -1,19 +1,17 @@
-List tasks tracked in the current session.
+List tasks tracked in the current session, or read one task in full.
 
 ### When to use `TaskList`
 
 - Inspect progress, dependencies, or IDs needed for subsequent task operations.
-
-### When NOT to use `TaskList`
-
-- Reading a known task's full description or metadata; TaskGet supplies details.
+- Read a known task's full description and metadata by `id`.
 
 ### How to use `TaskList`
 
-- Returns task IDs, status, subject, owner, and dependency links.
+- Without `id`, returns task IDs, status, subject, owner, and dependency links.
 - `status` optionally filters `pending`, `in_progress`, or `completed` tasks.
   Omitted or empty status returns all tasks. The list records tracked work,
   not a guarantee that the user's entire objective has been captured or completed.
+- With `id`, returns that task's description, owner, dependencies, and metadata.
 
 ### Examples of good usage
 

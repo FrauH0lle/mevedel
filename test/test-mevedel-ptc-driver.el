@@ -296,19 +296,19 @@ With RAW-P, retain the full pipeline result including hidden render data."
   ,test
   (test)
 
-  :doc "TaskCreate accepts task plists in vectors and quoted lists through ToolCall"
+  :doc "TaskWrite accepts task plists in vectors and quoted lists through ToolCall"
   (progn
     (mevedel-tool-task--register)
     (with-current-buffer buffer
       (setq-local gptel-tools
-                  (test-mevedel-ptc-driver--gptel-tools "TaskCreate")))
+                  (test-mevedel-ptc-driver--gptel-tools "TaskWrite")))
     (dolist (form '("[(:subject \"First\") (:subject \"Second\" :description \"Details\" :status \"in_progress\" :owner \"Review\" :blockedBy [1] :metadata nil) (:subject \"Third\" :status \"completed\")]"
                     "'((:subject \"First\") (:subject \"Second\" :description \"Details\" :status \"in_progress\" :owner \"Review\" :blockedBy (1) :metadata nil) (:subject \"Third\" :status \"completed\"))"))
       (setf (mevedel-session-tasks session) nil)
       (should (string-prefix-p
                "Created 3 tasks:"
                (test-mevedel-ptc-driver--run
-                buffer (format "(TaskCreate :tasks %s)" form))))
+                buffer (format "(TaskWrite :tasks %s)" form))))
       (let ((tasks (mevedel-session-tasks session)))
         (should (equal '(1 2 3) (mapcar #'mevedel-task-id tasks)))
         (should (equal '("First" "Second" "Third")
@@ -320,7 +320,7 @@ With RAW-P, retain the full pipeline result including hidden render data."
         (should (equal '(1) (mevedel-task-blocked-by (cadr tasks))))
         (should (hash-table-p (mevedel-task-metadata (cadr tasks)))))))
 
-  :doc "TaskCreate and TaskUpdate metadata activity reaches the rendered task row"
+  :doc "TaskWrite metadata activity reaches the rendered task row on create and update"
   (progn
     (mevedel-tool-task--register)
     (setf (mevedel-session-agent-registry session)
@@ -328,19 +328,19 @@ With RAW-P, retain the full pipeline result including hidden render data."
                       (mevedel-agent-record--create :path "/root/reviewer"))))
     (with-current-buffer buffer
       (setq-local gptel-tools
-                  (test-mevedel-ptc-driver--gptel-tools "TaskCreate" "TaskUpdate")))
+                  (test-mevedel-ptc-driver--gptel-tools "TaskWrite")))
     (should (string-prefix-p
              "Created 1 task"
              (test-mevedel-ptc-driver--run
               buffer
-              "(TaskCreate :tasks [(:subject \"Review\" :status \"in_progress\" :owner \"/root/reviewer\" :metadata (:activity \"Checking callbacks\"))])")))
+              "(TaskWrite :tasks [(:subject \"Review\" :status \"in_progress\" :owner \"/root/reviewer\" :metadata (:activity \"Checking callbacks\"))])")))
     (should (string-match-p
              "Checking callbacks"
              (mevedel-tool-task--format-one (car (mevedel-session-tasks session)))))
     (should (string-prefix-p
-             "Updated task"
+             "Updated 1 task"
              (test-mevedel-ptc-driver--run
-              buffer "(TaskUpdate :id 1 :metadata '(:activeForm \"Testing cleanup\"))")))
+              buffer "(TaskWrite :tasks [(:id 1 :metadata (:activeForm \"Testing cleanup\"))])")))
     (should (string-match-p
              "Testing cleanup"
              (mevedel-tool-task--format-one (car (mevedel-session-tasks session))))))

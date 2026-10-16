@@ -845,14 +845,28 @@
     (let ((tool (mevedel-tool-get "TestSummary" "mevedel")))
       (should (equal "Concise one-liner." (mevedel-tool-summary tool)))))
 
-  :doc "omitted :summary leaves the slot nil"
+  :doc "omitted :summary defaults to the description's first sentence"
   (progn
     (mevedel-define-tool
      :name "TestNoSummary"
      :handler #'ignore
-     :description "Tool without a summary")
+     :description "Tool without a summary. Further detail stays out.\nSecond line.")
     (let ((tool (mevedel-tool-get "TestNoSummary" "mevedel")))
-      (should (null (mevedel-tool-summary tool)))))
+      (should (equal "Tool without a summary." (mevedel-tool-summary tool)))))
+
+  :doc "a wrapped tool without :summary uses its source description"
+  (progn
+    (mevedel-define-tool
+     :wrap (gptel-make-tool
+            :name "WrappedNoSummary"
+            :function #'ignore
+            :description "Read the wrapped thing. More words."
+            :args nil
+            :category "test-summary"))
+    (should (equal "Read the wrapped thing."
+                   (mevedel-tool-summary
+                    (mevedel-tool-get "WrappedNoSummary"
+                                      "mevedel-test-summary")))))
 
   :doc "omitted :renderer leaves the slot nil"
   (progn
@@ -1101,6 +1115,25 @@
       (should-not (mevedel-tool-for-gptel uncategorized))
       (should-not (mevedel-tool-for-gptel "TestProvider"))
       (should-not (mevedel-tool-for-gptel nil)))))
+
+(mevedel-deftest mevedel-tool--default-summary ()
+  ,test
+  (test)
+  :doc "keeps only the first sentence of the first line"
+  (should (equal "Run it."
+                 (mevedel-tool--default-summary "  Run it. Then more.\nOther line.")))
+  :doc "keeps a first line without sentence punctuation whole"
+  (should (equal "Outline of a file"
+                 (mevedel-tool--default-summary "Outline of a file\nMore.")))
+  :doc "does not split inside a dotted word"
+  (should (equal "Read gptel.el source."
+                 (mevedel-tool--default-summary "Read gptel.el source. Rest.")))
+  :doc "bounds a long sentence"
+  (should (= 160 (length (mevedel-tool--default-summary (make-string 300 ?a)))))
+  :doc "returns nil without a description"
+  (progn
+    (should-not (mevedel-tool--default-summary nil))
+    (should-not (mevedel-tool--default-summary "  \n"))))
 
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here

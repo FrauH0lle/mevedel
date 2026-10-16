@@ -932,6 +932,11 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
       (should (string-prefix-p "No matching tools found" (nth 1 found)))
       (should-not (nth 2 found)))))
 
+(defun test-mevedel-agent-runtime--native-p (buffer name)
+  "Return non-nil when BUFFER's agent offers NAME as a native tool."
+  (cl-find name (buffer-local-value 'gptel-tools buffer)
+           :key #'gptel-tool-name :test #'equal))
+
 (defun test-mevedel-agent-runtime--named-role ()
   "Return a named role with its own direct and specialist tools."
   (mevedel-agent--create
@@ -953,6 +958,8 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
                   (mevedel-agent-default) "/root/helper")))
       (test-mevedel-agent-runtime--should-discover
        child (test-mevedel-agent-runtime--catalog-names))
+      ;; A permitted SendMessage is native as well, so reporting needs no search.
+      (should (test-mevedel-agent-runtime--native-p child "SendMessage"))
       ;; The inherited catalog is frozen with the agent, not read live.
       (push (cons (list "mevedel" "ListAgents") "late")
             (mevedel-session-tool-catalog mevedel--session))
@@ -1011,8 +1018,9 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
       (test-mevedel-agent-runtime--catalog-identities)
     (let ((child (test-mevedel-agent-runtime--spawn
                   (test-mevedel-agent-runtime--named-role) "/root/named")))
+      (should (test-mevedel-agent-runtime--native-p child "SendMessage"))
       (test-mevedel-agent-runtime--should-discover
-       child '("SendMessage" "ListAgents" "Imenu"))
+       child '("ListAgents" "Imenu"))
       (test-mevedel-agent-runtime--should-not-discover
        child (list "user-tools/ConfiguredProbe"
                     (test-mevedel-agent-runtime--mcp-name)))))
@@ -1025,8 +1033,10 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
            (grandchild (with-current-buffer named
                          (test-mevedel-agent-runtime--spawn
                           (mevedel-agent-default) "/root/named/helper"))))
+      ;; The named delegator's native SendMessage is inherited natively.
+      (should (test-mevedel-agent-runtime--native-p grandchild "SendMessage"))
       (test-mevedel-agent-runtime--should-discover
-       grandchild '("SendMessage" "ListAgents" "Imenu"))
+       grandchild '("ListAgents" "Imenu"))
       (test-mevedel-agent-runtime--should-not-discover
        grandchild (list "user-tools/ConfiguredProbe"
                     (test-mevedel-agent-runtime--mcp-name)))))
@@ -1045,6 +1055,10 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
         (let ((child (test-mevedel-agent-runtime--spawn
                       (mevedel-agent-default) "/root/helper")))
           (test-mevedel-agent-runtime--should-discover child allowed)
+          ;; A restricted request grants no native SendMessage either.
+          (should (eq (eq restricted 'some)
+                      (and (test-mevedel-agent-runtime--native-p child "SendMessage")
+                           t)))
           (test-mevedel-agent-runtime--should-not-discover
            child (cl-set-difference (test-mevedel-agent-runtime--catalog-names)
                                     allowed :test #'equal)))))))

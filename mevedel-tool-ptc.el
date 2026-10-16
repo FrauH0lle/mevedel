@@ -73,7 +73,7 @@
   '("Read" "Glob" "Grep" "Bash" "ApplyPatch" "Eval"
     "XrefReferences" "XrefDefinitions" "Imenu" "Treesitter"
     "WebSearch" "WebFetch" "ListSkills"
-    "TaskCreate" "TaskUpdate" "TaskNote" "TaskList" "TaskGet"
+    "TaskWrite" "TaskList"
     "Agent" "FollowupAgent" "ListAgents" "InterruptAgent" "SendMessage"
     "WriteStdin" "ListExecutions" "StopExecution")
   "Tools allowed in composed expressions, subject to current capabilities.

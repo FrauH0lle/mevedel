@@ -144,6 +144,44 @@ mandatory routing, or dynamic native schemas. It fixes demonstrated discovery
 gaps; improved autonomous tool selection remains a behavioral measurement, not
 an established consequence of these changes.
 
+That measurement, taken on 2026-10-16 over 83 saved sessions (about 17,000 tool
+calls, root and agent transcripts), replaced the static capability index. About
+350 of 519 ToolSearch calls were exact-name lookups of tools the model already
+knew: WriteStdin (84), SendMessage (97, mostly agents reporting to `/root`), and
+the agent-control tools. Each cost a model turn, and the retrieved contract stayed
+in history anyway, so deferral saved no context for tools in regular use. Tools
+the index merely named stayed unused: Imenu, Xref and Treesitter had no calls,
+tasks four. Eleven tools had no summary and matched only by name.
+
+The decision now has three tiers. Tools used constantly are native for the roles
+that need them: WriteStdin and Monitor in the implementation preset, WriteStdin
+for named roles with Bash, SendMessage for every named role and for a default
+agent whose inherited catalog permits it. Fixed per-role schemas preserve the
+cache property that removed dynamic loading. Every other permitted specialist
+appears in a retained tool listing with its calling shape and summary, delivered
+like the skill catalog and rendered from the recipient's own catalog, so the
+model calls it through ToolCall without searching. ToolSearch remains the source
+of full contracts and failure recovery; its broad results now return calling
+shapes. The capability index is deleted rather than kept beside the listing, and
+omitted summaries default to the description's first sentence. Whether visibility
+raises use of rarely called specialists is again a measurement for later sessions.
+
+Listing every specialist made the cost of fine-grained families visible: sixteen
+introspection tools and five task tools were a third of the listing, and the
+same counts showed thirteen introspection and four task calls in total. The
+introspection family is now three tools (`EmacsDescribe`, `EmacsFind`,
+`EmacsManual`) whose arguments select the aspect or kind; `EmacsDescribe`
+decides its own permission per call, so a value read still always asks. Each
+argument keeps one meaning: `EmacsFind` only matches names (functions,
+commands, variables, libraries), while where a definition lives and whether a
+library is loaded are `EmacsDescribe`'s `location` aspect. Feature checks and a
+load-path listing inside `EmacsFind` would have given its pattern three meanings
+depending on `kind`. Tasks
+are `TaskWrite` and `TaskList`. `TaskWrite` takes a batch in which an entry with
+an `id` updates that task and one without creates a task, rather than replacing
+the whole list, because several agents edit one session list by ID; the batch
+validates before mutating so it applies atomically.
+
 The original root-only restriction protected two host seams, not the evaluator.
 Agents lacked effective-roster handling, and their session resolution could write
 an envelope checkpoint into the root sidecar and later recover it into the root

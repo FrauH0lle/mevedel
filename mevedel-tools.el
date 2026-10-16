@@ -77,6 +77,11 @@
 (autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
 (autoload 'mevedel-mentions-commit-expansion "mevedel-mentions")
 
+;; `mevedel-models'
+(declare-function mevedel-model-effective-context-window "mevedel-models"
+                  (&optional model))
+(autoload 'mevedel-model-effective-context-window "mevedel-models")
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-stage-entry
                   "mevedel-reminders" (fsm type body &optional commit))
@@ -449,13 +454,13 @@ On a miss, suggest search terms from the effective callable CATALOG."
     (concat (mapconcat #'mevedel-tools--tool-search-format-entry matches "\n\n---\n\n")
             "\n\nFill the expression template with actual values and pass it to ToolCall(expression)."))
    (t
-    (format "Found %d tools%s:\n%s\n\nSearch one or two exact names to retrieve their full contracts."
+    (format "Found %d tools%s:\n%s\n\nCall a listed shape through ToolCall; bracketed arguments are optional. Search one or two exact names for their full contracts."
             (length matches) (if (> (length matches) 20) "; showing the first 20" "")
             (mapconcat
              (lambda (entry)
-               (let ((tool (mevedel-tool-get (cadr (car entry)) (car (car entry)))))
-                 (format "- %s%s" (mevedel-tool-call-name tool)
-                         (if (cdr entry) (concat ": " (cdr entry)) ""))))
+               (mevedel-tool-ptc--tool-declaration
+                (mevedel-tool-call-name
+                 (mevedel-tool-get (cadr (car entry)) (car (car entry))))))
              (seq-take matches 20) "\n")))))
 
 (cl-defun mevedel-tools--tool-search (callback query)
@@ -474,6 +479,58 @@ On a miss, suggest search terms from the effective callable CATALOG."
           (seq-filter (lambda (entry) (member entry catalog))
                       (and ctx (mevedel-tools--search-catalog ctx query)))))
     (funcall callback (mevedel-tools--tool-search-report matches catalog))))
+
+(defcustom mevedel-tools-listing-budget 0.02
+  "Fraction of the context window allotted to the specialist tool listing.
+The listing names each callable specialist with its argument shape and
+summary.  This fraction of the active model's context window, converted to
+characters at four characters per token, caps it; tools beyond the cap stay
+reachable through ToolSearch."
+  :type 'float
+  :group 'mevedel)
+
+(defun mevedel-tools-listing-section ()
+  "Return the current conversation's specialist tool listing, or nil.
+It lists catalog tools the current role and request may call through
+ToolCall, excluding native tools.  Without native ToolCall there is none."
+  (let* ((mevedel-tools--current-engine nil)
+         (ctx (mevedel-tools--current-context))
+         (native (mevedel-tool-ptc--active-tool-names))
+         (roster (mevedel-tool-ptc--roster))
+         (names
+          (and ctx
+               (cl-find "ToolCall" gptel-tools
+                        :key #'gptel-tool-name :test #'equal)
+               (delete-dups
+                (cl-loop for (path . _) in (mevedel-tools--ctx-tool-catalog ctx)
+                         for tool = (mevedel-tool-get (cadr path) (car path))
+                         for name = (and tool (mevedel-tool-call-name tool))
+                         when (and name (member name roster)
+                                   (not (member name native)))
+                         collect name)))))
+    (when names
+      (let ((budget (floor (* mevedel-tools-listing-budget
+                              (mevedel-model-effective-context-window)
+                              4)))
+            (used 0)
+            lines)
+        (dolist (name names)
+          (let ((line (mevedel-tool-ptc--tool-declaration name)))
+            (when (<= (+ used (length line) 1) budget)
+              (cl-incf used (1+ (length line)))
+              (push line lines))))
+        (let ((omitted (- (length names) (length lines))))
+          (concat
+           "## Tools\n"
+           "Specialist tools you can call through ToolCall without searching "
+           "first, as `(NAME :ARG VALUE ...)`; bracketed arguments are optional. "
+           "ToolSearch with an exact name returns the full contract when "
+           "argument meaning or usage rules matter.\n\n"
+           (string-join (reverse lines) "\n")
+           (if (> omitted 0)
+               (format "\n\n%d more tools are omitted; find them with ToolSearch."
+                       omitted)
+             "")))))))
 
 
 ;;

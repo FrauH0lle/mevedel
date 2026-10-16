@@ -1464,7 +1464,7 @@ been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
                                 stale-after))))))
    :content (lambda (session)
               (format
-               "You have active tasks that have not been updated recently. Review and update task status as you make progress (set to in_progress when starting, completed when done). Use TaskUpdate to keep task status current.\n\n%s"
+               "You have active tasks that have not been updated recently. Review and update task status as you make progress (set to in_progress when starting, completed when done). Use TaskWrite to keep task status current.\n\n%s"
                ;; The panel rendering is a display concern; the model
                ;; reads the same shape TaskList returns, with canonical
                ;; owner paths and unabbreviated subjects.

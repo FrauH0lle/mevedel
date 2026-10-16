@@ -74,7 +74,7 @@ The original request came from the 2026-08-20 watchdog/advisor discussion.
 ### Task transition events
 
 Consider a task transition event when notifications or tracker synchronization
-need to observe every completion. A hook matching `TaskUpdate` misses automatic
+need to observe every completion. A hook matching `TaskWrite` misses automatic
 completion by `mevedel-tool-task-finalize-owner` in `mevedel-tool-task.el`.
 Observe actual state transitions across both paths rather than tool calls alone.
 Defer until a concrete integration needs that coverage.

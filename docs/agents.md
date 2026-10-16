@@ -17,6 +17,12 @@ instructions, tools, model policy, and delegation capability. A named role
 supplies its own configuration rather than intersecting its tools with the
 delegator's. Children are created below the caller, so recursive delegation
 forms paths such as `/root/implementation/tests`.
+The default role also inherits its delegator's context observations, frozen
+with the agent: a named delegator's own selection, or for a root child the
+root's workspace guidance, memory index, environment, tool listing, skills and
+resources. Neither inherits the root Goal or journal map. Without these
+observations the inherited system prompt would lack its changing parts, which
+arrive as context updates rather than system text.
 
 The inherited default is the **general-purpose agent** for ordinary delegation:
 research, implementation, debugging, or mixed tasks. Callers select it by omitting
@@ -39,6 +45,10 @@ an empty or request-restricted catalog does not grant additional tools. Named
 roles still resolve their own tool configuration. Retained follow-ups and cold
 restores reuse the frozen identities rather than the parent's current catalog;
 discovery and calls remain subject to current tool availability and permissions.
+Every agent receives a retained tool listing of its own callable specialists.
+Named roles get native SendMessage; a default child inherits its delegator's
+native tools and gets native SendMessage only when its inherited catalog permits
+SendMessage, so a request restriction never grants it.
 
 `context` defaults to `none`, so the complete initial `message` is the
 child's sole assigned task and no parent dialogue is copied. Explicit `all`
@@ -691,10 +701,11 @@ model the same shape `TaskList` returns, with canonical owner paths and
 unabbreviated subjects, so display decisions cannot alter what the model
 reads.
 
-Each owner group can also carry a short status note through `TaskNote`
-or the top-level `note`/`noteOwner` arguments on `TaskCreate` and
-`TaskUpdate`. An unknown note owner rejects the whole call; no task is
-created or updated. Notes render under the owner's header, or under
+Each owner group can also carry a short status note through the top-level
+`note`/`noteOwner` arguments of `TaskWrite`, which may carry only a note.
+`TaskWrite` validates every task entry and the note owner before changing
+anything, so an invalid entry or unknown note owner rejects the whole call;
+no task is created or updated. Notes render under the owner's header, or under
 its single inline row; the main session's note opens the panel, having
 no header to hang from. A note is dropped from view when that owner has
 no open tasks, so a completed-only task list does not keep the overlay
