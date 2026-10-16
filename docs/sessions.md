@@ -146,8 +146,9 @@ compaction rotates segments within one chat. The sidecar's `:chapters` records,
 in the same commit, the closing chat's last segment, its title at that moment
 (nil under an explicit name, which titles every chat alike) and when it closed;
 a failed clear records nothing. An untitled chat is labelled by its first
-prompt. Fork keeps only the chats closed before its fork segment, Save As keeps
-all, and Rewind restores the record with the rest of its sidecar. The resume
+prompt. Fork and Rewind keep only the chats closed before their target
+segment, so a later clear appends in order; Save As keeps all, and restoring
+an earlier published head restores the record with the rest of its sidecar. The resume
 picker counts chats rather than segments and names the earlier ones, newest
 first, from the sidecar alone; it reads no segment files.
 Compaction does not rearm naming. A failed clear leaves naming eligibility

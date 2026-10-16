@@ -414,11 +414,28 @@ opening an editable draft."
     branch))
 
 (defun mevedel-plan-mode--worktree-warning (entry)
-  "Return ENTRY's dirty-source warning when Worktree is selected."
+  "Return ENTRY's Worktree notice when Worktree is selected, or nil.
+It names what would refuse acceptance now, from the same check acceptance
+runs, and warns that uncommitted source changes stay behind."
   (when (eq (plist-get (plist-get entry :selection) :location) 'worktree)
-    (with-current-buffer (plist-get entry :chat-buffer)
-      (when (plist-get (mevedel-worktree-collect-status) :dirty-p)
-        "Worktree starts at HEAD; uncommitted changes are not included."))))
+    (let* ((chat-buffer (plist-get entry :chat-buffer))
+           (blocked
+            (when-let* ((session (plist-get entry :session)))
+              (condition-case err
+                  (progn (mevedel-plan-handoff-assert-worktree-ready
+                          session chat-buffer)
+                         nil)
+                (error (error-message-string err)))))
+           (dirty
+            (with-current-buffer chat-buffer
+              (plist-get (mevedel-worktree-collect-status) :dirty-p))))
+      (when (or blocked dirty)
+        (string-join
+         (delq nil
+               (list (and blocked (concat blocked "."))
+                     (and dirty
+                          "Worktree starts at HEAD; uncommitted changes are not included.")))
+         "\n")))))
 
 (defvar-local mevedel-plan-mode--instructions-entry nil
   "Plan approval entry edited by the current instructions buffer.")

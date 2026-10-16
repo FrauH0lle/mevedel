@@ -613,7 +613,10 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     ;; History starts after the line, so the line never counts as history.
     (let ((after (mevedel-view--after-header-position)))
       (should-not (get-text-property after 'mevedel-view-chats-line))
-      (should (get-text-property (1- after) 'mevedel-view-chats-line))))
+      (should (get-text-property (1- after) 'mevedel-view-chats-line))
+      ;; Point where history starts must not inherit the line's keymap.
+      (should-not (eq mevedel-view-segments--chats-map
+                      (get-pos-property after 'keymap)))))
   :doc "an archived projection shows its banner instead"
   (mevedel-view-segments-test--with-view
     (setf (mevedel-session-chapters session)

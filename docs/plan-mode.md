@@ -214,16 +214,20 @@ switching to Worktree keeps Current. A Worktree starts at `HEAD`: uncommitted
 changes in the source checkout are not copied, apart from the files the session
 itself edited, which the fork restores. Accepting a Worktree proposal first
 checks that the session can fork (no pending input, request, live execution,
-active agent turn or active Goal), then prompts for its branch name in Emacs. Browser
+active agent turn or active Goal), then prompts for its branch name in Emacs.
+While Worktree is selected, the card names whatever would refuse that check,
+in the same words as the refusal, so a queued follow-up is resolved in the
+Pending Inputs cockpit first instead of being discovered on `RET`. Browser
 acceptance is available only for Here, using the host-selected settings;
 settings changes and Worktree acceptance remain in Emacs.
 
 Pending input remains available while the approval overlay is open. `C-c TAB`
 queues a follow-up without demoting or settling the proposal. Same-turn
 steering left from the Plan request must be delivered or resolved before
-acceptance, while queued follow-ups do not block acceptance and run after the
-accepted implementation kickoff. The same ordering applies while handoff
-preparation or retry owns the session.
+acceptance. Queued follow-ups do not block a Here acceptance and run after the
+accepted implementation kickoff; a Worktree acceptance refuses them, because
+the planning session closes once its fork takes over. The same ordering
+applies while handoff preparation or retry owns the session.
 
 The approval card keeps the Markdown proposal expanded above a compact
 Implementation section. Cycle keys appear beside their settings; accept,

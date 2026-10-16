@@ -12,8 +12,13 @@
           "helpers"))
 (require 'mevedel-view)
 (require 'mevedel-view-execution)
+(require 'mevedel-view-audit)
 (require 'mevedel-execution)
 (require 'mevedel-agents)
+(require 'mevedel-execution-test-helpers
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-execution-test-helpers"))
 
 (defmacro mevedel-view-execution-test--with-view (&rest body)
   "Run BODY in a real view with SESSION and mutable public LIVE snapshots."
@@ -229,6 +234,53 @@
             (should (string-search "child result" (buffer-string)))
             (should (string-search "/root/parent/child" (buffer-string))))
         (kill-buffer child))))
+  :doc "real yielded execution events preserve an active draft without consuming output"
+  (mevedel-view-test--with-buffers
+    (let* ((root (make-temp-file "mevedel-view-execution-" t))
+           (session (test-mevedel-execution--session root))
+           (mevedel-execution-event-functions '(mevedel-view-execution--event))
+           (mevedel-execution-state-change-hook '(mevedel-view-execution--state-changed))
+           (mevedel-execution-mailbox-delivery-function (lambda (&rest _) t)))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (let* ((observation
+                      (test-mevedel-execution--start-managed
+                       session root
+                       '("sh" "-c" "while [ ! -e go ]; do sleep 0.02; done; printf 'live output\\n'; while [ ! -e finish ]; do sleep 0.02; done; printf 'final output\\n'")
+                       :owner "/root" :data-buffer data-buf :tool-use-id "actual-tool"))
+                     (id (plist-get (plist-get observation :facts) :execution-id)))
+                (ert-info ((format "Initial execution observation: %S" observation))
+                  (should id))
+                (mevedel-view-execution-test--activate "  ▸ Running")
+                (goto-char (point-max))
+                (insert (propertize "> active draft\nsecond line" 'draft-test 'kept))
+                (backward-char 3)
+                (set-mark (- (point) 4))
+                (setq mark-active t)
+                (let ((draft (buffer-substring (mevedel-view--input-start) (point-max)))
+                      (offset (- (point) (mevedel-view--input-start)))
+                      (mark-offset (- (mark) (mevedel-view--input-start))))
+                  (write-region "go" nil (file-name-concat root "go") nil 'silent)
+                  (test-mevedel-execution--wait
+                   (lambda () (string-search "    live output" (buffer-string))))
+                  (let* ((state (mevedel-session-execution-state session))
+                         (record (gethash id (mevedel-execution--state-records state))))
+                    (should (= 0 (mevedel-execution--record-read-offset record))))
+                  (write-region "finish" nil (file-name-concat root "finish") nil 'silent)
+                  (test-mevedel-execution--wait
+                   (lambda () (plist-get mevedel-view-execution--selected :terminal-p)))
+                  (should (string-search "Completed (exit 0)" (buffer-string)))
+                  (should (string-search "    final output" (buffer-string)))
+                  (should-not (string-search "[Stop]" (buffer-string)))
+                  (should (equal-including-properties
+                           draft (buffer-substring (mevedel-view--input-start) (point-max))))
+                  (should (= offset (- (point) (mevedel-view--input-start))))
+                  (should (= mark-offset (- (mark) (mevedel-view--input-start))))
+                  (should mark-active)))))
+        (mevedel-execution-teardown-session session)
+        (delete-directory root t))))
   :doc "wrong session and equal ID with different owner cannot update selection"
   (mevedel-view-execution-test--with-view
     (mevedel-view--render-status)
@@ -308,6 +360,55 @@
         (mevedel-view-execution-test--activate "[Show in conversation]")
         (should (equal "tool1" (plist-get shown :tool-use-id)))
         (should (equal "e1" (plist-get shown :execution-id)))))))
+
+(mevedel-deftest mevedel-view-execution-show-in-conversation ()
+  ,test
+  (test)
+  :doc "settled agent navigation prepares its scheduled projection before locating the row"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (let* ((path "/root/settled")
+             (agent-data (generate-new-buffer " *execution-settled-agent*"))
+             (record (mevedel-agent-record--create
+                      :id "settled-agent" :path path :parent-path "/root"
+                      :role "default" :activity 'idle
+                      :conversation-buffer agent-data))
+             agent-view)
+        (unwind-protect
+            (progn
+              (setf (mevedel-session-agent-registry session) (list (cons path record)))
+              (with-current-buffer agent-data
+                (org-mode)
+                (setq-local mevedel--session session
+                            mevedel--view-buffer view-buf)
+                (insert (propertize
+                         "(:name \"Bash\" :args (:command \"printf result\"))\n\nRESULT\n"
+                         'gptel '(tool . "tool1"))))
+              (switch-to-buffer view-buf)
+              (goto-char (point-max))
+              (insert "> draft\nsecond line")
+              (backward-char 3)
+              (progn
+                (setf (plist-get (car live) :owner) path)
+                (mevedel-view--render-status)
+                (mevedel-view-execution-test--activate "  ▸ Running")
+                (cl-letf (((symbol-function 'mevedel-view-audit--evidence)
+                           (lambda (_) (ert-fail "Existing agent row was not revealed"))))
+                  (mevedel-view-execution-test--activate "[Show in conversation]"))
+                (setq agent-view (window-buffer (selected-window)))
+                (with-current-buffer agent-view
+                  (should mevedel-view--agent-transcript-p)
+                  (should (equal "tool1" (get-text-property (point) 'mevedel-view-tool-use-id)))
+                  (should-not (get-text-property (point) 'mevedel-view-collapsed)))
+                (with-current-buffer view-buf
+                  (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+          (unless agent-view
+            (when-let* ((window (buffer-local-value
+                                'mevedel-view--agent-transcript-window view-buf))
+                        ((window-live-p window)))
+              (setq agent-view (window-buffer window))))
+          (when (buffer-live-p agent-view) (kill-buffer agent-view))
+          (when (buffer-live-p agent-data) (kill-buffer agent-data)))))))
 
 (mevedel-deftest mevedel-view-execution--full-output ()
   ,test

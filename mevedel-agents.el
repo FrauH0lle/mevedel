@@ -85,7 +85,7 @@
 (defvar mevedel--session)
 
 ;; `mevedel-tool-ptc'
-(declare-function mevedel-tool-ptc--roster "mevedel-tool-ptc" ())
+(declare-function mevedel-tool-ptc--roster "mevedel-tool-ptc" (&optional include-hidden))
 (autoload 'mevedel-tool-ptc--roster "mevedel-tool-ptc")
 
 ;; `mevedel-tools'
@@ -283,7 +283,9 @@ Freezing these explicit specs preserves membership on later invocations."
       (let* ((mevedel-tools--current-engine nil)
              (owner (mevedel-tools--current-context))
              (catalog (and owner (mevedel-tools--ctx-tool-catalog owner)))
-             (roster (and catalog (mevedel-tool-ptc--roster))))
+             ;; A later follow-up can leave Plan.  Freeze capability membership,
+             ;; not this turn's transient visibility; dispatch filters each turn.
+             (roster (and catalog (mevedel-tool-ptc--roster t))))
         (append
          base
          (cl-loop for (path . _summary) in catalog

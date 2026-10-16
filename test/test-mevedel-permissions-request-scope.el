@@ -108,6 +108,16 @@
         (setcar (cdr tail) nil)
         (should-not (equal snapshot (mevedel-execution--preparation-authority
                                      session (list temporary-file-directory) request))))
+      ;; Strings are mutable too: copying conses alone would let a live path
+      ;; change rewrite the captured snapshot and escape the launch recheck.
+      (let ((path (copy-sequence "/allowed")))
+        (setf (mevedel-session-resource-grants session)
+              (make-list 2000 (list :path path :access 'write)))
+        (setq snapshot (mevedel-execution--preparation-authority
+                        session (list temporary-file-directory) request))
+        (aset path 1 ?x)
+        (should-not (equal snapshot (mevedel-execution--preparation-authority
+                                     session (list temporary-file-directory) request))))
       (setf (mevedel-session-permission-rules session) '(("Bash" :action deny)))
       (should-not (equal snapshot (mevedel-execution--preparation-authority
                                    session (list temporary-file-directory) request)))))

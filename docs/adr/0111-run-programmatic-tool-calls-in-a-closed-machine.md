@@ -160,7 +160,9 @@ agent whose inherited catalog permits it. Fixed per-role schemas preserve the
 cache property that removed dynamic loading. Every other permitted specialist
 appears in a retained tool listing with its calling shape and summary, delivered
 like the skill catalog and rendered from the recipient's own catalog, so the
-model calls it through ToolCall without searching. ToolSearch remains the source
+model calls it through ToolCall without searching. The shape marks standalone-only
+tools, so skipping discovery does not hide the composition restriction.
+ToolSearch remains the source
 of full contracts and failure recovery; its broad results now return calling
 shapes. The capability index is deleted rather than kept beside the listing, and
 omitted summaries default to the description's first sentence. Whether visibility

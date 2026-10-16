@@ -36,6 +36,9 @@
 (declare-function mevedel-tool-fs-read-workspace-context "mevedel-tool-fs-read" (scope owner))
 (autoload 'mevedel-tool-fs-read-workspace-context "mevedel-tool-fs-read")
 
+;; `mevedel-tools'
+(defvar mevedel-tools--current-engine)
+
 ;; `mevedel-utilities'
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
@@ -151,7 +154,8 @@ Use the recipient's selected components; never give a worker the root Goal."
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
       (when mevedel--session
-        (let* ((invocation (bound-and-true-p mevedel--agent-invocation))
+        (let* ((mevedel-tools--current-engine fsm)
+               (invocation (bound-and-true-p mevedel--agent-invocation))
                (names (if invocation
                           (mevedel-agent-context-components
                            (mevedel-agent-invocation-agent invocation))

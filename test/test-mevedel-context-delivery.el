@@ -415,7 +415,8 @@
                          :tool-catalog '((("mevedel" "Imenu") . "Outline")))))
           (setq-local gptel-tools
                       (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
-          (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+          (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)
+                                                :tools gptel-tools))))
             (mevedel-context-delivery-stage fsm)
             (let* ((entries (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
                    (types (mapcar (lambda (entry) (plist-get entry :type)) entries))

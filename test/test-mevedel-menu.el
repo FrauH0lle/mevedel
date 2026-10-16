@@ -1770,6 +1770,37 @@
       (let ((last-command-event ?3))
         (should-error (mevedel-menu--share-select) :type 'user-error)))))
 
+(mevedel-deftest mevedel-menu--share-choose ()
+  ,test
+  (test)
+  :doc "offers every share with unique full labels and routes beyond the ninth row"
+  (mevedel-menu-test--with-buffers
+    (let* ((label "Two identically named sessions with a long title")
+           (entries (cl-loop repeat 11 collect (list :kind 'room :label label)))
+           (recorded (list :kind 'recorded-lobby :label "Project"
+                           :directory "/srv/project/"))
+           scoped)
+      (setq entries (append entries (list recorded)))
+      (cl-letf (((symbol-function 'mevedel-menu--shares) (lambda () entries))
+                ((symbol-function 'completing-read)
+                 (lambda (_prompt choices _predicate require-match &rest _)
+                   (should require-match)
+                   (should (= 12 (length choices)))
+                   (should (= 12 (length (seq-uniq (mapcar #'car choices)))))
+                   (should (string-search label (caar choices)))
+                   (should (string-search "/srv/project/" (car (nth 11 choices))))
+                   (car (nth 11 choices))))
+                ((symbol-function 'transient-setup)
+                 (lambda (prefix _layout _edit &rest args)
+                   (setq scoped (list prefix (plist-get args :scope))))))
+        (with-current-buffer view-buf
+          (should (string-search "a chooses any share"
+                                 (mevedel-menu--share-active-description)))
+          (mevedel-menu--share-choose)
+          (should (equal (list 'mevedel-menu--share-item recorded) scoped))
+          (setq entries nil)
+          (should-error (mevedel-menu--share-choose) :type 'user-error))))))
+
 (mevedel-deftest mevedel-menu--share-item ()
   ,test
   (test)

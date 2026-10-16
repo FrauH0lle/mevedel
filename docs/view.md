@@ -1259,8 +1259,10 @@ running lobbies with their tabs, and lobbies recorded to restart that are not
 running. A digit opens that share's surface: `o` shows its session, `s` its
 links, `x` stops it, and for a recorded lobby `R` restarts it and `x` forgets
 it. Each action re-checks the share, so one that stopped meanwhile is refused
-rather than started again. `X Stop all…` asks once, with the counts, before
-stopping every share and lobby.
+rather than started again. `a Choose any share…` offers the complete list,
+including shares beyond the nine quick-access rows, with full names and
+workspace paths. `X Stop all…` asks once, with the counts, before stopping
+every share and lobby.
 
 The top row's `shared · N guests` gains `· +N more` when shares exist
 elsewhere. Like the rows, it is read from memory and the small lobby record:
@@ -1427,7 +1429,9 @@ results remain in the conversation.
 The expanded item has explicit **Full output**, **Show in conversation**, and
 live-only **Stop** actions. Full output opens a read-only inspection buffer;
 Show in conversation reveals the original tool row, opening the owning agent's
-transcript when necessary. The captured tool ID includes nested ToolCall children.
+transcript when necessary. Settled agent views finish their scheduled projection
+before locating the row, so an idle agent is as navigable as a running one.
+The captured tool ID includes nested ToolCall children.
 The **All…** and overflow actions explicitly open the execution cockpit; blank
 space does nothing. The status area lists up to five live items plus the selected
 inspector when needed. Monitor expiry is a fixed timestamp, not a new countdown
@@ -2359,7 +2363,11 @@ Inspection does not pause delivery or clear a failure-review hold. The preview
 follows the entry's stable identity through reordering and closes when the entry
 leaves the visible summary; it never silently switches to a new entry occupying
 the same position. Expanded text is plain, bounded to ten width-limited lines,
-and explicitly labeled partial when more remains.
+and explicitly labeled partial when more remains. Tabs and carriage returns
+become spaces in that preview. Summaries use display-column limits, and both
+collapsed and expanded previews process only bounded input prefixes rather than
+rescanning an arbitrarily large queued paste on each asynchronous refresh. These
+presentation limits never change the complete queued input.
 
 **Manage queue…** or `C-c C-e` opens the Pending Inputs cockpit and pauses
 automatic delivery; the link labels that consequence. Blank summary space is

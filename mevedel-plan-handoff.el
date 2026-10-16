@@ -105,7 +105,7 @@
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-list-sessions
-                  "mevedel-session-persistence" (&optional workspace))
+                  "mevedel-session-persistence" (workspace &optional cached))
 (declare-function mevedel-session-persistence-restore
                   "mevedel-session-persistence"
                   (session-dir &optional lifecycle-source

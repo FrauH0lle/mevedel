@@ -618,17 +618,20 @@ collaboration loads there is nothing to list."
 (defvar mevedel-menu--share-entries nil
   "Shares listed by the open Share surface, in digit-key order.")
 
-(defun mevedel-menu--share-row-description (entry here)
+(defun mevedel-menu--share-row-description (entry here &optional full-name)
   "Return the Share surface row for share ENTRY.
-HERE says ENTRY belongs to the menu's own session or workspace."
+HERE says ENTRY belongs to the menu's own session or workspace.
+FULL-NAME keeps the complete label for completion candidates."
   (let* ((kind (plist-get entry :kind))
          (guests (or (plist-get entry :guests) 0))
          (row
           (format "%s %-5s %-32s %s%s%s"
                   (if (eq kind 'recorded-lobby) "○" "●")
                   (if (eq kind 'room) "room" "lobby")
-                  (truncate-string-to-width
-                   (or (plist-get entry :label) "?") 32 nil nil "…")
+                  (if full-name
+                      (or (plist-get entry :label) "?")
+                    (truncate-string-to-width
+                     (or (plist-get entry :label) "?") 32 nil nil "…"))
                   (if (eq kind 'recorded-lobby)
                       "recorded, not running"
                     (format "%d %s%s" guests
@@ -649,7 +652,7 @@ HERE says ENTRY belongs to the menu's own session or workspace."
   "Return the heading of the Share surface's active-share rows."
   (let ((count (length (mevedel-menu--shares))))
     (if (> count mevedel-menu--share-row-limit)
-        (format "Active everywhere (first %d of %d; /collab status lists all)"
+        (format "Active everywhere (first %d of %d; a chooses any share)"
                 mevedel-menu--share-row-limit count)
       "Active everywhere")))
 
@@ -687,6 +690,32 @@ HERE says ENTRY belongs to the menu's own session or workspace."
     (unless entry
       (user-error "No share on that key"))
     (transient-setup 'mevedel-menu--share-item nil nil :scope entry)))
+
+(defun mevedel-menu--share-choose ()
+  "Choose any share, including those beyond the compact digit-key rows."
+  (interactive)
+  (let* ((context (mevedel-menu--context))
+         (index 0)
+         (choices
+          (mapcar
+           (lambda (entry)
+             ;; The ordinal disambiguates identically named sessions and
+             ;; workspaces without exposing links or truncating their names.
+             (cons (format "%d. %s%s"
+                           (cl-incf index)
+                           (mevedel-menu--share-row-description
+                            entry (mevedel-menu--share-here-p entry context) t)
+                           (if-let* ((root (plist-get entry :directory)))
+                               (format " (%s)" (abbreviate-file-name root))
+                             ""))
+                   entry))
+           (mevedel-menu--shares))))
+    (unless choices
+      (user-error "No active shares or recorded lobbies"))
+    (let ((entry (cdr (assoc (completing-read "Share: " choices nil t)
+                             choices))))
+      (when entry
+        (transient-setup 'mevedel-menu--share-item nil nil :scope entry)))))
 
 (defun mevedel-menu--share-item-room-p ()
   "Return non-nil when the share surface shows a session room."
@@ -1920,6 +1949,8 @@ Every action goes through the same commands as `/collab'."
    ["Inspect"
     :pad-keys t
     ("i" "Status" mevedel-menu--share-status)
+    ("a" "Choose any share…" mevedel-menu--share-choose
+     :inapt-if mevedel-menu--no-shares-p)
     ("X" "Stop all…" mevedel-menu--share-stop-all
      :inapt-if mevedel-menu--no-shares-p)]]
   [:class transient-column

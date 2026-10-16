@@ -1895,8 +1895,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                 (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
     (let* ((mevedel-model-context-limit 100)
            (gptel-model nil)
-           ;; 100 tokens * 4 chars * 0.1 = 40 chars: room for one short entry.
-           (mevedel-tools-listing-budget 0.1)
+           ;; 100 tokens * 4 chars * 0.15 = 60 chars: room for one short entry.
+           (mevedel-tools-listing-budget 0.15)
            (section (mevedel-tools-listing-section)))
       (should (string-search "(OtherProbe)" section))
       (should-not (string-search "ListedProbe" section))
@@ -1914,6 +1914,72 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                 (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
     (setf (mevedel-session-tool-catalog mevedel--session) nil)
     (should-not (mevedel-tools-listing-section))))
+
+(mevedel-deftest mevedel-tools-listing/owner
+  (:before-each (mevedel-tools-register)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "native and external observations retain Goal ownership and request-local tools"
+  (let* ((session (mevedel-tools-test--make-session))
+         (mevedel-system-retained-components '(tools))
+         (toolcall (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
+    (require 'mevedel-claude-code-context)
+    (setf (mevedel-session-tool-catalog session)
+          (mapcar (lambda (name) (cons (list "mevedel" name) name))
+                  '("CreateGoal" "GetGoal" "UpdateGoal")))
+    (with-temp-buffer
+      (setq-local mevedel--session session gptel-tools (list toolcall))
+      (dolist (external '(nil t))
+        (setf (mevedel-session-goal session) nil)
+        (let* ((info (list :buffer (current-buffer) :tools (list toolcall)))
+               (request (mevedel-request--create :session session :context info))
+               (owner (if external request (gptel-make-fsm :info info)))
+               ;; An unrelated callback's dynamic engine must not supply the
+               ;; recipient's identity or hide its Goal tools.
+               (mevedel-tools--current-engine (gptel-make-fsm :info '(:tools nil))))
+          (unless external (setf (mevedel-request-fsm request) owner))
+          (setq-local mevedel--current-request request)
+          (cl-labels
+              ((observe ()
+                 (if external
+                     (alist-get 'context-tools
+                                (mevedel-claude-code-context--observations owner))
+                   (mevedel-context-delivery-stage owner)
+                   (plist-get (cl-find 'context-tools
+                                       (plist-get info :mevedel-reminder-entries)
+                                       :key (lambda (entry) (plist-get entry :type)))
+                              :body))))
+            (let ((body (observe)))
+              (should (string-search "(CreateGoal " body))
+              (should (string-search "(GetGoal)" body))
+              (should-not (string-search "(UpdateGoal " body)))
+            (setf (mevedel-session-goal session)
+                  (mevedel-goal--create :id "listing-goal" :status 'active))
+            (plist-put info :mevedel-goal-id "listing-goal")
+            (let ((body (observe)))
+              (should (string-search "(UpdateGoal " body))
+              (should-not (string-search "(CreateGoal " body)))
+            ;; The buffer's ToolCall cannot resurrect a revoked request roster.
+            (plist-put info :tools nil)
+            (should (string-search "None currently available" (observe))))))))
+
+  :doc "gptel's tool-free request omits tools without restoring buffer capabilities"
+  (let ((gptel--known-backends nil))
+    (with-temp-buffer
+      (setq-local gptel-backend (gptel-make-openai "No tools" :key "test" :models '(test))
+                  gptel-model 'test
+                  gptel-use-tools nil
+                  gptel-use-context nil
+                  gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall")))
+                  mevedel--session
+                  (mevedel-session--create :tool-catalog '((("mevedel" "Imenu") . "Outline"))))
+      (let ((fsm (gptel-request "Inspect" :dry-run t :system "Test")))
+        (should-not (plist-member (gptel-fsm-info fsm) :tools))
+        (setq-local mevedel--current-request (mevedel-request--create :fsm fsm))
+        (should-not (mevedel-tools-listing-section))
+        (let ((mevedel-tools--current-engine fsm))
+          (should-not (mevedel-tool-ptc--native-tools)))))))
 
 (provide 'test-mevedel-tools)
 ;;; test-mevedel-tools.el ends here

@@ -1717,7 +1717,7 @@ incremental refresh."
 (defun mevedel-view--event-position (&optional event)
   "Return buffer position referenced by mouse EVENT, or nil."
   (and event
-       (eventp event)
+       (mouse-event-p event)
        (let ((pos (posn-point (event-end event))))
          (and (integer-or-marker-p pos) pos))))
 
@@ -1740,7 +1740,7 @@ the editable composer signal instead of settling queued interactions."
       (funcall activate))
      ((get-text-property pos 'mevedel-tool-task)
       (mevedel-toggle-tasks))
-     ((and event (eventp event))
+     ((and event (mouse-event-p event))
       nil)
      (t
       (user-error "No actionable fragment at point")))))

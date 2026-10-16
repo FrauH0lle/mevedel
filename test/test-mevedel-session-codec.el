@@ -1053,22 +1053,17 @@
          (session (plist-get result :session)))
     (should (equal metadata (mevedel-session-plan-metadata session))))
 
-  :doc "preserves a prepared standalone Plan Worktree target"
+  :doc "preserves a fork-first Worktree retry with its reservation and published fork"
   (let* ((retry
-          '(:step submit
+          '(:step prepare-worktree
             :selection (:location worktree :context fresh
                         :execution direct :mode full-auto
                         :branch "plan/topic")
-            :accepted (:path "local/plans/source.md"
-                       :absolute-path "/tmp/source/local/plans/source.md"
-                       :hash "abc")
-            :target-directory "/tmp/repo/.worktrees/topic/"
-            :target-save-path "/tmp/repo/.mevedel/target/"
-            :target-session-id "target-id"
-            :target-accepted
-            (:path "local/plans/accepted.md"
-             :absolute-path "/tmp/repo/.mevedel/target/local/plans/accepted.md"
-             :hash "abc")))
+            :accepted (:path "local/plans/source.md" :hash "abc")
+            :fork-point-id "reply-7"
+            :worktree-reservation
+            (:branch "plan/topic" :directory "/tmp/repo/.worktrees/topic/")
+            :target-save-path "/tmp/repo/.mevedel/sessions/fork/"))
          (metadata (list :status 'accepted :implementation-retry retry))
          (result
           (test-mevedel-session-persistence--deserialize-sidecar

@@ -176,6 +176,18 @@ temporary one."
                              (push symbol stale))))
                (ert-info ((format "Autoloads their file does not define: %S" stale))
                  (should-not stale))))
+            ('stop-shares
+             (should (commandp 'mevedel-collaboration-stop-all))
+             (should-not (featurep 'mevedel-collaboration-lobby))
+             ;; A saved intent can exist before installation/startup restores
+             ;; lobbies.  Stop all must forget it without opening a transport.
+             (make-directory mevedel-user-dir t)
+             (let ((intent (file-name-concat mevedel-user-dir "lobbies.el")))
+               (with-temp-file intent (prin1 (list root) (current-buffer)))
+               (cl-letf (((symbol-function 'message) #'ignore))
+                 (call-interactively 'mevedel-collaboration-stop-all))
+               (should-not (file-exists-p intent))
+               (should (zerop (hash-table-count mevedel-collaboration-lobby--lobbies)))))
             ('artifacts
              (call-process "git" nil nil nil "init" "-q")
              (should-not (featurep 'mevedel-artifacts-list))

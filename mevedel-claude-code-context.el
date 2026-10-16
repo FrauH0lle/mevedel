@@ -141,7 +141,8 @@ bytes and MIME types; the prompt may carry other parts around them."
 
 (defun mevedel-claude-code-context--observations (owner)
   "Render OWNER's currently selected observations through their shared owner."
-  (let* ((child (mevedel-agent-invocation-p owner))
+  (let* ((mevedel-tools--current-engine owner)
+         (child (mevedel-agent-invocation-p owner))
          (session (mevedel-claude-code-context--session owner))
          (names (if child
                     (mevedel-agent-context-components (mevedel-agent-invocation-agent owner))

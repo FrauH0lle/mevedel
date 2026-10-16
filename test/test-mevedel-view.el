@@ -84,34 +84,63 @@
       (should (equal "Provider failed" (mevedel-agent-record-settled-result record))))))
 
 (mevedel-deftest mevedel-view-activate-at-point
-  (:doc "mouse activation reads properties from the clicked window")
-  (let ((target (generate-new-buffer " *test-click-target*"))
-        opened)
-    (unwind-protect
-        (progn
-          (with-current-buffer target
-            (insert "xagent")
-            (put-text-property
-             2 7 'mevedel-view-agent-path "/root/test"))
-          (cl-letf
-              (((symbol-function 'mevedel-view--event-position)
-                (lambda (&optional _event) 2))
-               ((symbol-function 'mouse-set-point)
-                (lambda (_event)
-                  (set-buffer target)
-                  (goto-char 2)))
-               ((symbol-function 'mevedel-view--position-in-input-region-p)
-                (lambda (_position) nil))
-               ((symbol-function 'mevedel-view-open-agent-transcript-at-point)
-                (lambda (&optional _event)
-                  (setq opened
-                        (get-text-property
-                         (point) 'mevedel-view-agent-path)))))
-            (with-temp-buffer
-              (mevedel-view-activate-at-point 'mouse)))
-          (should (equal "/root/test" opened)))
-      (when (buffer-live-p target)
-        (kill-buffer target)))))
+  (:doc "keyboard activation keeps current buffer; mouse uses clicked window")
+  (progn
+    ;; Keyboard events must not consult the selected window.  A caller can
+    ;; activate a rendered control in another current buffer, as async views and
+    ;; batch callers do.  `eventp' also accepts these character events.
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t) activated)
+          (goto-char (point-min))
+          (insert (propertize
+                   "Action\n" 'keymap mevedel-view--display-map
+                   'mevedel-view-zone-activate (lambda () (setq activated t))))
+          (dolist (event '(13 11 nil))
+            (goto-char (point-min))
+            (setq activated nil)
+            (let ((last-nonmenu-event event))
+              (call-interactively (key-binding (kbd "RET"))))
+            (should (eq (current-buffer) view-buf))
+            (should activated))
+          (remove-text-properties
+           (point-min) (+ (point-min) 7) '(mevedel-view-zone-activate nil))
+          (dolist (event '(13 11 nil))
+            (let ((last-nonmenu-event event))
+              (should-error (call-interactively (key-binding (kbd "RET")))
+                            :type 'user-error)))
+          ;; An unadorned display click remains harmless.
+          (save-window-excursion
+            (switch-to-buffer view-buf)
+            (mevedel-view-activate-at-point
+             (list 'mouse-1 (list (selected-window) (point-min) '(0 . 0) 0)))))))
+    (let ((target (generate-new-buffer " *test-click-target*"))
+          opened)
+      (unwind-protect
+          (progn
+            (with-current-buffer target
+              (insert "xagent")
+              (put-text-property
+               2 7 'mevedel-view-agent-path "/root/test"))
+            (cl-letf
+                (((symbol-function 'mevedel-view--event-position)
+                  (lambda (&optional _event) 2))
+                 ((symbol-function 'mouse-set-point)
+                  (lambda (_event)
+                    (set-buffer target)
+                    (goto-char 2)))
+                 ((symbol-function 'mevedel-view--position-in-input-region-p)
+                  (lambda (_position) nil))
+                 ((symbol-function 'mevedel-view-open-agent-transcript-at-point)
+                  (lambda (&optional _event)
+                    (setq opened
+                          (get-text-property
+                           (point) 'mevedel-view-agent-path)))))
+              (with-temp-buffer
+                (mevedel-view-activate-at-point 'mouse)))
+            (should (equal "/root/test" opened)))
+        (when (buffer-live-p target)
+          (kill-buffer target))))))
 
 
 ;;
@@ -1564,28 +1593,20 @@
 (mevedel-deftest mevedel-view-execution-show-in-conversation-integration ()
   ,test
   (test)
-  :doc "agent navigation uses the captured child tool identity in its owning view"
-  (let ((agent-view (generate-new-buffer " *live execution agent*"))
-        opened shown)
-    (unwind-protect
-        (save-window-excursion
-          (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
-                     (lambda (owner)
-                       (setq opened owner)
-                       (switch-to-buffer agent-view)))
-                    ((symbol-function 'mevedel-view-audit-show-control-result)
-                     (lambda (_) (error "Live activation scanned transcript history")))
-                    ((symbol-function 'mevedel-view-audit-show-result)
-                     (lambda (record)
-                       (should (eq (current-buffer) agent-view))
-                       (setq shown record))))
-            (mevedel-view-execution-show-in-conversation
-             '(:execution-id "exec-child" :tool-use-id "outer/1/1"
-               :owner "/root/worker"))
-            (should (equal opened "/root/worker"))
-            (should (equal (plist-get shown :tool-use-id) "outer/1/1"))
-            (should (equal (plist-get shown :execution-id) "exec-child"))))
-      (kill-buffer agent-view))))
+  :doc "agent navigation supplies owner and captured nested tool identity to the navigator"
+  (let (shown)
+    (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
+               (lambda (_) (ert-fail "Caller bypassed owner-aware navigation")))
+              ((symbol-function 'mevedel-view-audit-show-control-result)
+               (lambda (_) (ert-fail "Live activation scanned transcript history")))
+              ((symbol-function 'mevedel-view-audit-show-result)
+               (lambda (record) (setq shown record))))
+      (mevedel-view-execution-show-in-conversation
+       '(:execution-id "exec-child" :tool-use-id "outer/1/1"
+         :owner "/root/worker"))
+      (should (equal (plist-get shown :owner) "/root/worker"))
+      (should (equal (plist-get shown :tool-use-id) "outer/1/1"))
+      (should (equal (plist-get shown :execution-id) "exec-child")))))
 
 (mevedel-deftest mevedel-view-execution-all-integration ()
   ,test

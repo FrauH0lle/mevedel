@@ -364,12 +364,14 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
                  (plist-get entry :queued-at-goal-id))))))
 
 (defun mevedel-view--pending-input-preview (input)
-  "Return a one-line preview for pending INPUT."
-  (let ((preview (string-trim
-                  (replace-regexp-in-string "[ \t\n\r]+" " "
-                                            (substring-no-properties input) t t))))
-    (if (> (length preview) 96)
-        (concat (substring preview 0 93) "...")
+  "Return a one-line, 96-column preview from a bounded prefix of INPUT."
+  (let* ((prefix (substring-no-properties input 0 (min (length input) 1024)))
+         (preview (string-trim
+                   (replace-regexp-in-string
+                    "[ \t\n\r]+" " "
+                    (mevedel--normalize-message-text prefix) t t))))
+    (if (or (> (length input) (length prefix)) (> (string-width preview) 96))
+        (concat (truncate-string-to-width preview 93) "...")
       preview)))
 
 (defun mevedel-view--pending-input-text (entry)
@@ -432,10 +434,17 @@ Only the explicitly labeled management action opens the queue cockpit."
   "Return ENTRY's plain input, bounded to ten width-limited display lines.
 Long inputs are explicitly labeled partial.  Text is never interpreted as
 buttons, Markdown, or interaction authority."
-  (let* ((text (substring-no-properties (mevedel-view--pending-input-text entry)))
-         (width (max 1 (min 80 (- (window-body-width
+  (let* ((width (max 1 (min 80 (- (window-body-width
                                   (get-buffer-window (current-buffer) t))
                                  6))))
+         (input (or (plist-get entry :input) ""))
+         ;; Bound normalization and property copying as well as line layout.
+         ;; Async queue refresh must not rescan a pasted megabyte-long input.
+         (prefix (substring-no-properties
+                  input 0 (min (length input) (1+ (* 20 width)))))
+         (partial (> (length input) (length prefix)))
+         (text (replace-regexp-in-string
+                "[\t\r]" " " (mevedel--normalize-message-text prefix) t t))
          (position 0)
          (lines 0)
          parts)
@@ -454,7 +463,7 @@ buttons, Markdown, or interaction authority."
         (when (and newline (= count newline)) (cl-incf position))
         (cl-incf lines)))
     (concat (if parts (apply #'concat (nreverse parts)) "    (Empty input)\n")
-            (when (< position (length text))
+            (when (or partial (< position (length text)))
               "    [Partial preview: 10 lines maximum; Manage queue for full input.]\n"))))
 
 (defun mevedel-view--pending-input-category-body (label entries &optional session selected)
@@ -473,7 +482,7 @@ SESSION and SELECTED identify the locally expanded entry."
                               (format "[◆ %s] "
                                       (mevedel-view-composer-scope-label scope)))
                             (mevedel-view--pending-input-preview
-                             (mevedel-view--pending-input-text entry))))))
+                             (or (plist-get entry :input) ""))))))
         (when (and session id)
           (add-text-properties
            0 (length text)

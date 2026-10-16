@@ -73,6 +73,7 @@
 (autoload 'mevedel-clear-patch-buffer "mevedel-chat" nil t)
 (autoload 'mevedel-collaboration-status "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-stop "mevedel-collaboration" nil t)
+(autoload 'mevedel-collaboration-stop-all "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-view "mevedel-collaboration" nil t)
 (autoload 'mevedel-compact "mevedel-compact" nil t)
 (autoload 'mevedel-diff-apply-buffer "mevedel-diff-apply" nil t)

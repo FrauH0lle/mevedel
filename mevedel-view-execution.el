@@ -42,10 +42,6 @@
 (declare-function mevedel-view--status-session "mevedel-view" (&optional data-buf))
 (defvar mevedel-view--agent-transcript-p)
 
-;; `mevedel-view-agent'
-(declare-function mevedel-view-open-agent-transcript "mevedel-view-agent" (agent-path))
-(autoload 'mevedel-view-open-agent-transcript "mevedel-view-agent" nil t)
-
 ;; `mevedel-view-audit'
 (declare-function mevedel-view-audit-show-result "mevedel-view-audit" (record))
 (autoload 'mevedel-view-audit-show-result "mevedel-view-audit" nil t)
@@ -228,15 +224,14 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
 
 (defun mevedel-view-execution-show-in-conversation (snapshot)
   "Show the originating tool row identified by SNAPSHOT, honoring its owner."
-  (let ((owner (plist-get snapshot :owner))
-        (record (list :execution-id (plist-get snapshot :execution-id)
-                      :tool-use-id (plist-get snapshot :tool-use-id)
-                      :facts snapshot)))
-    (if (equal owner "/root")
-        (mevedel-view-audit-show-result record)
-      (mevedel-view-open-agent-transcript owner)
-      (with-current-buffer (window-buffer (selected-window))
-        (mevedel-view-audit-show-result record)))))
+  ;; The audit navigator owns agent opening, source preparation and archived
+  ;; segment selection.  Pre-opening here bypasses its preparation of a
+  ;; settled agent's asynchronously rendered transcript.
+  (mevedel-view-audit-show-result
+   (list :owner (plist-get snapshot :owner)
+         :execution-id (plist-get snapshot :execution-id)
+         :tool-use-id (plist-get snapshot :tool-use-id)
+         :facts snapshot)))
 
 (defun mevedel-view-execution--details (session snapshot live)
   "Return expanded controls and preview for SESSION's SNAPSHOT.

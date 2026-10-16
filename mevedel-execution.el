@@ -812,27 +812,39 @@ Compare snapshots with `equal'.  A deep copy, unlike printed text, cannot
 depend on the printer state of the context that takes it."
   (let* ((authority (and session (mevedel-execution--mutation-target session)))
          (workspace (and authority (mevedel-session-workspace authority))))
-    (copy-tree
-     (list
-      (mevedel-permission-mode-effective session nil nil request invocation)
-      (mevedel-sandbox-mode-effective
-       session (mevedel-permission-mode-effective session nil nil request invocation))
-      (and (boundp 'mevedel-memory-dirs) mevedel-memory-dirs)
-      (and (boundp 'mevedel-workspace-additional-roots)
-           mevedel-workspace-additional-roots)
-      temporary-file-directory
-      (and (boundp 'mevedel-permission-rules) mevedel-permission-rules)
-      (and authority (mevedel-session-permission-rules authority))
-      (and authority (mevedel-session-resource-grants authority))
-      (and workspace (mevedel-permission-persistent-authority workspace 'global))
-      (and workspace (mevedel-permission-persistent-authority workspace 'workspace))
-      (mapcar (lambda (root)
-                (let ((attributes (file-attributes root)))
-                  (list (file-truename root)
-                        (file-attribute-inode-number attributes)
-                        (file-attribute-device-number attributes))))
-              roots))
-     t)))
+    (cl-labels ((snapshot (value)
+                  ;; `copy-tree' retains mutable strings, including rule and
+                  ;; grant paths.  A later in-place edit must not rewrite the
+                  ;; authority captured before asynchronous preparation.
+                  (cond ((consp value)
+                         (let (items)
+                           (while (consp value)
+                             (push (snapshot (car value)) items)
+                             (setq value (cdr value)))
+                           (nconc (nreverse items) (snapshot value))))
+                        ((stringp value) (copy-sequence value))
+                        ((vectorp value) (vconcat (mapcar #'snapshot value)))
+                        (t value))))
+      (snapshot
+       (list
+        (mevedel-permission-mode-effective session nil nil request invocation)
+        (mevedel-sandbox-mode-effective
+         session (mevedel-permission-mode-effective session nil nil request invocation))
+        (and (boundp 'mevedel-memory-dirs) mevedel-memory-dirs)
+        (and (boundp 'mevedel-workspace-additional-roots)
+             mevedel-workspace-additional-roots)
+        temporary-file-directory
+        (and (boundp 'mevedel-permission-rules) mevedel-permission-rules)
+        (and authority (mevedel-session-permission-rules authority))
+        (and authority (mevedel-session-resource-grants authority))
+        (and workspace (mevedel-permission-persistent-authority workspace 'global))
+        (and workspace (mevedel-permission-persistent-authority workspace 'workspace))
+        (mapcar (lambda (root)
+                  (let ((attributes (file-attributes root)))
+                    (list (file-truename root)
+                          (file-attribute-inode-number attributes)
+                          (file-attribute-device-number attributes))))
+                roots))))))
 
 (defun mevedel-execution--prepare
     (callback command workdir roots additional permissions session owner

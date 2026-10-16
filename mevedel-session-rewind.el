@@ -184,6 +184,7 @@
 (declare-function mevedel-directive-attempts "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x))
+(declare-function mevedel-session-chapters "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x))
@@ -1081,6 +1082,13 @@ candidate's surviving turn count."
      (mevedel-session-execution-state candidate) nil
      (mevedel-session-current-segment candidate) segment
      (mevedel-session-updated-at candidate) (format-time-string "%FT%H-%M-%S")
+     ;; Only chats closed before the target segment survive; a later `/clear'
+     ;; then appends after them in order.
+     (mevedel-session-chapters candidate)
+     (copy-tree
+      (cl-remove-if-not
+       (lambda (chapter) (< (plist-get chapter :segment) segment))
+       (mevedel-session-chapters session)))
      (mevedel-session-prompt-index candidate)
      (copy-tree
       (mevedel-session-rewind-reduce-prompt-index

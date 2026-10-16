@@ -1242,19 +1242,21 @@ that is not running is forgotten."
      (mevedel-collaboration-lobby-stop-directory
       (plist-get entry :directory)))))
 
+;;;###autoload
 (defun mevedel-collaboration-stop-all ()
   "Stop every session share and lobby in this Emacs.
 Stopped lobbies are no longer recorded to restart, including lobbies that
 failed to restart; their stored credentials stay, so starting one again
 revives its links."
   (interactive)
+  ;; A recorded lobby must be forgotten even before startup restoration has
+  ;; loaded its owner.  Loading the module does not start any lobby.
+  (require 'mevedel-collaboration-lobby)
   (let ((rooms (mevedel-collaboration--room-list))
         lobbies)
     (dolist (room rooms)
       (mevedel-collaboration--stop-internal room 'user-stop))
-    (setq lobbies (if (fboundp 'mevedel-collaboration-lobby-stop-every)
-                      (mevedel-collaboration-lobby-stop-every)
-                    0))
+    (setq lobbies (mevedel-collaboration-lobby-stop-every))
     (if (and (null rooms) (zerop lobbies))
         (message "mevedel: collaboration is not active")
       (message "mevedel: stopped %d share%s and %d lobb%s"

@@ -266,6 +266,53 @@
       (should (< (- (mevedel-view--input-start) (point-min)) 1500))
       (should (string-search "Manage queue… (pauses delivery; C-c C-e)" (buffer-string))))))
 
+(mevedel-deftest mevedel-view--pending-input-preview ()
+  ,test
+  (test)
+  :doc "summary uses display columns and strips authored properties"
+  (let ((preview (mevedel-view--pending-input-preview
+                  (propertize (make-string 100 ?界) 'display "hidden"))))
+    (should (<= (string-width preview) 96))
+    (should (string-suffix-p "..." preview))
+    (should-not (text-properties-at 0 preview)))
+  :doc "ordinary whitespace folds without changing short input"
+  (should (equal "one two three"
+                 (mevedel-view--pending-input-preview " \tone\ntwo\r three  ")))
+  :doc "queue summaries normalize only bounded prefixes of very large input"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up (list :input (make-string 1000000 ?界)))
+    (with-current-buffer view-buf
+      (let ((normalize (symbol-function 'mevedel--normalize-message-text))
+            (largest 0))
+        (cl-letf (((symbol-function 'mevedel--normalize-message-text)
+                   (lambda (text)
+                     (setq largest (max largest (length text)))
+                     (funcall normalize text))))
+          (mevedel-view--pending-inputs-body session))
+        (should (> largest 0))
+        (should (<= largest 1024))))))
+
+(mevedel-deftest mevedel-pending-inputs--preview-detail ()
+  ,test
+  (test)
+  :doc "expanded input normalizes bounded text and neutralizes tab and CR layout"
+  (with-temp-buffer
+    (let ((normalize (symbol-function 'mevedel--normalize-message-text))
+          (largest 0)
+          (text (concat "heading\tvalue\r\n" (make-string 1000000 ?界)))
+          detail)
+      (cl-letf (((symbol-function 'mevedel--normalize-message-text)
+                 (lambda (input)
+                   (setq largest (max largest (length input)))
+                   (funcall normalize input))))
+        (setq detail (mevedel-pending-inputs--preview-detail (list :input text))))
+      (should-not (string-match-p "[\t\r]" detail))
+      (should (string-search "Partial preview" detail))
+      (should (<= largest 1601))
+      (dolist (line (butlast (split-string detail "\n") 2))
+        (should (<= (string-width line) 84))))))
+
 (mevedel-deftest mevedel-pending-inputs-follow-up-changed ()
   ,test
   (test)

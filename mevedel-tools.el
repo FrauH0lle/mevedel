@@ -162,22 +162,26 @@ Keep them request-local across temporary removal of all callable tools."
          (setq parsed (vconcat parsed (vector (copy-tree annotation t)))))))
     (plist-put container :tools parsed)))
 
-(defun mevedel-tools-visibility (owner)
+(defun mevedel-tools-visibility (&optional owner)
   "Return a predicate of tool names visible to OWNER's next model sample.
 OWNER is a native gptel FSM or an external turn owner.  Plan and directive
 planning hide editing tools; Goal tools follow their current availability.
-Monitor is visible only to the root, never to an agent invocation."
-  (let* ((info (mevedel-engine-info owner))
-         (invocation (plist-get info :mevedel-agent-invocation))
-         (buffer (plist-get info :buffer))
+Monitor is visible only to the root, never to an agent invocation.
+Without OWNER, use the current conversation, including before admission."
+  (let* ((info (and owner (mevedel-engine-info owner)))
+         (buffer (or (plist-get info :buffer) (current-buffer)))
+         (invocation (or (and (mevedel-agent-invocation-p owner) owner)
+                         (plist-get info :mevedel-agent-invocation)
+                         (mevedel-tools--buffer-local-agent-invocation buffer)))
          (session
           (or (and (mevedel-agent-invocation-p invocation)
                    (mevedel-agent-invocation-parent-session invocation))
               (and (buffer-live-p buffer)
                    (buffer-local-value 'mevedel--session buffer))))
          (request
-          (and (buffer-live-p buffer)
-               (buffer-local-value 'mevedel--current-request buffer)))
+          (or (and (mevedel-request-p owner) owner)
+              (and (buffer-live-p buffer)
+                   (buffer-local-value 'mevedel--current-request buffer))))
          (plan-read-only-p
           (and session
                (or (mevedel-session-plan-mode session)
@@ -191,7 +195,8 @@ Monitor is visible only to the root, never to an agent invocation."
       (and (not (and invocation (equal name "Monitor")))
            (mevedel-tool-goal-available-p name owner)
            (not (and plan-read-only-p
-                     (when-let* ((registered (mevedel-tool-get name)))
+                     (when-let* ((registered (or (mevedel-tool-for-call name)
+                                                (mevedel-tool-get name))))
                        (if (equal name "ApplyPatch")
                            (not apply-patch-visible-p)
                          (or (equal name "Eval")
@@ -493,14 +498,24 @@ reachable through ToolSearch."
   "Return the current conversation's specialist tool listing, or nil.
 It lists catalog tools the current role and request may call through
 ToolCall, excluding native tools.  Without native ToolCall there is none."
-  (let* ((mevedel-tools--current-engine nil)
+  (let* ((mevedel-tools--current-engine
+          (cl-find-if
+           (lambda (owner)
+             (and owner
+                  (eq (plist-get (mevedel-engine-info owner) :buffer)
+                      (current-buffer))))
+           (list mevedel--agent-invocation
+                 (mevedel-engine-owner mevedel--current-request)
+                 mevedel-tools--current-engine)))
          (ctx (mevedel-tools--current-context))
          (native (mevedel-tool-ptc--active-tool-names))
          (roster (mevedel-tool-ptc--roster))
          (names
           (and ctx
-               (cl-find "ToolCall" gptel-tools
-                        :key #'gptel-tool-name :test #'equal)
+               (cl-some (lambda (provider)
+                          (when-let* ((tool (mevedel-tool-for-gptel provider)))
+                            (eq tool (mevedel-tool-get "ToolCall" "mevedel"))))
+                        (mevedel-tool-ptc--native-tools))
                (delete-dups
                 (cl-loop for (path . _) in (mevedel-tools--ctx-tool-catalog ctx)
                          for tool = (mevedel-tool-get (cadr path) (car path))
@@ -524,6 +539,7 @@ ToolCall, excluding native tools.  Without native ToolCall there is none."
            "## Tools\n"
            "Specialist tools you can call through ToolCall without searching "
            "first, as `(NAME :ARG VALUE ...)`; bracketed arguments are optional. "
+           "Tools marked standalone only must be the entire expression. "
            "ToolSearch with an exact name returns the full contract when "
            "argument meaning or usage rules matter.\n\n"
            (string-join (reverse lines) "\n")

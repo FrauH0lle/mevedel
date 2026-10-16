@@ -30,10 +30,6 @@
 ;; `gptel'
 (defvar gptel-tools)
 
-;; `gptel-request'
-(declare-function gptel-tool-category "ext:gptel-request" (tool))
-(declare-function gptel-tool-name "ext:gptel-request" (tool))
-
 ;; `mevedel-ptc-driver'
 (declare-function mevedel-ptc-driver-run
                   "mevedel-ptc-driver" (callback script roster &optional standalone-tools))
@@ -45,17 +41,13 @@
                   "mevedel-structs" (request))
 (defvar mevedel--current-request)
 
-;; `mevedel-tool-goal'
-(declare-function mevedel-tool-goal-available-p "mevedel-tool-goal"
-                  (name &optional fsm))
-(autoload 'mevedel-tool-goal-available-p "mevedel-tool-goal")
-
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-call-name "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-callable-p "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-description "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
+(declare-function mevedel-tool-for-gptel "mevedel-tool-registry" (provider))
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-groups "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (tool))
@@ -64,6 +56,7 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--ctx-tool-catalog "mevedel-tools" (ctx))
 (declare-function mevedel-tools--current-context "mevedel-tools" ())
+(declare-function mevedel-tools-visibility "mevedel-tools" (&optional owner))
 (defvar mevedel-tools--current-engine)
 
 
@@ -94,19 +87,22 @@ and interaction tools require a model turn to consume their result."
   :type 'natnum
   :group 'mevedel)
 
+(defun mevedel-tool-ptc--native-tools ()
+  "Return the current request's native tools, or the buffer's before admission."
+  (let* ((fsm (bound-and-true-p mevedel-tools--current-engine))
+         (info (and fsm (mevedel-engine-info fsm))))
+    (if fsm
+        (plist-get info :tools)
+      (bound-and-true-p gptel-tools))))
+
 (defun mevedel-tool-ptc--active-tool-names ()
   "Return canonical names of registered tools active in the current request."
-  (let* ((fsm (bound-and-true-p mevedel-tools--current-engine))
-         (tools (or (and fsm (plist-get (mevedel-engine-info fsm) :tools))
-                    (bound-and-true-p gptel-tools))))
-    (delq nil
-          (mapcar (lambda (tool)
-                    (when-let* ((registered (mevedel-tool-get
-                                            (gptel-tool-name tool)
-                                            (gptel-tool-category tool))))
-                      (when (mevedel-tool-callable-p registered)
-                        (mevedel-tool-call-name registered))))
-                  tools))))
+  (delq nil
+        (mapcar (lambda (tool)
+                  (when-let* ((registered (mevedel-tool-for-gptel tool)))
+                    (when (mevedel-tool-callable-p registered)
+                      (mevedel-tool-call-name registered))))
+                (mevedel-tool-ptc--native-tools))))
 
 (defun mevedel-tool-ptc--catalog-tool-names ()
   "Return canonical names in the current owner's discoverable catalog."
@@ -119,18 +115,22 @@ and interaction tools require a model turn to consume their result."
                         (mevedel-tool-call-name tool))))
                   (mevedel-tools--ctx-tool-catalog ctx)))))
 
-(defun mevedel-tool-ptc--roster ()
-  "Return callable names allowed by the current role and request."
+(defun mevedel-tool-ptc--roster (&optional include-hidden)
+  "Return callable names allowed by the current role and request.
+INCLUDE-HIDDEN retains tools hidden by transient turn visibility, for role
+inheritance.  Capability membership and skill restrictions still apply."
   (let ((available (delete-dups
                     (append (mevedel-tool-ptc--active-tool-names)
                             (mevedel-tool-ptc--catalog-tool-names))))
+        (visible (mevedel-tools-visibility
+                  (bound-and-true-p mevedel-tools--current-engine)))
         (restriction
          (if (bound-and-true-p mevedel--current-request)
              (mevedel-request-ptc-primitives mevedel--current-request)
            :unrestricted)))
     (seq-filter (lambda (name)
                   (and (not (member name '("ToolCall" "ToolSearch")))
-                       (mevedel-tool-goal-available-p name)
+                       (or include-hidden (funcall visible name))
                        (or (eq restriction :unrestricted)
                            (member name restriction))))
                 available)))
@@ -155,10 +155,11 @@ and interaction tools require a model turn to consume their result."
            (and tool (mevedel-tool-args tool))))
          (summary (and tool (or (mevedel-tool-summary tool)
                                 (mevedel-tool-description tool)))))
-    (format "- (%s%s)%s"
+    (format "- (%s%s)%s%s"
             name
             (if args (concat " " (string-join args " ")) "")
-            (if summary (concat " - " (string-trim summary)) ""))))
+            (if summary (concat " - " (string-trim summary)) "")
+            (if (mevedel-tool-ptc--composable-p name) "" " [standalone only]"))))
 
 (defun mevedel-tool-ptc--call-template (name)
   "Return a single-call template for NAME with required argument placeholders."

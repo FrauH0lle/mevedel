@@ -735,6 +735,56 @@
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
+  :doc "a Worktree card names queued input as the blocker and RET refuses with the same reason"
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock
+                   :name "test" :working-directory default-directory))
+         (data-buffer (generate-new-buffer " *plan-blocked-data*"))
+         (view-buffer (generate-new-buffer " *plan-blocked-view*"))
+         (selection (list :location 'worktree :context 'current
+                          :execution 'direct :mode 'ask
+                          :model-provider "Test:model"))
+         (entry (mevedel-plan-mode--approval-entry
+                 "# Plan" data-buffer session selection))
+         (notice "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q before implementing in a worktree")
+         descriptor outcome)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (_buffer) view-buffer))
+                  ((symbol-function 'mevedel-view--interaction-register)
+                   (lambda (value)
+                     (setq descriptor value)
+                     (make-overlay (point-min) (point-min))))
+                  ((symbol-function 'mevedel--prompt--settle)
+                   (lambda (_overlay value) (setq outcome value)))
+                  ((symbol-function 'mevedel-worktree-collect-status)
+                   (lambda (&optional _) '(:dirty-p nil))))
+          ;; Nothing blocks yet: the card carries no notice.
+          (mevedel-plan-mode--render-approval entry)
+          (should-not (string-search notice (plist-get descriptor :body)))
+          ;; Queue mutation rebuilds the interaction zone, which re-renders
+          ;; the approval with the blocker named.
+          (mevedel-session-enqueue-pending-input
+           session 'follow-up (list :input "Also update the docs"))
+          (mevedel-plan-mode--render-approval entry)
+          (let* ((body (plist-get descriptor :body))
+                 (position (string-search notice body)))
+            (should position)
+            (should (memq 'warning
+                          (flatten-tree
+                           (get-text-property position 'font-lock-face body)))))
+          (should
+           (equal notice
+                  (condition-case err
+                      (call-interactively
+                       (lookup-key (plist-get descriptor :keymap) (kbd "RET")))
+                    (user-error (error-message-string err)))))
+          (should-not outcome)
+          ;; The queued input survives the refusal.
+          (should (mevedel-session-pending-follow-ups session)))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
   :doc "cycling a setting preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create
@@ -1589,7 +1639,7 @@
     (should (functionp (plist-get entry :callback)))))
 
 (mevedel-deftest mevedel-plan-mode--worktree-warning
-  (:doc "warns only for a dirty Worktree source")
+  (:doc "names what blocks a Worktree fork now and warns for a dirty source")
   ,test
   (test)
   (let ((entry
@@ -1599,7 +1649,26 @@
                (lambda (&rest _) '(:dirty-p t))))
       (should (string-match-p
                "uncommitted changes"
-               (mevedel-plan-mode--worktree-warning entry))))))
+               (mevedel-plan-mode--worktree-warning entry)))))
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "test"
+                   :working-directory default-directory))
+         (entry (list :selection (list :location 'worktree)
+                      :chat-buffer (current-buffer)
+                      :session session)))
+    (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
+               (lambda (&rest _) '(:dirty-p nil))))
+      ;; A clean source that can fork needs no notice.
+      (should-not (mevedel-plan-mode--worktree-warning entry))
+      ;; Queued input would refuse acceptance, so the card says so first.
+      (mevedel-session-enqueue-pending-input
+       session 'follow-up (list :input "Also update the docs"))
+      (should (equal
+               "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q before implementing in a worktree."
+               (mevedel-plan-mode--worktree-warning entry)))
+      ;; Here keeps queued follow-ups for after kickoff and shows nothing.
+      (plist-put (plist-get entry :selection) :location 'here)
+      (should-not (mevedel-plan-mode--worktree-warning entry)))))
 
 (mevedel-deftest mevedel-plan-mode--accept
   (:doc "archives, exits Plan, shows preparation, and dispatches once")

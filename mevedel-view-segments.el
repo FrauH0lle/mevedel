@@ -473,6 +473,9 @@ The newest earlier chat comes first; the line opens the chat picker."
               (mapconcat (lambda (chat) (plist-get chat :title)) earlier " · ")
               100 nil nil "…"))
      'read-only t
+     ;; History starts right after this line: point there must keep the
+     ;; history's own keymap and stay editable for the renderer.
+     'rear-nonsticky t
      'font-lock-face 'shadow
      'keymap mevedel-view-segments--chats-map
      'mouse-face 'highlight

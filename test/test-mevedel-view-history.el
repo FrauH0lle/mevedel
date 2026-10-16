@@ -215,31 +215,33 @@ Binds `data-buf' and `view-buf'."
   (:doc "M-r incrementally searches, cycles matches, and restores on C-g")
   (mevedel-view-history-test--with-view
     (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "draft")
-      (mevedel-view-history-add "match older")
-      (mevedel-view-history-add "match newer")
-      (let ((unread-command-events
-             (append (list ?m ?a ?\M-r ?\r) unread-command-events)))
-        (mevedel-view-history-search))
-      (should (equal "match older" (mevedel-view-history--input-text)))
-      (mevedel-view-history--replace-input "draft")
-      (let ((unread-command-events
-             (append (list ?m ?\C-g) unread-command-events)))
-        (should (condition-case nil
-                    (progn
-                      (mevedel-view-history-search)
-                      nil)
-                  (quit t))))
-      (should (equal "draft" (mevedel-view-history--input-text)))
-      (let ((aborted nil)
-            (unread-command-events
-             (append (list ?m ?\C-c ?\C-k) unread-command-events)))
-        (cl-letf (((symbol-function 'mevedel-view-abort)
-                   (lambda () (interactive) (setq aborted t))))
+      ;; `read-key' updates this global even for simulated input.
+      (let ((last-nonmenu-event last-nonmenu-event))
+        (goto-char (point-max))
+        (insert "draft")
+        (mevedel-view-history-add "match older")
+        (mevedel-view-history-add "match newer")
+        (let ((unread-command-events
+               (append (list ?m ?a ?\M-r ?\r) unread-command-events)))
           (mevedel-view-history-search))
-        (should aborted))
-      (should (equal "draft" (mevedel-view-history--input-text))))))
+        (should (equal "match older" (mevedel-view-history--input-text)))
+        (mevedel-view-history--replace-input "draft")
+        (let ((unread-command-events
+               (append (list ?m ?\C-g) unread-command-events)))
+          (should (condition-case nil
+                      (progn
+                        (mevedel-view-history-search)
+                        nil)
+                    (quit t))))
+        (should (equal "draft" (mevedel-view-history--input-text)))
+        (let ((aborted nil)
+              (unread-command-events
+               (append (list ?m ?\C-c ?\C-k) unread-command-events)))
+          (cl-letf (((symbol-function 'mevedel-view-abort)
+                     (lambda () (interactive) (setq aborted t))))
+            (mevedel-view-history-search))
+          (should aborted))
+        (should (equal "draft" (mevedel-view-history--input-text)))))))
 
 (mevedel-deftest mevedel-view-history--browse-picker
   (:doc "C-c C-l restores the stored binding behind a plain picker choice")

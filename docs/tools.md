@@ -685,11 +685,15 @@ Each conversation receives a retained **specialist tool listing**: every catalog
 tool its current role and request may call through ToolCall, excluding native
 tools, as a calling shape and summary such as
 `- (Imenu :file_path string) - Fast outline of ...`. Bracketed arguments are
-optional. The listing lets the model call a known specialist without searching
+optional; a `[standalone only]` suffix means the call must be the entire
+expression. The listing lets the model call a known specialist without searching
 first; ToolSearch supplies full contracts when argument meaning or usage rules
 matter, and recovers after a failed call. `mevedel-tools-listing-section` renders
 it from the receiving conversation's catalog, so an agent sees its own
-specialists. It is delivered like the skill catalog: only when it changes, under
+specialists. Retained observations use that conversation's admitted engine and
+actual native tool set, including current root Goal attribution; an unrelated
+callback's engine cannot replace the recipient's context.
+It is delivered like the skill catalog: only when it changes, under
 a budget of `mevedel-tools-listing-budget` (default 2%) of the model's context
 window. Tools beyond the budget are counted and left to ToolSearch.
 
@@ -719,6 +723,11 @@ history. Calls use the current owner's catalog and request
 restrictions; search is not authorization. Wrapped tools use `category/name`
 identities, while built-ins use their short names. Unsupported category
 separators and language-name collisions require native exposure.
+The native and deferred rosters share Plan, Goal and agent visibility rules;
+hidden native tools cannot reappear through the catalog. Native membership
+requires the registered implementation, not merely its name. An admitted
+request's empty or omitted tool list never falls back to the buffer's wider
+native tools; only pre-admission discovery uses the buffer configuration.
 
 Native schema additions can invalidate a cached prefix containing much more
 than the changed tool. Role/configuration changes can still alter schemas;

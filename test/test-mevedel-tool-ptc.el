@@ -250,6 +250,40 @@
         (should (equal before (gptel-tool-description (mevedel-tool-gptel-tool tool))))
         (should (string-search "mevedel://ptc-dialect.md" before))))))
 
+(mevedel-deftest mevedel-tool-ptc--roster/visibility
+  (:before-each (mevedel-tools-register))
+  ,test
+  (test)
+  :doc "Plan and child visibility also bound deferred calls and their listing"
+  (with-temp-buffer
+    (let* ((names '("Eval" "SharedEdit" "ApplyPatch" "Monitor" "Imenu"))
+           (catalog (mapcar (lambda (name) (cons (list "mevedel" name) name)) names))
+           (session (mevedel-session--create :tool-catalog catalog :plan-mode t)))
+      (setq-local mevedel--session session
+                  gptel-tools (test-mevedel-tool-ptc--gptel-tools "ToolCall"))
+      ;; At prompt construction there need not be a bound engine yet.
+      (should (equal '("ApplyPatch" "Monitor" "Imenu") (mevedel-tool-ptc--roster)))
+      (let ((listing (mevedel-tools-listing-section)))
+        (should-not (string-search "(Eval " listing))
+        (should-not (string-search "(SharedEdit " listing)))
+      ;; The immutable child stamp survives leaving the parent's Plan mode.
+      (setf (mevedel-session-plan-mode session) nil)
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create
+                   :parent-session session :buffer (current-buffer)
+                   :runtime-context (list :buffer (current-buffer))
+                   :plan-read-only t :tool-catalog catalog))
+      (dolist (owner (list nil
+                          (gptel-make-fsm :info (list :buffer (current-buffer)))
+                          mevedel--agent-invocation))
+        (let ((mevedel-tools--current-engine owner))
+          (should (equal '("ApplyPatch" "Imenu") (mevedel-tool-ptc--roster)))))
+      ;; Root directive Planning is stricter: no ApplyPatch route either.
+      (setq-local mevedel--agent-invocation nil
+                  mevedel--current-request
+                  (mevedel-request--create :plan-read-only t :directive-uuid "directive"))
+      (should (equal '("Monitor" "Imenu") (mevedel-tool-ptc--roster))))))
+
 (mevedel-deftest mevedel-tool-ptc--call-template ()
   ,test
   (test)
@@ -271,9 +305,40 @@
     (dolist (spec '(("Probe" "server/team") ("list" "mevedel") ("Good" "server")))
       (let* ((tool (mevedel-tool--create :name (car spec) :category (cadr spec)))
              (native (gptel-make-tool :name (car spec) :category (cadr spec))))
+        (setf (mevedel-tool-gptel-tool tool) native)
         (mevedel-tool-register tool)
         (push native gptel-tools)))
-    (should (equal '("server/Good") (mevedel-tool-ptc--active-tool-names)))))
+    (should (equal '("server/Good") (mevedel-tool-ptc--active-tool-names))))
+
+  :doc "rejects foreign same-name implementations but accepts request-local schema copies"
+  (let ((mevedel-tool--registry (make-hash-table :test #'equal)))
+    (mevedel-tool-fs--register)
+    (let* ((native (mevedel-tool-gptel-tool (mevedel-tool-get "Read" "mevedel")))
+           (copy (gptel--copy-tool native))
+           (foreign (gptel--copy-tool native))
+           (gptel-tools (list copy foreign)))
+      (setf (gptel-tool-description copy) "Request-local description"
+            (gptel-tool-function foreign) #'ignore)
+      (should (equal '("Read") (mevedel-tool-ptc--active-tool-names)))))
+
+  :doc "an explicitly empty request roster does not inherit buffer tools"
+  (let ((mevedel-tool--registry (make-hash-table :test #'equal)))
+    (mevedel-tool-fs--register)
+    (let ((gptel-tools (test-mevedel-tool-ptc--gptel-tools "Read"))
+          (mevedel-tools--current-engine (gptel-make-fsm :info '(:tools nil))))
+      (should-not (mevedel-tool-ptc--active-tool-names)))))
+
+(mevedel-deftest mevedel-tool-ptc--tool-declaration ()
+  ,test
+  (test)
+  :doc "compact declarations expose the same standalone restriction as execution"
+  (let ((mevedel-tool--registry (make-hash-table :test #'equal)))
+    (mevedel-tool-ensure "Skill")
+    (mevedel-tool-ensure "Read")
+    (should (string-search "[standalone only]"
+                           (mevedel-tool-ptc--tool-declaration "Skill")))
+    (should-not (string-search "[standalone only]"
+                               (mevedel-tool-ptc--tool-declaration "Read")))))
 
 (mevedel-deftest mevedel-tool-ptc--handler ()
   ,test

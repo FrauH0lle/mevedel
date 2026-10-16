@@ -45,6 +45,10 @@ an empty or request-restricted catalog does not grant additional tools. Named
 roles still resolve their own tool configuration. Retained follow-ups and cold
 restores reuse the frozen identities rather than the parent's current catalog;
 discovery and calls remain subject to current tool availability and permissions.
+Freezing retains specialists hidden only by the current Plan or Goal state;
+each invocation applies its own visibility. A later ordinary follow-up can
+therefore use the role's tools without retaining the preceding Plan turn's
+restriction. Skill capability restrictions still bound the frozen membership.
 Every agent receives a retained tool listing of its own callable specialists.
 Named roles get native SendMessage; a default child inherits its delegator's
 native tools and gets native SendMessage only when its inherited catalog permits

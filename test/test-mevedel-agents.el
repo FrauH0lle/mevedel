@@ -201,6 +201,35 @@
       (should-not (member "Skill" tools))
       (should-not (member "ListSkills" tools)))))
 
+(mevedel-deftest mevedel-agent-default/plan-inheritance
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "frozen default roles retain transiently hidden specialists for ordinary followups"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create
+                    :plan-mode t
+                    :tool-catalog '((("mevedel" "Eval") . "eval")
+                                    (("mevedel" "SharedEdit") . "edit")
+                                    (("mevedel" "Imenu") . "outline")))))
+      (setq-local mevedel--session session
+                  mevedel--current-request
+                  (mevedel-request--create :plan-read-only t
+                                           :ptc-primitives '("Eval" "SharedEdit")))
+      (let ((frozen (mevedel-agent-freeze (mevedel-agent-default))))
+        (dolist (plan '(t nil))
+          (setf (mevedel-session-plan-mode session) plan)
+          (setq-local mevedel--current-request nil)
+          ;; Each follow-up creates a new invocation from the frozen role.
+          (setq-local mevedel--agent-invocation (mevedel-agent-invocation-create frozen))
+          (setf (mevedel-agent-invocation-parent-session mevedel--agent-invocation) session
+                (mevedel-agent-invocation-plan-read-only mevedel--agent-invocation) plan)
+          (should (equal '("Eval" "SharedEdit")
+                         (mapcar (lambda (entry) (cadr (car entry)))
+                                 (mevedel-agent-invocation-tool-catalog mevedel--agent-invocation))))
+          (should (equal (unless plan '("Eval" "SharedEdit"))
+                         (mevedel-tool-ptc--roster))))))))
+
 (mevedel-deftest mevedel-agent--specs-contain-tool-p/test
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test

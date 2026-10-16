@@ -2460,6 +2460,34 @@
              #'car
              (mevedel-session-rewind-reduce-agent-transcripts entries 5))))))
 
+(mevedel-deftest mevedel-session-rewind--rewind-candidate ()
+  ,test
+  (test)
+  :doc "keeps only chats closed before the target segment, so a later /clear stays ordered"
+  (let* ((chapters '((:segment 1 :title "A" :closed-at "t1")
+                     (:segment 3 :title "C" :closed-at "t3")))
+         (session (mevedel-session--create
+                   :name "main" :current-segment 4 :turn-count 6
+                   :chapters (copy-tree chapters)))
+         (candidate (mevedel-session-rewind--rewind-candidate
+                     session '(:segment 2 :turn 1 :cum-turn 3))))
+    (should (= 2 (mevedel-session-current-segment candidate)))
+    (should (equal '((:segment 1 :title "A" :closed-at "t1"))
+                   (mevedel-session-chapters candidate)))
+    (should (equal chapters (mevedel-session-chapters session)))
+    ;; Two later clears close segments 2 and 3 under their own titles.
+    (setf (mevedel-session-chapters candidate)
+          (append (mevedel-session-chapters candidate)
+                  '((:segment 2 :title "B" :closed-at "t5")
+                    (:segment 3 :title "D" :closed-at "t6"))))
+    (should (equal '(("A" 1 1) ("B" 2 2) ("D" 3 3) ("Now" 4 4))
+                   (mapcar (lambda (chat)
+                             (list (plist-get chat :title)
+                                   (plist-get chat :first-segment)
+                                   (plist-get chat :last-segment)))
+                           (mevedel-session-artifacts-chats
+                            (mevedel-session-chapters candidate) nil 4 "Now"))))))
+
 (mevedel-deftest mevedel-session-rewind-reduce-prompt-index ()
   ,test
   (test)
