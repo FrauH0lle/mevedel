@@ -34,3 +34,6 @@
 - [Dim collapsed thinking blocks](collapsed-thinking-visual-preference.md) - Use subdued font highlighting for collapsed thinking blocks
 - [Protect long-running work without treating silence as refusal](sleep-and-long-running-work-preferences.md) - Sleep blocking protects work and remote reachability; permission absence timeouts are opt-in, not implicit refusals
 - [Separate feature enablement from its command setting](separate-feature-toggle-from-command.md) - Use separate defcustoms for enabling a command-backed feature and configuring its command, with enablement off by default
+- [Fix review findings without deferral](fix-review-findings-without-deferral.md) - In review-and-fix work, address every finding in the same pass rather than parking it in the backlog
+- [Use Claude Code as the Monitor design reference](monitor-design-reference-preference.md) - For Monitor and background-wake design, consult Claude Code through its CLI and use it as the default reference when uncertain
+- [Actively use a partner when pair work is invoked](explicit-pair-workflow-feedback.md) - An explicit $pair implementation request calls for real partner participation, not solo implementation
