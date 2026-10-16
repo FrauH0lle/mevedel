@@ -664,6 +664,9 @@ the gutter instead of crossing it, and copying preserves the original payload.
 Collapsed delivery cards hide the header separator and retain the final payload
 newline as their visible terminator. This gives the following row its own display
 line and inset, without adding a blank row or changing payload ownership.
+Display decoration keeps invisibility rear-nonsticky, including after a card
+joins an activity group, so clicking past its header stays on that row rather
+than moving point onto the following row.
 Hook-context expansion restores through the same renderer as interactive toggles,
 so redraws retain one heading and the same body inset.
 Restoring an expanded system-reminder audit uses its ordinary disclosure renderer:

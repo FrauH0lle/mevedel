@@ -1127,12 +1127,13 @@ TURNS is the list of rendered turn plists."
   "Mark START..END read-only and attach default display keymaps.
 Existing local `keymap' properties, such as transcript attribution
 buttons, are preserved.  DEFAULT-VTYPE is used when a character has
-no `mevedel-view-type' property yet."
+no `mevedel-view-type' property yet.  Invisibility is rear-nonsticky so
+decorating a collapsed card cannot hide its visible terminator from point."
   (add-text-properties start end
                        '(read-only t
                          front-sticky (read-only keymap)
                          rear-nonsticky
-                         (read-only keymap line-prefix wrap-prefix)))
+                         (read-only keymap line-prefix wrap-prefix invisible)))
   (let ((pos start))
     (while (< pos end)
       (let* ((keymap-next

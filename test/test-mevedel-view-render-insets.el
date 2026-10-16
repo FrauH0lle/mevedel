@@ -221,6 +221,9 @@
                     (should (invisible-p header-end))
                     (should (eq ?\n (char-before end)))
                     (should-not (invisible-p (1- end)))
+                    ;; Point adjustment uses position stickiness, not just
+                    ;; the terminator character's own visibility property.
+                    (should-not (get-pos-property (1- end) 'invisible))
                     (should-not (get-text-property header-end 'mevedel-view-mailbox-body))
                     (should (get-text-property (1- end) 'mevedel-view-mailbox-body))
                     (mevedel-view-toggle-section)
