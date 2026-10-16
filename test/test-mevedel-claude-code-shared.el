@@ -107,7 +107,25 @@
               (mevedel-chat-install-request-hooks)
               (mevedel-view--setup view buffer)
               (advice-add 'mevedel-acp-prompt :before
-                          (lambda (_connection input &rest _) (push input prompts))
+                          (lambda (_connection input &rest _)
+                            (with-current-buffer buffer
+                              (push (list :input input
+                                          :read-count
+                                          (how-many "^#\\+begin_tool (Read\\_>" (point-min) (point-max))
+                                          :guidance-count
+                                          (mevedel-engine-test--count-evidence
+                                           "SHARED-PATH-GUIDANCE-7315")
+                                          :mentions-count
+                                          (hash-table-count (mevedel-session-mentions-shown session))
+                                          :instruction-hashes
+                                          (copy-tree (mevedel-session-workspace-instruction-hashes session))
+                                          :attribution
+                                          (mevedel-view--user-turn-attribution
+                                           (last (cl-remove-if-not
+                                                  (lambda (segment) (eq (car segment) 'user))
+                                                  (mevedel-transcript-segments
+                                                   (point-min) (point-max)))) buffer))
+                                    prompts)))
                           '((name . mevedel-claude-code-shared-context-test)))
               (cl-letf (((symbol-function 'mevedel-claude-code-launch)
                          (mevedel-engine-test--claude-launch
@@ -117,6 +135,7 @@
                                           (toolBatches . [[((name . "Read") (id . "read-evidence")
                                                            (args . ((file_path . ,file))))]])))))))
                 (dolist (shared (list shared-first (not shared-first)))
+                  (setq prompts nil)
                   (if shared
                       (progn
                         (mevedel-agent-control--enqueue
@@ -133,22 +152,52 @@
                       (mevedel-view--forward-input-now prompt)))
                   (with-timeout (10 (ert-fail "Context turn did not settle"))
                     (while (or (mevedel-turn-busy-p buffer)
-                               (mevedel-view--pending-follow-ups session))
+                               (mevedel-view--pending-follow-ups session)
+                               (and shared (mevedel-agent-control-context-mailbox session)))
                       (accept-process-output nil 0.01)))
                   ;; Both independent conversations receive the mention body.
-                  (should (string-search "SHARED-MENTION-6392" (format "%S" (car prompts))))
-                  (if shared
-                      (progn
-                        (should-not (string-search "ROOT-MAIL-9183" (format "%S" (car prompts))))
-                        (should (= 1 (length (mevedel-agent-control-context-mailbox session)))))
-                    (when shared-first
-                      (should (string-search "ROOT-MAIL-9183" (format "%S" (car prompts))))
-                      (should-not (mevedel-agent-control-context-mailbox session))))
-                  (when (and shared shared-first)
-                    (should (= 0 (hash-table-count (mevedel-session-mentions-shown session))))
-                    (should-not (mevedel-session-workspace-instruction-hashes session)))))
-              ;; Both Reads deliver their path guidance, independently of which
-              ;; conversation acknowledged it first.
+                  (should (= (if shared 2 1) (length prompts)))
+                  (let* ((user (car (last prompts)))
+                         (user-input (format "%S" (plist-get user :input)))
+                         (read-count (how-many "^#\\+begin_tool (Read\\_>" (point-min) (point-max)))
+                         (guidance-count (mevedel-engine-test--count-evidence
+                                          "SHARED-PATH-GUIDANCE-7315")))
+                    (should (string-search "SHARED-MENTION-6392" user-input))
+                    (should-not (string-search "ROOT-MAIL-9183" user-input))
+                    ;; Both original user turns still perform their own Read.
+                    (should (= 1 (- (if shared (plist-get (car prompts) :read-count) read-count)
+                                    (plist-get user :read-count))))
+                    ;; Guidance is independent per conversation.  When shared
+                    ;; runs first, the root notification acknowledges it before
+                    ;; the later root user Read, which correctly deduplicates it.
+                    (should (= (if (and shared-first (not shared)) 0 1)
+                               (- (if shared
+                                      (plist-get (car prompts) :guidance-count)
+                                    guidance-count)
+                                  (plist-get user :guidance-count))))
+                    (when shared
+                      (should (string-search
+                               "Conversation about shared item Board (board-context)" user-input))
+                      (let* ((background (car prompts))
+                             (input (format "%S" (plist-get background :input))))
+                        (should (string-search mevedel-pending-inputs--event-trigger input))
+                        (should (string-search "ROOT-MAIL-9183" input))
+                        (should (string-search "agent-result sender=\\\"/root/reader\\\" recipient=\\\"/root\\\"" input))
+                        (should-not (string-search "SHARED-MENTION-6392" input))
+                        (should-not (string-search "Conversation about shared item" input))
+                        (should (equal '(:type background-event)
+                                       (plist-get background :attribution)))
+                        (should-not (mevedel-agent-control-context-mailbox session))
+                        (should (= 1 (- read-count (plist-get background :read-count))))
+                        (should (= (if shared-first 1 0)
+                                   (- guidance-count (plist-get background :guidance-count))))
+                        ;; Inspect root state before its notification runs: the
+                        ;; shared turn itself acknowledges no root context.
+                        (when shared-first
+                          (should (= 0 (plist-get background :mentions-count)))
+                          (should-not (plist-get background :instruction-hashes))))))))
+              ;; Shared and root conversations acknowledge guidance independently.
+              (should (= 3 (how-many "^#\\+begin_tool (Read\\_>" (point-min) (point-max))))
               (should (= 2 (mevedel-engine-test--count-evidence "SHARED-PATH-GUIDANCE-7315"))))
           (advice-remove 'mevedel-acp-prompt 'mevedel-claude-code-shared-context-test)
           (when (buffer-live-p view) (kill-buffer view)))))))

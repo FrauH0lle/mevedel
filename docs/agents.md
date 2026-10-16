@@ -151,9 +151,10 @@ to the original spawn parent. A successful follow-up renders a collapsed
 `FollowupAgent: PATH (follow-up sent)` disclosure containing the exact
 follow-up text.
 `SendMessage`
-queues interim plain-text mail for `/root` or any retained path without
-activating a turn. `WaitAgent` suspends its ordinary asynchronous tool callback
-until mail, user steering, follow-up steering, or its bounded successful
+queues interim plain-text mail for `/root` or any retained path. Agent mail to
+`/root` can start an idle Background event turn; root self-mail and mail to
+non-root recipients do not activate a turn. `WaitAgent` suspends its ordinary
+asynchronous tool callback until mail, user steering, follow-up steering, or its bounded successful
 timeout wakes it. A `MAIL` wake-up is not sender completion; only the canonical
 `RESULT` is terminal.
 `InterruptAgent` aborts one retained non-root agent's current turn by canonical
@@ -304,7 +305,7 @@ sequenceDiagram
     Note over P,C: Parent and child continue independently
     C->>H: Turn settles
     H->>H: Stop hook, release capacity, retain conversation
-    H-->>P: Queue terminal RESULT and wake an existing waiter
+    H-->>P: Queue terminal RESULT; wake an existing waiter or offer an idle root wake
 ```
 
 The diagram covers initial spawning and settlement. Follow-ups reuse the
@@ -314,10 +315,11 @@ refresh belong to the current invocation in that retained conversation. An
 invocation keeps only its latest few activity items. Settlement drops the
 retained buffer's last request payload and audit decoding memo: an idle agent
 otherwise kept about as much Lisp data alive as its transcript, and a
-continuation builds a fresh request. A caller
-that needs the result explicitly
-invokes `WaitAgent`; a caller that does not may finish while descendants keep
-running. `/review`, `/verify`, and fork-skill workflows may keep their owning
+continuation builds a fresh request. A caller that needs to wait within its
+current turn invokes `WaitAgent`; a caller may instead finish while descendants
+keep running. An ordinary terminal result to `/root` can then start a Background
+event turn; a non-root parent stays idle until explicitly followed up.
+`/review`, `/verify`, and fork-skill workflows may keep their owning
 interaction open until a leaf result arrives, but that awaiting behavior does
 not create another agent execution mode.
 
@@ -384,8 +386,9 @@ PATH` from the canonical event.
 
 `SendMessage(target, message)` resolves canonical or relative retained paths
 tree-wide. It queues one canonical `MAIL` record containing type, sender path,
-recipient path, and payload; it never starts an idle turn. Successful sends
-return an empty result and render a collapsed
+recipient path, and payload. Agent-originated mail to `/root` can wake the idle
+root; root self-mail and mail to non-root recipients do not start turns.
+Successful sends return an empty result and render a collapsed
 `SendMessage: PATH (message queued)` disclosure whose path opens the retained transcript and whose body contains the
 sent message. Canonical `MAIL` payloads are retained in full without a mailbox
 body cap. Since this delivery is interim and may cross a root-turn boundary,
@@ -395,14 +398,30 @@ treating `SendMessage` as its completion channel.
 Mailbox append is an acknowledged durable mutation. Once the session has a
 storage path, mevedel rolls back a failed append and reports the send as
 failed; it releases a matching `WaitAgent` only after the root session snapshot
-has committed.
+has committed. Idle-root wake eligibility likewise follows durable publication.
 
 Before a recipient's next model sample, its retained unread queue drains in
 FIFO order. Each record is injected as a separate user-role communication
 block and written to the retained conversation transcript before the unread
-record is removed. Mail queued for an idle agent therefore waits for a later
-follow-up, while mail for an active agent is delivered at its next ordinary
+record is removed. Mail queued for an idle non-root agent therefore waits for a
+later follow-up, while mail for an active agent is delivered at its next ordinary
 WAIT boundary. The tool result never duplicates the message body.
+
+Agent-originated `MAIL` and ordinary terminal `RESULT` records addressed to
+`/root` use the same idle Background event scheduler as
+[Monitor](tools.md#monitor) and root-owned Bash completions. This is a background
+notification, not a user instruction or a new grant of authority. Queued user
+follow-ups run first, background events next, and Goal continuation last. The
+same holds apply: a composer draft, pending interactions, or a held follow-up
+drain prevents the wake, and dispatch uses current root permissions. Active
+`WaitAgent` delivery is unchanged and does not create a second root turn.
+
+Wake marks are runtime-only; unread mail remains durable. Restarted sessions
+read restored mail at the next ordinary turn, and recovery-generated results do
+not start background turns. Successful root turns reoffer eligible unread mail
+that arrived too late for their last sample. Failed or aborted root turns do
+not automatically retry that mail in a wake loop; it remains available for a
+later turn. `FollowupAgent` remains the explicit way to start an idle child.
 
 `WaitAgent(timeout_ms?)` is a wake primitive over the caller's mailbox, not a
 message transport. Its ordinary asynchronous callback stays pending without a
@@ -426,8 +445,9 @@ next provider request as for the root. Settlement publishes the unchanged final
 answer as `RESULT`, and each completion the agent could not read (arrived after
 its answer or still unread) as a separate `EXECUTION` record to the spawn parent,
 attributed to the agent. These records commit together; workflow result
-handlers consume only the `RESULT`. Bash
-completion does not wake `WaitAgent` before settlement, and starts no model request.
+handlers consume only the `RESULT`. A child's Bash completion does not wake
+`WaitAgent` before settlement or itself start a model request; the ordinary
+terminal `RESULT` to a root spawn parent can wake the root.
 
 The root's own completions differ: a root `EXECUTION` record from a command
 that ended on its own, and a root `MONITOR` event batch or terminal notice
@@ -465,8 +485,10 @@ The owning workflow attaches a one-shot consumer before provider dispatch and
 awaits that leaf's ordinary terminal `RESULT`. Settlement first queues the
 canonical envelope in parent mail; after successful workflow delivery, the
 consumer removes that exact envelope so a later model turn cannot receive a
-duplicate. Handler failure leaves the queued result recoverable. Completion
-therefore uses the same settlement and active-turn accounting as every other
+duplicate or wake the root for an already-consumed result. Handler failure
+leaves the queued result for ordinary mailbox delivery, including an idle-root
+background wake. Completion therefore uses the same settlement and active-turn
+accounting as every other
 asynchronous agent. Cancellation interrupts only the active turn: the
 canonical agent path and conversation remain retained for inspection or
 follow-up.

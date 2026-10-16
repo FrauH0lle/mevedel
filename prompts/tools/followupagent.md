@@ -7,7 +7,7 @@ Continue or steer an existing retained agent conversation.
 
 ### When NOT to use `FollowupAgent`
 
-- Passing interim information without starting work; use SendMessage.
+- Passing interim information to a child; use SendMessage.
 - Polling completion; ListAgents reports activity and WaitAgent waits for delivery.
 
 ### How to use `FollowupAgent`

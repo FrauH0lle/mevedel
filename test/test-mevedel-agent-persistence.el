@@ -412,6 +412,18 @@
                            :timestamp '(1 0 0 0)))))
       (should (equal raw (mevedel-agent-persistence-sanitize-mailbox
                          raw parent)))))
+  :doc "retains root agent MAIL and RESULT without persisting their wake marks"
+  (let* ((raw (list (list :type 'MAIL :sender "/root/child" :recipient "/root"
+                          :payload "report" :timestamp '(1 0 0 0) :wake t)
+                    (list :type 'RESULT :sender "/root/child" :recipient "/root"
+                          :payload "done" :outcome 'completed
+                          :timestamp '(2 0 0 0) :wake t)))
+         (clean (mevedel-agent-persistence-sanitize-mailbox raw "/root")))
+    (should (equal '("report" "done")
+                   (mapcar (lambda (record) (plist-get record :payload)) clean)))
+    (should (eq 'completed (plist-get (cadr clean) :outcome)))
+    (should-not (cl-some (lambda (record) (plist-member record :wake)) clean))
+    (should (cl-every (lambda (record) (plist-get record :wake)) raw)))
   :doc "keeps root MONITOR records and drops the runtime wake mark"
   (let* ((raw (list (list :type 'MONITOR :sender "/root" :recipient "/root"
                           :execution-id "exec-1" :description "CI"

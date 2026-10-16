@@ -81,8 +81,11 @@ also wakes an idle root model: the harness starts one
 the result reaches the model through the ordinary mailbox delivery. A stop by
 the user or the model does not wake it, a result the model already read does
 not wake it again, and agent-owned completions stay with their invocation.
-The wake mark is runtime state and is not persisted. User controls can inspect
-all session owners, while model controls remain owner-scoped. Deterministic
+The wake mark is runtime state and is not persisted. The same scheduler admits
+agent-originated MAIL and ordinary RESULT delivery to `/root`, under
+[ADR 0035](0035-separate-agent-messages-from-follow-up-work.md); a child's
+forwarded EXECUTION record does not itself gain wake eligibility. User controls
+can inspect all session owners, while model controls remain owner-scoped. Deterministic
 UTF-8, terminal, color, pager, and `MEVEDEL_EXECUTION=1` defaults make child output
 consistent without changing user-authorized command semantics.
 
@@ -97,6 +100,13 @@ of the same command remain independently navigable.
 
 ## Decision history
 
+- **Share the wake path with agent reports (2026-10).** Late root-directed
+  agent messages and results were stranded until the user's next turn even
+  though background Bash and Monitor already woke the idle root. They now use
+  that same scheduler, holds, and current permissions rather than a parallel
+  agent scheduler. Successful root turns reoffer eligible late unread mail;
+  failure or abort does not automatically retry it. Wake marks remain
+  runtime-only, and restart/recovery remains non-waking.
 - **Local inspection (2026-10).** Status rows previously jumped to their
   originating transcript entry, while their margins inherited an action opening
   the execution cockpit. The user found a named row unexpectedly opening a

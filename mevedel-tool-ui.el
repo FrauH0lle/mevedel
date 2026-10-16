@@ -406,7 +406,7 @@
     :renderer '((success . mevedel-tool-ui--render-tool-search)))
   (mevedel-define-tool
     :name "SendMessage"
-    :description "Queue an interim, non-duplicative message for any retained agent without starting a turn."
+    :description "Queue an interim, non-duplicative message for a retained agent; agent mail can wake an idle root, but not idle children."
     :prompt-file "prompts/tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
     :args ((target string :required

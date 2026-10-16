@@ -4,8 +4,10 @@ Status: accepted. Incorporates ADRs 0046, 0047, 0048, 0049, 0050, 0051, and 0052
 
 ## Current decision
 
-SendMessage queues nonempty plain-text information without starting an idle
-turn. FollowupAgent gives an addressable non-root agent work: it starts an idle
+SendMessage queues nonempty plain-text information. Agent-originated MAIL to
+`/root` can start an idle Background event turn through the Monitor scheduler;
+root self-mail and mail to non-root recipients do not start turns.
+FollowupAgent gives an addressable non-root agent work: it starts an idle
 conversation or steers an active one at its next safe boundary. The same text
 shape applies to Agent's initial task. Shared files can carry larger referenced
 material; there is no structured attachment or dual text/item protocol.
@@ -22,11 +24,13 @@ conversation history rather than the unread queue. There are no model-facing
 message IDs, replay controls, or acknowledgements.
 
 Every settled child turn stages one terminal RESULT for its original spawn
-parent, including later turns initiated by a peer. It does not activate the
-parent or broadcast. Outcomes are completed, errored, or interrupted; payloads
+parent, including later turns initiated by a peer. An ordinary RESULT to `/root`
+can wake the idle root; it does not activate a non-root parent or broadcast.
+Outcomes are completed, errored, or interrupted; payloads
 carry the final response, concise failure, or interruption reason with useful
 partial text. A workflow awaiting its child may consume that exact committed
-record through its result handler; failed delivery leaves it for ordinary mail.
+record through its result handler without waking the root. Handler failure
+leaves it for ordinary mail, including idle-root wake eligibility.
 A yielded Bash completion that arrives while the child still works reaches the
 child itself, as `EXECUTION` mail read at its next provider request, like the
 root's own completions. Completions the child can no longer read, because they
@@ -34,6 +38,14 @@ arrive after its final answer or remain unread at settlement, are committed
 alongside that result as separate `EXECUTION` records to the spawn parent, with
 the child as sender. They do not alter the final-response payload or the
 workflow result handler's input.
+
+Idle-root wakes share Monitor's scheduling order, holds, and current root
+permissions; they are not user instructions or new authority. An active
+WaitAgent still resumes through its existing callback rather than starting
+another turn. Wake marks are runtime-only: restart and recovery do not turn
+saved mail or recovery-generated results into background work. Successful root
+turns reoffer eligible unread mail that arrived after their last sample; failed
+or aborted turns do not automatically retry it in a wake loop.
 
 Inline terminal previews use a 32,768-character head-and-tail budget and point
 to the persisted transcript when truncated. Complete settled results and
@@ -44,10 +56,12 @@ opaque turn IDs.
 
 ## Rationale and consequences
 
-Communication must not silently spend another model turn. Explicit follow-up
-owns activation, mail owns information, and
+Explicit follow-up owns child activation, mail owns information, and
 [WaitAgent](0036-wait-for-agents-explicitly.md) owns waiting. Separating wake-up
 summaries from content avoids duplicate mail in tool output and history.
+The idle-root exception lets the coordinator receive late reports without a
+user nudge; it reuses the visible Background event path rather than granting
+senders a general ability to start or steer idle children.
 A stable spawn parent owns automatic results even when another peer starts work;
 that peer needs an explicit SendMessage for a direct reply.
 
@@ -58,6 +72,15 @@ turning the model into a delivery-protocol participant.
 
 ## Decision history
 
+- **Wake the idle root for agent reports (2026-10).** Previously all SendMessage
+  mail and terminal results were queue-only: even reports addressed to `/root`
+  could remain stranded until the user's next turn. Agent-originated MAIL and
+  ordinary RESULT delivery to `/root` now offer a wake through the existing
+  Monitor scheduler. The child activation boundary, active WaitAgent behavior,
+  and durable mailbox remain unchanged. Successful workflow consumption needs
+  no duplicate wake; failed handlers fall back to ordinary waking mail. Runtime
+  marks, non-waking recovery, and no automatic failure/abort retry loop prevent
+  persisted or failed work from silently restarting itself.
 - **Deliver a working child's completions to the child.** All captured
   completions used to go to the parent at settlement. A September 2026 Goal
   verifier yielded four probe scripts, never polled them, and gave its verdict

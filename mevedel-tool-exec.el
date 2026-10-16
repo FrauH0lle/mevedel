@@ -80,6 +80,11 @@
 
 (autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-offer-root-event
+                  "mevedel-pending-inputs" (session &optional data-buffer))
+(autoload 'mevedel-pending-inputs-offer-root-event "mevedel-pending-inputs")
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-active-permission-approvals
                   "mevedel-pipeline" ())
@@ -435,26 +440,6 @@ stopped command's outcome."
                         :model-result-envelope-p
                         (not suppress-sandbox-disclosure-p))))))
 
-(defun mevedel-tool-exec--offer-wake (session event)
-  "Offer SESSION's idle model a turn for newly delivered background mail.
-EVENT's root data buffer also works before SESSION has saved artifacts.
-Delivery is already durable here, so a failure only skips the wake: the
-record stays unread and the next turn still receives it."
-  (condition-case err
-      (when-let* ((buffer (let ((origin (plist-get event :data-buffer)))
-                           (if (and (buffer-live-p origin)
-                                   (eq session (buffer-local-value
-                                                'mevedel--session origin))
-                                   (equal (plist-get event :owner) "/root"))
-                              origin
-                             (mevedel-session-root-buffer session))))
-                  ((buffer-live-p buffer)))
-        (mevedel-pending-inputs-offer-idle-work buffer))
-    (error
-     (mevedel--warn-once
-      'execution-wake "Could not offer a background event turn: %s"
-      (error-message-string err)))))
-
 (defun mevedel-tool-exec-handle-execution-event (event owner-context)
   "Secure an independently delivered execution EVENT in its owner mailbox.
 Return non-nil only after the record is durable.  A yielded root result
@@ -466,7 +451,8 @@ that ended on its own wakes an idle model; a stopped one does not."
         owner-context (plist-get facts :execution-id)
         (or (plist-get facts :description) "")
         (plist-get event :body) t)
-       (mevedel-tool-exec--offer-wake owner-context event)
+       (mevedel-pending-inputs-offer-root-event
+        owner-context (plist-get event :data-buffer))
        t))
     ((and 'terminal (guard (eq (plist-get event :delivery) 'mailbox)))
      (let* ((args (plist-get event :tool-args))
@@ -501,7 +487,8 @@ that ended on its own wakes an idle model; a stopped one does not."
                 observation (plist-get args :suppress-sandbox-disclosure-p))
                :result))))
          (when wake
-           (mevedel-tool-exec--offer-wake owner-context event)))))))
+           (mevedel-pending-inputs-offer-root-event
+            owner-context (plist-get event :data-buffer))))))))
 
 (defun mevedel-tool-exec--monitor-terminal-body (event)
   "Return EVENT's pending monitor lines followed by its terminal notice."

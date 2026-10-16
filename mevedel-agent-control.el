@@ -129,6 +129,11 @@
 (autoload 'mevedel-model-parse-selector "mevedel-models")
 (autoload 'mevedel-model-resolve-workload "mevedel-models")
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-offer-root-event
+                  "mevedel-pending-inputs" (session &optional data-buffer))
+(autoload 'mevedel-pending-inputs-offer-root-event "mevedel-pending-inputs")
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-cancel-deferred-agent-save
                   "mevedel-session-persistence" (session))
@@ -623,6 +628,26 @@ Return the caller path when suspended, and nil after an immediate release."
   "Wake SESSION's root WaitAgent for pending user steering."
   (mevedel-agent-control--wake session "/root" 'user))
 
+(defun mevedel-agent-control--deliver-mail
+    (session recipient record &optional wake-reason)
+  "Notify RECIPIENT of committed RECORD in SESSION.
+Agent MAIL and RESULT for the root may start an idle background-event turn.
+Mark before releasing a waiter: its callback can synchronously consume mail.
+Recovery repairs neither mark records nor release waits."
+  (unless mevedel-agent-control-suppress-persistence
+    (let ((root-report
+           (and (equal recipient "/root")
+                (memq (plist-get record :type) '(MAIL RESULT))
+                (not (equal (plist-get record :sender) "/root"))
+                (memq record (mevedel-session-messages session)))))
+      (when root-report
+        (plist-put record :wake t))
+      (mevedel-agent-control--wake
+       session recipient (or wake-reason 'mailbox))
+      (when (and root-report
+                 (memq record (mevedel-session-messages session)))
+        (mevedel-pending-inputs-offer-root-event session)))))
+
 (defun mevedel-agent-control--enqueue
     (session recipient record &optional wake-reason)
   "Durably queue RECORD for RECIPIENT, then wake a matching wait."
@@ -636,9 +661,7 @@ Return the caller path when suspended, and nil after an immediate release."
        (mevedel-agent-control--set-mailbox-queue
         session recipient previous)
        (signal (car err) (cdr err))))
-    (unless mevedel-agent-control-suppress-persistence
-      (mevedel-agent-control--wake
-       session recipient (or wake-reason 'mailbox)))
+    (mevedel-agent-control--deliver-mail session recipient record wake-reason)
     record))
 
 (defun mevedel-agent-control-steer-user
@@ -664,7 +687,8 @@ transcript payload and hook audits."
 
 (defun mevedel-agent-control-send-message (session target message)
   "Queue one canonical MAIL with MESSAGE for TARGET in SESSION.
-Return the resolved recipient path.  Sending never activates a turn."
+Return the resolved recipient path.  Agent mail can wake an idle root;
+non-root recipients still require an explicit follow-up to start a turn."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "SendMessage message must be non-empty plain text"))
   (let* ((sender (mevedel-agent-control-current-path session))
@@ -965,7 +989,7 @@ already committed RESULT."
             session recipient previous)
            (signal (car err) (cdr err))))))
     (if (not handler)
-        (mevedel-agent-control--wake session recipient 'mailbox)
+        (mevedel-agent-control--deliver-mail session recipient result)
       (let ((queued
              (mevedel-agent-control--mailbox-queue session recipient)))
         (mevedel-agent-control--set-mailbox-queue
@@ -993,7 +1017,7 @@ already committed RESULT."
                     (mevedel-agent-record-path record)
                     (error-message-string err))
             :warning)
-           (mevedel-agent-control--wake session recipient 'mailbox)))))))
+           (mevedel-agent-control--deliver-mail session recipient result)))))))
 
 (defun mevedel-agent-control--settle
     (session record invocation response &optional event)

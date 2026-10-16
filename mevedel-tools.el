@@ -817,8 +817,8 @@ model-visible communication in conversation history."
           (plist-get info :backend) data
           (list :role "user" :content block)
           (and prepend-p index))))
-      (when (or (null messages) data)
-        (mevedel-agent-control-clear-context-mailbox ctx)))))
+      (when (and messages data)
+        (mevedel-agent-control-acknowledge-mail ctx messages)))))
 
 (defun mevedel-tools-agent-roster (owner &optional full-p)
   "Return OWNER's new direct children as reminder body and deferred commit.

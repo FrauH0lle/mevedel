@@ -11,7 +11,7 @@ effective tools. Session permissions, explicit denies, protected resources, and
 confinement remain the shared outer authority boundary.
 
 Delegators receive Agent, FollowupAgent, WaitAgent, and InterruptAgent. Every
-built-in role also receives passive SendMessage and ListAgents. Worker and
+built-in role also receives SendMessage and ListAgents. Worker and
 explorer can delegate; reviewer and verifier are communicating leaves. Worker
 owns an independent implementation toolset, so a directly read-only explorer
 can delegate an authorized implementation task to it.
@@ -26,6 +26,9 @@ that must remain leaves omit the delegation capability.
 The spawn tree owns canonical paths and automatic result delivery. Explicit
 communication can cross branches under
 [ADR 0037](0037-allow-tree-wide-agent-communication.md).
+Agent-originated mail can wake the idle root through the background scheduler
+without granting delegation or idle-child activation authority; see
+[ADR 0035](0035-separate-agent-messages-from-follow-up-work.md).
 
 ## Decision history
 
@@ -35,7 +38,10 @@ communication can cross branches under
   rather than intersecting each generation with its parent.
 - **ADR 0043 split passive observation/communication from active control**, letting
   reviewer and verifier communicate without starting, joining, or interrupting
-  other work.
+  other work. The October 2026 root-only background-wake amendment in ADR 0035
+  removes the passive qualification for root-directed reports that otherwise
+  remained stranded until the next user turn; these roles still cannot start
+  idle children without delegation tools.
 - **ADR 0065 gave worker an independent implementation toolset**, applying the
   same decision to explorer-to-worker delegation. Default inheritance remains
   separate from named-role specialization.

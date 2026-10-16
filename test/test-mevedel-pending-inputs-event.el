@@ -31,13 +31,28 @@
 
 (defun mevedel-pending-inputs-event-test--produce (session buffer delivery)
   "Write one background-event turn for SESSION into root BUFFER.
-DELIVERY names the engine path whose mailbox block reaches the transcript:
-`native' injects through the gptel WAIT handler's transcript writer, `acp'
-appends the same block as the Claude Code turn-start batch does."
+DELIVERY is (ENGINE . TYPE): ENGINE is `native' or `acp', TYPE names
+the reported mailbox record.  Both transcript writers use the same block."
   (with-current-buffer buffer
-    (mevedel-agent-control-enqueue-monitor-event
-     session "exec-1" "deploy \"watch\" <prod>"
-     (concat mevedel-pending-inputs-event-test--spoof "\n") t)
+    (let ((body (concat mevedel-pending-inputs-event-test--spoof "\n")))
+      (pcase (cdr delivery)
+        ('MONITOR
+         (mevedel-agent-control-enqueue-monitor-event
+          session "exec-1" "deploy \"watch\" <prod>" body t))
+        ('MAIL
+         (let ((mevedel--agent-invocation
+                (mevedel-agent-invocation--create
+                 :path "/root/worker" :parent-session session)))
+           (setf (mevedel-session-agent-registry session)
+                 (list (cons "/root/worker"
+                             (mevedel-agent-record--create :path "/root/worker"))))
+           (mevedel-agent-control-send-message session "/root" body)))
+        ('RESULT
+         (mevedel-agent-control--publish-result
+          session
+          (mevedel-agent-record--create :path "/root/worker" :parent-path "/root")
+          (list :type 'RESULT :sender "/root/worker" :recipient "/root"
+                :outcome 'completed :payload body :timestamp (current-time))))))
     (setq mevedel-view--pending-guest-attribution
           (list :type 'background-event))
     (mevedel--insert-local-user-turn
@@ -45,11 +60,11 @@ appends the same block as the Claude Code turn-start batch does."
      mevedel-pending-inputs--event-trigger)
     (should-not mevedel-view--pending-guest-attribution)
     (let ((message (car (mevedel-agent-control-context-mailbox session))))
-      (pcase delivery
+      (pcase (car delivery)
         ('native
-         (mevedel-tools--insert-session-injected-prompt
-          session (gptel-make-fsm :info (list :buffer buffer)) message
-          (mevedel-tools--message-delivery-block message)))
+         (mevedel-tools--handle-message-inject
+          (gptel-make-fsm :info (list :buffer buffer :backend nil
+                                     :data (list :messages (vector))))))
         ('acp
          (mevedel--insert-user-role-block-at-marker
           (concat (mevedel-tools--message-delivery-block message) "\n")))))
@@ -72,9 +87,11 @@ appends the same block as the Claude Code turn-start batch does."
     restored))
 
 (mevedel-deftest mevedel-pending-inputs--wake-for-event/attribution
-  (:doc "the heading survives restore and monitor text never becomes user intent")
-  (dolist (delivery '(native acp))
-    (ert-info ((symbol-name delivery))
+  (:doc "the heading survives restore and reported text never becomes user intent")
+  (dolist (delivery '((native . MONITOR) (acp . MONITOR)
+                      (native . MAIL) (acp . MAIL)
+                      (native . RESULT) (acp . RESULT)))
+    (ert-info ((format "%S" delivery))
       (let* ((session (mevedel-session--create :name "event"))
              (buffer (generate-new-buffer " *event-root*"))
              restored)

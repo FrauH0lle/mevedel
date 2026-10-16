@@ -651,9 +651,57 @@
       (should (string-match-p "TAIL" payload))
       (should (string-match-p "agents/large.chat.org" payload)))))
 
+(mevedel-deftest mevedel-agent-control--deliver-mail ()
+  ,test
+  (test)
+  :doc "does not mark recovery records or records consumed during commit"
+  (dolist (mode '(recovery consumed))
+    (let* ((session (mevedel-agent-control-test--session))
+           (result (list :type 'RESULT :sender "/root/worker"
+                         :recipient "/root" :payload "done"))
+           offered)
+      (unless (eq mode 'consumed)
+        (setf (mevedel-session-messages session) (list result)))
+      (let ((mevedel-agent-control-suppress-persistence (eq mode 'recovery)))
+        (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event)
+                   (lambda (&rest _) (setq offered t))))
+          (mevedel-agent-control--deliver-mail session "/root" result)))
+      (should-not (plist-get result :wake))
+      (should-not offered))))
+
 (mevedel-deftest mevedel-agent-control--publish-result ()
   ,test
   (test)
+  :doc "only ordinary root delivery and committed handler fallback offer a wake"
+  (dolist (parent '("/root" "/root/parent"))
+    (dolist (handler-mode '(nil success failure))
+      (let* ((session (mevedel-agent-control-test--session))
+             (result (list :type 'RESULT :sender (concat parent "/worker")
+                           :recipient parent :outcome 'completed :payload "done"))
+             (commits 0) offered
+             (record
+              (mevedel-agent-record--create
+               :path (concat parent "/worker") :parent-path parent
+               :result-handler
+               (and handler-mode
+                    (lambda (_)
+                      (should-not (mevedel-agent-control-wake-pending-p session))
+                      (when (eq handler-mode 'failure) (error "Broken handler")))))))
+        (setf (mevedel-session-agent-registry session)
+              (list (cons parent (mevedel-agent-record--create :path parent))))
+        (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+                   (lambda (_) (cl-incf commits)))
+                  ((symbol-function 'mevedel-pending-inputs-offer-root-event)
+                   (lambda (&rest _)
+                     (should (= commits (if handler-mode 3 1)))
+                     (should (memq result (mevedel-session-messages session)))
+                     (push t offered))))
+          (mevedel-test--with-captured-diagnostics nil
+            (mevedel-agent-control--publish-result session record result)))
+        (let ((wakes (and (equal parent "/root") (not (eq handler-mode 'success)))))
+          (should (eq wakes (mevedel-agent-control-wake-pending-p session)))
+          (should (= (if wakes 1 0) (length offered)))))))
+
   :doc "durably consumes a workflow RESULT before invoking its handler"
   (let* ((session (mevedel-agent-control-test--session))
          (result '(:type RESULT :sender "/root/review"
@@ -730,6 +778,33 @@
 (mevedel-deftest mevedel-agent-control--settle ()
   ,test
   (test)
+  :doc "all terminal outcomes wake the root only after settlement commits"
+  (dolist (status '(completed error aborted))
+    (let* ((session (mevedel-agent-control-test--session))
+           (invocation (mevedel-agent-invocation--create
+                        :path "/root/worker" :parent-session session
+                        :transcript-status status))
+           (record (mevedel-agent-record--create
+                    :path "/root/worker" :parent-path "/root"
+                    :activity 'running :invocation invocation))
+           committed offered)
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/worker" record)))
+      (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+                 (lambda (_)
+                   (should-not (mevedel-agent-control-wake-pending-p session))
+                   (setq committed t)))
+                ((symbol-function 'mevedel-pending-inputs-offer-root-event)
+                 (lambda (&rest _)
+                   (should committed)
+                   (setq offered t))))
+        (mevedel-agent-control-test--settle session record invocation "response"))
+      (should offered)
+      (should (mevedel-agent-control-wake-pending-p session))
+      (should (eq (pcase status ('error 'errored) ('aborted 'interrupted) (_ 'completed))
+                  (plist-get (car (mevedel-session-messages session)) :outcome)))
+      (should (eq 'idle (mevedel-agent-record-activity record)))))
+
   :doc "publishes Bash completions separately from the exact terminal result"
   (dolist (parent-path '("/root" "/root/parent"))
     (dolist (workflow-p '(nil t))
@@ -2183,6 +2258,77 @@
 (mevedel-deftest mevedel-agent-control-send-message ()
   ,test
   (test)
+  :doc "committed agent mail wakes the root but self-mail and child mail do not"
+  (let* ((session (mevedel-agent-control-test--session))
+         (sender (mevedel-agent-record--create
+                  :path "/root/sender" :activity 'running))
+         (child (mevedel-agent-record--create
+                 :path "/root/child" :activity 'idle))
+         (invocation (mevedel-agent-invocation--create
+                      :path "/root/sender" :parent-session session))
+         committed offered)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/sender" sender) (cons "/root/child" child)))
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_) (setq committed t)))
+              ((symbol-function 'mevedel-pending-inputs-offer-root-event)
+               (lambda (value &optional _buffer)
+                 (should committed)
+                 (should (eq session value))
+                 (push (mevedel-agent-control-context-mailbox session) offered))))
+      (let ((mevedel--agent-invocation invocation))
+        (mevedel-agent-control-send-message session "/root" "report")
+        (should (mevedel-agent-control-wake-pending-p session))
+        (should (= 1 (length offered)))
+        (mevedel-agent-control-clear-context-mailbox session)
+        (mevedel-agent-control-send-message session "/root/child" "child mail"))
+      (mevedel-agent-control-send-message session "/root" "self mail")
+      (should-not (mevedel-agent-control-wake-pending-p session))
+      (should (eq 'idle (mevedel-agent-record-activity child)))
+      (should (= 1 (length offered)))))
+
+  :doc "marks before releasing WaitAgent and does not reoffer consumed mail"
+  (let* ((session (mevedel-agent-control-test--session))
+         (mevedel--agent-invocation
+          (mevedel-agent-invocation--create
+           :path "/root/sender" :parent-session session))
+         (calls 0) offered)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/sender"
+                      (mevedel-agent-record--create :path "/root/sender")))
+          (mevedel-session-agent-root-waiter session)
+          (mevedel-agent-waiter--create
+           :callback
+           (lambda (reason)
+             (cl-incf calls)
+             (should (eq 'mailbox reason))
+             (should (mevedel-agent-control-wake-pending-p session))
+             (mevedel-agent-control-acknowledge-mail
+              session (mevedel-agent-control-context-mailbox session)))))
+    (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event)
+               (lambda (&rest _) (setq offered t))))
+      (mevedel-agent-control-send-message session "/root" "report"))
+    (should (= 1 calls))
+    (should-not offered)
+    (should-not (mevedel-agent-control-wake-pending-p session))
+    (should-not (mevedel-session-agent-root-waiter session)))
+
+  :doc "a failed root mail commit rolls back without marking or offering a wake"
+  (let* ((session (mevedel-agent-control-test--session))
+         (mevedel--agent-invocation
+          (mevedel-agent-invocation--create
+           :path "/root/sender" :parent-session session))
+         offered)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/sender" (mevedel-agent-record--create :path "/root/sender"))))
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_) (error "Commit failed")))
+              ((symbol-function 'mevedel-pending-inputs-offer-root-event)
+               (lambda (&rest _) (setq offered t))))
+      (should-error (mevedel-agent-control-send-message session "/root" "report")))
+    (should-not (mevedel-agent-control-context-mailbox session))
+    (should-not offered))
+
   :doc "queues canonical MAIL records in FIFO order without activating recipients"
   (let* ((session (mevedel-agent-control-test--session))
          (idle (mevedel-agent-record--create

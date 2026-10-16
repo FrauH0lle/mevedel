@@ -12,7 +12,9 @@ releases it. Retained idle identities consume no slot.
 Agent reserves capacity before publishing a child. FollowupAgent reserves a slot
 only to start an idle target; steering an already active target needs no new
 slot. An idle follow-up at capacity fails immediately without queueing its task.
-SendMessage remains available for queue-only communication.
+SendMessage remains available without reserving a non-root turn slot. Its
+idle-root wake exception does not activate children or consume tree capacity;
+see [ADR 0035](0035-separate-agent-messages-from-follow-up-work.md).
 
 ## Rationale and consequences
 

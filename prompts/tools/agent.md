@@ -33,8 +33,11 @@ agent with your effective instructions and capabilities.
 - `model` selects a configured tier or exact `BACKEND:MODEL`; `effort` must be
   supported by that model. Use overrides when the assignment calls for them.
 - The child runs independently and sends its terminal RESULT to its spawn parent.
-  Its path remains reserved for follow-ups. Roles with Agent can create children;
-  the complete session tree shares one active-turn limit.
+  An ordinary RESULT to `/root` can wake the idle root in a Background event turn;
+  it does not start an idle non-root parent's turn. Use WaitAgent when you need
+  to wait within your current turn. The child's path remains reserved for
+  follow-ups. Roles with Agent can create children; the complete session tree
+  shares one active-turn limit.
 
 ### Examples of good usage
 

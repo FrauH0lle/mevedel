@@ -10,7 +10,7 @@
 ;; resumes once an edit empties it.  When something else that held an idle
 ;; session clears, such as its last interaction, the held work is offered
 ;; again: queued follow-ups first, then a turn for background work that
-;; reported (a finished yielded command or a Monitor event), otherwise an
+;; reported (an agent report, finished command or Monitor event), otherwise an
 ;; active Goal's continuation.
 
 ;;; Code:
@@ -166,6 +166,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-metadata
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-set-pending-input-failure-paused
                   "mevedel-structs" (session paused))
 (declare-function mevedel-session-set-pending-input-paused
@@ -196,6 +197,8 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text
                   "mevedel-utilities" (text))
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 (autoload 'mevedel--normalize-message-text "mevedel-utilities")
 
 ;; `mevedel-view'
@@ -1108,6 +1111,27 @@ Only an idle data buffer with a live root view qualifies."
         (eq (mevedel-goal-status goal) 'active))
       'goal))))
 
+(defun mevedel-pending-inputs-offer-root-event (session &optional data-buffer)
+  "Offer SESSION's idle root a turn for committed background mail.
+Use DATA-BUFFER when it belongs to the root, including an unsaved session;
+otherwise resolve the session's root buffer.  Failure to offer cannot undo
+mail delivery: the unread records remain available to the next turn."
+  (condition-case err
+      (when-let* ((buffer
+                   (if (and (buffer-live-p data-buffer)
+                            (eq session (buffer-local-value
+                                         'mevedel--session data-buffer))
+                            (not (buffer-local-value
+                                  'mevedel--agent-invocation data-buffer)))
+                       data-buffer
+                     (mevedel-session-root-buffer session)))
+                  ((buffer-live-p buffer)))
+        (mevedel-pending-inputs-offer-idle-work buffer))
+    (error
+     (mevedel--warn-once
+      'background-wake "Could not offer a background event turn: %s"
+      (error-message-string err)))))
+
 (defun mevedel-pending-inputs-offer-idle-work (data-buffer)
   "Offer DATA-BUFFER's queued idle work again after a hold on it cleared.
 Queued follow-ups go first, then a turn for background work that reported;
@@ -1133,7 +1157,7 @@ started a turn or settled the work itself.  INPUTS-ONLY excludes Goal work."
               data-buffer)))))
 
 (defconst mevedel-pending-inputs--event-trigger
-  (concat "Background work you started has reported; its output follows. "
+  (concat "Background work has reported; its messages follow. "
           "This is not a message from the user.")
   "Fixed prompt of a turn started for background work that reported.
 The reports themselves reach the model as mailbox records, never as this

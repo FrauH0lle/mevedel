@@ -1840,6 +1840,44 @@
     (mevedel-agent-control-clear-wake session "/root" "exec-1")
     (should (eq 'goal (mevedel-pending-inputs--idle-work data-buf)))))
 
+(mevedel-deftest mevedel-pending-inputs-offer-root-event ()
+  ,test
+  (test)
+  :doc "uses the session root or a valid unsaved root, never a child's buffer"
+  (mevedel-pending-inputs-test--with-session
+    (let ((child (generate-new-buffer " *event-child*")) offered)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                     (lambda (buffer) (push buffer offered))))
+            (with-current-buffer child
+              (setq-local mevedel--session session
+                          mevedel--agent-invocation
+                          (mevedel-agent-invocation--create :path "/root/child")))
+            (setf (mevedel-session-root-buffer session) data-buf)
+            (mevedel-pending-inputs-offer-root-event session)
+            (mevedel-pending-inputs-offer-root-event session child)
+            (setf (mevedel-session-root-buffer session) nil)
+            (mevedel-pending-inputs-offer-root-event session data-buf)
+            (mevedel-pending-inputs-offer-root-event session child)
+            (should (equal (list data-buf data-buf data-buf) offered)))
+        (kill-buffer child))))
+  :doc "an offer failure leaves committed waking mail available"
+  (mevedel-pending-inputs-test--with-session
+    (setf (mevedel-session-root-buffer session) data-buf)
+    (mevedel-agent-control-enqueue-execution-result
+     session "/root" "done" "exec-1" t)
+    (let (warning)
+      (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
+                 (lambda (_) (error "Offer failed")))
+                ((symbol-function 'mevedel--warn-once)
+                 (lambda (_key format &rest args)
+                   (setq warning (apply #'format format args)))))
+        (mevedel-pending-inputs-offer-root-event session))
+      (should (string-search "Offer failed" warning))
+      (should (mevedel-agent-control-wake-pending-p session))
+      (should (equal "done" (plist-get (car (mevedel-session-messages session))
+                                      :payload))))))
+
 (mevedel-deftest mevedel-pending-inputs-offer-idle-work ()
   ,test
   (test)
@@ -2022,6 +2060,36 @@ BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
 (mevedel-deftest mevedel-pending-inputs--run-event-wake ()
   ,test
   (test)
+  :doc "agent mail preserves a multiline draft and wakes when the draft is cleared"
+  (mevedel-pending-inputs-test--with-session
+    (let ((draft "> unsent draft\nsecond line") callbacks submitted)
+      (setf (mevedel-session-root-buffer session) data-buf
+            (mevedel-session-agent-registry session)
+            (list (cons "/root/worker" (mevedel-agent-record--create :path "/root/worker"))))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest args)
+                   (push (cons function args) callbacks)))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (_key _path thunk &rest _) (funcall thunk) t))
+                ((symbol-function 'mevedel--submit-generated-turn)
+                 (lambda (&rest args) (push args submitted))))
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft draft))
+        (let ((mevedel--agent-invocation
+               (mevedel-agent-invocation--create
+                :path "/root/worker" :parent-session session)))
+          (mevedel-agent-control-send-message session "/root" "report"))
+        (while callbacks
+          (let ((callback (pop callbacks))) (apply (car callback) (cdr callback))))
+        (should-not submitted)
+        (with-current-buffer view-buf
+          (should (equal draft (mevedel-view--input-text)))
+          (delete-region (mevedel-view--input-start) (point-max)))
+        (while callbacks
+          (let ((callback (pop callbacks))) (apply (car callback) (cdr callback))))
+        (should (= 1 (length submitted)))
+        (should (mevedel-agent-control-wake-pending-p session)))))
+
   :doc "starts one fixed, attributed turn and leaves the mail for the request"
   (mevedel-pending-inputs-test--with-event
     (mevedel-pending-inputs--run-event-wake data-buf)

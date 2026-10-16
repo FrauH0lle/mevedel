@@ -1485,6 +1485,41 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   ,test
   (test)
 
+  :doc "mail arriving during injection remains unread for the next sample or wake"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buffer (generate-new-buffer " *mt-late-mail*"))
+         (data (list :messages (vector)))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :backend nil :data data)))
+         (first (list :type 'MAIL :sender "/root/worker" :recipient "/root"
+                      :payload "first report" :wake t))
+         (late (list :type 'MAIL :sender "/root/worker" :recipient "/root"
+                     :payload "late report" :wake t)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--session session))
+          (setf (mevedel-session-messages session) (list first))
+          (cl-letf* ((inject (symbol-function 'gptel--inject-prompt))
+                     ((symbol-function 'gptel--inject-prompt)
+                      (lambda (&rest args)
+                        (apply inject args)
+                        (push late (mevedel-session-messages session)))))
+            (mevedel-tools--handle-message-inject fsm))
+          (should (equal (list late) (mevedel-agent-control-context-mailbox session)))
+          (should (mevedel-agent-control-wake-pending-p session))
+          (should (= 1 (length (plist-get data :messages))))
+          (should (string-search "first report"
+                                 (plist-get (aref (plist-get data :messages) 0)
+                                            :content)))
+          (mevedel-tools--handle-message-inject fsm)
+          (should-not (mevedel-agent-control-wake-pending-p session))
+          (should (= 2 (length (plist-get data :messages))))
+          (should (string-search "late report"
+                                 (plist-get (aref (plist-get data :messages) 1)
+                                            :content))))
+      (kill-buffer buffer)))
+
   :doc "drains a root canonical MAIL exactly once and records it in transcript"
   (let* ((session (mevedel-tools-test--make-session))
          (buffer (generate-new-buffer " *mt-root-mail*"))

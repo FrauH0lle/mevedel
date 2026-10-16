@@ -381,6 +381,36 @@
 (mevedel-deftest mevedel-claude-code-context-prepare (:quiet t)
   ,test
   (test)
+  :doc "a native receipt consumes captured reports but preserves later waking mail"
+  (mevedel-engine-test--with-session
+    (insert "Question?\n\n")
+    (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+    (mevedel-claude-code-context-system request "sys")
+    (let* ((first (list :type 'MAIL :sender "/root/reader" :recipient "/root"
+                        :payload "FIRST-REPORT-7192" :wake t :timestamp (current-time)))
+           (later (list :type 'RESULT :sender "/root/reader" :recipient "/root"
+                        :outcome 'completed :payload "LATER-RESULT-8821"
+                        :wake t :timestamp (current-time))))
+      (mevedel-agent-control--enqueue session "/root" first)
+      (let ((body (mevedel-claude-code-context-prepare request)))
+        (should (string-search "FIRST-REPORT-7192" body))
+        (mevedel-agent-control--enqueue session "/root" later)
+        (mevedel-claude-code-context-observe
+         request (mevedel-claude-code-context-test--hook-receipt body))
+        (should (equal (list later) (mevedel-agent-control-context-mailbox session)))
+        (should (mevedel-agent-control-wake-pending-p session))
+        ;; A duplicate receipt cannot acknowledge the later report.
+        (mevedel-claude-code-context-observe
+         request (mevedel-claude-code-context-test--hook-receipt body)))
+      (should (string-search "FIRST-REPORT-7192" (buffer-string)))
+      (should-not (string-search "LATER-RESULT-8821" (buffer-string)))
+      (let ((body (mevedel-claude-code-context-prepare request)))
+        (should (string-search "LATER-RESULT-8821" body))
+        (mevedel-claude-code-context-observe
+         request (mevedel-claude-code-context-test--hook-receipt body)))
+      (should (string-search "LATER-RESULT-8821" (buffer-string)))
+      (should-not (mevedel-agent-control-wake-pending-p session))))
+
   :doc "a whole message beyond the hook limit takes the continuation route"
   (mevedel-engine-test--with-session
     (setf (mevedel-engine-info request) (list :buffer buffer))
