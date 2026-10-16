@@ -8,6 +8,7 @@
 (require 'mevedel-session-test-support
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-session-test-support"))
+(require 'mevedel-plan-handoff)
 ;; Name the source: stale bytecode beside the script would otherwise shadow the
 ;; converter under test.
 (require 'mevedel-migrate-session
@@ -205,6 +206,58 @@
     (should (equal data (mevedel-migrate-session--sidecar data)))
     (should-error (mevedel-migrate-session--sidecar data '("moved"))))
 
+  :doc "unprepared Worktree summaries migrate to fork-first preparation"
+  (let* ((retry '(:step prepare-summary
+                 :selection (:location worktree :context summary :execution direct
+                             :mode edits :branch "plan/topic" :model-provider "Unavailable:model")
+                 :accepted (:path "local/plans/accepted.md" :hash "abc")
+                 :failure "Summary failed"))
+         (data (test-mevedel-session-persistence--complete-sidecar
+                (list :plan-metadata
+                      (list :status 'accepted :implementation-retry retry))))
+         (converted (mevedel-migrate-session--sidecar data))
+         (actual (plist-get (plist-get converted :plan-metadata) :implementation-retry)))
+    (should (eq 'prepare-worktree (plist-get actual :step)))
+    (should (equal (plist-get actual :selection)
+                   (mevedel-plan-handoff--validate-record actual)))
+    (should (equal (plist-put (copy-tree retry) :step 'prepare-worktree) actual))
+    (should (eq 'prepare-summary (plist-get retry :step)))
+    (should (equal converted (mevedel-migrate-session--sidecar converted))))
+
+  :doc "prepared legacy Worktree retries refuse conversion instead of routing to the source"
+  (dolist (field '(:target-directory :target-session-id :target-accepted :target-save-path :summary))
+    (let* ((retry (list :step 'prepare-worktree
+                        :selection '(:location worktree :context fresh)
+                        field "retained target"))
+           (data (test-mevedel-session-persistence--complete-sidecar
+                  (list :plan-metadata (list :implementation-retry retry)))))
+      (should-error (mevedel-migrate-session--sidecar data))))
+  (dolist (step '(prepare-target submit))
+    (let ((data (test-mevedel-session-persistence--complete-sidecar
+                 (list :plan-metadata
+                       (list :implementation-retry
+                             (list :step step :selection '(:location worktree :context fresh)))))))
+      (should-error (mevedel-migrate-session--sidecar data))))
+
+  :doc "cached legacy Worktree summaries cannot prove whether compaction already ran"
+  (let ((data (test-mevedel-session-persistence--complete-sidecar
+               '(:plan-metadata
+                 (:implementation-retry
+                  (:step prepare-summary :summary "Kept handoff"
+                   :selection (:location worktree :context summary)))))))
+    (should-error (mevedel-migrate-session--sidecar data)))
+
+  :doc "Here retries and current fork-first Worktree retries remain unchanged"
+  (dolist (retry '((:step prepare-summary :selection (:location here :context summary))
+                   (:step submit :selection (:location here :context current))
+                   (:step prepare-worktree :selection (:location worktree :context current)
+                    :fork-point-id "reply" :worktree-reservation
+                    (:branch "plan/topic" :directory "/tmp/topic/")
+                    :target-save-path "/tmp/fork/")))
+    (let ((data (test-mevedel-session-persistence--complete-sidecar
+                 (list :plan-metadata (list :implementation-retry retry)))))
+      (should (equal data (mevedel-migrate-session--sidecar data)))))
+
   :doc "legacy recovery fields are rejected instead of silently overwriting work"
   (mevedel-migration-test--with-source "v0.5.9"
     (dolist (key '(:recovery-issues :pending-follow-ups :pending-steering
@@ -240,6 +293,47 @@
                              (mevedel-migrate-session--hash (file-name-concat destination relative)))))))
         ;; Runtime loading remains strict; only this explicit script accepts old data.
         (should-error (mevedel-session-codec-deserialize old workspace)))))
+
+  :doc "converts unprepared Worktree retries in every head and refuses prepared ones without source writes"
+  (dolist (prepared '(nil t))
+    (mevedel-migration-test--with-source "v0.5.12"
+      (setq old
+            (plist-put old :plan-metadata
+                       (list :status 'accepted :implementation-retry
+                             (append '(:step prepare-summary
+                                       :selection (:location worktree :context summary :execution direct
+                                                   :mode edits :branch "plan/topic"
+                                                   :model-provider "Unavailable:model")
+                                       :accepted (:path "local/plans/accepted.md" :hash "abc"))
+                                     (when prepared '(:target-directory "/tmp/legacy/"))))))
+      (mevedel-migrate-session--write (file-name-concat source "session.meta.el") old)
+      (dolist (name '("aaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbb"))
+        (let* ((directory (concat ".publications/generation-" name))
+               (file (file-name-concat source directory "000001.data"))
+               (manifest-file (file-name-concat source directory "manifest.el"))
+               (manifest (mevedel-migrate-session--read manifest-file)))
+          (mevedel-migrate-session--write file old)
+          (setf (plist-get (cdar (plist-get manifest :artifacts)) :sha256)
+                (mevedel-migrate-session--hash file))
+          (mevedel-migrate-session--write manifest-file manifest)))
+      (let ((before (mapcar (lambda (file) (cons file (mevedel-migrate-session--hash file)))
+                            (directory-files-recursively source "."))))
+        (if prepared
+            (progn
+              (should-error (mevedel-migrate-session-copy source destination))
+              (should-not (file-exists-p destination)))
+          (should (= 3 (mevedel-migrate-session-copy source destination)))
+          (dolist (name '("aaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbb"))
+            (let* ((publication (mevedel-session-publication-read
+                                 destination (concat ".publications/generation-" name "/manifest.el")))
+                   (data (mevedel-session-codec-read (plist-get publication :sidecar)))
+                   (loaded (plist-get (mevedel-session-codec-deserialize data workspace) :session)))
+              (let ((retry (plist-get (mevedel-session-plan-metadata loaded) :implementation-retry)))
+                (should (eq 'prepare-worktree (plist-get retry :step)))
+                (should (equal (plist-get retry :selection)
+                               (mevedel-plan-handoff--validate-record retry)))))))
+        (dolist (row before)
+          (should (equal (cdr row) (mevedel-migrate-session--hash (car row))))))))
 
   :doc "drops retained generations and fixed caches no reader accepts"
   (mevedel-migration-test--with-source "v0.5.9"

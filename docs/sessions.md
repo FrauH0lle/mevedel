@@ -1673,8 +1673,10 @@ to continue. Rewind preserves session preset settings but clears Goal state.
 ### Explicit migration to v0.5.13
 
 The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-session-v0.5.6.el) converts
-v0.5.6, v0.5.9, v0.5.10, v0.5.11 and v0.5.12 sessions to v0.5.13; a v0.5.13 session is
-only validated. Other versions, including v0.5.7 and v0.5.8, are not read.
+v0.5.6, v0.5.9, v0.5.10, v0.5.11 and v0.5.12 sessions to v0.5.13. A v0.5.13
+session receives the Worktree retry normalization described below and is
+otherwise only validated. Other versions, including v0.5.7 and
+v0.5.8, are not read.
 Close the source session first, then run
 from the repository root with a new destination outside the source directory:
 
@@ -1701,6 +1703,17 @@ so a converted session reads as one chat: its earlier segments stay browsable
 without chat titles. Conversion makes no model requests. Restoring an interrupted
 native conversation still requires explicit continuation through the current
 reader's recovery rules.
+
+The fork-first Worktree plan handoff changed within v0.5.13, so conversion
+also checks its saved implementation retry. A summary retry that has not
+recorded a summary or target changes to fork-first preparation, preserving
+the accepted plan and implementation selection. Here retries and current
+fork-first Worktree retries stay unchanged. A legacy retry with a cached
+summary or prepared target is refused: its summary may already have been
+applied, or its clean target session may already own prepared work. Recover
+that handoff manually before converting; the converter neither deletes the
+target nor resets or replays implementation. Conversion itself never creates
+a worktree, forks a session, or requests a summary.
 
 Conversion refuses PID locks, live leases, pending recovery, invalid metadata,
 checksum mismatches and symlinks. A lease that is active but past its expiry,

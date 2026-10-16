@@ -6,6 +6,8 @@
 ;; The file keeps the name of its first source format.
 ;; Copy a closed local session to a new directory; never change the source.
 ;; Convert all retained publication sidecars and their manifest checksums.
+;; Unprepared legacy Worktree plan retries gain fork-first preparation;
+;; already prepared targets require manual recovery, never replay or discard.
 ;; Run from the repository root:
 ;; npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-session-v0.5.6.el \
 ;;   -f mevedel-migrate-session-main -- SOURCE DESTINATION
@@ -67,11 +69,39 @@
 (define-error 'mevedel-migrate-session-unconvertible
   "Session has nothing this converter reads")
 
+(defun mevedel-migrate-session--plan-retry (data)
+  "Update DATA's unprepared Worktree retry to the fork-first handoff.
+Refuse older target-oriented state whose effects cannot be recovered from
+one sidecar.  DATA is the private copy owned by the converter."
+  (let* ((metadata (plist-get data :plan-metadata))
+         (retry (plist-get metadata :implementation-retry)))
+    (when (eq (plist-get (plist-get retry :selection) :location) 'worktree)
+      ;; Legacy targets were clean sessions, not forks.  Reusing their path
+      ;; as a fork or submitting in the source would implement in the wrong
+      ;; conversation; resetting them could duplicate already prepared work.
+      (when (or (cl-some (lambda (key) (plist-member retry key))
+                        '(:target-directory :target-session-id :target-accepted :summary))
+                (and (plist-member retry :target-save-path)
+                     (not (plist-get retry :worktree-reservation)))
+                (not (memq (plist-get retry :step)
+                           '(prepare-summary prepare-worktree)))
+                (and (eq (plist-get retry :step) 'prepare-summary)
+                     (or (not (eq (plist-get (plist-get retry :selection) :context) 'summary))
+                         (plist-get retry :worktree-reservation)
+                         (plist-get retry :fork-point-id))))
+        (error "Legacy Worktree plan retry requires manual recovery; source and target must stay unchanged"))
+      (when (eq (plist-get retry :step) 'prepare-summary)
+        (setq retry (plist-put retry :step 'prepare-worktree))
+        (setq metadata (plist-put metadata :implementation-retry retry))
+        (setq data (plist-put data :plan-metadata metadata)))))
+  data)
+
 (defun mevedel-migrate-session--sidecar (data &optional attached)
   "Return DATA converted to v0.5.13, preserving existing durable fields.
 ATTACHED lists the store artifact ids a session older than the artifact store
 \(v0.5.11) starts attached to; a store-aware session refuses them rather than
-lose them.  A current v0.5.13 sidecar is only validated."
+lose them.  A current v0.5.13 sidecar retains its fields except for an
+unprepared legacy Worktree retry, then is validated."
   (unless (equal mevedel-session-codec-format-version "v0.5.13")
     (error "This converter targets v0.5.13; use its matching mevedel checkout"))
   (setq data (copy-tree data))
@@ -129,6 +159,9 @@ lose them.  A current v0.5.13 sidecar is only validated."
           (error "Unexpected chat records in legacy sidecar"))
         (setq data (plist-put data :chapters nil)))
       (setq data (plist-put data :version "v0.5.13"))))
+  ;; The Worktree handoff changed within v0.5.13, so inspect its durable
+  ;; shape even for a sidecar whose top-level schema is already current.
+  (setq data (mevedel-migrate-session--plan-retry data))
   (mevedel-session-codec-validate-current-sidecar data))
 
 (defun mevedel-migrate-session--closed (directory)
