@@ -737,7 +737,12 @@ section only."
   "Hide mailbox payload from START to END without joining following rows.
 Keep the final payload newline visible, hiding the header separator instead.
 The display iterator must encounter a visible newline before the next row
-to apply that row's own line prefix.  Do not change payload ownership or bytes."
+to apply that row's own line prefix.  Do not change payload ownership or bytes.
+
+The hidden text is rear-nonsticky for `invisible', so the visible terminator
+is not a position inside the hidden region.  Otherwise the command loop's
+point adjustment treats a click past the header as entering hidden text and
+moves point onto the following row."
   (let* ((terminator (and (< start end) (eq (char-before end) ?\n)))
          (hide-start (if (and terminator (eq (char-before start) ?\n))
                          (1- start)
@@ -745,6 +750,11 @@ to apply that row's own line prefix.  Do not change payload ownership or bytes."
          (hide-end (if terminator (1- end) end)))
     (put-text-property hide-start hide-end
                        'invisible 'mevedel-view-mailbox-collapsed)
+    (when (< hide-start hide-end)
+      (let ((nonsticky (get-text-property (1- hide-end) 'rear-nonsticky)))
+        (unless (or (eq nonsticky t) (memq 'invisible nonsticky))
+          (put-text-property (1- hide-end) hide-end
+                             'rear-nonsticky (cons 'invisible nonsticky)))))
     (when terminator
       (remove-text-properties hide-end end '(invisible nil)))))
 

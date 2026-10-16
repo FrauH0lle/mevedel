@@ -1257,21 +1257,38 @@ the preceding header."
   ,test
   (test)
   :doc "visibility boundaries keep one terminator without changing payload bytes"
-  (dolist (payload '("\nBody.\n" "\n  Authored.\nSecond.\n\n" "\n" ""))
+  (dolist (payload '("\nBody.\n" "\n  Authored.\nSecond.\n\n" "\n" ""
+                     "\nNo terminator"))
     (with-temp-buffer
       (insert "Card\n")
       (let ((start (point)))
-        (insert (propertize payload 'mevedel-view-mailbox-body t))
+        (insert (propertize payload 'mevedel-view-mailbox-body t
+                            'rear-nonsticky '(read-only keymap)))
         (let ((end (point)))
           (insert "Following\n")
           (mevedel-view-disclosure-collapse-mailbox-body start end)
           (should (equal payload (buffer-substring-no-properties start end)))
-          (when (< start end)
+          (when (and (< start end) (eq (char-before end) ?\n))
             (should (invisible-p (1- start)))
             (should-not (invisible-p (1- end)))
             (should-not (get-text-property (1- start) 'mevedel-view-mailbox-body))
-            (should (get-text-property (1- end) 'mevedel-view-mailbox-body)))
-          (should-not (invisible-p end)))))))
+            (should (get-text-property (1- end) 'mevedel-view-mailbox-body))
+            ;; The command loop reads `get-pos-property' when adjusting
+            ;; point; the visible terminator must not inherit invisibility,
+            ;; or a click past the header moves point to the next row.
+            (should-not (get-pos-property (1- end) 'invisible)))
+          (should-not (get-pos-property end 'invisible))
+          (should-not (invisible-p end))))))
+  :doc "collapsing keeps existing rear-nonsticky properties"
+  (with-temp-buffer
+    (insert "Card\n")
+    (let ((start (point)))
+      (insert (propertize "\nBody.\n" 'rear-nonsticky '(read-only keymap)))
+      (mevedel-view-disclosure-collapse-mailbox-body start (point))
+      (let ((nonsticky (get-text-property (- (point) 2) 'rear-nonsticky)))
+        (should (memq 'invisible nonsticky))
+        (should (memq 'read-only nonsticky))
+        (should (memq 'keymap nonsticky))))))
 
 (provide 'test-mevedel-view-disclosure)
 ;;; test-mevedel-view-disclosure.el ends here
