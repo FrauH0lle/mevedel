@@ -89,6 +89,7 @@
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-turn "mevedel-turn" (session))

@@ -106,6 +106,16 @@
 (autoload 'mevedel-collaboration--transport-send "mevedel-collaboration-transport")
 (autoload 'mevedel-collaboration--transport-stop "mevedel-collaboration-transport")
 
+;; `mevedel-collaboration-files'
+(declare-function mevedel-collaboration-files-handle-get
+                  "mevedel-collaboration-files" (owner peer frame root))
+(declare-function mevedel-collaboration-files-handle-list
+                  "mevedel-collaboration-files" (owner peer frame root))
+(declare-function mevedel-collaboration-files-handle-remove
+                  "mevedel-collaboration-files" (owner peer frame root))
+(declare-function mevedel-collaboration-files-handle-upload
+                  "mevedel-collaboration-files" (owner peer frame root))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-delete
                   "mevedel-session-persistence" (workspace save-path))
