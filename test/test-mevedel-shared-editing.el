@@ -199,11 +199,16 @@
                                             workspace '(:action "read" :id "board1"))
                                            :result)
                                 :title)))
-      ;; A rename reaches the store's metadata.
-      (should-not (plist-get (mevedel-shared-editing-test--call
-                              workspace '(:action "rename" :id "board1" :title "Later"
-                                          :actor "Alice" :opId "two"))
-                             :error))
+      ;; A rename reaches the store's metadata, and the item's open
+      ;; conversation follows it.
+      (let (named)
+        (cl-letf (((symbol-function 'mevedel-artifact-store-name-conversation)
+                   (lambda (named-workspace id) (push (cons named-workspace id) named))))
+          (should-not (plist-get (mevedel-shared-editing-test--call
+                                  workspace '(:action "rename" :id "board1" :title "Later"
+                                              :actor "Alice" :opId "two"))
+                                 :error)))
+        (should (equal (list (cons workspace "board1")) named)))
       (should (equal "Later" (plist-get (mevedel-artifact-store-meta workspace "board1")
                                         :title)))))
 

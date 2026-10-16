@@ -166,6 +166,9 @@ The room header and the tab title name the shared session. The host's
 receives at once and every guest again after a rename, manual or automatic;
 until it arrives the header shows the start of the room ID. A lobby's header
 names its project instead.
+An artifact's own conversation is named by the artifact's title (see
+[the artifact store](view.md#artifact-store)), so its room is too, and the
+browser lists the room under that name.
 
 Invite sits in the room header and remains available to read-only guests.
 New session is in **In this room**. Invite disappears when the room

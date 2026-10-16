@@ -1484,8 +1484,13 @@ session leaves its artifacts in place.
 An artifact may have one dedicated session, its own conversation for work
 started outside any chat: a discussion message from the lobby, the cockpit's
 `c`, or **Conversation** in the browser. It is an ordinary session, created on
-first use, attached to the artifact and saved at once, and named "Artifact
-ID". The two name each other: `meta.el` records the session's id and the
+first use, attached to the artifact and saved at once, and named by the
+artifact's title, or its id when the title is blank. The name follows the
+title: renaming a whiteboard or document renames its conversation while it is
+open in this Emacs, and opening the conversation renames it when the title
+changed meanwhile; a rename the session refuses, such as one another client
+holds, is reported and keeps the old name. The two name each other: `meta.el`
+records the session's id and the
 session records the artifact's (`:dedicated-artifact`). A saved session is
 hidden from the session chooser and the lobby listing and kept from expiry
 only while both agree; an open one goes by its own record, so a `meta.el` copied outside mevedel never makes another

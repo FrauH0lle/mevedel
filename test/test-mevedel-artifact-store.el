@@ -662,13 +662,14 @@
     (unwind-protect
         (progn
           (mevedel-artifact-store-test--write store "flow/index.html" "x")
-          (mevedel-artifact-store-create-meta workspace "flow" "index.html")
+          (mevedel-artifact-store-create-meta workspace "flow" "index.html" nil "Release plan")
           ;; Presets are defined by the package setup the test omits.
           (cl-letf (((symbol-function 'mevedel--ensure-chat-preset) #'ignore))
             (setq buffer (mevedel-artifact-store-conversation workspace "flow")))
           (let* ((session (buffer-local-value 'mevedel--session buffer))
                  (id (mevedel-session-session-id session)))
-            (should (equal "Artifact flow" (mevedel-session-name session)))
+            ;; Named by what people recognize, not by the artifact's id.
+            (should (equal "Release plan" (mevedel-session-name session)))
             (should (equal '("flow") (mevedel-session-attached-artifacts session)))
             (should (equal "flow" (mevedel-session-dedicated-artifact session)))
             (should (mevedel-artifact-store-dedicated-p workspace id "flow"))
@@ -690,9 +691,13 @@
               (should (string-match-p "still working" failure))
               (should (file-exists-p (file-name-concat store "flow"))))
             (test-mevedel-session-persistence--release-and-kill buffer session)
+            ;; Renamed while it was closed, it takes the new title on opening.
+            (mevedel-artifact-store-update-meta workspace "flow" :title "Release plan v2")
             (setq buffer (mevedel-artifact-store-conversation workspace "flow"))
             (should (equal id (mevedel-session-session-id
                                (buffer-local-value 'mevedel--session buffer))))
+            (should (equal "Release plan v2"
+                           (mevedel-session-name (buffer-local-value 'mevedel--session buffer))))
             ;; An idle open conversation, as a room opens it from the lobby,
             ;; closes with its artifact.
             (mevedel-artifact-store-delete workspace "flow")
@@ -736,6 +741,65 @@
          winner (buffer-local-value 'mevedel--session winner)))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-artifact-store-name-conversation (:quiet t)
+  ,test
+  (test)
+  :doc "an open conversation follows its artifact's title; a closed one waits"
+  (pcase-let* ((`(,workspace . ,root)
+                (test-mevedel-session-persistence--make-tempdir-workspace))
+               (buffer nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--ensure-chat-preset) #'ignore))
+          (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Board")
+          ;; No conversation yet: nothing to rename.
+          (should-not (mevedel-artifact-store-name-conversation workspace "board"))
+          (setq buffer (mevedel-artifact-store-conversation workspace "board"))
+          (let ((session (buffer-local-value 'mevedel--session buffer))
+                renames)
+            (mevedel-artifact-store-update-meta workspace "board" :title "Pipeline\n  sketch")
+            (mevedel-artifact-store-name-conversation workspace "board")
+            ;; One line, as a session name is.
+            (should (equal "Pipeline sketch" (mevedel-session-name session)))
+            (should (string-match-p "Pipeline sketch" (buffer-name buffer)))
+            ;; The name already matches: no second rename.
+            (cl-letf (((symbol-function 'mevedel-session-naming-rename)
+                       (lambda (&rest args) (push args renames))))
+              (mevedel-artifact-store-name-conversation workspace "board"))
+            (should-not renames)
+            ;; A blank title names it by the artifact's id.
+            (mevedel-artifact-store-update-meta workspace "board" :title " ")
+            (mevedel-artifact-store-name-conversation workspace "board")
+            (should (equal "board" (mevedel-session-name session)))
+            ;; A refused rename is reported and keeps the old name.
+            (mevedel-artifact-store-update-meta workspace "board" :title "Held elsewhere")
+            (let (reported)
+              (cl-letf (((symbol-function 'mevedel-session-naming-rename)
+                         (lambda (&rest _) (user-error "Session publication is busy")))
+                        ((symbol-function 'message)
+                         (lambda (format &rest args)
+                           (setq reported (apply #'format-message format args)))))
+                (mevedel-artifact-store-name-conversation workspace "board"))
+              (should (string-match-p "could not rename" reported)))
+            (should (equal "board" (mevedel-session-name session)))
+            ;; Closed, it waits until it is opened again.
+            (test-mevedel-session-persistence--release-and-kill buffer session)
+            (setq buffer nil)
+            (should-not (mevedel-artifact-store-name-conversation workspace "board"))))
+      (when (buffer-live-p buffer)
+        (test-mevedel-session-persistence--release-and-kill
+         buffer (buffer-local-value 'mevedel--session buffer)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-artifact-store--conversation-name
+  (:doc "names a conversation by its artifact's title on one line, else its id")
+  (progn
+    (should (equal "Release plan" (mevedel-artifact-store--conversation-name
+                                   '(:title "Release plan") "r")))
+    (should (equal "A b" (mevedel-artifact-store--conversation-name '(:title " A\n b ") "r")))
+    (should (equal "r" (mevedel-artifact-store--conversation-name '(:title "") "r")))
+    (should (equal "r" (mevedel-artifact-store--conversation-name nil "r")))))
 
 (mevedel-deftest mevedel-artifact-store--claim-conversation ()
   ,test

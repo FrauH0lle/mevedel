@@ -834,12 +834,17 @@ Return the winning session id, preserving concurrent metadata updates."
 (defun mevedel-artifact-store-conversation (workspace id)
   "Return the data buffer of artifact ID's dedicated session.
 Save a new conversation before publishing its id.  If another Emacs wins
-publication, discard this unused candidate and open the winner."
+publication, discard this unused candidate and open the winner.  The
+session is named by the artifact's title."
   (mevedel-artifact-store--with-changes
-    (let ((previous (plist-get (or (mevedel-artifact-store-meta workspace id)
-                                   (error "No artifact %s" id))
-                              :dedicated-session)))
-      (or (and previous (mevedel-artifact-store-session-buffer workspace previous))
+    (let* ((meta (or (mevedel-artifact-store-meta workspace id)
+                     (error "No artifact %s" id)))
+           (previous (plist-get meta :dedicated-session)))
+      (or (when-let* ((buffer (and previous (mevedel-artifact-store-session-buffer
+                                             workspace previous))))
+            ;; A conversation from before a rename takes the current title.
+            (mevedel-artifact-store-name-conversation workspace id)
+            buffer)
           (let* ((buffer (mevedel--chat-buffer nil t workspace))
                  (session (buffer-local-value 'mevedel--session buffer))
                  published winner)
@@ -849,7 +854,8 @@ publication, discard this unused candidate and open the winner."
                   (setf (mevedel-session-dedicated-artifact session) id)
                   (mevedel-artifact-store-attach session id)
                   (mevedel-session-artifacts-save session buffer nil t)
-                  (mevedel-session-naming-rename session buffer (format "Artifact %s" id))
+                  (mevedel-session-naming-rename
+                   session buffer (mevedel-artifact-store--conversation-name meta id))
                   (setq winner (mevedel-artifact-store--claim-conversation
                                 workspace id previous (mevedel-session-session-id session))
                         published (equal winner (mevedel-session-session-id session))))
@@ -860,6 +866,27 @@ publication, discard this unused candidate and open the winner."
             (if published buffer
               (or (mevedel-artifact-store-session-buffer workspace winner)
                   (error "Artifact conversation disappeared; retry"))))))))
+
+(defun mevedel-artifact-store--conversation-name (meta id)
+  "Return the session name for the conversation of artifact ID with META.
+It is the artifact's title, which people recognize, and ID only when the
+title is blank."
+  (let ((title (string-join (split-string (or (plist-get meta :title) "")) " ")))
+    (if (string-empty-p title) id title)))
+
+(defun mevedel-artifact-store-name-conversation (workspace id)
+  "Give artifact ID's live conversation the artifact's current title.
+Do nothing while it is not open in this Emacs: opening it renames it.  A
+failed rename, such as from a session another client holds, is reported
+and leaves the old name."
+  (when-let* ((meta (mevedel-artifact-store-meta workspace id))
+              (session-id (plist-get meta :dedicated-session))
+              (buffer (mevedel-artifact-store--live-buffer workspace session-id))
+              (session (buffer-local-value 'mevedel--session buffer))
+              (name (mevedel-artifact-store--conversation-name meta id))
+              ((not (equal name (mevedel-session-name session)))))
+    (with-demoted-errors "mevedel: could not rename an artifact conversation: %S"
+      (mevedel-session-naming-rename session buffer name))))
 
 (defun mevedel-artifact-store-note-writes (session changes &optional request)
   "Record settled ApplyPatch CHANGES of SESSION that land in the store.

@@ -241,7 +241,10 @@ current the commit reads it and retries.  Return the metadata's bytes."
         (dolist (result (cdr results))
           (mevedel-session-control-fs-program-value result))
         (if listed
-            (mevedel-artifact-store--changed workspace)
+            (progn
+              (mevedel-artifact-store--changed workspace)
+              ;; A renamed item renames its open conversation.
+              (mevedel-artifact-store-name-conversation workspace id))
           (mevedel-artifact-store--content-changed workspace))
         (or written bytes)))))
 
