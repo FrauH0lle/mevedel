@@ -26,10 +26,13 @@ The relay serves the viewer but never receives the room key.
 reports its bearer links (the full-control link is copied to the kill ring).
 `/collab status` reports the room, relay connectivity, and guest names
 without printing any secret, and `/collab stop` ends that session's room.
+`/collab stop all` (or `M-x mevedel-collaboration-stop-all`) ends every
+session's room and every lobby, and forgets lobbies recorded to restart.
 `/collab lobby` shares a workspace's session list instead; see
 [the lobby](#the-lobby).
 The session menu's `S Share…` surface offers the same actions on the menu's
-session and workspace; see [the view manual](view.md#status-strip-and-cockpit-routing).
+session and workspace, and lists every active share and lobby of this Emacs;
+see [the view manual](view.md#status-strip-and-cockpit-routing).
 Sessions may be shared concurrently; each has an independent room, key,
 and guest set. Killing the owning data buffer, ending its session, explicitly
 stopping the share, or exiting Emacs tears its room down. Otherwise the room

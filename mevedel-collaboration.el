@@ -82,6 +82,14 @@
 ;; `mevedel-collaboration-lobby'
 (declare-function mevedel-collaboration-lobby--status
                   "mevedel-collaboration-lobby" ())
+(declare-function mevedel-collaboration-lobby-shares
+                  "mevedel-collaboration-lobby" ())
+(declare-function mevedel-collaboration-lobby-show-directory
+                  "mevedel-collaboration-lobby" (root &optional restart))
+(declare-function mevedel-collaboration-lobby-stop-directory
+                  "mevedel-collaboration-lobby" (root))
+(declare-function mevedel-collaboration-lobby-stop-every
+                  "mevedel-collaboration-lobby" ())
 (defvar mevedel-collaboration-lobby--lobbies)
 
 ;; `mevedel-collaboration-presence'
@@ -1166,13 +1174,92 @@ The plist holds `:guests', the number of distinct guests connected.  It is
 read from memory, so status displays may call it freely; it never carries
 a bearer link."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (let (ids)
-      (when-let* ((guests (plist-get room :guests)))
-        (maphash (lambda (peer guest)
-                   (cl-pushnew (or (plist-get guest :guest-id) peer) ids
-                               :test #'equal))
-                 guests))
-      (list :guests (length ids)))))
+    (list :guests (mevedel-collaboration--guest-count room))))
+
+(defun mevedel-collaboration--guest-count (room)
+  "Return the number of distinct guests connected to ROOM.
+One guest may hold several tabs, which share its stable identity."
+  (let (ids)
+    (when-let* ((guests (plist-get room :guests)))
+      (maphash (lambda (peer guest)
+                 (cl-pushnew (or (plist-get guest :guest-id) peer) ids
+                             :test #'equal))
+               guests))
+    (length ids)))
+
+(defun mevedel-collaboration-shares ()
+  "Return every session share and lobby of this Emacs, without secrets.
+Each entry is a plist with `:kind' (`room', `lobby', or `recorded-lobby'
+for a lobby recorded to run that is not running), `:label', `:guests',
+and `:connected'.  A room names its owning `:data-buffer', a lobby its
+workspace root `:directory'.  Rooms come first, in the order they started.
+Read from memory and the small lobby record, so status displays may call
+it freely."
+  (append
+   (mapcar (lambda (room)
+             (let ((transport (plist-get room :transport)))
+               (list :kind 'room
+                     :label (plist-get room :session-label)
+                     :guests (mevedel-collaboration--guest-count room)
+                     :connected (and transport
+                                     (mevedel-collaboration--transport-open-p
+                                      transport)
+                                     t)
+                     :data-buffer (plist-get room :data-buffer))))
+           (mevedel-collaboration--room-list))
+   ;; A lobby exists only once its module is loaded.
+   (and (fboundp 'mevedel-collaboration-lobby-shares)
+        (mevedel-collaboration-lobby-shares))))
+
+(defun mevedel-collaboration--share-room (entry)
+  "Return the live room of room ENTRY, or signal that it has stopped."
+  (or (mevedel-collaboration--room-for-buffer (plist-get entry :data-buffer))
+      (user-error "%s is no longer shared" (plist-get entry :label))))
+
+(defun mevedel-collaboration-show-share (entry)
+  "Show the links of ENTRY from `mevedel-collaboration-shares'.
+A lobby recorded to run but not running is started first, as it would be
+at the next Emacs start.  A share that stopped meanwhile is refused rather
+than started again."
+  (pcase (plist-get entry :kind)
+    ('room
+     (mevedel-collaboration-share-present
+      (mevedel-collaboration--share-room entry)))
+    ((or 'lobby 'recorded-lobby)
+     (mevedel-collaboration-lobby-show-directory
+      (plist-get entry :directory)
+      (eq (plist-get entry :kind) 'recorded-lobby)))))
+
+(defun mevedel-collaboration-stop-share (entry)
+  "Stop ENTRY from `mevedel-collaboration-shares'.
+A stopped lobby is no longer recorded to restart, and a recorded lobby
+that is not running is forgotten."
+  (pcase (plist-get entry :kind)
+    ('room
+     (mevedel-collaboration-stop-session
+      (plist-get (mevedel-collaboration--share-room entry) :data-buffer)))
+    ((or 'lobby 'recorded-lobby)
+     (mevedel-collaboration-lobby-stop-directory
+      (plist-get entry :directory)))))
+
+(defun mevedel-collaboration-stop-all ()
+  "Stop every session share and lobby in this Emacs.
+Stopped lobbies are no longer recorded to restart, including lobbies that
+failed to restart; their stored credentials stay, so starting one again
+revives its links."
+  (interactive)
+  (let ((rooms (mevedel-collaboration--room-list))
+        lobbies)
+    (dolist (room rooms)
+      (mevedel-collaboration--stop-internal room 'user-stop))
+    (setq lobbies (if (fboundp 'mevedel-collaboration-lobby-stop-every)
+                      (mevedel-collaboration-lobby-stop-every)
+                    0))
+    (if (and (null rooms) (zerop lobbies))
+        (message "mevedel: collaboration is not active")
+      (message "mevedel: stopped %d share%s and %d lobb%s"
+               (length rooms) (if (= 1 (length rooms)) "" "s")
+               lobbies (if (= 1 lobbies) "y" "ies")))))
 
 (defun mevedel-collaboration--keep-awake-state (room now)
   "Return ROOM's keep-awake state at float-time NOW.

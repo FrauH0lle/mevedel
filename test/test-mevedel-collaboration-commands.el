@@ -268,6 +268,110 @@
       (kill-buffer mine)
       (kill-buffer other))))
 
+(mevedel-deftest mevedel-collaboration-shares
+  (:doc "lists rooms then lobbies from memory, counting distinct guests, without secrets")
+  (let* ((data (generate-new-buffer " *shares*"))
+         (guests (make-hash-table :test #'eql))
+         (room (list :data-buffer data :guests guests :transport 'transport
+                     :session-label "Review"
+                     :link-full "http://example/#room.full-secret"))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-open-p)
+                   (lambda (_) t))
+                  ((symbol-function 'mevedel-collaboration-lobby-shares)
+                   (lambda () (list (list :kind 'lobby :label "proj")))))
+          (should (equal (list (list :kind 'lobby :label "proj"))
+                         (mevedel-collaboration-shares)))
+          (puthash data room mevedel-collaboration--rooms)
+          (puthash 1 (list :guest-id "a") guests)
+          (puthash 2 (list :guest-id "a") guests)
+          (let ((shares (mevedel-collaboration-shares)))
+            (should (equal (list :kind 'room :label "Review" :guests 1
+                                 :connected t :data-buffer data)
+                           (car shares)))
+            (should (eq 'lobby (plist-get (cadr shares) :kind)))
+            (should-not (string-search "secret" (format "%S" shares)))))
+      (kill-buffer data))))
+
+(mevedel-deftest mevedel-collaboration-show-share
+  (:doc "shows a live room's links, refuses a stopped one, and routes lobbies")
+  (let* ((data (generate-new-buffer " *show-share*"))
+         (room (list :data-buffer data :session-label "Review"))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+         calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration-share-present)
+                   (lambda (shown) (push (list 'present shown) calls)))
+                  ((symbol-function 'mevedel-collaboration-lobby-show-directory)
+                   (lambda (root restart) (push (list 'lobby root restart) calls))))
+          (mevedel-collaboration-show-share
+           (list :kind 'room :label "Review" :data-buffer data))
+          (mevedel-collaboration-show-share
+           (list :kind 'lobby :directory "/root/"))
+          (mevedel-collaboration-show-share
+           (list :kind 'recorded-lobby :directory "/srv/"))
+          (should (equal (list (list 'present room)
+                               (list 'lobby "/root/" nil)
+                               (list 'lobby "/srv/" t))
+                         (nreverse calls)))
+          (clrhash mevedel-collaboration--rooms)
+          (should-error (mevedel-collaboration-show-share
+                         (list :kind 'room :label "Review" :data-buffer data))
+                        :type 'user-error))
+      (kill-buffer data))))
+
+(mevedel-deftest mevedel-collaboration-stop-share
+  (:doc "stops exactly the chosen room or lobby")
+  (let* ((data (generate-new-buffer " *stop-share*"))
+         (room (list :data-buffer data :session-label "Review"))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+         calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration-stop-session)
+                   (lambda (buffer) (push (list 'room buffer) calls)))
+                  ((symbol-function 'mevedel-collaboration-lobby-stop-directory)
+                   (lambda (root) (push (list 'lobby root) calls))))
+          (mevedel-collaboration-stop-share
+           (list :kind 'room :label "Review" :data-buffer data))
+          (mevedel-collaboration-stop-share
+           (list :kind 'recorded-lobby :directory "/srv/"))
+          (should (equal (list (list 'room data) (list 'lobby "/srv/"))
+                         (nreverse calls)))
+          (clrhash mevedel-collaboration--rooms)
+          (should-error (mevedel-collaboration-stop-share
+                         (list :kind 'room :label "Review" :data-buffer data))
+                        :type 'user-error))
+      (kill-buffer data))))
+
+(mevedel-deftest mevedel-collaboration-stop-all
+  (:doc "stops every room, including other sessions', and every lobby")
+  (let* ((first (list :data-buffer (generate-new-buffer " *all-1*")))
+         (second (list :data-buffer (generate-new-buffer " *all-2*")))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry first second))
+         (lobbies 2)
+         stopped messages)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
+                   (lambda (room reason)
+                     (push (cons room reason) stopped)
+                     (remhash (plist-get room :data-buffer)
+                              mevedel-collaboration--rooms)))
+                  ((symbol-function 'mevedel-collaboration-lobby-stop-every)
+                   (lambda () (prog1 lobbies (setq lobbies 0)))))
+          (mevedel-test--with-captured-messages messages
+            ;; From inside one session, the others stop too.
+            (with-current-buffer (plist-get first :data-buffer)
+              (mevedel-collaboration-stop-all)))
+          (should (equal (list (cons first 'user-stop) (cons second 'user-stop))
+                         (nreverse stopped)))
+          (should (string-match-p "stopped 2 shares and 2 lobbies" messages))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-collaboration-stop-all))
+          (should (string-match-p "not active" messages)))
+      (kill-buffer (plist-get first :data-buffer))
+      (kill-buffer (plist-get second :data-buffer)))))
+
 (mevedel-deftest mevedel-collaboration-room-summary
   (:doc "summarizes a session's room from memory, without its secrets")
   (let* ((data (generate-new-buffer " *summary*"))
@@ -433,11 +537,14 @@
                 ((symbol-function 'mevedel-collaboration-lobby-stop)
                  (lambda () (push 'stop called)))
                 ((symbol-function 'mevedel-collaboration-lobby-rotate)
-                 (lambda () (push 'rotate called))))
+                 (lambda () (push 'rotate called)))
+                ((symbol-function 'mevedel-collaboration-stop-all)
+                 (lambda () (push 'stop-all called))))
         (should-not (mevedel-cmd--collab "lobby"))
         (should-not (mevedel-cmd--collab "lobby stop"))
         (should-not (mevedel-cmd--collab " lobby rotate "))
-        (should (equal '(rotate stop lobby) called))))))
+        (should-not (mevedel-cmd--collab "stop all"))
+        (should (equal '(stop-all rotate stop lobby) called))))))
 
 (mevedel-deftest mevedel-skills--dispatch-slash-command
   (:doc "dispatches /collab without copying its bearer URL into messages")

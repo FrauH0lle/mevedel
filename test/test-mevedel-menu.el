@@ -1682,7 +1682,155 @@
           (should (string-match-p "session shared · 1 guest · lobby shared" header))
           (should-not (string-search "secret" header)))
         (should-not (mevedel-menu--not-shared-p))
-        (should-not (mevedel-menu--lobby-down-p))))))
+        (should-not (mevedel-menu--lobby-down-p)))))
+
+  :doc "counts shares in other sessions and workspaces, and lights up for them"
+  (mevedel-menu-test--with-buffers
+    (let* ((other (generate-new-buffer " *menu-other*"))
+           (mevedel-collaboration--rooms
+            (mevedel-test-room-registry
+             (list :data-buffer other :session-label "Other"
+                   :guests (make-hash-table :test #'eql))))
+           (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal)))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (should (string= "Share…     not shared · +1 more"
+                             (substring-no-properties
+                              (mevedel-menu--share-summary))))
+            (should (eq 'transient-value
+                        (get-text-property 11 'face (mevedel-menu--share-summary))))
+            ;; This workspace's own lobby is not "elsewhere".
+            (puthash (mevedel-workspace-root workspace)
+                     (list :project "p" :guests (make-hash-table :test #'eql))
+                     mevedel-collaboration-lobby--lobbies)
+            (should (string= "Share…     not shared · +1 more"
+                             (substring-no-properties
+                              (mevedel-menu--share-summary)))))
+        (kill-buffer other)))))
+
+(mevedel-deftest mevedel-menu--share-active-rows ()
+  ,test
+  (test)
+  :doc "lists this session's share first, one digit per share, without links"
+  (mevedel-menu-test--with-buffers
+    (let* ((other (generate-new-buffer " *menu-other*"))
+           (mine-guests (make-hash-table :test #'eql))
+           (mevedel-collaboration--rooms
+            (mevedel-test-room-registry
+             (list :data-buffer other :session-label "Other session"
+                   :guests (make-hash-table :test #'eql)
+                   :link-full "https://relay.example/#room.full-secret")
+             (list :data-buffer data-buf :session-label "This session"
+                   :guests mine-guests)))
+           (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+           (mevedel-menu--share-entries nil))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (puthash 1 (list :guest-id "a") mine-guests)
+            (mevedel-collaboration-lobby--set-intended "/srv/excal/" t)
+            (let ((rows (mevedel-menu--share-active-rows nil)))
+              (should (equal '("1" "2" "3")
+                             (mapcar (lambda (row) (plist-get (cdr row) :key))
+                                     rows)))
+              (should (equal '(mevedel-menu--share-select)
+                             (seq-uniq (mapcar (lambda (row)
+                                                 (plist-get (cdr row) :command))
+                                               rows))))
+              (let ((labels (mapcar (lambda (row)
+                                      (substring-no-properties
+                                       (plist-get (cdr row) :description)))
+                                    rows)))
+                (should (string-match-p
+                         "\\`● room +This session +1 guest · reconnecting · this session\\'"
+                         (nth 0 labels)))
+                (should (string-match-p "\\`● room +Other session +0 guests" (nth 1 labels)))
+                (should (string-match-p "\\`○ lobby +excal +recorded, not running\\'"
+                                        (nth 2 labels)))
+                (should-not (seq-some (lambda (label) (string-search "secret" label))
+                                      labels)))
+              (should (eq data-buf (plist-get (car mevedel-menu--share-entries)
+                                              :data-buffer)))))
+        (kill-buffer other)))))
+
+(mevedel-deftest mevedel-menu--share-select ()
+  ,test
+  (test)
+  :doc "opens the share surface for the pressed digit's share"
+  (let ((mevedel-menu--share-entries (list (list :kind 'room :label "a")
+                                           (list :kind 'lobby :label "b")))
+        scoped)
+    (cl-letf (((symbol-function 'transient-setup)
+               (lambda (prefix _layout _edit &rest args)
+                 (setq scoped (list prefix (plist-get args :scope))))))
+      (let ((last-command-event ?2))
+        (mevedel-menu--share-select))
+      (should (equal (list 'mevedel-menu--share-item
+                           (list :kind 'lobby :label "b"))
+                     scoped))
+      (let ((last-command-event ?3))
+        (should-error (mevedel-menu--share-select) :type 'user-error)))))
+
+(mevedel-deftest mevedel-menu--share-item ()
+  ,test
+  (test)
+  :doc "routes the chosen share's actions to the collaboration module"
+  (let* ((buffer (generate-new-buffer " *share-item*"))
+         (entry (list :kind 'room :label "Review" :guests 2 :connected t
+                      :data-buffer buffer))
+         calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'transient-scope) (lambda (&rest _) entry))
+                  ((symbol-function 'mevedel-collaboration-show-share)
+                   (lambda (shown) (push (list 'show shown) calls)))
+                  ((symbol-function 'mevedel-collaboration-stop-share)
+                   (lambda (shown) (push (list 'stop shown) calls)))
+                  ((symbol-function 'mevedel--display-chat-buffer)
+                   (lambda (shown) (push (list 'open shown) calls))))
+          (should (string-match-p "room Review\n2 guests connected · relay connected"
+                                  (substring-no-properties
+                                   (mevedel-menu--share-item-description))))
+          (should (equal "Stop sharing" (mevedel-menu--share-item-stop-description)))
+          (mevedel-menu--share-item-open)
+          (mevedel-menu--share-item-links)
+          (mevedel-menu--share-item-stop)
+          (should (equal (list (list 'open buffer) (list 'show entry)
+                               (list 'stop entry))
+                         (nreverse calls)))
+          (setq entry (list :kind 'recorded-lobby :label "excal"
+                            :directory "/srv/excal/"))
+          (should (mevedel-menu--share-item-recorded-p))
+          (should-not (mevedel-menu--share-item-room-p))
+          (should (string-match-p "Forget" (mevedel-menu--share-item-stop-description)))
+          (should-error (mevedel-menu--share-item-open) :type 'user-error))
+      (kill-buffer buffer))))
+
+(mevedel-deftest mevedel-menu--share-stop-all ()
+  ,test
+  (test)
+  :doc "stops everything only after a confirmation that counts it"
+  (mevedel-menu-test--with-buffers
+    (let* ((mevedel-collaboration--rooms
+            (mevedel-test-room-registry
+             (list :data-buffer data-buf :session-label "s"
+                   :guests (make-hash-table :test #'eql))))
+           (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+           stopped messages prompt)
+      (cl-letf (((symbol-function 'mevedel-collaboration-stop-all)
+                 (lambda () (setq stopped t))))
+        (with-current-buffer view-buf
+          (should-not (mevedel-menu--no-shares-p))
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (text) (setq prompt text) nil)))
+            (mevedel-test--with-captured-messages messages
+              (mevedel-menu--share-stop-all)))
+          (should (string-match-p "Stop 1 share and 0 lobbies" prompt))
+          (should-not stopped)
+          (should (string-match-p "shares kept" messages))
+          (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
+            (mevedel-menu--share-stop-all))
+          (should stopped)
+          (clrhash mevedel-collaboration--rooms)
+          (should (mevedel-menu--no-shares-p)))))))
 
 (mevedel-deftest mevedel-menu--share ()
   ,test

@@ -695,6 +695,78 @@ Only an exit leaves it recorded as running, to restart with Emacs."
      mevedel-collaboration-lobby--lobbies)
     (and lines (mapconcat #'identity (nreverse lines) "; "))))
 
+(defun mevedel-collaboration-lobby-shares ()
+  "Return share entries for every running and recorded lobby.
+See `mevedel-collaboration-shares' for the entry shape.  A recorded lobby
+that is not running, usually because it failed to restart, is
+`recorded-lobby'."
+  (let (live)
+    (maphash
+     (lambda (root lobby)
+       (push (list :kind 'lobby
+                   :label (plist-get lobby :project)
+                   :guests (hash-table-count (plist-get lobby :guests))
+                   :connected (and (plist-get lobby :transport)
+                                   (mevedel-collaboration--transport-open-p
+                                    (plist-get lobby :transport))
+                                   t)
+                   :directory root)
+             live))
+     mevedel-collaboration-lobby--lobbies)
+    (append
+     (nreverse live)
+     (mapcar (lambda (root)
+               (list :kind 'recorded-lobby
+                     :label (file-name-nondirectory (directory-file-name root))
+                     :guests 0
+                     :connected nil
+                     :directory root))
+             (seq-remove (lambda (root)
+                           (gethash root mevedel-collaboration-lobby--lobbies))
+                         (mevedel-collaboration-lobby--intended))))))
+
+(defun mevedel-collaboration-lobby-show-directory (root &optional restart)
+  "Show the links of workspace ROOT's running lobby.
+With RESTART, start a lobby that is recorded to run but is not running,
+as the next Emacs start would; the recording is its earlier consent.
+Otherwise a lobby that stopped meanwhile is refused."
+  (if-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies)))
+      (mevedel-collaboration-share-present lobby)
+    (unless (and restart
+                 (member root (mevedel-collaboration-lobby--intended)))
+      (user-error "The lobby of %s is no longer running" root))
+    (mevedel-collaboration-share-present
+     (mevedel-collaboration-lobby-start root))))
+
+(defun mevedel-collaboration-lobby-stop-directory (root)
+  "Stop workspace ROOT's lobby, or forget it when it is only recorded.
+Either way it no longer restarts with Emacs."
+  (if-let* ((lobby (gethash root mevedel-collaboration-lobby--lobbies)))
+      (progn
+        (mevedel-collaboration-lobby--stop lobby 'user-stop)
+        (message "mevedel: lobby stopped for %s" (plist-get lobby :project)))
+    (mevedel-collaboration-lobby--set-intended root nil)
+    (message "mevedel: lobby of %s no longer restarts" root)))
+
+(defun mevedel-collaboration-lobby-stop-every ()
+  "Stop every running lobby and forget recorded ones; return how many.
+Credentials stay stored, so starting a lobby again revives its links."
+  (let ((recorded (mevedel-collaboration-lobby--intended))
+        lobbies)
+    (maphash (lambda (_root lobby) (push lobby lobbies))
+             mevedel-collaboration-lobby--lobbies)
+    (dolist (lobby lobbies)
+      (mevedel-collaboration-lobby--stop lobby 'user-stop))
+    (let ((forgotten (seq-remove
+                      (lambda (root)
+                        (seq-some (lambda (lobby)
+                                    (equal root (plist-get lobby :directory)))
+                                  lobbies))
+                      recorded)))
+      (dolist (root forgotten)
+        (mevedel-collaboration-lobby--set-intended root nil))
+      (+ (length lobbies) (length forgotten)))))
+
 
 ;;
 ;;; Commands

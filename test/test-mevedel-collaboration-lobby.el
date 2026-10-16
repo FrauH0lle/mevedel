@@ -1150,5 +1150,108 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
           (should-not (equal old-link (plist-get (car presented) :link-owner)))
           (mevedel-collaboration-lobby--stop (car presented) 'user-stop))))))
 
+(defmacro mevedel-collaboration-lobby-test--with-stubbed-transport (&rest body)
+  "Run BODY with lobby transports that record stops instead of closing.
+The list of stopped transports is bound to `stopped'."
+  (declare (indent 0))
+  `(let (stopped)
+     (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                (lambda (&rest _) t))
+               ((symbol-function 'mevedel-collaboration--transport-stop)
+                (lambda (transport) (push transport stopped)))
+               ((symbol-function 'mevedel-collaboration--transport-open-p)
+                (lambda (transport) (eq transport 'transport)))
+               ((symbol-function 'mevedel-collaboration-presence-publish)
+                #'ignore)
+               ((symbol-function 'mevedel-collaboration-share-dismiss)
+                #'ignore))
+       ,@body)))
+
+(mevedel-deftest mevedel-collaboration-lobby-shares
+  (:doc "lists running lobbies, then recorded ones that are not running, without links")
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (mevedel-collaboration-lobby-test--with-stubbed-transport
+      (let* ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+             (workspace (mevedel-collaboration-lobby-test--workspace "/root/"))
+             (lobby (mevedel-collaboration-lobby-test--lobby workspace)))
+        (should-not (mevedel-collaboration-lobby-shares))
+        (puthash 1 (list :name "Phone") (plist-get lobby :guests))
+        (puthash 2 (list :name "Laptop") (plist-get lobby :guests))
+        (puthash "/root/" lobby mevedel-collaboration-lobby--lobbies)
+        (mevedel-collaboration-lobby--set-intended "/root/" t)
+        (mevedel-collaboration-lobby--set-intended "/srv/excal/" t)
+        (let ((shares (mevedel-collaboration-lobby-shares)))
+          (should (equal (list (list :kind 'lobby :label "proj" :guests 2
+                                     :connected t :directory "/root/")
+                               (list :kind 'recorded-lobby :label "excal"
+                                     :guests 0 :connected nil
+                                     :directory "/srv/excal/"))
+                         shares))
+          (should-not (string-search "link" (format "%S" shares))))))))
+
+(mevedel-deftest mevedel-collaboration-lobby-show-directory
+  (:doc "shows a running lobby and restarts a recorded one only when asked")
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (let* ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+           (workspace (mevedel-collaboration-lobby-test--workspace "/root/"))
+           (lobby (mevedel-collaboration-lobby-test--lobby workspace))
+           presented started)
+      (cl-letf (((symbol-function 'mevedel-collaboration-share-present)
+                 (lambda (shown) (push shown presented)))
+                ((symbol-function 'mevedel-collaboration-lobby-start)
+                 (lambda (root) (push root started) lobby)))
+        (puthash "/root/" lobby mevedel-collaboration-lobby--lobbies)
+        (mevedel-collaboration-lobby-show-directory "/root/")
+        (should (equal (list lobby) presented))
+        (clrhash mevedel-collaboration-lobby--lobbies)
+        ;; Stopped meanwhile: never restarted behind the user's back.
+        (should-error (mevedel-collaboration-lobby-show-directory "/root/")
+                      :type 'user-error)
+        ;; Restart needs the recording, which is the earlier consent.
+        (should-error (mevedel-collaboration-lobby-show-directory "/root/" t)
+                      :type 'user-error)
+        (should-not started)
+        (mevedel-collaboration-lobby--set-intended "/root/" t)
+        (mevedel-collaboration-lobby-show-directory "/root/" t)
+        (should (equal '("/root/") started))
+        (should (equal (list lobby lobby) presented))))))
+
+(mevedel-deftest mevedel-collaboration-lobby-stop-directory
+  (:doc "stops a running lobby and forgets a recorded one, so neither restarts")
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (mevedel-collaboration-lobby-test--with-stubbed-transport
+      (let* ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+             (workspace (mevedel-collaboration-lobby-test--workspace "/root/"))
+             (lobby (mevedel-collaboration-lobby-test--lobby workspace))
+             messages)
+        (puthash "/root/" lobby mevedel-collaboration-lobby--lobbies)
+        (mevedel-collaboration-lobby--set-intended "/root/" t)
+        (mevedel-collaboration-lobby--set-intended "/srv/excal/" t)
+        (mevedel-test--with-captured-messages messages
+          (mevedel-collaboration-lobby-stop-directory "/root/")
+          (mevedel-collaboration-lobby-stop-directory "/srv/excal/"))
+        (should (equal '(transport) stopped))
+        (should (zerop (hash-table-count mevedel-collaboration-lobby--lobbies)))
+        (should-not (mevedel-collaboration-lobby--intended))
+        (should (string-match-p "lobby stopped for proj" messages))
+        (should (string-match-p "/srv/excal/ no longer restarts" messages))))))
+
+(mevedel-deftest mevedel-collaboration-lobby-stop-every
+  (:doc "stops every running lobby and forgets recorded ones, counting both")
+  (mevedel-collaboration-lobby-test--with-user-dir
+    (mevedel-collaboration-lobby-test--with-stubbed-transport
+      (let* ((mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+             (workspace (mevedel-collaboration-lobby-test--workspace "/root/"))
+             (lobby (mevedel-collaboration-lobby-test--lobby workspace)))
+        (should (zerop (mevedel-collaboration-lobby-stop-every)))
+        (puthash "/root/" lobby mevedel-collaboration-lobby--lobbies)
+        (mevedel-collaboration-lobby--set-intended "/root/" t)
+        (mevedel-collaboration-lobby--set-intended "/srv/excal/" t)
+        (should (= 2 (mevedel-collaboration-lobby-stop-every)))
+        (should (equal '(transport) stopped))
+        (should (zerop (hash-table-count mevedel-collaboration-lobby--lobbies)))
+        (should-not (mevedel-collaboration-lobby--intended))
+        (should-not (mevedel-collaboration-lobby-shares))))))
+
 (provide 'test-mevedel-collaboration-lobby)
 ;;; test-mevedel-collaboration-lobby.el ends here

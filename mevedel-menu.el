@@ -30,6 +30,10 @@
 (autoload 'mevedel-artifacts-list-open "mevedel-artifacts-list")
 (autoload 'mevedel-artifacts-new-shared-item "mevedel-artifacts-list" nil t)
 
+;; `mevedel-chat'
+(declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
+(autoload 'mevedel--display-chat-buffer "mevedel-chat")
+
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-call-in-data
                   "mevedel-cockpit" (context function &rest args))
@@ -53,9 +57,15 @@
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration-room-summary
                   "mevedel-collaboration" (data-buffer))
+(declare-function mevedel-collaboration-shares "mevedel-collaboration" ())
+(declare-function mevedel-collaboration-show-share
+                  "mevedel-collaboration" (entry))
 (declare-function mevedel-collaboration-status "mevedel-collaboration" ())
+(declare-function mevedel-collaboration-stop-all "mevedel-collaboration" ())
 (declare-function mevedel-collaboration-stop-session
                   "mevedel-collaboration" (data-buffer))
+(declare-function mevedel-collaboration-stop-share
+                  "mevedel-collaboration" (entry))
 (declare-function mevedel-collaboration-view "mevedel-collaboration" ())
 (autoload 'mevedel-collaboration-status "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-stop-session "mevedel-collaboration")
@@ -565,10 +575,185 @@ connects, or touches a bearer link."
 
 (defun mevedel-menu--share-summary ()
   "Return the top-level Share row description."
-  (let ((summary (mevedel-menu--share-state)))
+  (let ((summary (mevedel-menu--share-state))
+        (elsewhere (length (mevedel-menu--shares-elsewhere))))
     (mevedel-menu--state-description
-     "Share…" (mevedel-menu--share-label summary)
-     (unless summary 'transient-inactive-value))))
+     "Share…"
+     (concat (mevedel-menu--share-label summary)
+             (if (> elsewhere 0) (format " · +%d more" elsewhere) ""))
+     (unless (or summary (> elsewhere 0)) 'transient-inactive-value))))
+
+(defun mevedel-menu--shares ()
+  "Return every active share and lobby of this Emacs.
+Read from memory only, like `mevedel-menu--share-state': before
+collaboration loads there is nothing to list."
+  (and (featurep 'mevedel-collaboration)
+       (mevedel-collaboration-shares)))
+
+(defun mevedel-menu--share-here-p (entry context)
+  "Return non-nil when share ENTRY is CONTEXT's session or workspace lobby."
+  (if (eq (plist-get entry :kind) 'room)
+      (eq (plist-get entry :data-buffer)
+          (mevedel-cockpit-context-data-buffer context))
+    (when-let* ((workspace (mevedel-cockpit-context-workspace context)))
+      (equal (plist-get entry :directory)
+             (mevedel-workspace-root workspace)))))
+
+(defun mevedel-menu--shares-elsewhere ()
+  "Return the active shares other than this session's and workspace's."
+  (let ((context (mevedel-menu--context)))
+    (seq-remove (lambda (entry) (mevedel-menu--share-here-p entry context))
+                (mevedel-menu--shares))))
+
+(defun mevedel-menu--no-shares-p ()
+  "Return non-nil when no share or lobby is active."
+  (null (mevedel-menu--shares)))
+
+(defconst mevedel-menu--share-row-limit 9
+  "Most shares the Share surface lists, one per digit key.")
+
+(defvar mevedel-menu--share-entries nil
+  "Shares listed by the open Share surface, in digit-key order.")
+
+(defun mevedel-menu--share-row-description (entry here)
+  "Return the Share surface row for share ENTRY.
+HERE says ENTRY belongs to the menu's own session or workspace."
+  (let* ((kind (plist-get entry :kind))
+         (guests (or (plist-get entry :guests) 0))
+         (row
+          (format "%s %-5s %-32s %s%s%s"
+                  (if (eq kind 'recorded-lobby) "○" "●")
+                  (if (eq kind 'room) "room" "lobby")
+                  (truncate-string-to-width
+                   (or (plist-get entry :label) "?") 32 nil nil "…")
+                  (if (eq kind 'recorded-lobby)
+                      "recorded, not running"
+                    (format "%d %s%s" guests
+                            (if (eq kind 'room) "guest" "tab")
+                            (if (= guests 1) "" "s")))
+                  (if (or (eq kind 'recorded-lobby)
+                          (plist-get entry :connected))
+                      ""
+                    " · reconnecting")
+                  (cond ((not here) "")
+                        ((eq kind 'room) " · this session")
+                        (t " · this workspace")))))
+    (if (eq kind 'recorded-lobby)
+        (mevedel-menu--face row 'transient-inactive-value)
+      row)))
+
+(defun mevedel-menu--share-active-description ()
+  "Return the heading of the Share surface's active-share rows."
+  (let ((count (length (mevedel-menu--shares))))
+    (if (> count mevedel-menu--share-row-limit)
+        (format "Active everywhere (first %d of %d; /collab status lists all)"
+                mevedel-menu--share-row-limit count)
+      "Active everywhere")))
+
+(defun mevedel-menu--share-active-rows (_children)
+  "Return one digit-keyed suffix per active share, this session's first."
+  (let* ((context (mevedel-menu--context))
+         (shares (mevedel-menu--shares))
+         (entries
+          (seq-take
+           (append
+            (seq-filter (lambda (entry) (mevedel-menu--share-here-p entry context))
+                        shares)
+            (seq-remove (lambda (entry) (mevedel-menu--share-here-p entry context))
+                        shares))
+           mevedel-menu--share-row-limit))
+         (index 0))
+    (setq mevedel-menu--share-entries entries)
+    (transient-parse-suffixes
+     'mevedel-menu--share
+     (mapcar (lambda (entry)
+               (setq index (1+ index))
+               (list (number-to-string index)
+                     (mevedel-menu--share-row-description
+                      entry (mevedel-menu--share-here-p entry context))
+                     'mevedel-menu--share-select))
+             entries))))
+
+(defun mevedel-menu--share-select ()
+  "Open the surface of the share whose digit key was pressed."
+  (interactive)
+  (let ((entry (and (characterp last-command-event)
+                    (<= ?1 last-command-event ?9)
+                    (nth (- last-command-event ?1)
+                         mevedel-menu--share-entries))))
+    (unless entry
+      (user-error "No share on that key"))
+    (transient-setup 'mevedel-menu--share-item nil nil :scope entry)))
+
+(defun mevedel-menu--share-item-room-p ()
+  "Return non-nil when the share surface shows a session room."
+  (eq 'room (plist-get (transient-scope) :kind)))
+
+(defun mevedel-menu--share-item-recorded-p ()
+  "Return non-nil when the share surface shows a lobby that is not running."
+  (eq 'recorded-lobby (plist-get (transient-scope) :kind)))
+
+(defun mevedel-menu--share-item-description ()
+  "Return the header of one share's surface."
+  (let* ((entry (transient-scope))
+         (kind (plist-get entry :kind))
+         (guests (or (plist-get entry :guests) 0)))
+    (concat
+     (mevedel-menu--face (if (eq kind 'room) "room" "lobby") 'transient-heading)
+     " "
+     (mevedel-menu--value (or (plist-get entry :label) "?"))
+     (if (eq kind 'room)
+         ""
+       (concat " " (abbreviate-file-name (plist-get entry :directory))))
+     "\n"
+     (mevedel-menu--face
+      (if (eq kind 'recorded-lobby)
+          "Recorded to run, but not running: it failed to restart or was never started here."
+        (format "%d %s%s connected · relay %s"
+                guests (if (eq kind 'room) "guest" "tab")
+                (if (= guests 1) "" "s")
+                (if (plist-get entry :connected) "connected" "reconnecting")))
+      'transient-inactive-value))))
+
+(defun mevedel-menu--share-item-stop-description ()
+  "Return the stop action's label for the shown share."
+  (pcase (plist-get (transient-scope) :kind)
+    ('room "Stop sharing")
+    ('lobby "Stop the lobby")
+    (_ "Forget it (no restart)")))
+
+(defun mevedel-menu--share-item-open ()
+  "Show the shared session."
+  (interactive)
+  (let ((buffer (plist-get (transient-scope) :data-buffer)))
+    (unless (buffer-live-p buffer)
+      (user-error "That session is no longer open"))
+    (mevedel--display-chat-buffer buffer)))
+
+(defun mevedel-menu--share-item-links ()
+  "Show the shown share's links, restarting a recorded lobby first."
+  (interactive)
+  (mevedel-collaboration-show-share (transient-scope)))
+
+(defun mevedel-menu--share-item-stop ()
+  "Stop the shown share, or forget a recorded lobby."
+  (interactive)
+  (mevedel-collaboration-stop-share (transient-scope)))
+
+(defun mevedel-menu--share-stop-all ()
+  "Stop every share and lobby after confirmation."
+  (interactive)
+  (let* ((entries (mevedel-menu--shares))
+         (rooms (seq-count (lambda (entry) (eq 'room (plist-get entry :kind)))
+                           entries))
+         (lobbies (- (length entries) rooms)))
+    (if (yes-or-no-p
+         (format (concat "Stop %d share%s and %d lobb%s? Their guests are "
+                         "disconnected, and the session links stop working. ")
+                 rooms (if (= rooms 1) "" "s")
+                 lobbies (if (= lobbies 1) "y" "ies")))
+        (mevedel-collaboration-stop-all)
+      (message "mevedel: shares kept"))))
 
 (defun mevedel-menu--share-description ()
   "Return the Share surface header."
@@ -1731,10 +1916,34 @@ Every action goes through the same commands as `/collab'."
     ("r" "Rotate lobby links…" mevedel-menu--share-lobby-rotate)]
    ["Inspect"
     :pad-keys t
-    ("i" "Status" mevedel-menu--share-status)]]
+    ("i" "Status" mevedel-menu--share-status)
+    ("X" "Stop all…" mevedel-menu--share-stop-all
+     :inapt-if mevedel-menu--no-shares-p)]]
+  [:class transient-column
+   :description mevedel-menu--share-active-description
+   :if-not mevedel-menu--no-shares-p
+   :setup-children mevedel-menu--share-active-rows]
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--share))
+
+(transient-define-prefix mevedel-menu--share-item ()
+  "One share or lobby chosen on the Share surface.
+Every action goes through the collaboration module, which refuses a share
+that stopped meanwhile."
+  [:description mevedel-menu--share-item-description
+   ["Share"
+    :pad-keys t
+    ("o" "Open session" mevedel-menu--share-item-open
+     :if mevedel-menu--share-item-room-p)
+    ("s" "Show links" mevedel-menu--share-item-links
+     :if-not mevedel-menu--share-item-recorded-p)
+    ("R" "Restart and show links" mevedel-menu--share-item-links
+     :if mevedel-menu--share-item-recorded-p)
+    ("x" mevedel-menu--share-item-stop
+     :description mevedel-menu--share-item-stop-description)]]
+  (interactive)
+  (user-error "Choose a share on the Share surface"))
 
 (transient-define-prefix mevedel-menu--control ()
   "Session control cockpit surface.

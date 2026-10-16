@@ -1246,9 +1246,20 @@ shows whether this session and the workspace lobby are shared. It shows this
 session's links or starts sharing it with `/collab`'s disclosure, stops this
 session's share only, reports status, and starts, stops or rotates the lobby.
 Rotating asks first, because every earlier lobby link stops working. Links
-appear only in the share panel with its QR code. The top row's `shared · N
-guests` is read from memory: opening the menu never loads collaboration,
-connects, or reads credentials.
+appear only in the share panel with its QR code.
+
+Below, *Active everywhere* lists up to nine shares of this Emacs, this
+session's and workspace's first: session rooms with their distinct guests,
+running lobbies with their tabs, and lobbies recorded to restart that are not
+running. A digit opens that share's surface: `o` shows its session, `s` its
+links, `x` stops it, and for a recorded lobby `R` restarts it and `x` forgets
+it. Each action re-checks the share, so one that stopped meanwhile is refused
+rather than started again. `X Stop all…` asks once, with the counts, before
+stopping every share and lobby.
+
+The top row's `shared · N guests` gains `· +N more` when shares exist
+elsewhere. Like the rows, it is read from memory and the small lobby record:
+opening the menu never loads collaboration, connects, or reads credentials.
 
 Information panels use read-only sections with theme-inheriting headings,
 aligned labels, and visual wrapping. `RET` on a heading folds its body; `TAB`
