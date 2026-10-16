@@ -55,6 +55,8 @@ class Element {
     for (const callback of this.listeners[type] || []) callback(event);
   }
   focus() { this.focused = true; }
+  showPopover() { this.popoverOpen = true; }
+  hidePopover() { this.popoverOpen = false; }
   // <dialog> is the whole modal, so the stub carries its three moving
   // parts: open state, a return value, and the close event.
   showModal() { this.open = true; }
@@ -652,7 +654,8 @@ async function main() {
                'lobby-files', 'files-path', 'files-list',
                'files-status', 'files-upload', 'files-input', 'artifact-ask',
                'editing-status', 'editing-recheck', 'editing-box', 'editing-items', 'editing-panel', 'editing-body',
-               'editing-title', 'editing-saved', 'editing-file', 'editing-import', 'editing-close'];
+               'editing-title', 'editing-saved', 'editing-file', 'editing-import', 'editing-close',
+               'room-crumbs', 'room-back', 'agent-crumbs', 'artifact-crumbs'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   // The dock is addressed by class, not id, and its height is what the
   // reading-mode fold threshold is measured against.
@@ -845,6 +848,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-files.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-store.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-lobby.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-nav.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-presence.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-header.js', 'utf8'), context);
@@ -1731,7 +1735,20 @@ async function main() {
                      workspace: 'ws'},
                     {room: 'third', name: 'handed-over',
                      secret: thirdSecret, workspace: 'ws'}]);
-  assert.match(textOf(nodes['session-summary']), /2 rooms/);
+  // The project menu offers them, in this tab, beside the project's
+  // artifacts; without a lobby the project is no place to go.
+  const crumbButton = nodes['room-crumbs'].children[0];
+  crumbButton.dispatch('click', {currentTarget: crumbButton});
+  const navMenu = document.body.children.find(
+    child => child.className === 'store-menu nav-menu');
+  assert.equal(navMenu.popoverOpen, true);
+  assert.deepEqual(navMenu.children.map(textOf),
+                   ['Project · this project', 'Project artifacts', 'Rooms',
+                    'onboarding', 'handed-over', 'Manage rooms…']);
+  navMenu.children[1].dispatch('click');
+  assert.equal(navMenu.popoverOpen, false);
+  assert.equal(nodes['store-sheet'].open, true);
+  nodes['store-sheet'].open = false;
   // The same room twice is one room: a reconnect re-offering it must not
   // stack a second card.
   await deliver({t: 'room', name: 'handed-over',

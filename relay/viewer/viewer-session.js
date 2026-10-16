@@ -17,7 +17,7 @@
     {name: 'owner', bytes: 64, what: 'and change mode, create sessions'},
   ];
 
-  function create({state, send, el, encode, decode, summarize, notice}) {
+  function create({state, send, el, encode, decode, notice}) {
     const button = document.getElementById('new-session-button');
     const sheet = document.getElementById('new-session');
     const nameInput = document.getElementById('new-session-name');
@@ -38,7 +38,6 @@
     const inviteSheet = document.getElementById('invite');
     const inviteTiers = document.getElementById('invite-tiers');
     const inviteQr = document.getElementById('invite-qr');
-    const roomsButton = document.getElementById('rooms-button');
     const roomsSheet = document.getElementById('rooms');
     const roomsList = document.getElementById('rooms-list');
 
@@ -69,6 +68,9 @@
     // links share this key. Keying on the link would give that browser
     // two cards for one room, and letting the last tab write the whole
     // list would have each clobber the other's rooms.
+    //
+    // A lobby is kept like any room, marked `lobby', so every room of
+    // its workspace can lead back to it.
     function stored() {
       try {
         const raw = JSON.parse(localStorage.getItem(STORE) || '[]');
@@ -92,21 +94,30 @@
     // which replaces whatever name the room was stored under.
     // Rooms are handed out in this tab's workspace: a session requested
     // here is created in it, so nothing is kept before the host names it.
-    function rememberRoom(name, parts, renamed = false) {
+    function rememberRoom(name, parts, renamed = false, lobby = false) {
       if (!workspace) return;
-      const rooms = stored();
+      // A workspace has one lobby: a new one, such as after its links were
+      // rotated, replaces the one kept before, whose link is dead.
+      const rooms = stored().filter(room => !(lobby && room.lobby === true
+                                              && room.workspace === workspace
+                                              && room.room !== parts.roomId));
+      const superseded = rooms.length < stored().length;
       const existing = rooms.find(room => room.room === parts.roomId);
       if (!existing) {
-        rooms.push({room: parts.roomId, name, secret: parts.secret, workspace});
+        rooms.push({room: parts.roomId, name, secret: parts.secret, workspace,
+                    ...(lobby ? {lobby: true} : {})});
       } else if (existing.secret.length < parts.secret.length) {
         // The stronger secret wins -- it is what this browser was
         // actually handed; what a given tab may present is capped when
         // the link is built, not here.
         existing.secret = parts.secret;
         existing.name = name;
+        if (lobby) existing.lobby = true;
       } else if (renamed && existing.name !== name) {
         existing.name = name;
-      } else {
+      } else if (lobby && existing.lobby !== true) {
+        existing.lobby = true;
+      } else if (!superseded) {
         return;
       }
       saveRooms(rooms);
@@ -303,22 +314,8 @@
       return open;
     }
 
-    // The Rooms button lives in In this room, whose summary counts them.
-    let roomCount = 0;
-    let inviteShown = false;
-    function reportRoom() {
-      if (!summarize) return;
-      summarize('room', roomCount ? `${roomCount} room${roomCount === 1 ? '' : 's'}` : '');
-    }
-
     function renderRooms() {
       const rooms = elsewhere();
-      roomCount = rooms.length;
-      if (roomsButton) {
-        roomsButton.hidden = rooms.length === 0;
-        roomsButton.replaceChildren('Rooms ', el('span', 'dock-count', String(rooms.length)));
-      }
-      reportRoom();
       if (!roomsList) return;
       roomsList.replaceChildren();
       rooms.forEach(room => {
@@ -340,6 +337,32 @@
         row.append(actions);
         roomsList.append(row);
       });
+    }
+
+    // The rooms of this workspace the tab can switch to, as {name, link};
+    // the lobby is reached as the project instead.
+    function rooms() {
+      return elsewhere().filter(room => room.lobby !== true)
+        .map(room => ({name: room.name, link: roomLink(room)}))
+        .filter(room => room.link);
+    }
+
+    // The link back to this workspace's lobby, capped to this tab's tier,
+    // or null when the browser holds none.
+    function lobbyLink() {
+      const lobby = elsewhere().find(room => room.lobby === true);
+      return lobby ? roomLink(lobby) : null;
+    }
+
+    // An owner's host names the running lobby of the room's workspace.
+    function rememberLobby(link, name) {
+      const parts = splitLink(link);
+      if (parts) rememberRoom(name, parts, false, true);
+    }
+
+    function openRooms() {
+      renderRooms();
+      roomsSheet.showModal();
     }
 
     /* -- Inviting into this room --------------------------------------- */
@@ -412,17 +435,13 @@
     // hand on too -- but not the room: an ended room's link is dead, and
     // offering to pass it on would be a lie.
     function setInviteVisible(visible) {
-      inviteShown = Boolean(visible && secret);
-      if (inviteButton) inviteButton.hidden = !inviteShown;
-      // Rooms outlive this room, so the list stays reachable after it
-      // ends; only its own count decides whether the button is there.
-      renderRooms();
+      if (inviteButton) inviteButton.hidden = !(visible && secret);
     }
 
     // Kept like any other room, so the rooms this one opens can list it,
-    // under the name its host currently gives it.
-    function rememberCurrent(name) {
-      if (secret) rememberRoom(name, {roomId, secret: encode(secret)}, true);
+    // under the name its host currently gives it. LOBBY marks the lobby.
+    function rememberCurrent(name, lobby = false) {
+      if (secret) rememberRoom(name, {roomId, secret: encode(secret)}, true, lobby);
     }
 
     // The fragment is wiped from the URL on connect, so the tiers are
@@ -446,16 +465,12 @@
       else files.clear();
     });
     if (inviteButton) inviteButton.addEventListener('click', openInvite);
-    if (roomsButton) {
-      roomsButton.addEventListener('click', () => {
-        renderRooms();
-        roomsSheet.showModal();
-      });
-    }
 
     return Object.freeze({setVisible, setInviteVisible,
                           showResult, offerRoom, useCredentials, setWorkspace,
-                          rememberCurrent, openNewSession: open});
+                          rememberCurrent, rememberLobby, lobbyLink, rooms,
+                          hasRooms: () => elsewhere().length > 0, openRooms,
+                          openNewSession: open});
   }
 
   window.mevedelSessionView = Object.freeze({create});

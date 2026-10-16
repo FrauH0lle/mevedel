@@ -168,19 +168,68 @@ until it arrives the header shows the start of the room ID. A lobby's header
 names its project instead.
 
 Invite sits in the room header and remains available to read-only guests.
-Rooms and New session are in **In this room**. Invite disappears when the room
+New session is in **In this room**. Invite disappears when the room
 ends, because the link goes with it.
 
 Every page has the same header: the room, the editor tab, and the agent and
-artifact views. It shows the wordmark, a small line over the page's title, and
-the page's actions; the Appearance menu follows whichever header is on screen.
-The other pages say **Back to room** at the end of their actions. The header
+artifact views. It shows the wordmark, a back button when the page has
+somewhere to go back to, a small line over the page's title, and the page's
+actions; the Appearance menu follows whichever header is on screen. See
+[navigation and history](#navigation-and-history) for the back button and
+the small line. The header
 keeps one line at every width: actions fold into its **⋯** menu, the least
 needed first, while they would squeeze the title below 120 pixels or cut it
 off while it has less than half the header, and come back when there is room
-again. Presence never
+again. The back button and presence never
 folds. The bell is an icon, struck through while the browser blocks
 notifications, and a labelled row in the **⋯** menu.
+
+## Navigation and history
+
+The header's small line names where the page is. It starts with the project,
+`proj ▾`, which opens a menu of the places this tab can go; over an artifact
+or sub-agent transcript it continues `› Feature work`, the room the panel
+covers, and clicking that closes the panel. A phone keeps this line and hides
+only the page's details, such as an artifact's size.
+
+The project menu lists, in a room, the **Lobby** when there is one to go to
+and **Project artifacts**, the store sheet; in the lobby, its **Sessions**,
+**Artifacts** and, for a full or owner link, **Files** tabs. Under **Rooms**
+it lists the other rooms of the workspace this browser holds, capped to the
+tab's tier, and **Manage rooms…**, the sheet that copies and forgets them.
+The menu replaced the dock's Rooms and Project artifacts rows.
+
+Every page but the lobby has a back button before its title. In a room it
+returns to the lobby; over a panel it closes the panel. Its label names
+where it leads, such as "Back to the project lobby". An editor tab's back
+button shows the session in that tab.
+
+Moves are browser history. Opening a room from the lobby, a menu or the
+back button pushes an entry, and so does opening an artifact or transcript
+panel; browser Back closes the panel, then returns to the page before, and
+Forward reopens it. A reload keeps an open panel: its entry names the
+artifact record, project file or agent row, which is opened again once the
+host welcomes the tab. The lobby records its tab on its entry, so a reload or
+Back returns to the tab that was shown.
+
+A room's key never enters history. Each entry names its room id only, and
+the tab keeps each room's link it used in `sessionStorage`, per tab and gone
+with it; going back finds the link there and reloads into that room. A room
+that ends is dropped from the tab's links, so Back cannot rejoin it.
+
+Which lobby a room leads back to comes from the browser, and from the host
+for an owner. The browser keeps every lobby it opens with its rooms, marked
+as a lobby. A room's `welcome` carries the project's name and a `lobby`
+field: for an owner-link guest, the owner link of the workspace's running
+lobby; for any other guest, `true` while one runs; and `false` when none does.
+A `lobby-state` frame carries the same field to every guest of the
+workspace's rooms when the lobby starts or stops. The browser keeps an
+owner's link like one it opened. A workspace has one lobby, so a new lobby
+link for it, such as after its links were rotated, replaces the one kept
+before. With `false`, a room offers no way to a
+lobby even when the browser still holds its link, and the project stays only
+a menu. The host never starts a lobby to answer, and a view or full room
+link never reveals the workspace's other sessions.
 
 ## Room navigation and appearance
 
@@ -303,19 +352,19 @@ one guest's approval lands on another guest's pending card. An owner can
 already reach a session it approved; being told is the difference between
 reaching it and knowing it exists. Offers and replies land in one dock
 strip as notices, and every reachable one is kept in browser storage per
-relay origin and listed in the Rooms sheet beside Invite.
+relay origin and listed under the project menu's Rooms.
 
 One relay serves every host and project, so the store is grouped by
 workspace. Every welcome and lobby listing carries an opaque `workspace`
 key, a hash of the host's system name and the workspace's type and id, and
 a room is kept under the key of the tab that was handed it; a session
 requested from a room or lobby is created in that same workspace. The
-Rooms sheet lists only rooms under the current tab's key.
+project menu lists only rooms under the current tab's key.
 
 The two surfaces answer different questions. A notice says what just
 happened -- approved, refused, someone handed you a room -- and Dismiss
-dismisses the news. The Rooms sheet answers which rooms this browser can
-get back to, and only Forget takes one out of it.  A refusal is
+dismisses the news. The project menu answers which rooms this browser can
+get back to, and only Forget, under Manage rooms, takes one out of it.  A refusal is
 never stored: it is news and nothing else. Rooms die with the host's
 share regardless of what the browser remembers.
 
@@ -500,10 +549,12 @@ protected, including locks written without that evidence. See
 [session locking](sessions.md#locking).
 
 In the browser, a lobby link renders the session list in place of the
-conversation and composer. Open replaces the page with the session's room;
+conversation and composer. Open shows the session's room in the same tab, as
+a new history entry;
 an owner's rows also carry Delete, which asks for confirmation first.
-The lobby stores itself in the browser's room list, so every room it opens
-lists it under Rooms as the way back. An **Artifacts** tab beside
+The lobby stores itself in the browser's room list, marked as the lobby, so
+every room it opens leads back to it
+([navigation and history](#navigation-and-history)). An **Artifacts** tab beside
 **Sessions** lists the [artifact store](#the-artifact-store-in-the-browser)
 for every link; a full or owner link adds a **Files** tab: the
 [project files](#project-files). Refresh and a return to the foreground reload
@@ -985,9 +1036,8 @@ the lobby receive the store's new listing.
 
 ### The artifact store in the browser
 
-A room's dock ends with rows for **New session**, **Project artifacts**, which
-opens a sheet, and **Rooms** with its count; the lobby has an **Artifacts**
-tab with its create buttons beside Refresh. Both listings show the workspace's
+A room's project menu opens **Project artifacts**, a sheet; the lobby has an
+**Artifacts** tab with its create buttons beside Refresh. Both listings show the workspace's
 [artifact store](view.md#artifact-store) newest first, one line each: name,
 kind, size, version count, age of the last change, and in a room whether the
 artifact is attached to the room's session; the id shows on hovering the name.
@@ -1129,7 +1179,8 @@ viewer therefore keeps the share it is in under `sessionStorage`, per tab
 and gone with the tab, which never enters history and so keeps the reason
 for the wipe: F5, or navigating away and back, rejoins the room for as
 long as the tab and the room live. On boot the URL fragment wins, then the
-tab's share, then the notification opt-in's persisted last share. That last store is refreshed only for a room whose notifications are on. On an initial connection the relay answers an unknown room with
+link the tab used in the room its history entry names, then the tab's
+share, then the notification opt-in's persisted last share. That last store is refreshed only for a room whose notifications are on. On an initial connection the relay answers an unknown room with
 close code 4004. The host hands out a new room's links before its own relay
 dial settles, so a guest following one at once, as the lobby does, can
 arrive first; the viewer therefore retries a first-join 4004 for five

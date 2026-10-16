@@ -103,6 +103,10 @@
 (autoload 'mevedel-collaboration--publish-history
   "mevedel-collaboration-history")
 
+;; `mevedel-collaboration-lobby'
+(declare-function mevedel-collaboration-lobby--find
+                  "mevedel-collaboration-lobby" (workspace))
+
 ;; `mevedel-collaboration-presence'
 (declare-function mevedel-collaboration-presence-handle
                   "mevedel-collaboration-presence" (room peer frame))
@@ -188,6 +192,7 @@
                   "mevedel-structs" (session))
 (declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x))
+(declare-function mevedel-workspace-name "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x))
 
@@ -409,10 +414,52 @@ its own workspace's rooms; the key reveals no path."
                                     (mevedel-workspace-id workspace)))
                0 32)))
 
+(defun mevedel-collaboration--project-name (workspace)
+  "Return WORKSPACE's name as browser headers show it."
+  (or (mevedel-workspace-name workspace)
+      (file-name-nondirectory
+       (directory-file-name (mevedel-workspace-root workspace)))))
+
+(defun mevedel-collaboration--lobby-field (room guest)
+  "Return what GUEST in ROOM learns of its workspace's lobby.
+An owner gets the running lobby's owner link, the way back to the
+project from any of its rooms.  Other guests learn only whether a lobby
+runs, so a view or full room link never reveals the workspace's other
+sessions; their browser may hold a lobby link of its own.  The value is
+the link, t, or `:json-false' when no lobby runs.  Nothing here starts
+one."
+  (if-let* (((featurep 'mevedel-collaboration-lobby))
+            ;; A lobby carries its workspace itself and needs no way back.
+            ((not (plist-get room :workspace)))
+            (workspace (mevedel-collaboration--room-workspace room))
+            (lobby (mevedel-collaboration-lobby--find workspace)))
+      (if (plist-get guest :owner) (plist-get lobby :link-owner) t)
+    :json-false))
+
+(defun mevedel-collaboration--announce-lobby (workspace)
+  "Tell every guest of WORKSPACE's rooms whether its lobby runs now.
+One guest's failed send does not keep the others from hearing it."
+  (let ((root (mevedel-workspace-root workspace)))
+    (dolist (room (mevedel-collaboration--room-list))
+      (when-let* ((transport (plist-get room :transport))
+                  ;; A lobby needs no word about itself.
+                  ((not (plist-get room :workspace)))
+                  (own (mevedel-collaboration--room-workspace room))
+                  ((equal root (mevedel-workspace-root own))))
+        (maphash (lambda (peer guest)
+                   (ignore-errors
+                     (mevedel-collaboration--transport-send
+                      transport peer
+                      (list :t "lobby-state"
+                            :lobby (mevedel-collaboration--lobby-field
+                                    room guest)))))
+                 (plist-get room :guests))))))
+
 (defun mevedel-collaboration--send-snapshot (room peer)
   "Send ROOM's welcome and chunked snapshot to guest PEER."
   (let* ((transport (plist-get room :transport))
          (guest (mevedel-collaboration--guest room peer))
+         (workspace (mevedel-collaboration--room-workspace room))
          (records (plist-get room :records))
          ;; Guests joining while the records are unchanged share their
          ;; encoding; each publish drops it.
@@ -429,10 +476,13 @@ its own workspace's rooms; the key reveals no path."
             :proto mevedel-collaboration--protocol-version
             :readOnly (if (plist-get guest :writable) :json-false t)
             :workspace (mevedel-collaboration--workspace-key room)
+            :lobby (mevedel-collaboration--lobby-field room guest)
             ;; Count what is actually sent: a record too large for a frame of
             ;; its own is dropped, and promising it would leave the guest
             ;; waiting for a chunk that never arrives.
             :recordCount (apply #'+ (mapcar #'length chunks)))
+      (when workspace
+        (list :project (mevedel-collaboration--project-name workspace)))
       ;; The host-curated roster is the guest's whole discovery
       ;; surface; a view link gets none, having no way to use it.
       (when-let* (((plist-get guest :writable))

@@ -24,7 +24,8 @@
     <a class="skip-link" href="#transcript">Skip to transcript</a>
     <header class="topbar">
       <div class="wordmark">mevedel</div>
-      <div class="room-heading"><span class="project-name">Shared workspace</span><h1 id="session-label">Live session</h1></div>
+      <button id="room-back" class="back" type="button" hidden>‹</button>
+      <div class="room-heading"><span class="project-name"><span id="room-crumbs" class="crumbs"></span></span><h1 id="session-label">Live session</h1></div>
       <div class="header-actions">
         <details id="you-menu" class="you-menu keep">
           <summary aria-label="Your name"><span id="you-initials" class="you-initials" aria-hidden="true"></span><span id="you-label" class="you-label"></span></summary>
@@ -102,9 +103,9 @@
              role="dialog" aria-label="Sub-agent transcript">
       <header class="topbar">
         <span class="wordmark">mevedel</span>
-        <div class="room-heading"><span id="agent-meta" class="project-name"></span><h2 id="agent-title" class="heading-title"></h2></div>
+        <button id="agent-close" class="back" type="button">‹</button>
+        <div class="room-heading"><span class="project-name"><span id="agent-crumbs" class="crumbs"></span><span id="agent-meta" class="head-meta"></span></span><h2 id="agent-title" class="heading-title"></h2></div>
         <div class="header-actions">
-          <button id="agent-close" class="btn quiet back" type="button" data-fold="4">Back to room</button>
         </div>
       </header>
       <div id="agent-transcript" class="ledger agent-ledger"
@@ -114,7 +115,8 @@
              role="dialog" aria-label="Session artifact">
       <header class="topbar">
         <span class="wordmark">mevedel</span>
-        <div class="room-heading"><span id="artifact-meta" class="project-name"></span><h2 id="artifact-title" class="heading-title"></h2></div>
+        <button id="artifact-close" class="back" type="button">‹</button>
+        <div class="room-heading"><span class="project-name"><span id="artifact-crumbs" class="crumbs"></span><span id="artifact-meta" class="head-meta"></span></span><h2 id="artifact-title" class="heading-title"></h2></div>
         <div class="header-actions">
           <span class="presence keep" data-presence role="img" hidden></span>
           <button id="artifact-discussion" class="btn quiet" type="button" hidden data-fold="6"
@@ -129,7 +131,6 @@
                   title="Save this artifact as a file">Download</button>
           <button id="artifact-delete" class="btn quiet danger" type="button" hidden data-fold="2"
                   title="Delete this artifact from the session for everyone">Delete</button>
-          <button id="artifact-close" class="btn quiet back" type="button" data-fold="4">Back to room</button>
         </div>
       </header>
       <div class="artifact-main">
@@ -145,10 +146,10 @@
       <section id="editing-panel" class="viewer-panel" hidden role="dialog" aria-label="Shared editing">
         <header class="topbar">
           <span class="wordmark">mevedel</span>
+          <button id="editing-close" class="back" type="button">‹</button>
           <div class="room-heading"><span id="editing-state" class="project-name" role="status">Shared work<span id="editing-saved"></span></span><input id="editing-title" class="heading-title" aria-label="Title" maxlength="200" autocomplete="off" spellcheck="false" readonly></div>
           <div class="header-actions">
             <span class="presence keep" data-presence role="img" hidden></span>
-            <button id="editing-close" class="btn quiet back" type="button" data-fold="4">Back to room</button>
           </div>
         </header>
         <div id="editing-body"></div>
@@ -194,12 +195,6 @@
             <button id="new-session-button" class="btn quiet" type="button" hidden
                     title="Start a separate session — this room stays open"
                     aria-label="New session">New session</button>
-            <button id="store-button" class="btn quiet" type="button"
-                    title="Every artifact, whiteboard and document of this project">Project artifacts</button>
-            <button id="rooms-button" class="btn quiet" type="button" hidden
-                    title="Other rooms this browser can get back to"
-                    aria-label="Rooms">Rooms</button>
-
           </div>
       <details class="disclosure" aria-label="Sharing and security notice">
         <summary>Access and privacy</summary>
@@ -218,8 +213,10 @@
         this viewer observes the room end or gives up reconnecting; otherwise
         it may remain until this link is opened again or site data is cleared.
         Links to rooms you requested or were offered are kept in this browser
-        too, so a reload does not lose them; Rooms lists them and Forget
-        removes one, and they die with the host&rsquo;s share regardless.</p>
+        too, so a reload does not lose them, and so is a lobby link once
+        opened; the project menu lists them, Manage rooms forgets one, and
+        they die with the host&rsquo;s share regardless. Browser history
+        names rooms but never holds their links.</p>
       </details>
         </div>
       </details>
@@ -394,6 +391,7 @@
     <script src="/viewer-files.js" defer></script>
     <script src="/viewer-store.js" defer></script>
     <script src="/viewer-lobby.js" defer></script>
+    <script src="/viewer-nav.js" defer></script>
     <script src="/viewer-editing.js" defer></script>
     <script src="/viewer-presence.js" defer></script>
     <script src="/viewer-header.js" defer></script>

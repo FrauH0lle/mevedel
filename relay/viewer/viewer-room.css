@@ -15,6 +15,19 @@ button,select,input { font:inherit; }
 .room-heading { flex:1 1 auto; min-width:0; padding-left:24px; border-left:1px solid var(--line); }
 .project-name { display:block; font-size:11px; line-height:1.5; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .project-name:empty { display:none; }
+/* The small line names where the page is: the project, which opens the
+   menu of places to go, then the room an open panel covers. */
+.crumb { padding:0; border:0; background:none; font:inherit; color:var(--accent); cursor:pointer; }
+.crumb:hover,.crumb:focus-visible { text-decoration:underline; text-underline-offset:2px; }
+.crumb-sep { margin:0 .45em; color:var(--muted); }
+.crumbs:not(:empty) + .head-meta:not(:empty)::before { content:'·'; margin:0 .45em; }
+/* Back to the page's parent: first in the header, never folded. */
+.back { flex:none; display:grid; place-items:center; width:36px; height:36px; margin-right:-12px; padding:0 0 3px; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--ink); font:400 24px/1 var(--font-ui); cursor:pointer; }
+.back:hover,.back:focus-visible { border-color:var(--accent); color:var(--accent); }
+.nav-menu { min-width:14rem; }
+.nav-menu-head { padding:.45rem .6rem .15rem; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+.nav-menu-head:not(:first-child) { margin-top:.3rem; border-top:1px solid var(--line); padding-top:.55rem; }
+.nav-menu .btn[aria-current="page"] { color:var(--accent); font-weight:600; }
 #editing-saved:not(:empty)::before { content:' · '; color:var(--muted); }
 #editing-saved[data-error="true"] { color:var(--failed); }
 .room-heading h1,.heading-title { display:block; width:100%; margin:2px 0 0; font:600 17px/1.4 var(--font-ui); letter-spacing:-.025em; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -26,7 +39,6 @@ input.heading-title[readonly] { cursor:default; }
 .header-actions .btn { min-height:36px; padding:7px 12px; background:transparent; border:1px solid var(--line); font-size:12px; font-weight:500; border-radius:4px; filter:none; color:var(--ink); }
 .header-actions .btn.danger { color:var(--failed); }
 .header-actions .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
-.header-actions .back { background:var(--surface-2); border-color:transparent; font-weight:600; }
 /* The bell is an icon in the header and a labelled row in the ⋯ menu. */
 .bell { display:inline-flex; align-items:center; gap:10px; min-height:36px; min-width:36px; padding:0 8px; background:transparent; border:1px solid var(--line); border-radius:4px; color:var(--muted); font-size:14px; filter:none; }
 .bell svg { width:18px; height:18px; flex:none; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
@@ -212,8 +224,9 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
   .topbar { padding:0 12px; gap:10px; }
   .wordmark { font-size:19px; letter-spacing:-1.3px; }
   .room-heading { padding-left:10px; }
-  /* A label that never changes gives way to the title; a state stays. */
-  .topbar .project-name:not([role=status]) { display:none; }
+  /* A page's details give way to the title; where it is, and a state, stay. */
+  .topbar .head-meta { display:none; }
+  .back { width:32px; height:32px; margin-right:-4px; }
   .room-heading h1,.heading-title { font-size:15px; margin:0; }
   .header-actions { gap:6px; }
   #editing-box .editing-create .btn { min-height:40px; }

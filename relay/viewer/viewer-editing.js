@@ -305,7 +305,7 @@ window.mevedelEditingView = {
       if (editorTab) {
         const url = new URL(window.location.href);
         url.searchParams.set('shared', id);
-        window.history.replaceState(null, '', url);
+        window.history.replaceState(window.history.state, '', url);
       }
       if (current === id && frame && !committed) {
         panel.hidden = false;
@@ -770,7 +770,7 @@ window.mevedelEditingView = {
       requestedItem = null;
       const url = new URL(window.location.href);
       url.searchParams.delete('shared');
-      window.history.replaceState(null, '', url);
+      window.history.replaceState(window.history.state, '', url);
       port?.postMessage({ type: 'closed' });
       if (connected && !state.readOnly)
         send({

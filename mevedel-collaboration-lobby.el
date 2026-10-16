@@ -62,8 +62,12 @@
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--admit-hello
                   "mevedel-collaboration-guest" (room peer frame))
+(declare-function mevedel-collaboration--announce-lobby
+                  "mevedel-collaboration-guest" (workspace))
 (declare-function mevedel-collaboration--model-labels
                   "mevedel-collaboration-guest" ())
+(declare-function mevedel-collaboration--project-name
+                  "mevedel-collaboration-guest" (workspace))
 (declare-function mevedel-collaboration--request-id-p
                   "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--workspace-key
@@ -626,9 +630,7 @@ until it is stopped."
                (key (plist-get credentials :key))
                (write-token (plist-get credentials :write-token))
                (owner-token (plist-get credentials :owner-token))
-               (project (or (mevedel-workspace-name workspace)
-                            (file-name-nondirectory
-                             (directory-file-name root))))
+               (project (mevedel-collaboration--project-name workspace))
                (lobby
                 (append
                  (list :workspace workspace
@@ -667,16 +669,20 @@ until it is stopped."
              (signal (car error-data) (cdr error-data))))
           (mevedel-collaboration-lobby--set-intended root t)
           (mevedel-sleep-update)
+          ;; Owners in the workspace's rooms get their way to it.
+          (ignore-errors (mevedel-collaboration--announce-lobby workspace))
           lobby))))
 
 (defun mevedel-collaboration-lobby--stop (lobby reason)
   "Stop LOBBY for REASON, telling its guests unless Emacs is exiting.
 Its credentials stay stored, so starting it again revives its links.
 Only an exit leaves it recorded as running, to restart with Emacs."
-  (let ((root (mevedel-workspace-root (plist-get lobby :workspace))))
+  (let* ((workspace (plist-get lobby :workspace))
+         (root (mevedel-workspace-root workspace)))
     (remhash root mevedel-collaboration-lobby--lobbies)
     (unless (eq reason 'emacs-exit)
-      (mevedel-collaboration-lobby--set-intended root nil)))
+      (mevedel-collaboration-lobby--set-intended root nil)
+      (ignore-errors (mevedel-collaboration--announce-lobby workspace))))
   (when (zerop (hash-table-count mevedel-collaboration-lobby--lobbies))
     (remove-hook 'kill-emacs-hook #'mevedel-collaboration-lobby--stop-all))
   (ignore-errors (mevedel-collaboration-share-dismiss lobby))

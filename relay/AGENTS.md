@@ -29,6 +29,9 @@ For discussion changes, also run
 `npm ci --prefix shared-editing` and Playwright Chromium.
 For dock or panel layout changes, also run
 `node --test test/collaboration-viewer-requests.browser.mjs`.
+For header, menu or history changes, also run
+`node test/collaboration-viewer-nav-test.js` and
+`node --test test/collaboration-viewer-navigation.browser.mjs`.
 For shared-editor integration changes, also use the
 [shared-editing checks](../docs/shared-editing.md#checks).
 Host-side Elisp checks follow [the development guide](../docs/development.md).

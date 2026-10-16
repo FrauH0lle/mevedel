@@ -53,7 +53,7 @@
     // KIND is 'artifact' for an artifact card or 'file' for a project file,
     // which has no discussions and is removed from the file tree instead.
     // STORE is the artifact store id discussions belong to, if any.
-    const view = {id: null, name: null, store: null, kind: 'artifact', reqId: 0,
+    const view = {id: null, name: null, store: null, kind: 'artifact', record: null, reqId: 0,
                   staging: null, meta: null, bytes: null, urls: [], frames: []};
     let requestSequence = 0;
     let theme = null;
@@ -112,6 +112,7 @@
       view.id = null;
       view.name = null;
       view.store = null;
+      view.record = null;
       view.staging = null;
       view.meta = null;
       view.bytes = null;
@@ -181,6 +182,11 @@
             (record.artifact || 'artifact') + (version ? ` · Version ${record.version}` : ''),
             {t: 'artifact-get', id: record.id, ...(version ? {version: record.version} : {})});
       view.store = typeof record.store === 'string' ? record.store : null;
+      // What reopens this page after Back, Forward or a reload.
+      view.record = {id: record.id};
+      for (const key of ['artifact', 'store', 'version', 'size', 'item']) {
+        if (record[key] !== undefined) view.record[key] = record[key];
+      }
       onPage();
     }
 
@@ -188,6 +194,13 @@
     function openFile(path) {
       if (!panel || typeof path !== 'string') return;
       fetch('file', path, path, {t: 'file-get', path});
+    }
+
+    // The open page, as {artifact: RECORD} or {file: PATH}, or null.
+    function describe() {
+      if (!panel || panel.hidden || !view.id) return null;
+      if (view.kind === 'file') return {file: view.id};
+      return view.record ? {artifact: view.record} : null;
     }
 
     function renderContent() {
@@ -386,6 +399,7 @@
     }
 
     return Object.freeze({open, openFile, render, attachedRows, handle, handleDelete, close,
+                          describe,
                           page: () => (panel && !panel.hidden ? view.store : null),
                           setTheme, queue, handleDiscussion, storedDiscussions, discuss, activity});
   }

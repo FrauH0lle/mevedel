@@ -15,7 +15,7 @@ const ids = ['lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
              'lobby-sessions', 'lobby-artifacts', 'lobby-files', 'files-upload',
              'lobby-store-create'];
 
-function build({writable = true, owner = false} = {}) {
+function build({writable = true, owner = false, wanted = null} = {}) {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.lobby.hidden = true;
   const body = new Element('body');
@@ -41,6 +41,7 @@ function build({writable = true, owner = false} = {}) {
   const filesCalls = [];
   const confirms = [];
   const confirmAnswer = {value: true};
+  const tabs = [];
   const files = {
     show: () => filesCalls.push(['show']),
     refresh: () => filesCalls.push(['refresh']),
@@ -55,13 +56,15 @@ function build({writable = true, owner = false} = {}) {
     el: (tag, className, text) => element(document, tag, className, text),
     notice: text => notices.push(text),
     sessions: {
-      rememberCurrent: name => remembered.push(name),
+      rememberCurrent: (name, lobby) => remembered.push(lobby === true ? `${name} (lobby)` : name),
       openNewSession: note => newSession.push(note),
     },
     navigate: link => followed.push(link),
+    onTab: name => tabs.push(name),
+    initialTab: () => wanted,
     confirm: text => { confirms.push(text); return confirmAnswer.value; },
   });
-  return {lobby, nodes, body, document, sent, notices, followed, confirms,
+  return {lobby, nodes, body, document, sent, notices, followed, confirms, tabs,
           confirmAnswer, remembered, newSession, filesCalls, storeCalls,
           age: window.mevedelLobbyView.age};
 }
@@ -94,7 +97,8 @@ function openButton(nodes, index) {
   // The header names the project; the heading names only the list.
   assert.equal(textOf(nodes['lobby-title']), 'Sessions');
   assert.equal(document.title, 'mevedel · mevedel');
-  assert.deepEqual(remembered, ['Lobby · mevedel']);
+  // Kept as the lobby, so the rooms of its workspace lead back to it.
+  assert.deepEqual(remembered, ['Lobby · mevedel (lobby)']);
   const rows = nodes['lobby-list'].children.map(row => textOf(row.children[0]));
   assert.equal(rows.length, 3);
   assert.match(rows[0], /design2m ago · sharedSketch the lobby/);
@@ -104,7 +108,7 @@ function openButton(nodes, index) {
   assert.equal(nodes['lobby-omitted'].hidden, true);
   // A refresh is not a second arrival.
   lobby.show(listing);
-  assert.deepEqual(remembered, ['Lobby · mevedel']);
+  assert.deepEqual(remembered, ['Lobby · mevedel (lobby)']);
 }
 
 // Opening asks the host once and follows the link it returns.
@@ -311,6 +315,23 @@ function openButton(nodes, index) {
   assert.doesNotMatch(meta(nodes['lobby-list'].children[1]), /here/);
   lobby.counts([]);
   assert.doesNotMatch(meta(nodes['lobby-list'].children[0]), /here/);
+}
+
+// The tab shown is reported, so history comes back to it; the entry's
+// tab is shown first, and the menu selects tabs by name.
+{
+  const {lobby, nodes, tabs, storeCalls} = build({wanted: 'artifacts'});
+  lobby.show(listing);
+  assert.equal(lobby.tab(), 'artifacts');
+  assert.equal(nodes['lobby-artifacts'].hidden, false);
+  assert.deepEqual(tabs, ['artifacts']);
+  assert.deepEqual(storeCalls, ['refresh']);
+  lobby.select('sessions');
+  assert.deepEqual(tabs, ['artifacts', 'sessions']);
+  // A view link has no files tab to go back to.
+  const view = build({writable: false, wanted: 'files'});
+  view.lobby.show(listing);
+  assert.equal(view.lobby.tab(), 'sessions');
 }
 
 console.log('viewer lobby controller passed');

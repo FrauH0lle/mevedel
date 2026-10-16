@@ -4,10 +4,10 @@
 (() => {
   // LIST is the <ul> the rows render into and EMPTY the note shown when the
   // store has none. ROOM is true in a session's room, where artifacts can be
-  // attached to the session; the lobby has no session of its own.
+  // attached to the session; the lobby has no session of its own. NAVIGATE
+  // opens an artifact's conversation room in this tab.
   function create({send, el, list, empty, state, room = false, open, notice,
-                   creation = null,
-                   navigate = link => window.location.replace(link),
+                   creation = null, navigate,
                    ask = (text, value) => window.prompt(text, value),
                    confirm = text => window.confirm(text)}) {
     let rows = [];

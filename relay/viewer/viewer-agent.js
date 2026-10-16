@@ -17,7 +17,7 @@
     const metaEl = document.getElementById('agent-meta');
     const closeButton = document.getElementById('agent-close');
     const transcript = document.getElementById('agent-transcript');
-    const view = {path: null, reqId: 0, digest: null, staging: null,
+    const view = {path: null, row: null, reqId: 0, digest: null, staging: null,
                   timer: null};
     let requestSequence = 0;
 
@@ -67,6 +67,9 @@
     function open(row) {
       if (!panel) return;
       view.path = row.path;
+      view.row = {path: row.path};
+      if (typeof row.role === 'string') view.row.role = row.role;
+      if (typeof row.status === 'string') view.row.status = row.status;
       view.digest = null;
       view.staging = null;
       if (title) title.textContent = row.path;
@@ -84,6 +87,7 @@
       if (view.timer) clearInterval(view.timer);
       view.timer = null;
       view.path = null;
+      view.row = null;
       view.digest = null;
       view.staging = null;
       if (panel) panel.hidden = true;
@@ -168,7 +172,12 @@
     }
 
     if (closeButton) closeButton.addEventListener('click', close);
-    return Object.freeze({show, handle, close});
+    // The open transcript, as {agent: ROW}, or null.
+    function describe() {
+      return panel && !panel.hidden && view.row ? {agent: view.row} : null;
+    }
+
+    return Object.freeze({show, handle, close, open, describe});
   }
 
   window.mevedelAgentView = Object.freeze({create});

@@ -16,11 +16,11 @@ The editor tab's header shows the item's title, editable in place by full and
 owner links, over its save state, such as **Saved on host** or a save failure;
 the editor reports both to the tab over its item port and performs the rename.
 A failed save also marks the editor menu, where **Retry save** then appears.
-**Back to room** shows the session in that tab. The host uses the same editor through
+The back button before the title shows the session in that tab. The host uses the same editor through
 a browser share link. Browser popup permission is needed to open a new tab.
 An editor tab shows its loading state immediately. If the item cannot be read,
 it keeps the requested item and displays an error with Retry; it does not fall
-back silently to the room. Back to room cancels a pending editor opening.
+back silently to the room. The back button cancels a pending editor opening.
 
 From Emacs, `o` on an item's row in the artifacts cockpit, or clicking a
 `[title](shared://ID)` link in the transcript, opens that item's editor tab in

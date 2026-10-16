@@ -67,6 +67,11 @@
     owner: false,
     // Whether this link carried the write token; cosmetic like `owner'.
     writable: false,
+    // The project the room belongs to, from the host.
+    project: null,
+    // Whether the project's lobby runs: the owner link to it, true, or
+    // false; undefined until the host says.
+    lobby: undefined,
   };
 
   let transport = null;
@@ -145,7 +150,7 @@
   // actions each own a fragment of its summary line and a section inside
   // the disclosure, and the box shows for as long as any has something
   // to offer. Key order is display order.
-  const summaryParts = {commands: '', agents: '', tasks: '', artifacts: '', room: ''};
+  const summaryParts = {commands: '', agents: '', tasks: '', artifacts: ''};
   const summaryWarnings = {};
   function summarizeSession(key, text, warning) {
     summaryParts[key] = text || '';
@@ -223,7 +228,7 @@
   names.ready.then(name => { state.guestName = name; });
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
-     summarize: summarizeSession, notice: flashNotice});
+     notice: flashNotice});
   const uploads = window.mevedelFilesView.uploader({send});
   const files = window.mevedelFilesView.create(
     {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile});
@@ -232,6 +237,7 @@
   const storeSheet = document.getElementById('store-sheet');
   const roomStore = window.mevedelStoreView.create({
     send, el, state, room: true, notice: flashNotice,
+    navigate: link => nav.navigate(link),
     open: record => {
       storeSheet.close();
       if (record.item && !record.version) editing.openItem(record.store);
@@ -240,18 +246,35 @@
     list: document.getElementById('store-list'),
     empty: document.getElementById('store-empty'),
   });
-  document.getElementById('store-button').addEventListener('click', () => {
+  function openStore() {
     roomStore.refresh();
     storeSheet.showModal();
-  });
+  }
   const lobbyStore = window.mevedelStoreView.create({
     send, el, state, open: artifacts.open, notice: flashNotice,
+    navigate: link => nav.navigate(link),
     creation: document.getElementById('lobby-store-create'),
     list: document.getElementById('lobby-store-list'),
     empty: document.getElementById('lobby-store-empty'),
   });
   const lobby = window.mevedelLobbyView.create(
-    {state, send, el, notice: flashNotice, sessions, files, store: lobbyStore});
+    {state, send, el, notice: flashNotice, sessions, files, store: lobbyStore,
+     navigate: link => nav.navigate(link),
+     onTab: tab => nav.note({tab}),
+     initialTab: () => nav.entry().tab});
+  const nav = window.mevedelNav.create({
+    state, el, parse: parseFragment, sessions, lobby, openStore,
+    openRooms: sessions.openRooms,
+    panels: [
+      {node: document.getElementById('artifact-panel'), describe: artifacts.describe,
+       owns: page => Boolean(page.artifact || page.file),
+       reopen: page => (page.file ? artifacts.openFile(page.file) : artifacts.open(page.artifact)),
+       close: artifacts.close},
+      {node: document.getElementById('agent-panel'), describe: agents.describe,
+       owns: page => Boolean(page.agent), reopen: page => agents.open(page.agent),
+       close: agents.close},
+    ],
+  });
   const activeStore = () => (lobby.active() ? lobbyStore : roomStore);
   let storeArtifacts = null;
 
@@ -1200,6 +1223,7 @@
     notifications.forget();
     try { sessionStorage.removeItem('mevedel-tab-share'); }
     catch (_error) { /* storage unavailable */ }
+    nav.leave();
     notifications.render();
     tray.clear();
     clearRequests();
@@ -1223,6 +1247,18 @@
     window.scrollTo({top: 0, behavior: 'instant'});
   }
 
+  // VALUE is the host's word on the project's lobby: an owner's link to it,
+  // true while it runs, or false. A link is kept with this browser's rooms.
+  function showLobbyState(value) {
+    if (typeof value === 'string' && value) {
+      state.lobby = value;
+      sessions.rememberLobby(value, `Lobby · ${state.project || 'project'}`);
+    } else if (value === true || value === false) {
+      state.lobby = value;
+    }
+    nav.render();
+  }
+
   function handleFrame(frame) {
     if (!frame || typeof frame.t !== 'string') return;
     if (frame.t === 'recovery') {
@@ -1237,6 +1273,8 @@
       showSkillChips(state.readOnly ? [] : frame.commands);
       state.models = Array.isArray(frame.models) ? frame.models : [];
       sessions.setWorkspace(frame.workspace);
+      if (typeof frame.project === 'string' && frame.project) state.project = frame.project;
+      showLobbyState(frame.lobby);
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
       // The host sends `queue' only when it changes, so a reconnect
@@ -1251,6 +1289,7 @@
       tasks.show();
       setConnection('Loading…', 'connected');
       editing.welcome();
+      nav.restore();
     } else if (frame.t === 'editing' || frame.t === 'editing-presence') {
       editing.receive(frame);
     } else if (frame.t === 'snapshot-chunk') {
@@ -1346,6 +1385,7 @@
           document.title = `${marker}${frame.name} · mevedel`;
         }
         sessions.rememberCurrent(frame.name);
+        nav.render();
       }
       renderModeline();
       editing.conversation();
@@ -1353,11 +1393,16 @@
     } else if (frame.t === 'lobby') {
       state.models = Array.isArray(frame.models) ? frame.models : [];
       sessions.setWorkspace(frame.workspace);
+      if (typeof frame.project === 'string' && frame.project) state.project = frame.project;
       lobby.show(frame);
       if (sessionLabel && typeof frame.project === 'string') {
         sessionLabel.textContent = `Lobby · ${frame.project}`;
       }
       setConnection('Connected', 'connected');
+      nav.render();
+      nav.restore();
+    } else if (frame.t === 'lobby-state') {
+      showLobbyState(frame.lobby);
     } else if (frame.t === 'presence') {
       presence.show(frame);
       lobby.counts(frame.sessions);
@@ -1512,7 +1557,8 @@
     document.body.removeAttribute('data-reading');
   });
   window.addEventListener('scroll', updateLiveAffordance, {passive: true});
-  const rawFragment = notificationsApi.resolveShare(parseFragment);
+  const rawFragment = notificationsApi.resolveShare(parseFragment,
+                                                    window.mevedelNav.historyShare());
   const credentials = parseFragment(`#${rawFragment}`);
   if (!credentials) {
     setConnection('Invalid link', 'ended');
@@ -1534,9 +1580,11 @@
     // most recently opened.
     if (notifications.enabled()) notifications.persistShare();
     if (sessionLabel) sessionLabel.textContent = credentials.roomId.slice(0, 8);
-    // The key remains only in this page's memory; remove it from the URL
-    // and history before opening the socket.
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    // The key remains only in this page's and tab's memory; the history
+    // entry names the room alone, and the URL loses the key before the
+    // socket opens.
+    nav.enter(credentials.roomId, rawFragment);
+    nav.render();
     Promise.all([importKey(credentials.keyBytes), names.ready]).then(([key]) => {
       transport = transportApi.create({
         roomId: credentials.roomId,

@@ -870,11 +870,15 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
           (kill-emacs-hook nil)
           (workspace (mevedel-collaboration-lobby-test--workspace root))
           (sleep-updates 0)
-          opened stopped)
+          opened stopped announced)
       (cl-letf (((symbol-function 'mevedel-collaboration-lobby--workspace)
                  (lambda (_directory) workspace))
                 ((symbol-function 'mevedel-sleep-update)
                  (lambda () (cl-incf sleep-updates)))
+                ((symbol-function 'mevedel-collaboration--announce-lobby)
+                 (lambda (announced-workspace)
+                   (push (and (mevedel-collaboration-lobby--find announced-workspace) t)
+                         announced)))
                 ((symbol-function 'mevedel-collaboration--transport-open)
                  (lambda (url _key &rest _callbacks)
                    (push url opened)
@@ -896,6 +900,8 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
           (should (equal (list (format "wss://relay.example/r/%s?role=host"
                                        (plist-get lobby :room-id)))
                          opened))
+          ;; The workspace's rooms hear that it runs, once it does.
+          (should (equal '(t) announced))
           (should (memq #'mevedel-collaboration-lobby--stop-all
                         kill-emacs-hook))
           ;; It runs until stopped, so the next Emacs restarts it.
@@ -907,6 +913,8 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
           (should (= 1 (length opened)))
           (mevedel-collaboration-lobby--stop lobby 'user-stop)
           (should-not (mevedel-collaboration-lobby--find workspace))
+          ;; And that it stopped, once it has.
+          (should (equal '(nil t) announced))
           (should-not (mevedel-collaboration-lobby--intended))
           (should-not kill-emacs-hook)
           ;; Restarting revives the very same links.
@@ -945,7 +953,12 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
           (mevedel-collaboration-lobby--stop lobby 'rotated)
           (should (equal '((0 :t "bye" :reason "rotated")) sent))
           (setq sent nil)
-          (mevedel-collaboration-lobby--stop lobby 'emacs-exit)
+          ;; Exiting tells nobody: the lobby restarts with the next Emacs.
+          (let (announced)
+            (cl-letf (((symbol-function 'mevedel-collaboration--announce-lobby)
+                       (lambda (workspace) (push workspace announced))))
+              (mevedel-collaboration-lobby--stop lobby 'emacs-exit))
+            (should-not announced))
           (should-not sent)))))
 
   :doc "only an Emacs exit leaves the lobby recorded to restart"

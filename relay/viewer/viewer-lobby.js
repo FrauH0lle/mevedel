@@ -15,15 +15,12 @@
       undefined, {month: 'short', day: 'numeric'});
   }
 
-  // The viewer's hashchange handler reloads into the room a link names.
-  // Replacing keeps Back from landing on a page whose fragment was
-  // already wiped.
-  function follow(link) {
-    window.location.replace(link);
-  }
-
-  function create({state, send, el, notice, sessions, files, store,
-                   navigate = follow, confirm = text => window.confirm(text)}) {
+  // NAVIGATE opens a room in this tab as a history entry. ON-TAB hears
+  // the tab shown, so a reload or Back comes back to it, and INITIAL-TAB
+  // names the tab the entry asks for first.
+  function create({state, send, el, notice, sessions, files, store, navigate,
+                   onTab = () => {}, initialTab = () => null,
+                   confirm = text => window.confirm(text)}) {
     const section = document.getElementById('lobby');
     const tabs = document.getElementById('lobby-tabs');
     const sessionsTab = document.getElementById('lobby-tab-sessions');
@@ -79,6 +76,7 @@
       retitle();
       if (tab === 'files') files.show();
       if (tab === 'artifacts') store.refresh();
+      onTab(tab);
     }
 
     function reload() {
@@ -139,7 +137,9 @@
         section.hidden = false;
         // The lobby is the way back from every room it opens, so it is
         // kept where those rooms list the others.
-        sessions.rememberCurrent(`Lobby · ${frame.project || 'project'}`);
+        sessions.rememberCurrent(`Lobby · ${frame.project || 'project'}`, true);
+        const wanted = initialTab();
+        if (wanted && wanted !== tab) select(wanted);
       }
       const project = typeof frame.project === 'string' && frame.project ? frame.project : null;
       document.title = project ? `${project} · mevedel` : 'mevedel';
@@ -208,7 +208,8 @@
       if (active) list.replaceChildren(...shown.map(renderRow));
     }
 
-    return Object.freeze({show, opened, deleted, created, counts, active: () => active});
+    return Object.freeze({show, opened, deleted, created, counts, select,
+                          tab: () => tab, active: () => active});
   }
 
   window.mevedelLobbyView = Object.freeze({create, age});

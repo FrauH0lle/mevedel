@@ -24,6 +24,7 @@
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-lobby)
 (require 'mevedel-collaboration-owner)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-prompt-submission)
@@ -216,6 +217,121 @@
         (let ((chunk (mevedel-test--frame (cdr (car sent)))))
           (should (eq t (plist-get chunk :final)))
           (should (equal [] (plist-get chunk :records))))))))
+
+(defun test-mevedel-collaboration-guest--workspace (root &optional name)
+  "Return a project workspace at ROOT, displayed as NAME when given."
+  (mevedel-workspace--create :type 'project :id root :root root :name name))
+
+(mevedel-deftest mevedel-collaboration--project-name
+  (:doc "names a project by its workspace name, else its directory")
+  (progn
+    (should (equal "Mevedel" (mevedel-collaboration--project-name
+                              (test-mevedel-collaboration-guest--workspace
+                               "/home/u/proj/" "Mevedel"))))
+    (should (equal "proj" (mevedel-collaboration--project-name
+                           (test-mevedel-collaboration-guest--workspace
+                            "/home/u/proj/"))))))
+
+(mevedel-deftest mevedel-collaboration--lobby-field
+  (:doc "an owner learns the running lobby's link, others only that it runs")
+  (let* ((workspace (test-mevedel-collaboration-guest--workspace "/home/u/proj/"))
+         (room (list :session (mevedel-session--create :workspace workspace)))
+         (lobby (list :workspace workspace :link-owner "owner-link"))
+         (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal)))
+    ;; Nothing runs, and nothing is started to answer.
+    (should (eq :json-false (mevedel-collaboration--lobby-field
+                             room (list :owner t :writable t))))
+    (should (zerop (hash-table-count mevedel-collaboration-lobby--lobbies)))
+    (puthash "/home/u/proj/" lobby mevedel-collaboration-lobby--lobbies)
+    (should (equal "owner-link" (mevedel-collaboration--lobby-field
+                                 room (list :owner t :writable t))))
+    (should (eq t (mevedel-collaboration--lobby-field room (list :writable t))))
+    (should (eq t (mevedel-collaboration--lobby-field room nil)))
+    ;; Another project's room learns nothing of this lobby.
+    (should (eq :json-false
+                (mevedel-collaboration--lobby-field
+                 (list :session (mevedel-session--create
+                                 :workspace (test-mevedel-collaboration-guest--workspace
+                                             "/home/u/other/")))
+                 (list :owner t))))
+    ;; The lobby itself needs no way back to itself.
+    (should (eq :json-false (mevedel-collaboration--lobby-field
+                             lobby (list :owner t))))))
+
+(mevedel-deftest mevedel-collaboration--announce-lobby
+  (:doc "tells each guest of the workspace's rooms what its tier may know")
+  (let* ((workspace (test-mevedel-collaboration-guest--workspace "/home/u/proj/"))
+         (here (list :transport 'here :guests (make-hash-table :test #'eql)
+                     :session (mevedel-session--create :workspace workspace)))
+         (elsewhere (list :transport 'elsewhere :guests (make-hash-table :test #'eql)
+                          :session (mevedel-session--create
+                                    :workspace (test-mevedel-collaboration-guest--workspace
+                                                "/home/u/other/"))))
+         (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+         (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+         sent)
+    (puthash 1 (list :owner t :writable t) (plist-get here :guests))
+    (puthash 2 (list :writable t) (plist-get here :guests))
+    (puthash 3 (list :owner t :writable t) (plist-get elsewhere :guests))
+    (puthash 'here-buffer here mevedel-collaboration--rooms)
+    (puthash 'elsewhere-buffer elsewhere mevedel-collaboration--rooms)
+    ;; The lobby itself is told nothing.
+    (let ((lobby-room (list :transport 'lobby :workspace workspace
+                            :guests (make-hash-table :test #'eql))))
+      (puthash 4 (list :owner t) (plist-get lobby-room :guests))
+      (puthash 'lobby-buffer lobby-room mevedel-collaboration--rooms))
+    (puthash "/home/u/proj/" (list :workspace workspace :link-owner "owner-link")
+             mevedel-collaboration-lobby--lobbies)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (transport peer frame) (push (list transport peer frame) sent) t)))
+      (mevedel-collaboration--announce-lobby workspace)
+      (should (equal '((here 1 (:t "lobby-state" :lobby "owner-link"))
+                       (here 2 (:t "lobby-state" :lobby t)))
+                     (sort (copy-sequence sent)
+                           (lambda (a b) (< (cadr a) (cadr b))))))
+      ;; A stopped lobby is announced as gone.
+      (setq sent nil)
+      (clrhash mevedel-collaboration-lobby--lobbies)
+      (mevedel-collaboration--announce-lobby workspace)
+      (should (equal '((:t "lobby-state" :lobby :json-false)
+                       (:t "lobby-state" :lobby :json-false))
+                     (mapcar #'caddr sent))))
+    ;; A failed send still lets the next guest hear it.
+    (setq sent nil)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (transport peer frame)
+                 (when (eql peer 1) (error "Socket gone"))
+                 (push (list transport peer frame) sent) t)))
+      (mevedel-collaboration--announce-lobby workspace)
+      (should (equal '(2) (mapcar #'cadr sent))))))
+
+(mevedel-deftest mevedel-collaboration--send-snapshot--project
+  (:doc "the welcome names the project and what the guest may know of its lobby")
+  (let* ((workspace (test-mevedel-collaboration-guest--workspace "/home/u/proj/" "Mevedel"))
+         (guests (make-hash-table :test #'eql))
+         (room (list :transport 'transport :guests guests :records nil
+                     :session (mevedel-session--create :workspace workspace)))
+         (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+         sent)
+    (puthash 7 (list :name "o" :owner t :ready t) guests)
+    (puthash "/home/u/proj/" (list :workspace workspace :link-owner "owner-link")
+             mevedel-collaboration-lobby--lobbies)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport _peer frame) (push frame sent) t)))
+      (mevedel-collaboration--send-snapshot room 7))
+    (let ((welcome (car (last sent))))
+      (should (equal "welcome" (plist-get welcome :t)))
+      (should (equal "Mevedel" (plist-get welcome :project)))
+      (should (equal "owner-link" (plist-get welcome :lobby))))
+    ;; A room without a workspace names no project.
+    (setq sent nil)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport _peer frame) (push frame sent) t)))
+      (mevedel-collaboration--send-snapshot
+       (list :transport 'transport :guests guests :records nil) 7))
+    (let ((welcome (car (last sent))))
+      (should-not (plist-member welcome :project))
+      (should (eq :json-false (plist-get welcome :lobby))))))
 
 
 ;;
