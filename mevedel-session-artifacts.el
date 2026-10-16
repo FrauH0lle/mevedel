@@ -205,6 +205,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x))
 (declare-function mevedel-request-turn "mevedel-structs" (cl-x))
+(declare-function mevedel-session-chapters "mevedel-structs" (cl-x))
 (declare-function mevedel-session-control-transfer "mevedel-structs" (cl-x))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
@@ -630,11 +631,14 @@ for saving."
   "Return ordered segment descriptors for SESSION.
 
 LIVE-BUFFER supplies the current segment even when it has not reached disk.
-Each descriptor contains `:number', `:path', `:status', `:current-p', and
-`:preview'.  Missing and unreadable archived segments remain in the result."
+Each descriptor contains `:number', `:path', `:status', `:current-p',
+`:preview', and the `:chat' it belongs to, from
+`mevedel-session-artifacts-chats'.  Missing and unreadable archived
+segments remain in the result."
   (let* ((save-path (mevedel-session-save-path session))
          (current (or (mevedel-session-current-segment session) 1))
-         (index (mevedel-session-prompt-index session)))
+         (index (mevedel-session-prompt-index session))
+         (chats (mevedel-session-artifacts-session-chats session)))
     (cl-loop
      for number from 1 to current
      for path = (and save-path
@@ -659,12 +663,73 @@ Each descriptor contains `:number', `:path', `:status', `:current-p', and
        ((and (file-regular-p path) (file-readable-p path)) 'readable)
        (t 'unreadable))
       :current-p current-p
+      :chat
+      (cl-find-if (lambda (chat)
+                    (<= (plist-get chat :first-segment) number
+                        (plist-get chat :last-segment)))
+                  chats)
       :preview
       (cl-loop for prompt in (reverse prompts)
                for preview = (plist-get prompt :preview)
                when (and (stringp preview)
                          (not (string-empty-p (string-trim preview))))
                return preview)))))
+
+(defun mevedel-session-artifacts-chats
+    (chapters prompt-index current-segment current-title)
+  "Return a session's chats, oldest first.
+A chat is the run of segments between two `/clear's; compaction rotates
+segments within one chat.  CHAPTERS are the session's closed-chat records,
+PROMPT-INDEX its per-segment prompt index, CURRENT-SEGMENT the live
+segment, and CURRENT-TITLE the live chat's title.
+
+Each chat is a plist with `:number', `:first-segment', `:last-segment',
+`:title', `:closed-at', and `:current-p'.  A closed chat without a recorded
+title is labelled by its first prompt.  A record at or past
+CURRENT-SEGMENT, which a Fork or Rewind no longer reaches, is ignored.
+This reads no files, so session listings may call it freely."
+  (let ((first 1) (number 0) chats)
+    (dolist (chapter chapters)
+      (let ((last (plist-get chapter :segment)))
+        (when (and (>= last first) (< last current-segment))
+          (setq number (1+ number))
+          (push (list :number number
+                      :first-segment first
+                      :last-segment last
+                      :title (or (plist-get chapter :title)
+                                 (mevedel-session-artifacts--first-preview
+                                  prompt-index first last)
+                                 "(no prompt)")
+                      :closed-at (plist-get chapter :closed-at)
+                      :current-p nil)
+                chats)
+          (setq first (1+ last)))))
+    (push (list :number (1+ number)
+                :first-segment first
+                :last-segment current-segment
+                :title current-title
+                :closed-at nil
+                :current-p t)
+          chats)
+    (nreverse chats)))
+
+(defun mevedel-session-artifacts--first-preview (prompt-index first last)
+  "Return the first nonblank prompt preview of segments FIRST to LAST.
+PROMPT-INDEX is the session's per-segment prompt index."
+  (cl-loop for number from first to last
+           thereis (cl-loop for prompt in (cdr (assoc number prompt-index))
+                            for preview = (plist-get prompt :preview)
+                            when (and (stringp preview)
+                                      (string-match-p "\\S-" preview))
+                            return (string-trim preview))))
+
+(defun mevedel-session-artifacts-session-chats (session)
+  "Return SESSION's chats; see `mevedel-session-artifacts-chats'."
+  (mevedel-session-artifacts-chats
+   (mevedel-session-chapters session)
+   (mevedel-session-prompt-index session)
+   (or (mevedel-session-current-segment session) 1)
+   (mevedel-session-name session)))
 
 (defun mevedel-session-artifacts-read-segment (session number)
   "Load SESSION segment NUMBER into a read-only inspection buffer.
@@ -3042,6 +3107,7 @@ absolute path on success, nil if SESSION is not yet materialized."
             (old-naming-state (mevedel-session-naming-state session))
             (old-naming-input (mevedel-session-naming-input session))
             (old-prompt-index (copy-tree (mevedel-session-prompt-index session)))
+            (old-chapters (copy-tree (mevedel-session-chapters session)))
             (old-head (plist-get (mevedel-session-publication session) :head))
             capture committed
             old-file-bytes
@@ -3076,6 +3142,17 @@ absolute path on success, nil if SESSION is not yet materialized."
                     ;; Old history is never naming input for the new segment.
                     (setf (mevedel-session-naming-state session) 'pending
                           (mevedel-session-naming-input session) nil))
+                  (when clear
+                    ;; The closing chat keeps the title it had.  An explicit
+                    ;; name titles every chat alike, so it identifies none.
+                    (setf (mevedel-session-chapters session)
+                          (append
+                           (mevedel-session-chapters session)
+                           (list
+                            (list :segment old-current-segment
+                                  :title (unless (eq old-naming-state 'explicit)
+                                           (mevedel-session-name session))
+                                  :closed-at (format-time-string "%FT%H-%M-%S"))))))
                   (cl-incf (mevedel-session-current-segment session))
                   (setq new-segment
                         (mevedel-session-artifacts-segment-path
@@ -3133,7 +3210,8 @@ absolute path on success, nil if SESSION is not yet materialized."
                    (setf (mevedel-session-updated-at session) old-updated-at
                          (mevedel-session-naming-state session) old-naming-state
                          (mevedel-session-naming-input session) old-naming-input
-                         (mevedel-session-prompt-index session) old-prompt-index)
+                          (mevedel-session-prompt-index session) old-prompt-index
+                          (mevedel-session-chapters session) old-chapters)
                    (mevedel-session-artifacts--restore-segment-file
                     old-segment old-file-bytes)
                    (let ((inhibit-read-only t))

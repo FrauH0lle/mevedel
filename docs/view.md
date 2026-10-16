@@ -1325,6 +1325,7 @@ needs one menu. It only inspects, and never changes session state:
   view.
 - `g` opens the segment picker, including missing or unreadable archived
   segments.
+- `c` opens the chat picker: the runs of segments `/clear` separates, by title.
 - `n` / `p` move through rendered displays.
 - `C-n` / `C-p` move through user queries.
 - `TAB` toggles the section at point.

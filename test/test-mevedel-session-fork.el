@@ -17,7 +17,7 @@
 (mevedel-deftest mevedel-session-fork-clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-		   (should (= 92
+		   (should (= 93
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -98,6 +98,7 @@
            :lease-renewal-timer 'timer
            :current-segment 1
            :prompt-index '((1 . ((:turn 1 :cum-turn 1))))
+           :chapters '((:segment 1 :title "Earlier chat" :closed-at "closed"))
            :file-snapshots '((1 . (("/tmp/file" . (:version 1)))))
            :agent-transcripts '(("worker--1" :parent-turn 1 :status completed))
            :invoked-skills (list invoked)
@@ -185,6 +186,7 @@
                       mevedel-session-agent-registry
                       mevedel-session-skills
                       mevedel-session-prompt-index
+                      mevedel-session-chapters
                       mevedel-session-file-snapshots
                       mevedel-session-agent-transcripts
                       mevedel-session-invoked-skills
@@ -210,6 +212,10 @@
     (should (= 1 (mevedel-session-turn-count fork)))
     (should (equal '((1 . ((:turn 1 :cum-turn 1))))
                    (mevedel-session-prompt-index fork)))
+    ;; Save As keeps every chat; a Fork only those closed before its segment.
+    (should (equal (mevedel-session-chapters source)
+                   (mevedel-session-chapters save-as)))
+    (should-not (mevedel-session-chapters fork))
     (should (equal '((1 . (("/tmp/file" . (:version 1)))))
                    (mevedel-session-file-snapshots fork)))
     (should-not (eq (mevedel-session-permission-rules source)

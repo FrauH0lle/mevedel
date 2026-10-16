@@ -21,6 +21,8 @@
                   "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-segments
                   "mevedel-session-artifacts" (session live-buffer))
+(declare-function mevedel-session-artifacts-session-chats
+                  "mevedel-session-artifacts" (session))
 (declare-function mevedel-session-artifacts-transcript-segments
                   "mevedel-session-artifacts"
                   (session live-buffer &optional agent-transcript-p))
@@ -29,6 +31,7 @@
 (autoload 'mevedel-session-artifacts-read-transcript-segment
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-segments "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-session-chats "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-transcript-segments
   "mevedel-session-artifacts")
 
@@ -41,6 +44,7 @@
 ;; `mevedel-view'
 (declare-function mevedel-view--jump-to-pinned-prompt
                   "mevedel-view" (position &optional event))
+(defvar mevedel-view--side-conversation-p)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position
@@ -351,17 +355,25 @@ An invalid prompt or unreadable archive leaves the current projection intact."
         (message "mevedel: latest segment")
       (mevedel-view-segments--show target 'forward))))
 
-(defun mevedel-view-segments--candidate (segment displayed)
-  "Return completion text for SEGMENT, marking DISPLAYED."
+(defun mevedel-view-segments--candidate (segment displayed &optional chats-p)
+  "Return completion text for SEGMENT, marking DISPLAYED.
+CHATS-P names each segment's chat, for a session `/clear' divided."
   (let ((number (plist-get segment :number))
         (status (plist-get segment :status))
-        (preview (or (plist-get segment :preview) "(no user message)")))
-    (format "%s S%d  %-10s  %s"
+        (preview (or (plist-get segment :preview) "(no user message)"))
+        (chat (plist-get segment :chat)))
+    (format "%s S%d  %-10s  %s%s"
             (if (= number displayed) "●" " ")
             number
             (if (plist-get segment :current-p)
                 "current"
               (symbol-name status))
+            (if (and chats-p chat)
+                (format "Chat %d · %s  "
+                        (plist-get chat :number)
+                        (truncate-string-to-width
+                         (or (plist-get chat :title) "") 32 nil nil "…"))
+              "")
             preview)))
 
 (defun mevedel-view-go-to-segment (&optional number)
@@ -376,10 +388,14 @@ readable compaction archives instead of the parent session's segments."
          (segments (mevedel-view-segments--entries session))
          (latest (plist-get (car (last segments)) :number))
          (displayed (or mevedel-view-segments--number latest))
+         (chats-p (cl-some (lambda (segment)
+                             (> (or (plist-get (plist-get segment :chat) :number) 1)
+                                1))
+                           segments))
          (choices
           (mapcar
            (lambda (segment)
-             (cons (mevedel-view-segments--candidate segment displayed)
+             (cons (mevedel-view-segments--candidate segment displayed chats-p)
                    (plist-get segment :number)))
            segments))
          (target
@@ -396,6 +412,72 @@ readable compaction archives instead of the parent session's segments."
     (unless (= target displayed)
       (mevedel-view-segments--show
        target (if (< target displayed) 'backward 'forward)))))
+
+(defun mevedel-view-segments--chats ()
+  "Return the live session's chats.
+Agent transcripts and side conversations have none of their own."
+  (when-let* (((not mevedel-view--agent-transcript-p))
+              ((not mevedel-view--side-conversation-p))
+              (session (mevedel-view-segments--session)))
+    (mevedel-session-artifacts-session-chats session)))
+
+(defun mevedel-view-go-to-chat (&optional number)
+  "Show chat NUMBER of this session, choosing it interactively.
+A chat is the run of segments between two `/clear's.  An earlier chat
+opens at its last segment, read-only like any archived segment; the
+current chat returns to the live segment."
+  (interactive)
+  (let* ((chats (or (mevedel-view-segments--chats)
+                    (user-error "Active view has no mevedel session")))
+         (choices
+          (mapcar
+           (lambda (chat)
+             (cons (format "Chat %d  %-40s  %s"
+                           (plist-get chat :number)
+                           (truncate-string-to-width
+                            (or (plist-get chat :title) "") 40 nil nil "…")
+                           (if (plist-get chat :current-p)
+                               "current"
+                             (format "S%d–S%d"
+                                     (plist-get chat :first-segment)
+                                     (plist-get chat :last-segment))))
+                   chat))
+           chats))
+         (chat
+          (if number
+              (or (cl-find number chats
+                           :key (lambda (chat) (plist-get chat :number)))
+                  (user-error "Unknown chat: %s" number))
+            (if (cdr chats)
+                (cdr (assoc (completing-read "Go to chat: " choices nil t)
+                            choices))
+              (user-error "This session has one chat; /clear starts another")))))
+    (mevedel-view-go-to-segment (plist-get chat :last-segment))))
+
+(defvar-keymap mevedel-view-segments--chats-map
+  :doc "Keymap for the earlier-chats line of a view."
+  "RET" #'mevedel-view-go-to-chat
+  "<mouse-1>" #'mevedel-view-go-to-chat)
+
+(defun mevedel-view-segments-chats-line ()
+  "Return the line naming this session's earlier chats, or nil.
+The newest earlier chat comes first; the line opens the chat picker."
+  (when-let* ((chats (mevedel-view-segments--chats))
+              (earlier (reverse (seq-remove (lambda (chat)
+                                              (plist-get chat :current-p))
+                                            chats))))
+    (propertize
+     (format "◂ %d earlier chat%s in this session: %s\n\n"
+             (length earlier) (if (cdr earlier) "s" "")
+             (truncate-string-to-width
+              (mapconcat (lambda (chat) (plist-get chat :title)) earlier " · ")
+              100 nil nil "…"))
+     'read-only t
+     'font-lock-face 'shadow
+     'keymap mevedel-view-segments--chats-map
+     'mouse-face 'highlight
+     'help-echo "Show an earlier chat of this session"
+     'mevedel-view-chats-line t)))
 
 (defun mevedel-view-return-to-latest-segment (&optional _event)
   "Return from archived inspection to the live session segment."

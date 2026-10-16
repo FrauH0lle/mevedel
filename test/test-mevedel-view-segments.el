@@ -590,5 +590,76 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (when (buffer-live-p data) (kill-buffer data))
       (delete-directory directory t))))
 
+(mevedel-deftest mevedel-view-segments-chats-line ()
+  ,test
+  (test)
+  :doc "names earlier chats below the header, as header chrome, and only when they exist"
+  (mevedel-view-segments-test--with-view
+    (goto-char (point-min))
+    (forward-line 1)
+    (should-not (get-text-property (point) 'mevedel-view-chats-line))
+    (should (= (point) (mevedel-view--after-header-position)))
+    (setf (mevedel-session-chapters session)
+          '((:segment 1 :title "First chat" :closed-at "t1")
+            (:segment 2 :title nil :closed-at "t2")))
+    (mevedel-view--full-rerender)
+    (goto-char (point-min))
+    (forward-line 1)
+    (should (looking-at-p
+             "◂ 2 earlier chats in this session: second prompt · First chat\n\n"))
+    (should (get-text-property (point) 'mevedel-view-chats-line))
+    (should (eq #'mevedel-view-go-to-chat
+                (lookup-key (get-text-property (point) 'keymap) (kbd "RET"))))
+    ;; History starts after the line, so the line never counts as history.
+    (let ((after (mevedel-view--after-header-position)))
+      (should-not (get-text-property after 'mevedel-view-chats-line))
+      (should (get-text-property (1- after) 'mevedel-view-chats-line))))
+  :doc "an archived projection shows its banner instead"
+  (mevedel-view-segments-test--with-view
+    (setf (mevedel-session-chapters session)
+          '((:segment 1 :title "First chat" :closed-at "t1")))
+    (mevedel-view-go-to-segment 1)
+    (goto-char (point-min))
+    (should-not (text-property-any (point-min) (point-max)
+                                   'mevedel-view-chats-line t))
+    (should (text-property-any (point-min) (point-max)
+                               'mevedel-view-historical-banner t))))
+
+(mevedel-deftest mevedel-view-go-to-chat ()
+  ,test
+  (test)
+  :doc "opens an earlier chat at its last segment and returns to the live chat"
+  (mevedel-view-segments-test--with-view
+    (setf (mevedel-session-chapters session)
+          '((:segment 2 :title "First chat" :closed-at "t1")))
+    (let (offered)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt choices &rest _)
+                   (setq offered (mapcar #'car choices))
+                   (car offered))))
+        (mevedel-view-go-to-chat))
+      (should (string-match-p "\\`Chat 1  First chat +S1–S2\\'" (car offered)))
+      (should (string-match-p "\\`Chat 2  segments +current\\'" (cadr offered))))
+    (should (= 2 (mevedel-view-segments-current-number)))
+    (mevedel-view-go-to-chat 2)
+    (should-not (mevedel-view-segments-current-number))
+    (should-error (mevedel-view-go-to-chat 3) :type 'user-error))
+  :doc "a session with one chat has nothing to choose"
+  (mevedel-view-segments-test--with-view
+    (should-error (mevedel-view-go-to-chat) :type 'user-error)))
+
+(mevedel-deftest mevedel-view-segments--candidate ()
+  ,test
+  (test)
+  :doc "names each segment's chat only for a session that clear divided"
+  (let ((segment (list :number 2 :status 'readable :preview "Prompt"
+                       :chat (list :number 1 :title "Planning"))))
+    (should (equal "  S2  readable    Prompt"
+                   (mevedel-view-segments--candidate segment 3)))
+    (should (equal "  S2  readable    Chat 1 · Planning  Prompt"
+                   (mevedel-view-segments--candidate segment 3 t)))
+    (should (equal "● S2  readable    Chat 1 · Planning  Prompt"
+                   (mevedel-view-segments--candidate segment 2 t)))))
+
 (provide 'test-mevedel-view-segments)
 ;;; test-mevedel-view-segments.el ends here

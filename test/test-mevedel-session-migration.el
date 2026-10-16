@@ -24,7 +24,9 @@
           (workspace (mevedel-session-workspace session))
           (old (cl-loop for (key value) on (mevedel-session-codec-serialize session) by #'cddr
                         ;; Strip exactly the fields VERSION predates.
-                        unless (or (eq key :naming-input)
+                        unless (or (eq key :chapters)
+                                   (and (not (equal ,version "v0.5.12"))
+                                        (eq key :naming-input))
                                    (and (member ,version '("v0.5.6" "v0.5.9"))
                                         (memq key '(:recovery-issues :pending-follow-ups :pending-steering
                                                                      :pending-input-next-id :pending-input-paused
@@ -77,7 +79,8 @@
                      :turns-run 1 :plan-reference nil :created-at "created" :updated-at "updated")))
     (dolist (key '(:external-conversations :recovery-issues :pending-follow-ups :pending-steering
                                            :pending-input-next-id :pending-input-paused :pending-input-failure-paused
-                                           :attached-artifacts :dedicated-artifact :naming-input))
+                                           :attached-artifacts :dedicated-artifact :naming-input
+                                           :chapters))
       (cl-remf data key))
     (setq data (plist-put (plist-put data :version "v0.5.6") :goal goal))
     (let ((restored (mevedel-session-codec--goal-from-plist
@@ -142,6 +145,7 @@
     (cl-remf data :attached-artifacts)
     (cl-remf data :dedicated-artifact)
     (cl-remf data :naming-input)
+    (cl-remf data :chapters)
     (let ((converted (mevedel-migrate-session--sidecar data)))
       (should (equal mevedel-session-codec-format-version (plist-get converted :version)))
       (should (= 4 (plist-get converted :pending-input-next-id)))
@@ -161,6 +165,7 @@
                        :recovery-issues '((:id "session-naming" :category "request"
                                                :message "Naming failed" :blocking nil))))))
       (cl-remf data :naming-input)
+      (cl-remf data :chapters)
       (let ((converted (mevedel-migrate-session--sidecar data)))
         (should (equal mevedel-session-codec-format-version (plist-get converted :version)))
         (should (plist-member converted :naming-input))
@@ -172,6 +177,21 @@
       ;; A field the source version never had is refused, not overwritten.
       (should-error (mevedel-migrate-session--sidecar
                      (plist-put (copy-tree data) :naming-input "Unexpected")))))
+
+  :doc "v0.5.12 keeps its fields, including naming input, and gains no chat history"
+  (let ((data (test-mevedel-session-persistence--complete-sidecar
+               (list :version "v0.5.12" :session-name "Kept title"
+                     :naming-state 'attempted :naming-input "Fix this"))))
+    (cl-remf data :chapters)
+    (let ((converted (mevedel-migrate-session--sidecar data)))
+      (should (equal mevedel-session-codec-format-version (plist-get converted :version)))
+      (should (plist-member converted :chapters))
+      (should-not (plist-get converted :chapters))
+      (cl-loop for (key value) on data by #'cddr unless (eq key :version) do
+               (should (equal value (plist-get converted key)))))
+    ;; A field the source version never had is refused, not overwritten.
+    (should-error (mevedel-migrate-session--sidecar
+                   (plist-put (copy-tree data) :chapters nil))))
 
   :doc "current sidecars retain queued input, recovery state and naming input unchanged"
   (let ((data (test-mevedel-session-persistence--complete-sidecar nil)))
@@ -195,7 +215,7 @@
   ,test
   (test)
   :doc "converts all retained heads, preserves bytes and loads through the current reader"
-  (dolist (version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11"))
+  (dolist (version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12"))
     (mevedel-migration-test--with-source version
       (let ((before (mapcar (lambda (file) (cons file (mevedel-migrate-session--hash file)))
                             (directory-files-recursively source "."))))

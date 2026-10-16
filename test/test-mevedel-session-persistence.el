@@ -4255,7 +4255,32 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                       :current-segment 1
                       :total-turn-count 1
                       :first-user-message "Original request")))))
-    (should (string-match-p "Original request" display))))
+    (should (string-match-p "Original request" display)))
+  :doc "counts chats, not segments, and names earlier chats newest first"
+  (let ((display
+         (mevedel-session-persistence--format-session-candidate
+          (list :summary
+                (list :session-name "Background Review"
+                      :updated-at "2026-04-23T12-00-00"
+                      :current-segment 4
+                      :total-turn-count 41
+                      :latest-user-message "Please commit"
+                      :chats (mevedel-session-artifacts-chats
+                              '((:segment 1 :title "Review queue timeout" :closed-at "t1")
+                                (:segment 3 :title "Cursor Jump" :closed-at "t2"))
+                              nil 4 "Background Review"))))))
+    (should (string-match-p
+             "Background Review  \\[3 chats, 41 turns\\]  ↩ Cursor Jump · Review queue timeout  Please commit\\'"
+             display)))
+  :doc "a session without clears is one chat with no earlier names"
+  (let ((display
+         (mevedel-session-persistence--format-session-candidate
+          (list :summary
+                (list :session-name "demo" :updated-at "2026-04-23T12-00-00"
+                      :current-segment 3 :total-turn-count 2
+                      :latest-user-message "Hi"
+                      :chats (mevedel-session-artifacts-chats nil nil 3 "demo"))))))
+    (should (string-match-p "demo  \\[1 chat, 2 turns\\]  Hi\\'" display))))
 
 
 ;;
@@ -6196,12 +6221,23 @@ every byte and error.  Other files are read normally."
        (should-not (mevedel-session-persistence--change-lock path stale nil))
        (should (equal "resumed" (plist-get (mevedel-session-persistence--read-lock path) :buffer)))))))
 
-(mevedel-deftest mevedel-session-persistence--sidecar-summary
-  (:doc "retains attachment ids for workspace listing projections")
+(mevedel-deftest mevedel-session-persistence--sidecar-summary ()
+  ,test
+  (test)
+  :doc "retains attachment ids for workspace listing projections"
   (let* ((sidecar (test-mevedel-session-persistence--complete-sidecar
                    '(:attached-artifacts ("a" "b"))))
          (summary (mevedel-session-persistence--sidecar-summary sidecar)))
-    (should (equal '("a" "b") (plist-get summary :attached-artifacts)))))
+    (should (equal '("a" "b") (plist-get summary :attached-artifacts))))
+  :doc "projects the chats from the sidecar alone, without reading segments"
+  (let* ((sidecar (test-mevedel-session-persistence--complete-sidecar
+                   '(:session-name "Now" :current-segment 3
+                     :chapters ((:segment 2 :title "Before" :closed-at "t"))))))
+    (should (equal '("Before" "Now")
+                   (mapcar (lambda (chat) (plist-get chat :title))
+                           (plist-get (mevedel-session-persistence--sidecar-summary
+                                       sidecar)
+                                      :chats))))))
 
 (provide 'test-mevedel-session-persistence)
 ;;; test-mevedel-session-persistence.el ends here

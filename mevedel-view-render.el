@@ -367,6 +367,8 @@
                   "mevedel-view-segments" (&optional _event))
 (declare-function mevedel-view-segments-banner
                   "mevedel-view-segments" ())
+(declare-function mevedel-view-segments-chats-line
+                  "mevedel-view-segments" ())
 (declare-function mevedel-view-segments-display-buffer
                   "mevedel-view-segments" ())
 (declare-function mevedel-view-segments-initialize
@@ -3666,13 +3668,18 @@ interaction UI live below that boundary and above the input prompt."
   mevedel-view--status-marker)
 
 (defun mevedel-view--after-header-position ()
-  "Return the first history position after the session header."
+  "Return the first history position after the session header.
+The earlier-chats line belongs to the header chrome."
   (save-excursion
     (goto-char (point-min))
     ;; Agent transcript chrome lives in the header line, not in the
     ;; transcript.  Its first text line is already history.
     (unless mevedel-view--agent-transcript-p
-      (forward-line 1))
+      (forward-line 1)
+      (when (get-text-property (point) 'mevedel-view-chats-line)
+        (goto-char (or (next-single-property-change
+                        (point) 'mevedel-view-chats-line)
+                       (point-max)))))
     (point)))
 
 (defun mevedel-view--transcript-history-position-p (pos)
@@ -7997,8 +8004,10 @@ historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
     (mevedel-view--forget-request-progress-region)
     (goto-char (point-min))
     (insert (mevedel-view--header-string session-data-buf))
-    (when historical-p
-      (insert (mevedel-view-segments-banner))))
+    (if historical-p
+        (insert (mevedel-view-segments-banner))
+      (when-let* ((line (mevedel-view-segments-chats-line)))
+        (insert line))))
   (set-marker mevedel-view--input-marker (point))
   (when (markerp mevedel-view--status-marker)
     (set-marker mevedel-view--status-marker (point)))

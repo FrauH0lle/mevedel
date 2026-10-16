@@ -96,6 +96,7 @@
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-agent-turn-capacity "mevedel-structs" (cl-x))
 (declare-function mevedel-session-attached-artifacts "mevedel-structs" (cl-x))
+(declare-function mevedel-session-chapters "mevedel-structs" (cl-x))
 (declare-function mevedel-session-dedicated-artifact "mevedel-structs" (cl-x))
 (declare-function mevedel-session-authority-mode-for-session "mevedel-structs" (session))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
@@ -157,7 +158,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.12"
+(defconst mevedel-session-codec-format-version "v0.5.13"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -188,7 +189,7 @@ add more, and we don't want to act on actions we don't understand).")
     :last-observed-date
     :agent-types-snapshot :workspace-instruction-hashes
     :additional-roots :tasks
-    :prompt-index :file-snapshots :ptc-checkpoints :agent-transcripts :agent-registry
+    :prompt-index :chapters :file-snapshots :ptc-checkpoints :agent-transcripts :agent-registry
     :agent-turn-capacity :plan-metadata :goal :attached-artifacts :dedicated-artifact :messages)
   "Keys required in every current-version session sidecar.")
 
@@ -634,6 +635,7 @@ The resulting plist is round-trippable via
    :tasks                  (mapcar #'mevedel-session-codec--task-to-plist
                                    (mevedel-session-tasks session))
    :prompt-index           (mevedel-session-prompt-index session)
+   :chapters               (copy-tree (mevedel-session-chapters session))
    :file-snapshots         (mevedel-session-file-snapshots session)
    :ptc-checkpoints        (copy-tree (mevedel-session-ptc-checkpoints session) t)
    :agent-transcripts      (mevedel-session-agent-transcripts session)
@@ -720,6 +722,17 @@ authored prompt was never recorded."
                    (null (text-properties-at 0 input))
                    (null (next-property-change 0 input))))
     (error "Invalid persisted naming input for state %S" state)))
+
+(defun mevedel-session-codec--chapter-p (chapter)
+  "Return non-nil when CHAPTER is a valid closed-chat record.
+A record names the last segment of a chat that `/clear' closed, the title
+it had then, or nil, and when it closed."
+  (and (proper-list-p chapter)
+       (natnump (plist-get chapter :segment))
+       (> (plist-get chapter :segment) 0)
+       (let ((title (plist-get chapter :title)))
+         (or (null title) (stringp title)))
+       (stringp (plist-get chapter :closed-at))))
 
 (defun mevedel-session-codec-validate-current-sidecar (plist)
   "Return PLIST when it contains every current-version sidecar key."
@@ -820,6 +833,10 @@ authored prompt was never recorded."
                    (cl-every (lambda (key) (plist-member prompt key))
                              '(:turn :file-turn :cum-turn)))
         (error "Invalid session prompt entry: %S" prompt))))
+  (let ((chapters (plist-get plist :chapters)))
+    (unless (and (proper-list-p chapters)
+                 (cl-every #'mevedel-session-codec--chapter-p chapters))
+      (error "Invalid session chapters: %S" chapters)))
   (let ((ids (plist-get plist :attached-artifacts)))
     (unless (and (proper-list-p ids) (cl-every #'stringp ids))
       (error "Invalid attached artifacts: %S" ids)))
@@ -986,6 +1003,7 @@ their hygiene filters."
                      :worktree-base-commit
                      (plist-get plist :worktree-base-commit)
                      :prompt-index     prompt-index
+                     :chapters         (copy-tree (plist-get plist :chapters))
                      :file-snapshots   (plist-get plist :file-snapshots)
                      :ptc-checkpoints
                      (mevedel-session-codec--sanitize-ptc-checkpoints

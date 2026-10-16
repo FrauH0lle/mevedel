@@ -144,6 +144,7 @@
 (declare-function mevedel-session-agent-turn-capacity "mevedel-structs" (cl-x))
 (declare-function mevedel-session-attached-artifacts "mevedel-structs" (cl-x))
 (declare-function mevedel-session-buffer-name "mevedel-structs" (session-name workspace))
+(declare-function mevedel-session-chapters "mevedel-structs" (cl-x))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
 (declare-function mevedel-session-enqueue-pending-reminder
@@ -270,7 +271,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     lease-renewal-timer save-path session-id created-at updated-at
     current-segment forked-from-session-id forked-from-turn fork-type
     forked-from-fork-point-id worktree-source-root worktree-directory
-    worktree-branch worktree-base-commit prompt-index file-snapshots
+    worktree-branch worktree-base-commit prompt-index chapters file-snapshots
     ptc-checkpoints persisted-first-user-message durable-tree-ensured
     agent-transcripts invoked-skills permission-queue permission-absence
     pending-plan-approval
@@ -431,6 +432,14 @@ The identity and timestamp keywords describe the new materialized child."
                  current-segment turn)
               (mevedel-session-prompt-index session))
             t)
+           ;; A fork keeps only the chats that ended before its fork segment.
+           :chapters
+           (copy-tree
+            (if fork-p
+                (seq-filter (lambda (chapter)
+                              (< (plist-get chapter :segment) current-segment))
+                            (mevedel-session-chapters session))
+              (mevedel-session-chapters session)))
            :file-snapshots
            (copy-tree
             (if fork-p

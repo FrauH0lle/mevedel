@@ -606,6 +606,19 @@
   (let ((plist (test-mevedel-session-persistence--complete-sidecar
                 '(:attached-artifacts ("board") :dedicated-artifact "board"))))
     (should (eq plist (mevedel-session-codec-validate-current-sidecar plist))))
+  :doc "validates closed-chat records"
+  (dolist (bad '((:chapters ((:segment 0 :title nil :closed-at "t")))
+                 (:chapters ((:segment 2 :title title :closed-at "t")))
+                 (:chapters ((:segment 2 :title "T")))
+                 (:chapters (:segment 2))))
+    (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+      (should-error (mevedel-session-codec-validate-current-sidecar
+                     (plist-put plist (car bad) (cadr bad))))))
+  (let* ((chapters '((:segment 2 :title "Planning" :closed-at "t1")
+                     (:segment 3 :title nil :closed-at "t2")))
+         (plist (test-mevedel-session-persistence--complete-sidecar
+                 (list :chapters chapters))))
+    (should (eq plist (mevedel-session-codec-validate-current-sidecar plist))))
   :doc "rejects a current-version sidecar with a missing required key"
   (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
     (cl-remf plist :working-directory)
@@ -1096,6 +1109,7 @@
                         ("Write" :path "/y" :action future-action))
                       :tasks nil
                       :prompt-index nil
+                      :chapters nil
                       :file-snapshots nil))
          (session
           (plist-get

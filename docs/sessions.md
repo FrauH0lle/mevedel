@@ -143,6 +143,16 @@ A successful `/clear` cancels the old segment's naming operation and persists
 `pending` for automatically managed names with the new segment. The existing
 title remains visible until the next accepted authored prompt supplies its
 replacement; old history is not naming input. Explicit names survive clear.
+
+A `/clear` also closes a *chat*: the run of segments between two clears, while
+compaction rotates segments within one chat. The sidecar's `:chapters` records,
+in the same commit, the closing chat's last segment, its title at that moment
+(nil under an explicit name, which titles every chat alike) and when it closed;
+a failed clear records nothing. An untitled chat is labelled by its first
+prompt. Fork keeps only the chats closed before its fork segment, Save As keeps
+all, and Rewind restores the record with the rest of its sidecar. The resume
+picker counts chats rather than segments and names the earlier ones, newest
+first, from the sidecar alone; it reads no segment files.
 Compaction does not rearm naming. A failed clear leaves naming eligibility
 unchanged; failures after a committed transition do not roll it back.
 Keyboard quit is deferred during clear publication and recovery so it cannot
@@ -171,12 +181,12 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.12`, including recovery issues, retained input and pause state,
-naming input,
+The closed sidecar schema is `v0.5.13`, including recovery issues, retained input and pause state,
+naming input, closed chats (`:chapters`),
 the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
 and, for an artifact's own conversation, that artifact's id (`:dedicated-artifact`).
 Other schemas are rejected by the runtime loader; older sessions are converted
-only by the [explicit migration](#explicit-migration-to-v0512). Recovery records
+only by the [explicit migration](#explicit-migration-to-v0513). Recovery records
 contain issue messages, never credentials.
 Queued follow-ups retain text, attribution, scope and attachment grants. Live
 submission objects are excluded. Undelivered steering reloads as requiring review,
@@ -707,10 +717,10 @@ confirmation; declining aborts resume, while accepting binds the conversation
 to the opened workspace and discards copied session permission rules, resource
 grants, and additional roots.  The next save records the opened workspace's
 identity. Superseded sidecar shapes are not migrated during resume; the
-[explicit migration](#explicit-migration-to-v0512) runs separately.
+[explicit migration](#explicit-migration-to-v0513) runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.12`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.13`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions
@@ -1663,10 +1673,10 @@ An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
 
-### Explicit migration to v0.5.12
+### Explicit migration to v0.5.13
 
 The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-session-v0.5.6.el) converts
-v0.5.6, v0.5.9, v0.5.10 and v0.5.11 sessions to v0.5.12; a v0.5.12 session is
+v0.5.6, v0.5.9, v0.5.10, v0.5.11 and v0.5.12 sessions to v0.5.13; a v0.5.13 session is
 only validated. Other versions, including v0.5.7 and v0.5.8, are not read.
 Close the source session first, then run
 from the repository root with a new destination outside the source directory:
@@ -1689,7 +1699,9 @@ holds legacy `artifacts/` is refused rather than having them moved without
 being attached. Titles and naming states are kept. No older format recorded
 naming input, so a converted session has none: an `attempted` title can still
 be retried, and `mevedel-retry-session-naming` asks for a description instead
-of guessing it from history. Conversion makes no model requests. Restoring an interrupted
+of guessing it from history. No older format recorded chat boundaries either,
+so a converted session reads as one chat: its earlier segments stay browsable
+without chat titles. Conversion makes no model requests. Restoring an interrupted
 native conversation still requires explicit continuation through the current
 reader's recovery rules.
 
@@ -1802,6 +1814,12 @@ The picker lists the canonical range from segment 1 through the live segment,
 including each segment's latest prompt preview and `readable`, `missing`, or
 `unreadable` status. Adjacent navigation reports the exact broken path instead
 of skipping it; the picker lets the user bypass that segment.
+In a session that `/clear` divided, each row also names its chat, and `c`
+(`M-x mevedel-view-go-to-chat`) chooses a chat directly: an earlier chat opens
+at its last segment, the current chat returns to the live segment. The live
+view shows the earlier chats, newest first, on one line below its header;
+`RET` or a click on it opens the chat picker. The line is header chrome, so
+history begins after it.
 
 Each archived projection renders exactly one segment and is read-only. It does
 not merge earlier segments, modify the authoritative data buffer, or become a

@@ -312,12 +312,15 @@
                   "mevedel-view-render" ())
 
 ;; `mevedel-view-segments'
+(declare-function mevedel-view-go-to-chat "mevedel-view-segments"
+                  (&optional number))
 (declare-function mevedel-view-go-to-segment "mevedel-view-segments"
                   (&optional number))
 (declare-function mevedel-view-next-segment "mevedel-view-segments" ())
 (declare-function mevedel-view-previous-segment "mevedel-view-segments" ())
 (declare-function mevedel-view-segments-current-number
                   "mevedel-view-segments" ())
+(autoload 'mevedel-view-go-to-chat "mevedel-view-segments" nil t)
 (autoload 'mevedel-view-go-to-segment "mevedel-view-segments" nil t)
 (autoload 'mevedel-view-next-segment "mevedel-view-segments" nil t)
 (autoload 'mevedel-view-previous-segment "mevedel-view-segments" nil t)
@@ -1996,6 +1999,10 @@ match the ones the view buffer itself binds."
     ("g" "Go to…"
      (lambda () (interactive)
        (mevedel-menu--call-in-view #'mevedel-view-go-to-segment))
+     :transient t)
+    ("c" "Chat…"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-go-to-chat))
      :transient t)]
    ["Display"
     :pad-keys t

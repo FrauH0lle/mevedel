@@ -108,6 +108,7 @@
 (declare-function mevedel-session-artifacts-artifact-present-p "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
 (declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer))
+(declare-function mevedel-session-artifacts-chats "mevedel-session-artifacts" (chapters prompt-index current-segment current-title))
 (declare-function mevedel-session-artifacts-check-target-incarnation "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
 (declare-function mevedel-session-artifacts-disown-save-machinery "mevedel-session-artifacts" nil)
@@ -1910,6 +1911,11 @@ mentions-shown reset to empty hash tables on load."
         :total-turn-count (plist-get sidecar :total-turn-count)
         :first-user-message (plist-get sidecar :first-user-message)
         :latest-user-message (plist-get sidecar :latest-user-message)
+        :chats (mevedel-session-artifacts-chats
+                (plist-get sidecar :chapters)
+                (plist-get sidecar :prompt-index)
+                (or (plist-get sidecar :current-segment) 1)
+                (plist-get sidecar :session-name))
         :fork-point-ids
         (cl-loop
          for segment in (plist-get sidecar :prompt-index)
@@ -2300,7 +2306,11 @@ one field with no bound on its length."
          (preview  (or (plist-get s :latest-user-message)
                        (plist-get s :first-user-message)
                        ""))
-         (segments (or (plist-get s :current-segment) 1))
+         (chats    (plist-get s :chats))
+         (earlier
+          (mapcar (lambda (chat) (plist-get chat :title))
+                  (reverse (seq-remove (lambda (chat) (plist-get chat :current-p))
+                                       chats))))
          (turns    (or (plist-get s :total-turn-count) 0))
          (worktree
           (when (eq (plist-get s :fork-type) 'worktree)
@@ -2327,8 +2337,17 @@ one field with no bound on its length."
                      (t "active"))))
               (format "  Worktree Fork: %s (%s)"
                       (or current origin "?") status)))))
-    (format "%-12s  %s  [%d seg, %d turns]%s%s  %s"
-            relative name segments turns (or worktree "")
+    (format "%-12s  %s  [%d chat%s, %d turns]%s%s%s  %s"
+            relative name (max 1 (length chats))
+            (if (> (length chats) 1) "s" "")
+            turns
+            ;; Newest first, bounded: the preview after it is the row's end.
+            (if earlier
+                (concat "  ↩ "
+                        (truncate-string-to-width
+                         (string-join earlier " · ") 60 nil nil "…"))
+              "")
+            (or worktree "")
             (if detail (format "  (%s)" detail) "")
             preview)))
 

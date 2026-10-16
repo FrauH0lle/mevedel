@@ -357,6 +357,7 @@ publication."
                :additional-roots nil
                :tasks nil
                :prompt-index nil
+               :chapters nil
                :file-snapshots nil
                :ptc-checkpoints nil
                :workspace-instruction-hashes nil

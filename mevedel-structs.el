@@ -278,6 +278,7 @@ workspace."
   worktree-branch   ; generated branch name for a Worktree Fork
   worktree-base-commit ; full HEAD commit used to create a Worktree Fork
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
+  chapters          ; closed /clear chats, oldest first: (:segment LAST :title STR-OR-NIL :closed-at ISO)
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
   ptc-checkpoints   ; durable unfinished/settled ToolCall envelopes; never guest state
   ;; Transient cache of the committed sidecar's `:first-user-message'.  The

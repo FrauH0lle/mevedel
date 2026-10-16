@@ -778,6 +778,7 @@
            :save-path (file-name-as-directory directory)
            :authority-mode 'pid-lock
            :current-segment 4
+           :chapters '((:segment 2 :title "Old chat" :closed-at "2026-10-15T10-00-00"))
            :prompt-index
            '((1 . ((:cum-turn 1 :preview "first prompt")))
              (2 . ((:cum-turn 2 :preview "missing prompt")))
@@ -812,10 +813,51 @@
                        "unreadable prompt" "live prompt")
                      (mapcar
                       (lambda (entry) (plist-get entry :preview))
-                      segments)))))
+                      segments)))
+            (should (equal '((1 . "Old chat") (1 . "Old chat") (2 . "segments") (2 . "segments"))
+                           (mapcar (lambda (entry)
+                                     (let ((chat (plist-get entry :chat)))
+                                       (cons (plist-get chat :number)
+                                             (plist-get chat :title))))
+                                   segments)))))
       (when (buffer-live-p live-buffer)
         (kill-buffer live-buffer))
       (delete-directory directory t))))
+
+(mevedel-deftest mevedel-session-artifacts-chats ()
+  ,test
+  (test)
+  :doc "groups segments between clears and titles untitled chats by their first prompt"
+  (let ((chats (mevedel-session-artifacts-chats
+                '((:segment 2 :title "Planning" :closed-at "t1")
+                  (:segment 3 :title nil :closed-at "t2"))
+                '((3 . ((:preview "  ") (:preview " First real prompt ")))
+                  (4 . ((:preview "live"))))
+                5 "Current title")))
+    (should (equal '((1 1 2 "Planning" nil) (2 3 3 "First real prompt" nil)
+                     (3 4 5 "Current title" t))
+                   (mapcar (lambda (chat)
+                             (list (plist-get chat :number)
+                                   (plist-get chat :first-segment)
+                                   (plist-get chat :last-segment)
+                                   (plist-get chat :title)
+                                   (plist-get chat :current-p)))
+                           chats))))
+  :doc "a session without clears is one chat"
+  (should (equal '((1 1 3 "Only" t))
+                 (mapcar (lambda (chat)
+                           (list (plist-get chat :number) (plist-get chat :first-segment)
+                                 (plist-get chat :last-segment) (plist-get chat :title)
+                                 (plist-get chat :current-p)))
+                         (mevedel-session-artifacts-chats nil nil 3 "Only"))))
+  :doc "ignores records a Fork or Rewind no longer reaches, and labels a promptless chat"
+  (should (equal '("(no prompt)" "Live")
+                 (mapcar (lambda (chat) (plist-get chat :title))
+                         (mevedel-session-artifacts-chats
+                          '((:segment 1 :title nil :closed-at "t1")
+                            (:segment 2 :title "Beyond" :closed-at "t2")
+                            (:segment 4 :title "Gone" :closed-at "t3"))
+                          nil 2 "Live")))))
 
 
 (mevedel-deftest mevedel-session-artifacts-read-segment ()
@@ -2847,6 +2889,46 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    session buf))
           (with-current-buffer buf
             (should (verify-visited-file-modtime buf))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "clear closes the chat under its title; compaction rotation does not"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (setf (mevedel-session-name session) "Cursor Jump Near Messages"
+                (mevedel-session-naming-state session) 'attempted)
+          (mevedel-session-artifacts-start-fresh-segment session buf)
+          (should-not (mevedel-session-chapters session))
+          (mevedel-session-artifacts-start-fresh-segment session buf :clear t)
+          (let ((chapter (car (mevedel-session-chapters session))))
+            (should (= 1 (length (mevedel-session-chapters session))))
+            (should (= 2 (plist-get chapter :segment)))
+            (should (equal "Cursor Jump Near Messages" (plist-get chapter :title)))
+            (should (stringp (plist-get chapter :closed-at))))
+          ;; The record is durable, not just live state.
+          (should (equal (mevedel-session-chapters session)
+                         (plist-get (mevedel-session-codec-read
+                                     (mevedel-session-artifacts-sidecar-path
+                                      (mevedel-session-save-path session)))
+                                    :chapters)))
+          ;; An explicit name titles every chat alike, so it is not recorded.
+          (setf (mevedel-session-naming-state session) 'explicit)
+          (mevedel-session-artifacts-start-fresh-segment session buf :clear t)
+          (should (equal '(2 3) (mapcar (lambda (chapter) (plist-get chapter :segment))
+                                        (mevedel-session-chapters session))))
+          (should-not (plist-get (cadr (mevedel-session-chapters session)) :title)))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "a clear that fails before its commit leaves the chats unchanged"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (cl-letf (((symbol-function 'mevedel-session-artifacts--publish-segment-text)
+                     (lambda (&rest _) (error "Injected publication failure"))))
+            (should-error (mevedel-session-artifacts-start-fresh-segment
+                           session buf :clear t)))
+          (should (= 1 (mevedel-session-current-segment session)))
+          (should-not (mevedel-session-chapters session)))
       (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "sidecar and prompt index point at the new empty segment"
   (cl-destructuring-bind (session . tempdir)

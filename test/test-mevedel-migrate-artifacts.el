@@ -26,6 +26,7 @@
     (cl-remf data :attached-artifacts)
     (cl-remf data :dedicated-artifact)
     (cl-remf data :naming-input)
+    (cl-remf data :chapters)
     data))
 
 (defconst mevedel-migrate-artifacts-test--board
@@ -286,6 +287,7 @@
                             :workspace (list :type 'file :workspace-id (make-string 64 ?a)
                                              :target-native-root "/tmp/" :name "w")))))
           (cl-remf data :naming-input)
+          (cl-remf data :chapters)
           (mevedel-migrate-session--write sidecar data)
           (let ((report (mevedel-migrate-artifacts root destination)))
             (should (eq :failed (cadr (assoc "s1" report))))

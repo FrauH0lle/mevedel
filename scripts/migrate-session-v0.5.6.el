@@ -1,7 +1,7 @@
-;;; migrate-session-v0.5.6.el --- Convert v0.5.6-v0.5.11 sessions to v0.5.12 -*- lexical-binding: t -*-
+;;; migrate-session-v0.5.6.el --- Convert v0.5.6-v0.5.12 sessions to v0.5.13 -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Explicit v0.5.6/v0.5.9/v0.5.10/v0.5.11 -> v0.5.12 conversion, outside the
+;; Explicit v0.5.6/v0.5.9/v0.5.10/v0.5.11/v0.5.12 -> v0.5.13 conversion, outside the
 ;; runtime loader.  Each step adds the fields one source version predates.
 ;; The file keeps the name of its first source format.
 ;; Copy a closed local session to a new directory; never change the source.
@@ -68,16 +68,18 @@
   "Session has nothing this converter reads")
 
 (defun mevedel-migrate-session--sidecar (data &optional attached)
-  "Return DATA converted to v0.5.12, preserving existing durable fields.
+  "Return DATA converted to v0.5.13, preserving existing durable fields.
 ATTACHED lists the store artifact ids a session older than the artifact store
 \(v0.5.11) starts attached to; a store-aware session refuses them rather than
-lose them.  A current v0.5.12 sidecar is only validated."
-  (unless (equal mevedel-session-codec-format-version "v0.5.12")
-    (error "This converter targets v0.5.12; use its matching mevedel checkout"))
+lose them.  A current v0.5.13 sidecar is only validated."
+  (unless (equal mevedel-session-codec-format-version "v0.5.13")
+    (error "This converter targets v0.5.13; use its matching mevedel checkout"))
   (setq data (copy-tree data))
   (let* ((version (plist-get data :version))
-         (older (cdr (member version '("v0.5.12" "v0.5.11" "v0.5.10" "v0.5.9" "v0.5.6")))))
-    (unless (member version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12"))
+         (older (cdr (member version '("v0.5.13" "v0.5.12" "v0.5.11" "v0.5.10"
+                                       "v0.5.9" "v0.5.6")))))
+    (unless (member version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12"
+                              "v0.5.13"))
       (signal 'mevedel-migrate-session-unconvertible (list (format "version %s" version))))
     (cl-flet ((before-p (introduced)
                 ;; Non-nil when VERSION predates the INTRODUCED format.
@@ -120,7 +122,13 @@ lose them.  A current v0.5.12 sidecar is only validated."
         (when (plist-member data :naming-input)
           (error "Unexpected naming input in legacy sidecar"))
         (setq data (plist-put data :naming-input nil)))
-      (setq data (plist-put data :version "v0.5.12"))))
+      (when (before-p "v0.5.13")
+        ;; Earlier `/clear's recorded no chat boundary or title; their
+        ;; segments read as one chat rather than as invented ones.
+        (when (plist-member data :chapters)
+          (error "Unexpected chat records in legacy sidecar"))
+        (setq data (plist-put data :chapters nil)))
+      (setq data (plist-put data :version "v0.5.13"))))
   (mevedel-session-codec-validate-current-sidecar data))
 
 (defun mevedel-migrate-session--closed (directory)
@@ -284,7 +292,7 @@ the new copy.  The caller must keep SOURCE closed throughout conversion."
     (setq command-line-args-left nil)
     (unless (= (length args) 2)
       (error "Usage: mevedel-migrate-session-main -- SOURCE DESTINATION"))
-    (princ (format "Converted %d sidecar files to v0.5.12 into %s; source unchanged\n"
+    (princ (format "Converted %d sidecar files to v0.5.13 into %s; source unchanged\n"
                    (mevedel-migrate-session-copy (car args) (cadr args)) (cadr args)))))
 
 (provide 'mevedel-migrate-session)

@@ -126,6 +126,7 @@
 (autoload 'mevedel-view-back-to-chat "mevedel-view-composer" nil t)
 (autoload 'mevedel-view-close-agent-transcript "mevedel-view-agent" nil t)
 (autoload 'mevedel-view-cycle-permission-mode "mevedel-view-composer" nil t)
+(autoload 'mevedel-view-go-to-chat "mevedel-view-segments" nil t)
 (autoload 'mevedel-view-go-to-segment "mevedel-view-segments" nil t)
 (autoload 'mevedel-native-install "mevedel-native" nil t)
 (autoload 'mevedel-view-next-display "mevedel-view-render" nil t)
