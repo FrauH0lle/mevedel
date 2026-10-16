@@ -81,9 +81,9 @@ test('a failed editor read stays on the requested item and can be retried',async
   await other.evaluate(()=>{window.holdReadTest=true;});
   await other.locator('#editing-body').getByRole('button',{name:'Retry',exact:true}).click();
   await other.waitForFunction(()=>window.releaseReadTest);
-  await other.getByRole('button',{name:'Back to room',exact:true}).click();
+  await other.getByRole('button',{name:'Back to the room',exact:true}).click();
   await other.evaluate(async()=>{window.releaseReadTest();await new Promise(resolve=>setTimeout(resolve,50));});
-  assert.equal(await other.locator('#editing-panel').isVisible(),false,'a delayed read does not reopen an editor after Back to room');
+  assert.equal(await other.locator('#editing-panel').isVisible(),false,'a delayed read does not reopen an editor after Back');
   assert.equal(new URL(other.url()).searchParams.has('shared'),false);
 });
 

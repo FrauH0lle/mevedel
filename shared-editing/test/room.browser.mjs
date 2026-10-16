@@ -1168,7 +1168,9 @@ test(
       const storeRow = (page) =>
         page.locator('#store-list li', { has: page.locator(`.lobby-name[title="${doomed}"]`) });
       const storeMenu = async (page, action) => {
-        await page.locator('#store-button').click();
+        await page.locator('#room-crumbs .crumb').click();
+        await page.locator('.nav-menu:popover-open')
+          .getByRole('menuitem', { name: 'Project artifacts' }).click();
         await storeRow(page).locator('.store-more').click();
         await page.locator('.store-menu:popover-open').getByRole('button', { name: action }).click();
       };
