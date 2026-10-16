@@ -484,6 +484,17 @@ paths:
       (should (string-match-p "Self-contained, always" artifact-body))
       (should (string-match-p "mevedel-artifact-store-directory"
                               artifact-body)))
+    ;; Native whiteboard guidance is independent of HTML artifact attachments.
+    (let ((whiteboard (cl-find "shared-whiteboard" skills
+                               :key #'mevedel-skill-name :test #'equal)))
+      (should whiteboard)
+      (should (eq 'bundled (mevedel-skill-source whiteboard)))
+      (should (mevedel-skill-user-invocable-p whiteboard))
+      (should (mevedel-skill-model-invocable-p whiteboard))
+      (should (mevedel-skill-effective-model-invocable-p whiteboard))
+      (should-not (mevedel-skill-path-patterns whiteboard))
+      (should-not (mevedel-skill-dependencies whiteboard))
+      (should-not (mevedel-skill-dependency-diagnostics whiteboard)))
     ;; The artifact family inherits through required attachments: each leaf
     ;; declares its bases, and every descendant stays model-invocable so a
     ;; model-origin root resolves the whole graph.  Attachment-only bases stay

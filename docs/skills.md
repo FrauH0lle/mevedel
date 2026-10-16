@@ -182,9 +182,14 @@ Bundled skills currently include:
   filterable table over a JSON dataset embedded in the page.
 - `artifact-explainer` — user-invocable explainer artifact: a numbered-step or
   sectioned walkthrough pairing prose with a visual at each stage.
+- `shared-whiteboard` — user- and model-invocable layout and styling guidance
+  for native shared whiteboards, including substantial edits. Uses Shared tools,
+  preserves established board styles, and offers an Excalidraw-style sketch
+  treatment or a polished warm-neutral/blue treatment with shared composition
+  and checking guidance; does not attach the HTML-specific artifact skills.
 
-The four leaf skills each build from a `template.html` beside their `SKILL.md`,
-reached through `${MEVEDEL_SKILL_DIR}`, and attach `artifact` plus
+The four artifact leaf skills each build from a `template.html` beside their
+`SKILL.md`, reached through `${MEVEDEL_SKILL_DIR}`, and attach `artifact` plus
 `artifact-design`; `artifact-explainer` additionally attaches
 `artifact-diagramming`. Together they are the worked example of the
 required-attachment contract in bundled skills: the bases carry the rules once
