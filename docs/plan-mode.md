@@ -190,7 +190,7 @@ The approval interaction has these axes:
 | Location | Current | Fresh | Summary |
 |---|---:|---:|---:|
 | Here | yes | yes | yes |
-| Worktree | no | yes | yes |
+| Worktree | yes | yes | yes |
 
 - Location: Here or Worktree.
 - Context: Current, Fresh, or Summary. Summary costs one additional model
@@ -209,9 +209,12 @@ selected—`b` for Budget. The ordinary `/model` cockpit remains session-level.
 The instructions editor saves with `C-c C-c` and cancels with `C-c C-k`.
 `RET` accepts, `f` opens an editable feedback draft, `q` hides the approval,
 and `C-g` cancels.
-Selecting Worktree while Current is selected changes the context to Fresh. A
-dirty source checkout is not copied or stashed; Worktree starts at `HEAD`.
-Accepting a Worktree proposal prompts for its branch name in Emacs. Browser
+Location and Context are independent; the default is Here/Current, and
+switching to Worktree keeps Current. A Worktree starts at `HEAD`: uncommitted
+changes in the source checkout are not copied, apart from the files the session
+itself edited, which the fork restores. Accepting a Worktree proposal first
+checks that the session can fork (no pending input, request, live execution,
+active agent turn or active Goal), then prompts for its branch name in Emacs. Browser
 acceptance is available only for Here, using the host-selected settings;
 settings changes and Worktree acceptance remain in Emacs.
 
@@ -256,10 +259,9 @@ Ordinary chat while the Goal is paused, blocked, budget-limited, or complete
 uses the session baseline. An already-admitted implementation turn retains its
 captured policy through settlement even if the Goal stops meanwhile.
 
-Neither Here nor Worktree promotes these settings to session defaults. A new
-Worktree target retains its usual session defaults and inherited preset; a
-reopened target retains its restored baseline. The accepted selection is not
-installed as that baseline. Summary, control, directive, and unrelated child
+Neither Here nor Worktree promotes these settings to session defaults. A
+Worktree fork copies the planning session's ordinary defaults and preset; the
+accepted selection is not installed as that baseline. Summary, control, directive, and unrelated child
 requests do not inherit an ambient Goal implementation policy. Directive
 implementation retains its own request-local selection on the common
 permission path.
@@ -291,40 +293,27 @@ plan. Both Summary locations project the same effective source history and
 generate the shared eight-section handoff background. The accepted proposal is
 replaced in that evidence by an omission marker; the exact immutable plan and
 implementation-only instructions are supplied separately as relevance focus
-and remain authoritative. Worktree variants create a clean target session and
-install the accepted artifact there. Target acceptance metadata is installed
-only after inherited preset restoration returns, so interrupted preset setup
-is retried; later publication failures do not reapply a successfully installed
-preset in the live target.
+and remain authoritative. A Worktree implementation runs these same contexts
+in its fork; see [Worktree implementation](#worktree-implementation).
 
-Here/Summary applies that background through aggressive root compaction, with
+Summary applies that background through aggressive root compaction, with
 no verbatim tail, and therefore retains `PreCompact`/`PostCompact`, bounded
 request retries, segment rotation, persistence, and the new compact context
-epoch. Worktree/Summary makes one summary request without compaction hooks,
-source mutation, segment rotation, or a context epoch. Before target insertion
-it rewrites source-checkout absolute paths relative to the repository root,
-in both the client and the target-native spelling: model-visible paths are
-target-native, so on a remote session that is the only spelling the evidence
-carries. The repository root is the base rather than the session's working
-directory, because the target session's working directory is its own worktree
-top level.
-The successful result is cached in the durable retry record, so a later
-artifact, worktree, or implementation-start failure does not regenerate it.
+epoch. The successful result is cached in the durable retry record, so a later
+implementation-start failure does not regenerate it.
 
 Durable Plan descriptors contain only a normalized session-relative artifact
 path and its content hash. The qualified logical path is derived after the
-owning target session is known; remote consumers read verified publication
+owning session is known; remote consumers read verified publication
 bytes for that logical artifact. Absolute source or publication paths are not
 part of Plan metadata or retry records.
 
-When the prepared submission is ready, the source view releases its
-`Preparing implementation...` row before kickoff. Implementation progress
-belongs to the target view; a Worktree handoff does not leave the source
-animating while work runs elsewhere.
+When the prepared submission is ready, the view releases its
+`Preparing implementation...` row before kickoff.
 
 After any valid location/context preparation, Direct submits its ordinary
-one-turn instruction. Goal instead constructs a Goal in the prepared
-target session, using the target-owned immutable accepted-plan path and the
+one-turn instruction. Goal instead constructs a Goal in the implementing
+session, using its own immutable accepted-plan path and the
 Plan-selected Goal budget. Its deterministic objective treats plan
 outcomes, constraints, and acceptance criteria as the completion contract while
 allowing mechanics to follow current repository evidence. The first canonical
@@ -348,28 +337,31 @@ disclosure. Its expansion is independent of the Prompt drawer, hook context,
 and ordinary system-reminder batches; attachments do not increase the reminder
 batch count.
 
-For Worktree execution, the target session owns the Goal and accepted artifact;
-its implementation request or Goal owns the selected policy, and the Goal owns
-the selected budget. Both source and target keep their ordinary policy baselines.
-The source keeps the accepted-plan and handoff-recovery metadata. Branch
-acceptance first proves that Git and its worktree
-command are available on the source session's execution target; preparation
-then persists the deterministic branch/directory reservation before Git
-mutation, creates the linked worktree on that target, and opens the target
-session there. The target session is fully persisted before the source retry
-record advances beyond worktree preparation. If that target save or the
-following source save fails, retry validates the accepted branch at its
-deterministic worktree directory, reopens the live target or its unique durable
-session, and does not issue a second `git worktree add`. A directory registered
-to another branch, or multiple saved sessions rooted there, is a recovery
-conflict rather than authority to guess. Later Goal turns derive exact read
-authority only for the validated target-local artifact.
+### Worktree implementation
 
-Retry revalidates the target summary and republishes the target session before
-advancing the source retry to submission. Live accepted-artifact metadata alone
-does not prove that an interrupted target preparation was durably saved. A
-matching summary is reused rather than appended again; a conflicting summary
-stops the handoff.
+A Worktree implementation is a [Worktree Fork](sessions.md#fork) of the
+planning session at the reply that proposed the plan, so the fork carries the
+whole planning conversation into a linked worktree on the accepted branch, at
+`.worktrees/<branch leaf>`. The fork receives its own byte-identical accepted
+artifact and a retry record for the equivalent Here handoff, with
+repository-local skill paths retargeted to its checkout, and then runs the
+selected context and execution exactly as Here does: Current submits at once,
+Fresh rotates the fork's segment, Summary compacts the fork, and Goal lives in
+the fork. The fork's view takes over every window that showed the planning
+view, and the planning session, now saved with only its accepted-plan archive,
+is closed once the accepting command returns. Both sessions stay linked
+through the fork's recorded parent and fork point; the planning conversation
+remains reachable through the variant button at the plan reply.
+
+Each step is durable before the next. The source retry records the fork point,
+then the branch and directory reservation before any Git mutation, then the
+fork's save path once the fork transaction has published it. A retry reopens
+that fork, or finds the unique saved fork of this parent rooted at the reserved
+directory, instead of forking again; a published plan recognized by its hash is
+not installed again. The source's retry is cleared only after the fork holds
+its own, so at every point exactly one session owns the implementation. A
+directory that exists with no fork is refused with the fork transaction's
+cleanup command.
 
 Acceptance is final even if preparation fails. The source session persists a
 bounded retry record, and `mevedel-retry-plan-implementation` resumes from the
@@ -378,14 +370,14 @@ worktrees. A post-acceptance preparation failure settles the original approval;
 it never restores an action that could archive the same proposal again. Here
 and Worktree retries capture the same accepted implementation policy at dispatch
 without changing either session baseline. Goal execution reserves and persists
-its Goal ID in that record.
-A retry reuses a target Goal only when the reserved ID, target-local
-accepted-plan reference, and stored implementation policy match; a different
+its Goal ID in that record; a Worktree fork inherits the reservation.
+A retry reuses a Goal only when the reserved ID, accepted-plan reference, and
+stored implementation policy match; a different
 unfinished Goal or conflicting policy remains untouched and is reported as a
 conflict.
 
-Goal construction is the Plan recovery boundary. The target Goal, including
-its implementation policy and selected budget, is persisted before the source
+Goal construction is the Plan recovery boundary. The Goal, including
+its implementation policy and selected budget, is persisted before the
 retry is cleared and kickoff starts. Kickoff retains the exact Goal owner and
 reserved identity across publication. If that Goal is paused, cleared, replaced,
 edited, or given a different policy before dispatch, or another request starts,
@@ -396,8 +388,7 @@ Direct keeps the exact prepared retry record
 through request startup and clears it only when the canonical request settles
 successfully, whether gptel's FSM or an external engine such as Claude Code owns
 it. While kickoff authority is staged before admission, a competing ordinary
-composer submission is refused rather than inheriting that authority, including
-in a Worktree target whose retry record belongs to the source session.
+composer submission is refused rather than inheriting that authority.
 Provider errors and aborts retain the record with the terminal reason for
 `mevedel-retry-plan-implementation`. Recorded reasons are bounded text: error
 data can carry whole requests or sessions, so printing is depth-limited and
@@ -406,12 +397,10 @@ If recovery finds the matching Goal already durable but paused by session
 restore, it reactivates it without scheduling before retrying the owned
 kickoff, preventing both duplicate Goals and duplicate continuations.
 
-For Here + Goal, non-command input submitted after acceptance queues behind the
-reserved kickoff. Each queued follow-up then runs as its own Goal turn before
-automatic continuation. A Worktree source remains independent; its input stays
-ordinary source-session work, while input entered in the prepared target queues
-behind that target's kickoff. Paused kickoff-owned input remains held until
-resume.
+For Goal execution, non-command input submitted after acceptance queues behind
+the reserved kickoff, in the fork for a Worktree implementation. Each queued
+follow-up then runs as its own Goal turn before automatic continuation. Paused
+kickoff-owned input remains held until resume.
 
 Plan activity, proposal identity, selection, artifact descriptors, and retry
 state persist in session metadata. Resume reconstructs an approval only when

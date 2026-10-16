@@ -1717,15 +1717,9 @@
           :plan-metadata
           '(:implementation-retry
             (:goal-id "target-goal"
-             :selection (:location worktree :execution goal)))))
-        (target
-         (mevedel-session--create
-          :authority-mode 'pid-lock
-          :name "target"
-          :plan-metadata '(:implementation-goal-id "target-goal"))))
+             :selection (:location worktree :execution goal))))))
     (should (mevedel-view--follow-up-auto-drain-blocked-p here))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p source))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p target)))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p source)))
   (let* ((goal (mevedel-goal--create :id "goal" :status 'paused))
          (session
           (mevedel-session--create

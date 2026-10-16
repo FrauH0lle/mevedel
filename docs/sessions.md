@@ -75,12 +75,9 @@ before the failure, and retrying the same session name starts from a new buffer.
 and failed browser-requested session creation. It attempts every cleanup hook
 despite individual errors, then forces remaining buffers closed without queries.
 
-Plan Here/Summary is a root compaction and follows this rotation and context
-epoch contract. Plan Worktree/Summary is a non-mutating handoff preparation:
-the source sidecar caches its successful generated background in the durable
-implementation retry record, but the source segment and context epoch stay
-unchanged. The clean target later receives that cached background before its
-accepted-plan implementation turn.
+Plan Summary is a root compaction and follows this rotation and context
+epoch contract, in the planning session for Here and in its Worktree fork for
+Worktree.
 
 ## Session identity and display names
 
@@ -1493,18 +1490,18 @@ model-not-found signal (provider code or HTTP 404) moves a session to
 
 Standalone Plan metadata and its implementation retry record live in the
 sidecar; draft and accepted artifacts live under `local/plans/`. The retry
-record identifies completed preparation steps, cached Summary evidence, an
-existing Worktree target, the accepted implementation selection, and any reserved
-Goal construction. It allows retry
-without repeating an accepted rotation, summary, target creation, or Goal.
+record identifies completed preparation steps, cached Summary evidence, the
+Worktree fork point, reservation and published fork, the accepted
+implementation selection, and any reserved Goal construction. It allows retry
+without repeating an accepted rotation, summary, fork, or Goal.
 See [Plan execution](plan-mode.md) for the Here/Worktree, Fresh/Summary, and
 Direct/Goal workflows and their failure handling.
 
 Direct implementation captures the accepted model, effort, and permission mode
 on one request; retry reuses that selection. Goal construction persists them on
 the Goal before clearing source recovery. Both Here and Worktree leave ordinary
-session policy untouched. A new Worktree target retains its usual defaults plus
-the inherited preset; reopening retains its restored baseline. The accepted
+session policy untouched; a Worktree fork copies the planning session's
+defaults and preset. The accepted
 budget sets the Goal slot only, never `mevedel-goal-token-budget`. There is no
 baseline snapshot/restore scheme, so concurrent user setting changes survive
 settlement. Effective views, logs, and reminders do not become saved defaults.

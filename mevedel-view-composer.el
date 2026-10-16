@@ -1832,14 +1832,13 @@ When FORCE is non-nil, replace the current draft unconditionally."
   "Return a symbol naming SESSION's occupying workflow, or nil.
 Non-nil means later input is a follow-up.  The symbol is one of
 `plan-approval', `directive-planning', `implementation-retry',
-`goal-handoff', `goal-budget', or `goal'."
+`goal-budget', or `goal'."
   (cond
    ((mevedel-session-pending-plan-approval session) 'plan-approval)
    ((mevedel-session-directive-planning session) 'directive-planning)
    ((plist-get (mevedel-session-plan-metadata session)
                :implementation-retry)
     'implementation-retry)
-   ((mevedel-view--reserved-goal-handoff-id session) 'goal-handoff)
    ((when-let* ((goal (mevedel-session-goal session)))
       (pcase (mevedel-goal-status goal)
         ('complete nil)
@@ -1855,8 +1854,6 @@ Non-nil means later input is a follow-up.  The symbol is one of
       "An accepted plan implementation is pending -- M-x mevedel-retry-plan-implementation resumes it")
      ('plan-approval
       "A plan proposal is awaiting approval -- respond to it first")
-     ('goal-handoff
-      "An accepted-plan Goal handoff is being prepared -- wait for it to finish")
      ('goal-budget
       "The unfinished Goal has exhausted its token budget -- /goal budget N or /goal budget none continues it")
      ('goal

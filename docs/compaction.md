@@ -92,13 +92,8 @@ retains the normal hooks, bounded retries, rotation, persistence, and compact
 context epoch. The generated background is anchored in the new segment and
 cached in the Plan retry record before rotation persists the sidecar.
 
-Worktree/Summary reuses that aggressive evidence selection but calls the
-one-attempt context-summary generator directly. It emits no compaction hooks,
-does not rotate or otherwise mutate the source, and starts no source context
-epoch. A successful background is cached in the durable retry record, rewritten
-to repository-relative source paths, and installed as the leading canonical
-summary block of the clean target. Later preparation or implementation-start
-failures therefore reuse it without another model request.
+Worktree/Summary is the same compaction, run in the Worktree fork that carries
+the planning conversation; the planning session itself is not compacted.
 
 When `PreCompact` adds hook context, the hook audit surface is stored as
 an ignored side channel next to the compaction summary, not in the

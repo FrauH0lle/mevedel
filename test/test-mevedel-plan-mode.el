@@ -475,27 +475,34 @@
             (should (string-match-p
                      "accepted plan"
                      (mevedel-plan-mode--context-description 'summary)))
+            ;; A Worktree forks the planning session, so every context,
+            ;; Current included, stays available there.
             (call-interactively (lookup-key keymap (kbd "l")))
             (should (eq 'worktree (plist-get selection :location)))
             (should (eq 'summary (plist-get selection :context)))
             (call-interactively (lookup-key keymap (kbd "c")))
-            (should (eq 'fresh (plist-get selection :context)))
+            (should (eq 'current (plist-get selection :context)))
             (call-interactively (lookup-key keymap (kbd "c")))
-            (should (eq 'summary (plist-get selection :context)))
+            (should (eq 'fresh (plist-get selection :context)))
             (call-interactively (lookup-key keymap (kbd "l")))
             (should (eq 'here (plist-get selection :location)))
-            (should (eq 'summary (plist-get selection :context)))
+            (should (eq 'fresh (plist-get selection :context)))
             (call-interactively (lookup-key keymap (kbd "l")))
             (call-interactively (lookup-key keymap (kbd "c")))
             (call-interactively (lookup-key keymap (kbd "m")))
             (should rerendered)
             (should (eq 'full-auto (plist-get selection :mode)))
             (should (eq 'edits (mevedel-session-permission-mode session)))
-            (call-interactively (lookup-key keymap (kbd "RET")))
+            (let (checked)
+              (cl-letf (((symbol-function 'mevedel-plan-handoff-assert-worktree-ready)
+                         (lambda (checked-session buffer)
+                           (setq checked (list checked-session buffer)))))
+                (call-interactively (lookup-key keymap (kbd "RET"))))
+              (should (eq session (car checked))))
             (should (plist-get outcome :accept))
             (let ((accepted (plist-get outcome :selection)))
               (should (eq 'worktree (plist-get accepted :location)))
-              (should (eq 'fresh (plist-get accepted :context)))
+              (should (eq 'summary (plist-get accepted :context)))
               (should (eq 'goal (plist-get accepted :execution)))
               (should (eq 'full-auto (plist-get accepted :mode)))
               (should (equal "plan/topic" (plist-get accepted :branch)))
@@ -1390,6 +1397,8 @@
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
+                    ((symbol-function 'mevedel-plan-handoff--latest-fork-point-id)
+                     (lambda (_session _buffer) "plan-reply"))
                     ((symbol-function 'mevedel-plan-handoff--dispatch-accepted)
                      (lambda (_session _buffer) (setq dispatched t)))
                     ((symbol-function 'mevedel-permission-mode-transition)
@@ -1408,6 +1417,8 @@
             (should dispatched)
             (should (eq 'ask (mevedel-session-permission-mode session)))
             (should (eq 'prepare-worktree (plist-get retry :step)))
+            ;; The fork point is the reply that proposed the plan.
+            (should (equal "plan-reply" (plist-get retry :fork-point-id)))
             (should-not (plist-member retry :goal-token-budget))
             (should (= 7000
                        (plist-get (plist-get retry :selection)
@@ -1546,23 +1557,22 @@
   (should (eq 'ask (mevedel-plan-mode--next-mode 'full-auto))))
 
 (mevedel-deftest mevedel-plan-mode--next-context
-  (:doc "cycles only contexts valid for the selected location")
+  (:doc "cycles every context, at either location")
   ,test
   (test)
-  (should (eq 'fresh (mevedel-plan-mode--next-context 'here 'current)))
-  (should (eq 'current (mevedel-plan-mode--next-context 'here 'summary)))
-  (should (eq 'summary (mevedel-plan-mode--next-context 'worktree 'fresh)))
-  (should (eq 'fresh (mevedel-plan-mode--next-context 'worktree 'summary))))
+  (should (eq 'fresh (mevedel-plan-mode--next-context 'current)))
+  (should (eq 'summary (mevedel-plan-mode--next-context 'fresh)))
+  (should (eq 'current (mevedel-plan-mode--next-context 'summary))))
 
 (mevedel-deftest mevedel-plan-mode--next-location
-  (:doc "moves Current to Worktree/Fresh and preserves Fresh on return")
+  (:doc "toggles the location and keeps Current, the default context")
   ,test
   (test)
   (let ((selection '(:location here :context current)))
     (mevedel-plan-mode--next-location selection)
-    (should (equal '(:location worktree :context fresh) selection))
+    (should (equal '(:location worktree :context current) selection))
     (mevedel-plan-mode--next-location selection)
-    (should (equal '(:location here :context fresh) selection))))
+    (should (equal '(:location here :context current) selection))))
 
 (mevedel-deftest mevedel-plan-mode--approval-entry
   (:doc "builds one root interaction with a callable outcome callback")

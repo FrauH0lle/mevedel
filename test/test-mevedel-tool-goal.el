@@ -412,9 +412,8 @@ and `verify-callback' delivers the verifier outcome."
       (setf (mevedel-session-goal session) (mevedel-goal--create :status status))
       (should-not (mevedel-tool-goal-available-p "CreateGoal" fsm)))
     (setf (mevedel-session-goal session) nil)
-    (dolist (metadata '((:implementation-retry t) (:implementation-goal-id "reserved")))
-      (setf (mevedel-session-plan-metadata session) metadata)
-      (should-not (mevedel-tool-goal-available-p "CreateGoal" fsm))))
+    (setf (mevedel-session-plan-metadata session) '(:implementation-retry t))
+    (should-not (mevedel-tool-goal-available-p "CreateGoal" fsm)))
 
   :doc "restores native UpdateGoal after creation within the same request"
   (mevedel-tool-goal-test--with-request

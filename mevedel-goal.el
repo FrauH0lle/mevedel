@@ -485,8 +485,7 @@ Reads the current buffer's request for request-scoped Plan mode."
       "Leave Plan mode before starting a Goal")
      ((and current (not (eq (mevedel-goal-status current) 'complete)))
       "Finish or clear the current Goal first")
-     ((or (plist-get metadata :implementation-retry)
-          (plist-get metadata :implementation-goal-id))
+     ((plist-get metadata :implementation-retry)
       "Finish or cancel the accepted Plan implementation first"))))
 
 (defun mevedel-goal-start (objective &optional prompt-submission)
@@ -583,12 +582,6 @@ Running tools finish and the turn settles; it is not aborted."
     (setq mevedel-goal--transient-retries 0)
     (setf (mevedel-goal-status goal) 'active
           (mevedel-goal-reason goal) nil)
-    (when-let* ((metadata (mevedel-session-plan-metadata mevedel--session))
-                ((equal (plist-get metadata :implementation-goal-id)
-                        (mevedel-goal-id goal))))
-      (setq metadata (copy-sequence metadata))
-      (cl-remf metadata :implementation-goal-id)
-      (setf (mevedel-session-plan-metadata mevedel--session) metadata))
     (mevedel-goal--touch goal)
     (when (and (stringp steering) (not (string-blank-p steering)))
       (mevedel-session-enqueue-pending-input

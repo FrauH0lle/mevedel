@@ -384,9 +384,10 @@ A new Goal cannot replace an unfinished Goal or start while accepted Plan
 implementation is preparing or retryable. Ordinary Goal startup and Plan mode
 are mutually exclusive; accepted-plan Goal execution uses its dedicated handoff.
 
-An accepted Plan may select Goal execution after Here/Current, Here/Fresh,
-Here/Summary, Worktree/Fresh, or Worktree/Summary preparation. The prepared
-target owns the resulting Goal and immutable accepted artifact. Construction
+An accepted Plan may select Goal execution after any location and context
+preparation. The implementing session owns the resulting Goal and immutable
+accepted artifact: the planning session for Here, its Worktree fork for
+Worktree. Construction
 uses a deterministic objective that preserves the plan's outcomes, constraints,
 acceptance criteria, and validation evidence as the completion contract without
 parsing Markdown headings. The first ordinary Goal turn receives the prepared
@@ -394,19 +395,17 @@ context, resolved artifact path, full plan, and kickoff; later turns use the
 small request-local Goal context and may reread the validated artifact.
 
 The prepared Goal owns the Plan-selected implementation policy and token budget,
-not the target session's ordinary defaults. Here keeps the current session's
-baseline; Worktree keeps the target's usual or restored baseline plus its
-inherited preset, and leaves the source policy and Goal state unchanged. Derived
-artifact authority exists only while the target Goal is unfinished and never
-alters user grants.
+not the session's ordinary defaults, which a Worktree fork copies from the
+planning session. Derived artifact authority exists only while the Goal is
+unfinished and never alters user grants.
 
 Plan approval reserves the Goal identity before asynchronous preparation. The
-source retry record blocks a competing Here Goal; a prepared Worktree target
-holds the same kickoff reservation locally. Recovery reuses completed summary,
-segment, Worktree, preset, artifact, and Goal construction steps. A
-durable Goal is recognized only by the reserved ID together with its accepted
-plan reference and matching implementation policy, so an unrelated unfinished
-target Goal or a conflicting policy is never overwritten.
+retry record blocks a competing Goal; a Worktree fork receives the reservation
+with its own retry record. Recovery reuses completed summary, segment, fork,
+artifact, and Goal construction steps. A durable Goal is recognized only by the
+reserved ID together with its accepted plan reference and matching
+implementation policy, so an unrelated unfinished Goal or a conflicting policy
+is never overwritten.
 A matching Goal restored as paused after a crash is reactivated without
 scheduling; the still-owned Plan handoff supplies its one explicit kickoff.
 

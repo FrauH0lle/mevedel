@@ -293,10 +293,9 @@
     (should-error (mevedel-goal-start "Ship") :type 'user-error)
     (should-not (mevedel-session-goal mevedel--session)))
 
-  :doc "rejects source and prepared-target Plan handoff reservations"
+  :doc "rejects a pending Plan handoff reservation"
   (dolist (metadata
-           '((:implementation-retry (:goal-id "reserved"))
-             (:implementation-goal-id "reserved")))
+           '((:implementation-retry (:goal-id "reserved"))))
     (let ((session (mevedel-session--create
                     :name "main" :plan-metadata metadata)))
       (with-temp-buffer
@@ -1024,7 +1023,7 @@
          scheduled)
     (setf (mevedel-session-goal session) goal
           (mevedel-session-plan-metadata session)
-          '(:status accepted :implementation-goal-id "goal-1"))
+          '(:status accepted))
     (with-temp-buffer
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
@@ -1034,9 +1033,6 @@
     (should scheduled)
     (should (eq 'active (mevedel-goal-status goal)))
     (should-not (mevedel-goal-reason goal))
-    (should-not
-     (plist-member (mevedel-session-plan-metadata session)
-                   :implementation-goal-id))
     (let ((entry (car (mevedel-session-pending-follow-ups session))))
       (should (equal "steer first" (plist-get entry :input)))
       (should (= 1 (plist-get entry :id)))

@@ -586,14 +586,6 @@
     (should (eq 'implementation-retry
                 (mevedel-view--occupied-root-workflow session))))
 
-  :doc "reserved Goal handoff names its cause"
-  (let ((session (mevedel-session--create :authority-mode 'pid-lock
-                                          :name "main")))
-    (setf (mevedel-session-plan-metadata session)
-          '(:implementation-goal-id "g1"))
-    (should (eq 'goal-handoff
-                (mevedel-view--occupied-root-workflow session))))
-
   :doc "unfinished goal names its cause; complete goal does not occupy"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock
                                           :name "main")))
@@ -636,13 +628,6 @@
            "/goal budget"
            (cadr (should-error
                   (mevedel-view--occupied-root-workflow-error 'goal-budget)
-                  :type 'user-error))))
-
-  :doc "preconstruction Goal handoff says to wait"
-  (should (string-match-p
-           "wait"
-           (cadr (should-error
-                  (mevedel-view--occupied-root-workflow-error 'goal-handoff)
                   :type 'user-error))))
 
   :doc "unknown cause keeps the generic follow-up hint"

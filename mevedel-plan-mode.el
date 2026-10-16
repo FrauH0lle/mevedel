@@ -58,11 +58,14 @@
 (defvar mevedel-plan--relative-current-path)
 
 ;; `mevedel-plan-handoff'
+(declare-function mevedel-plan-handoff-assert-worktree-ready
+                  "mevedel-plan-handoff" (session buffer))
 (declare-function mevedel-plan-handoff-selection-valid-p
                   "mevedel-plan-handoff" (selection))
 (declare-function mevedel-plan-handoff-start "mevedel-plan-handoff"
                   (session chat-buffer selection accepted))
 (defvar mevedel-plan-handoff-implementation-modes)
+(autoload 'mevedel-plan-handoff-assert-worktree-ready "mevedel-plan-handoff")
 (autoload 'mevedel-plan-handoff-selection-valid-p "mevedel-plan-handoff")
 (autoload 'mevedel-plan-handoff-start "mevedel-plan-handoff")
 
@@ -282,20 +285,16 @@ Call in the owning chat buffer, where the session's preset policy lives."
   "Return the Plan execution choice after EXECUTION."
   (if (eq execution 'direct) 'goal 'direct))
 
-(defun mevedel-plan-mode--next-context (location context)
-  "Return the implementation context after CONTEXT at LOCATION."
-  (if (eq location 'worktree)
-      (if (eq context 'fresh) 'summary 'fresh)
-    (or (cadr (memq context '(current fresh summary))) 'current)))
+(defun mevedel-plan-mode--next-context (context)
+  "Return the implementation context after CONTEXT.
+Every context is available at either location: a Worktree implementation
+forks the planning session."
+  (or (cadr (memq context '(current fresh summary))) 'current))
 
 (defun mevedel-plan-mode--next-location (selection)
-  "Toggle SELECTION's location while preserving a valid context."
-  (if (eq (plist-get selection :location) 'here)
-      (progn
-        (plist-put selection :location 'worktree)
-        (when (eq (plist-get selection :context) 'current)
-          (plist-put selection :context 'fresh)))
-    (plist-put selection :location 'here))
+  "Toggle SELECTION's location, keeping its context."
+  (plist-put selection :location
+             (if (eq (plist-get selection :location) 'here) 'worktree 'here))
   selection)
 
 (defun mevedel-plan-mode--context-description (context)
@@ -536,6 +535,8 @@ opening an editable draft."
            (let ((accepted (copy-tree selection))
                  (provider (plist-get selection :model-provider)))
              (when (eq (plist-get accepted :location) 'worktree)
+               (mevedel-plan-handoff-assert-worktree-ready
+                (plist-get entry :session) chat-buffer)
                (plist-put accepted :branch
                           (mevedel-plan-mode--read-worktree-branch entry)))
              (unless (string-match-p "\\`[^:]+:.+\\'" provider)
@@ -553,7 +554,6 @@ opening an editable draft."
            (interactive)
            (plist-put selection :context
                       (mevedel-plan-mode--next-context
-                       (plist-get selection :location)
                        (plist-get selection :context)))
            (mevedel-plan-mode--selection-changed entry))
          (cycle-execution ()

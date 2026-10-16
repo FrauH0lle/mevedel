@@ -4,29 +4,27 @@ Status: accepted
 
 ## Current decision
 
-When an approved plan is implemented in a new worktree session, the source
-session keeps the approval archive and durable preparation record, while the
-worktree session receives its own byte-identical accepted-plan artifact and
-inherited preset. Selected model, effort, and permission mode belong to its
-one Direct implementation request or durable Goal implementation policy, not
-its ordinary session defaults. A new target retains its usual baseline;
-reopening retains its restored baseline. Both Here and Worktree leave source
-and target baseline policies untouched. The selected Goal budget sets the Goal
-slot only, never the target's new-Goal default. This preserves planning history
-while keeping execution attached to the session that changes files. Standalone
-Plan has no verification-pending state.
+An approved plan implemented in a worktree is a Worktree Fork of the planning
+session at the reply that proposed it. The fork carries the planning
+conversation, receives its own byte-identical accepted-plan artifact and a retry
+record for the equivalent Here handoff, and runs every context (Current, Fresh,
+Summary) and execution (Direct, Goal) exactly as Here does. Its view replaces
+the planning view in the same windows, and the planning session, saved with
+only its approval archive, is closed. Execution stays attached to the session
+that changes files, and the user keeps the conversation that led to the plan.
 
-Fresh targets retain the ordinary worktree setup context. Summary targets are
-clean sessions: the source transcript is summarized without mutation, source
-checkout paths become repository-relative, and the target stores the summary
-before its accepted artifact path, full plan, and implementation instruction.
-Each preparation attempt reconciles the target summary and saves the target
-before advancing the source's durable retry record. The target receives accepted
-metadata only after inherited preset restoration returns; interrupted preset
-hooks therefore leave setup retryable rather than falsely prepared. Accepted metadata can
-survive a failed save in the live target, so its presence alone cannot prove
-durable preparation. Retrying this publication does not reinstall the preset
-or duplicate a matching summary.
+Selected model, effort, and permission mode belong to the one Direct request or
+the durable Goal's implementation policy, not to session defaults, which the
+fork copies from the planning session. The selected Goal budget sets the Goal
+slot only, never a new-Goal default. Standalone Plan has no
+verification-pending state.
+
+The source retry record advances through durable steps: fork point, branch and
+directory reservation before Git mutation, the fork's published save path, then
+the installed fork record. A retry reopens the recorded or uniquely
+discoverable fork instead of forking again, recognizes an installed plan by its
+hash, and clears the source record only after the fork owns its own, so one
+session owns the implementation at every point.
 
 Direct retries reuse the accepted policy. Goal construction persists it before
 clearing source recovery, so active Goal turns and resume retain the selection.
@@ -38,6 +36,23 @@ not acquire implementation settings. See [ADR 0067](0067-separate-planning-from-
 for policy ownership and the strict Goal record.
 
 ## Decision history
+
+The worktree session was originally a clean session created beside the source,
+which kept the retry record and a separate target-preparation step. Context
+Current was refused there, Fresh received a setup stub, and Summary was
+generated from the source without compaction, then rewritten to
+repository-relative paths and inserted into the target. In use, accepting a
+plan opened a new buffer that lacked the whole planning conversation, and the
+planning conversation simply ended: the user had to find the new buffer and
+could not continue the discussion there. Worktree Fork, added later
+(`mevedel-session-fork-create`), already copies a conversation into a linked
+worktree with retargeted paths and restored session-edited files, so the
+clean-session path, its target-only recovery, the worktree-only summary and the
+target Goal reservation were removed in favour of forking. Consequences: the
+worktree now includes files the session itself edited, restored by the fork;
+and accepting refuses while the session cannot fork (pending input, a request,
+live executions, active agent turns or an active Goal) instead of failing
+afterwards.
 
 The earlier handoff applied the selected implementation settings to the target
 session itself. Here execution therefore overwrote ordinary source-session

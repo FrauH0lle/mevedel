@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Real Goal publication, source handoff completion, target reservation saves
+;; Real Goal publication, handoff completion saves
 ;; and generated request startup.  Timers run user Goal commands while the
 ;; publication save is still on the stack; only provider transport is faked.
 
@@ -19,68 +19,50 @@
 (require 'mevedel-journal-capture)
 (require 'gptel-openai)
 
-(defmacro mevedel-handoff-owner-test--with-target (location &rest body)
-  "Run BODY with a published source and LOCATION's Here/Worktree target."
-  (declare (indent 1) (debug (form body)))
+(defmacro mevedel-handoff-owner-test--with-target (&rest body)
+  "Run BODY with a published session holding a Here Goal handoff.
+A Worktree handoff runs the same Here handoff in its fork."
+  (declare (indent 0) (debug (body)))
   `(mevedel-engine-test--with-session
      (mevedel-request-end)
-     (let* ((location ,location)
-            (target-session (if (eq location 'here) session
-                              (mevedel-session-create "kickoff-target" workspace)))
-            (target-buffer (if (eq location 'here) buffer
-                             (generate-new-buffer " *kickoff-target*"))))
-       (unwind-protect
-           (with-current-buffer target-buffer
-             (unless (eq target-buffer buffer)
-               (mevedel-chat-prepare-transcript-buffer)
-               (setq-local mevedel--session target-session mevedel--workspace workspace
-                           default-directory (file-name-as-directory root))
-               (mevedel-session-set-root-buffer target-session target-buffer)
-               (mevedel-session-artifacts-ensure-files target-session target-buffer))
-             (mevedel-skills-test--with-model-backends
-               (mevedel-model-set-session-provider
-                target-session (mevedel-model-resolve-provider "Fast:fast-model") target-buffer)
-               (mevedel-model-set-session-effort target-session 'high target-buffer)
-               (mevedel-permission-mode-set-raw 'ask)
-               (let* ((selection (list :location location :context 'current :execution 'goal
-                                       :mode 'full-auto :model-provider "Balanced:balanced-model"
-                                       :reasoning-effort nil :goal-token-budget 200))
-                      (policy (mevedel-implementation-policy-from-selection selection))
-                      (draft (mevedel-plan-write-current "# Accepted outcome\nRead and verify."
-                                                         target-session target-buffer))
-                      (accepted (mevedel-plan-archive-accepted draft target-session))
-                      (record (list :step 'submit :goal-id "reserved-kickoff"
-                                    :selection selection :accepted accepted))
-                      (submission (mevedel-prompt-submission-create :session target-session))
-                      (mevedel-journal-enabled nil)
-                      (gptel-use-curl t) (gptel-use-tools nil) (gptel-use-context nil)
-                      (gptel-send--handlers
-                       (mevedel-preset--build-handlers (copy-tree gptel-send--handlers)))
-                      (gptel-send--transitions
-                       (mevedel-preset--build-transitions (copy-tree gptel-send--transitions)))
-                      (gptel-prompt-transform-functions
-                       '(mevedel-skills--transform-apply-request-model-policy)))
-                 (mevedel-plan--metadata-put target-session :accepted-path (plist-get accepted :path))
-                 (mevedel-plan--metadata-put target-session :accepted-hash (plist-get accepted :hash))
-                 (mevedel-plan--metadata-put target-session :implementation-goal-id "reserved-kickoff")
-                 (mevedel-plan--metadata-put session :implementation-retry record)
-                 (mevedel-prompt-submission-accept submission "Implement accepted outcome" nil nil nil)
-                 ,@body)))
-         (unless (eq target-buffer buffer)
-           (dolist (timer (append timer-list timer-idle-list nil))
-             (when (cl-some (lambda (arg) (or (eq arg target-session) (eq arg target-buffer)))
-                            (timer--args timer))
-               (cancel-timer timer)))
-           (test-mevedel-session-persistence--release-and-kill target-buffer target-session))))))
+     (with-current-buffer buffer
+       (mevedel-skills-test--with-model-backends
+         (mevedel-model-set-session-provider
+          session (mevedel-model-resolve-provider "Fast:fast-model") buffer)
+         (mevedel-model-set-session-effort session 'high buffer)
+         (mevedel-permission-mode-set-raw 'ask)
+         (let* ((selection (list :location 'here :context 'current :execution 'goal
+                                 :mode 'full-auto :model-provider "Balanced:balanced-model"
+                                 :reasoning-effort nil :goal-token-budget 200))
+                (policy (mevedel-implementation-policy-from-selection selection))
+                (draft (mevedel-plan-write-current "# Accepted outcome\nRead and verify."
+                                                   session buffer))
+                (accepted (mevedel-plan-archive-accepted draft session))
+                (record (list :step 'submit :goal-id "reserved-kickoff"
+                              :selection selection :accepted accepted))
+                (submission (mevedel-prompt-submission-create :session session))
+                (mevedel-journal-enabled nil)
+                (gptel-use-curl t) (gptel-use-tools nil) (gptel-use-context nil)
+                (gptel-send--handlers
+                 (mevedel-preset--build-handlers (copy-tree gptel-send--handlers)))
+                (gptel-send--transitions
+                 (mevedel-preset--build-transitions (copy-tree gptel-send--transitions)))
+                (gptel-prompt-transform-functions
+                 '(mevedel-skills--transform-apply-request-model-policy)))
+           (mevedel-plan--metadata-put session :accepted-path (plist-get accepted :path))
+           (mevedel-plan--metadata-put session :accepted-hash (plist-get accepted :hash))
+           (mevedel-plan--metadata-put session :implementation-retry record)
+           (mevedel-prompt-submission-accept submission "Implement accepted outcome" nil nil nil)
+           ,@body)))))
 
 (mevedel-deftest mevedel-plan-handoff--dispatch-submission/published-owner (:quiet t)
   ,test
   (test)
-  :doc "publication and reservation callbacks cannot transfer or pause stale kickoff authority"
-  (dolist (location '(here worktree))
-    (dolist (stage '(publication reservation))
+  :doc "publication callbacks cannot transfer or pause stale kickoff authority"
+  (progn
+    (let ((stage 'publication))
       (dolist (change '(pause clear replace edit policy request))
-        (mevedel-handoff-owner-test--with-target location
+        (mevedel-handoff-owner-test--with-target
           (let ((save (symbol-function 'mevedel-session-artifacts-save))
                 changed owner replacement admitted sent)
             (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
@@ -90,19 +72,15 @@
                        (lambda (saving-session saving-buffer)
                          (prog1 (funcall save saving-session saving-buffer)
                            (when (and (not changed)
-                                      (mevedel-session-goal target-session)
-                                      (if (eq stage 'publication)
-                                          (and (eq saving-session session)
+                                      (mevedel-session-goal session)
+                                      (and (eq saving-session session)
                                                (not (plist-member (mevedel-session-plan-metadata session)
-                                                                  :implementation-retry)))
-                                        (and (eq saving-session target-session)
-                                             (not (plist-member (mevedel-session-plan-metadata target-session)
-                                                                :implementation-goal-id)))))
-                             (setq changed t owner (mevedel-session-goal target-session))
+                                                                  :implementation-retry))))
+                             (setq changed t owner (mevedel-session-goal session))
                              (run-at-time
                               0 nil
                               (lambda ()
-                                (with-current-buffer target-buffer
+                                (with-current-buffer buffer
                                   (should-not mevedel--pending-implementation-policy)
                                   (pcase change
                                     ('pause (mevedel-goal-pause))
@@ -111,18 +89,18 @@
                                      (mevedel-goal-clear)
                                      (setq replacement
                                            (mevedel-goal-create
-                                            "Unrelated replacement" :session target-session
+                                            "Unrelated replacement" :session session
                                             :id "reserved-kickoff" :implementation-policy policy)))
                                     ('edit (mevedel-goal-edit "Revised kickoff"))
-                                    ('request (setq admitted (mevedel-request-begin target-session)))
+                                    ('request (setq admitted (mevedel-request-begin session)))
                                     ('policy
                                      (setf (mevedel-goal-implementation-policy owner)
                                            '(:model-provider "Balanced:balanced-model"
                                              :reasoning-effort high :permission-mode edits))
-                                     (funcall save target-session target-buffer))))))
+                                     (funcall save session buffer))))))
                              (accept-process-output nil .02))))))
               (mevedel-plan-handoff--dispatch-submission
-               session buffer record selection accepted target-session target-buffer
+               session buffer record selection accepted
                "Implement" submission))
             (should changed)
             (should-not sent)
@@ -131,10 +109,10 @@
               (should-not (mevedel-request-cancelled-p admitted)))
             (should-not mevedel--pending-implementation-policy)
             (should (eq 'pending (mevedel-prompt-submission-state submission)))
-            (let* ((current (mevedel-session-goal target-session))
+            (let* ((current (mevedel-session-goal session))
                    (saved (mevedel-session-codec-read
                            (mevedel-session-artifacts-sidecar-path
-                            (mevedel-session-save-path target-session)))))
+                            (mevedel-session-save-path session)))))
               (should (eq (pcase change ('clear nil) ('pause 'paused) (_ 'active))
                           (and current (mevedel-goal-status current))))
               (when replacement
@@ -145,29 +123,29 @@
             (when admitted (mevedel-request-end t))))))))
 
   :doc "a real provider startup failure pauses its owner but never replacement authority"
-  (dolist (location '(here worktree))
+  (progn
    (dolist (change '(none replace))
-    (mevedel-handoff-owner-test--with-target location
+    (mevedel-handoff-owner-test--with-target
       (let (sent replacement owner expected-status)
         (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
                   ((symbol-function 'gptel-curl-get-response)
                    (lambda (fsm)
                      (push fsm sent)
-                     (with-current-buffer target-buffer
-                       (setq owner (mevedel-session-goal target-session))
+                     (with-current-buffer buffer
+                       (setq owner (mevedel-session-goal session))
                        (when (eq change 'replace)
                          (mevedel-goal-clear)
                          (setq replacement
                                (mevedel-goal-create
-                                "Unrelated startup replacement" :session target-session
+                                "Unrelated startup replacement" :session session
                                 :implementation-policy policy)))
                        (setq expected-status (if (eq change 'none) 'paused 'active)))
                      (error "Provider startup refused"))))
           (mevedel-plan-handoff--dispatch-submission
-           session buffer record selection accepted target-session target-buffer
+           session buffer record selection accepted
            "Implement" submission))
         (should (= 1 (length sent)))
-        (let ((current (mevedel-session-goal target-session)))
+        (let ((current (mevedel-session-goal session)))
           (should (eq expected-status (mevedel-goal-status current)))
           (when replacement
             (should (eq replacement current))
@@ -180,11 +158,11 @@
         (cl-letf (((symbol-function 'mevedel-goal-schedule-continuation) #'ignore))
           (gptel--fsm-transition (car sent) 'ABRT)
           (mevedel-test--await 5 "Failed kickoff did not settle"
-            (not (mevedel-turn-busy-p target-buffer))))
-        (let* ((goal (mevedel-session-goal target-session))
+            (not (mevedel-turn-busy-p buffer))))
+        (let* ((goal (mevedel-session-goal session))
                (saved (mevedel-session-codec-read
                        (mevedel-session-artifacts-sidecar-path
-                        (mevedel-session-save-path target-session)))))
+                        (mevedel-session-save-path session)))))
           (should (eq expected-status (mevedel-goal-status goal)))
           (when (eq change 'none)
             (should (equal "reserved-kickoff" (mevedel-goal-id goal)))
@@ -195,20 +173,20 @@
   ,test
   (test)
   :doc "owned publication failures pause durably; insertion staleness preserves replacement"
-  (dolist (location '(here worktree))
-    (dolist (stage '(publication reservation insertion))
-      (mevedel-handoff-owner-test--with-target location
+  (progn
+    (dolist (stage '(publication insertion))
+      (mevedel-handoff-owner-test--with-target
         (let ((save (symbol-function 'mevedel-session-artifacts-save))
               changed owner replacement)
           (when (eq stage 'insertion)
             (setq-local after-change-functions
                         (list (lambda (&rest _)
                                 (when (and mevedel--pending-implementation-policy (not changed))
-                                  (setq changed t owner (mevedel-session-goal target-session))
+                                  (setq changed t owner (mevedel-session-goal session))
                                   (mevedel-goal-clear)
                                   (setq replacement
                                         (mevedel-goal-create "Replacement during insertion"
-                                                             :session target-session
+                                                             :session session
                                                              :implementation-policy policy)))))))
           (cl-letf (((symbol-function 'gptel-curl-get-response)
                      (lambda (&rest _) (ert-fail "Stale or failed publication started a provider")))
@@ -216,26 +194,22 @@
                      (lambda (saving-session saving-buffer)
                        (prog1 (funcall save saving-session saving-buffer)
                          (when (and (not changed) (not (eq stage 'insertion))
-                                    (mevedel-session-goal target-session)
-                                    (if (eq stage 'publication)
-                                        (and (eq saving-session session)
+                                    (mevedel-session-goal session)
+                                    (and (eq saving-session session)
                                              (not (plist-member (mevedel-session-plan-metadata session)
-                                                                :implementation-retry)))
-                                      (and (eq saving-session target-session)
-                                           (not (plist-member (mevedel-session-plan-metadata target-session)
-                                                              :implementation-goal-id)))))
-                           (setq changed t owner (mevedel-session-goal target-session))
+                                                                :implementation-retry))))
+                           (setq changed t owner (mevedel-session-goal session))
                            (error "Kickoff publication refused"))))))
             (mevedel-plan-handoff--dispatch-submission
-             session buffer record selection accepted target-session target-buffer
+             session buffer record selection accepted
              "Implement" submission))
           (should changed)
           (should-not mevedel--current-request)
           (should-not mevedel--pending-implementation-policy)
-          (let* ((current (mevedel-session-goal target-session))
+          (let* ((current (mevedel-session-goal session))
                  (saved (mevedel-session-codec-read
                          (mevedel-session-artifacts-sidecar-path
-                          (mevedel-session-save-path target-session)))))
+                          (mevedel-session-save-path session)))))
             (if replacement
                 (progn
                   (should (eq replacement current))
@@ -252,9 +226,8 @@
   ,test
   (test)
   :doc "public Direct retry cannot seize a newer generated-send FSM admitted during publication"
-  (mevedel-handoff-owner-test--with-target 'here
+  (mevedel-handoff-owner-test--with-target
     (setf (plist-get selection :execution) 'direct)
-    (mevedel-plan--metadata-put target-session :implementation-goal-id nil)
     (let ((view (generate-new-buffer " *direct-owner-view*"))
           (save (symbol-function 'mevedel-session-artifacts-save))
           (accept (symbol-function 'mevedel-prompt-submission-accept))
@@ -262,7 +235,7 @@
           observations)
       (unwind-protect
           (save-window-excursion
-            (mevedel-view--setup view target-buffer)
+            (mevedel-view--setup view buffer)
             (set-window-buffer (selected-window) view)
             (setq-local gptel-post-request-hook
                         (list (lambda () (push mevedel--current-request hook-owners))))
@@ -276,26 +249,26 @@
                       ((symbol-function 'mevedel-session-artifacts-save)
                        (lambda (saving-session saving-buffer)
                          (prog1 (funcall save saving-session saving-buffer)
-                           (when (and (not changed) (eq saving-session target-session))
+                           (when (and (not changed) (eq saving-session session))
                              (setq changed t)
                              ;; Real publication can yield to user input before
                              ;; the accepted handoff enters --implement-plan.
                              (run-at-time
                               0 nil
                               (lambda ()
-                                (with-current-buffer target-buffer
+                                (with-current-buffer buffer
                                   (setq newer-fsm
                                         (mevedel--submit-generated-turn "Newer ordinary request")
                                         newer mevedel--current-request)
                                   (should (eq 'WAIT (gptel-fsm-state newer-fsm)))
                                   (should (eq newer-fsm (mevedel-request-fsm newer)))
-                                  (mevedel-model-set-session-effort target-session 'low target-buffer)
+                                  (mevedel-model-set-session-effort session 'low buffer)
                                   ;; Serialize gptel's bounds before comparing
                                   ;; bytes; retry failure also performs a save.
-                                  (funcall save target-session target-buffer)
+                                  (funcall save session buffer)
                                   (setq newer-text (buffer-string)))))
                              (accept-process-output nil .02))))))
-              (mevedel-retry-plan-implementation target-session target-buffer)
+              (mevedel-retry-plan-implementation session buffer)
               ;; Save evidence before settling transports, even on the red run,
               ;; so fixture cleanup does not hide the ownership or policy leak.
               (setq observations
@@ -308,7 +281,7 @@
                           :context mevedel-skills--pending-request-context))
               (dolist (fsm sent) (gptel--fsm-transition fsm 'ABRT))
               (mevedel-test--await 5 "Newer Direct owner fixture did not settle"
-                (not (mevedel-turn-busy-p target-buffer)))
+                (not (mevedel-turn-busy-p buffer)))
               (let ((ordinary (mevedel--submit-generated-turn "Ordinary follow-up")))
                 (setq observations
                       (append observations
@@ -318,7 +291,7 @@
                                     :ordinary-mode (mevedel-request-permission-mode-override mevedel--current-request))))
                 (gptel--fsm-transition ordinary 'ABRT)
                 (mevedel-test--await 5 "Direct owner follow-up did not settle"
-                  (not (mevedel-turn-busy-p target-buffer))))))
+                  (not (mevedel-turn-busy-p buffer))))))
         (with-current-buffer view (mevedel-view-stream-stop))
         (kill-buffer view))
       (should changed)
@@ -345,14 +318,14 @@
       (should (eq 'low (plist-get observations :ordinary-effort)))
       (should-not (plist-get observations :ordinary-policy))
       (should-not (plist-get observations :ordinary-mode))
-      (should (equal "Fast:fast-model" (mevedel-session-model-provider target-session)))
-      (should (eq 'low (mevedel-session-reasoning-effort target-session)))
-      (should (eq 'ask (mevedel-session-permission-mode target-session)))))
+      (should (equal "Fast:fast-model" (mevedel-session-model-provider session)))
+      (should (eq 'low (mevedel-session-reasoning-effort session)))
+      (should (eq 'ask (mevedel-session-permission-mode session)))))
 
-  :doc "Here/Worktree Direct cannot seize a post-request or still-settling owner"
-  (dolist (location '(here worktree))
+  :doc "Direct cannot seize a post-request or still-settling owner"
+  (progn
     (dolist (stage '(post-request settlement))
-      (mevedel-handoff-owner-test--with-target location
+      (mevedel-handoff-owner-test--with-target
         (setf (plist-get selection :execution) 'direct)
         (let ((persist (symbol-function 'mevedel-goal-persist-failure))
               attempted sent newer-fsm newer observations)
@@ -361,7 +334,7 @@
                  (setq attempted t)
                  ;; Prime legitimate save metadata so exact byte comparison
                  ;; detects insertion rather than first-time bounds encoding.
-                 (mevedel-session-artifacts-save target-session target-buffer)
+                 (mevedel-session-artifacts-save session buffer)
                  (let ((text (buffer-string))
                        (pending mevedel--turn-settlements-pending)
                        (cancelled (mevedel-request-cancelled-p newer))
@@ -373,7 +346,7 @@
                      (should (eq newer mevedel--current-request))
                      (should (eq fsm (mevedel-request-fsm newer))))
                    (mevedel-plan-handoff--dispatch-submission
-                    session buffer record selection accepted target-session target-buffer
+                    session buffer record selection accepted
                     "Implement" submission)
                    (setq observations
                          (list :text-unchanged (equal text (buffer-string))
@@ -395,12 +368,12 @@
                        (lambda (fsm)
                          (prog1 (funcall persist fsm)
                            (when (and (eq stage 'settlement) (eq fsm newer-fsm) (not attempted))
-                             (with-current-buffer target-buffer (attempt fsm)))))))
+                             (with-current-buffer buffer (attempt fsm)))))))
               (setq newer-fsm (mevedel--submit-generated-turn "Newer owner"))
               (setq-local gptel-post-request-hook nil)
               (gptel--fsm-transition newer-fsm 'ABRT)
               (mevedel-test--await 5 "Direct busy-owner callback did not settle"
-                (not (mevedel-turn-busy-p target-buffer)))
+                (not (mevedel-turn-busy-p buffer)))
               (should attempted)
               (should (plist-get observations :text-unchanged))
               (should (plist-get observations :info-unchanged))
@@ -421,28 +394,25 @@
                 (should-not (mevedel-request-permission-mode-override mevedel--current-request))
                 (gptel--fsm-transition ordinary 'ABRT)
                 (mevedel-test--await 5 "Direct callback follow-up did not settle"
-                  (not (mevedel-turn-busy-p target-buffer)))))))))))
+                  (not (mevedel-turn-busy-p buffer)))))))))))
 
 (mevedel-deftest mevedel-plan-handoff--dispatch-submission/joined-authority (:quiet t)
   ,test
   (test)
-  :doc "Here/Worktree Direct/Goal join accepted provider and actual authority on one admitted request"
-  (dolist (location '(here worktree))
+  :doc "Direct/Goal join accepted provider and actual authority on one admitted request"
+  (progn
     (dolist (execution '(direct goal))
-      (ert-info ((format "Accepted handoff: %s/%s" location execution))
-        (mevedel-handoff-owner-test--with-target location
+      (ert-info ((format "Accepted handoff: %s" execution))
+        (mevedel-handoff-owner-test--with-target
           (setf (plist-get selection :execution) execution)
           ;; Ordinary selections differ from every accepted implementation axis.
-          ;; Configure both owners, not just the target of a Worktree handoff.
-          (dolist (owner (list (cons session buffer)
-                              (cons target-session target-buffer)))
-            (mevedel-model-set-session-provider
-             (car owner) (mevedel-model-resolve-provider "Fast:fast-model") (cdr owner))
-            (mevedel-model-set-session-effort (car owner) 'high (cdr owner))
-            (with-current-buffer (cdr owner)
-              (mevedel-permission-mode-set-raw 'ask)
-              (setf (mevedel-session-sandbox-mode (car owner)) 'best-effort)
-              (setq-local mevedel-goal-token-budget 4321 mevedel-model-workloads nil)))
+          (mevedel-model-set-session-provider
+           session (mevedel-model-resolve-provider "Fast:fast-model") buffer)
+          (mevedel-model-set-session-effort session 'high buffer)
+          (with-current-buffer buffer
+            (mevedel-permission-mode-set-raw 'ask)
+            (setf (mevedel-session-sandbox-mode session) 'best-effort)
+            (setq-local mevedel-goal-token-budget 4321 mevedel-model-workloads nil))
           (let ((edit-tool (mevedel-tool--create :name "AcceptedHandoffEdit" :groups '(edit)))
                 (command "make accepted-handoff-check")
                 (global-budget (default-value 'mevedel-goal-token-budget))
@@ -461,7 +431,7 @@
                          (buffer-local-value 'mevedel-goal-token-budget data)))
                  (authority (admitted mode outcome confinement)
                    ;; No synthetic :mode: resolve this production request owner.
-                   (let ((context (list :session target-session :buffer target-buffer
+                   (let ((context (list :session session :buffer buffer
                                         :request admitted :workspace workspace)))
                      (should-not (plist-member context :mode))
                      (should (eq mode (mevedel-bash-policy-effective-permission-mode context)))
@@ -471,38 +441,38 @@
                      (should (eq outcome
                                  (mevedel-check-permission
                                   "AcceptedHandoffEdit" :tool-struct edit-tool
-                                  :session target-session :request admitted
-                                  :session-rules (mevedel-session-permission-rules target-session))))))
+                                  :session session :request admitted
+                                  :session-rules (mevedel-session-permission-rules session))))))
                  (durable-goal (owner status)
-                   (should (eq owner (mevedel-session-goal target-session)))
+                   (should (eq owner (mevedel-session-goal session)))
                    (should (eq status (mevedel-goal-status owner)))
                    (should (equal policy (mevedel-goal-implementation-policy owner)))
                    (should (= 200 (mevedel-goal-token-budget owner)))
                    (let* ((saved (mevedel-session-codec-read
                                   (mevedel-session-artifacts-sidecar-path
-                                   (mevedel-session-save-path target-session))))
+                                   (mevedel-session-save-path session))))
                           (saved-goal (plist-get saved :goal)))
                      (should (equal (mevedel-goal-id owner) (plist-get saved-goal :id)))
                      (should (eq status (plist-get saved-goal :status)))
                      (should (equal policy (plist-get saved-goal :implementation-policy)))
                      (should (= 200 (plist-get saved-goal :token-budget))))))
               (let ((source-before (baseline session buffer))
-                    (target-before (baseline target-session target-buffer)))
+                    (target-before (baseline session buffer)))
                 (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
                           ((symbol-function 'gptel-curl-get-response)
                            (lambda (fsm) (push fsm sent))))
                   (mevedel-plan-handoff--dispatch-submission
-                   session buffer record selection accepted target-session target-buffer
+                   session buffer record selection accepted
                    "Implement" submission)
                   (should (= 1 (length sent)))
                   (let* ((fsm (car sent))
                          (info (gptel-fsm-info fsm))
                          (admitted mevedel--current-request)
-                         (goal (mevedel-session-goal target-session)))
+                         (goal (mevedel-session-goal session)))
                     (should (eq 'WAIT (gptel-fsm-state fsm)))
                     (should (mevedel-request-p admitted))
-                    (should (eq target-session (mevedel-request-session admitted)))
-                    (should (eq target-buffer (plist-get info :buffer)))
+                    (should (eq session (mevedel-request-session admitted)))
+                    (should (eq buffer (plist-get info :buffer)))
                     (should (eq fsm (mevedel-request-fsm admitted)))
                     (should (eq (gptel-get-backend "Balanced") (plist-get info :backend)))
                     (should (eq 'balanced-model (plist-get info :model)))
@@ -514,16 +484,16 @@
                     (should-not mevedel--pending-permission-mode)
                     (authority admitted 'full-auto 'allow 'off)
                     ;; Rules change after admission; the same request must deny.
-                    (let ((rules (mevedel-session-permission-rules target-session)))
+                    (let ((rules (mevedel-session-permission-rules session)))
                       (unwind-protect
                           (progn
-                            (setf (mevedel-session-permission-rules target-session)
+                            (setf (mevedel-session-permission-rules session)
                                   `(("AcceptedHandoffEdit" :action deny)
                                     ("Bash" :pattern ,command :action deny)))
                             (authority admitted 'full-auto 'deny 'off))
-                        (setf (mevedel-session-permission-rules target-session) rules)))
+                        (setf (mevedel-session-permission-rules session) rules)))
                     (should (equal source-before (baseline session buffer)))
-                    (should (equal target-before (baseline target-session target-buffer)))
+                    (should (equal target-before (baseline session buffer)))
                     (if (eq execution 'goal)
                         (progn
                           (durable-goal goal 'active)
@@ -535,7 +505,7 @@
                     ;; The fake provider completes the real admitted FSM normally.
                     (gptel--fsm-transition fsm 'DONE)
                     (mevedel-test--await 5 "Accepted handoff did not settle"
-                      (not (mevedel-turn-busy-p target-buffer)))
+                      (not (mevedel-turn-busy-p buffer)))
                     (should-not mevedel--current-request)
                     (should (eq 'success (plist-get (gptel-fsm-info fsm) :mevedel-terminal-status)))
                     (when goal (durable-goal goal 'paused))
@@ -552,13 +522,13 @@
                       (should-not (mevedel-request-permission-mode-override ordinary-request))
                       (authority ordinary-request 'ask 'ask 'best-effort)
                       (should (equal source-before (baseline session buffer)))
-                      (should (equal target-before (baseline target-session target-buffer)))
+                      (should (equal target-before (baseline session buffer)))
                       (should (equal global-budget (default-value 'mevedel-goal-token-budget)))
                       (gptel--fsm-transition ordinary 'DONE)
                       (mevedel-test--await 5 "Ordinary handoff follow-up did not settle"
-                        (not (mevedel-turn-busy-p target-buffer))))
+                        (not (mevedel-turn-busy-p buffer))))
                     (should (equal source-before (baseline session buffer)))
-                    (should (equal target-before (baseline target-session target-buffer)))
+                    (should (equal target-before (baseline session buffer)))
                     (should (equal global-budget (default-value 'mevedel-goal-token-budget)))
                     (when goal (durable-goal goal 'paused))))))))))))
 

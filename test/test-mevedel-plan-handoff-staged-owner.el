@@ -17,13 +17,12 @@
 (mevedel-deftest mevedel--implement-plan/staged-owner (:quiet t)
   ,test
   (test)
-  :doc "Here/Worktree ordinary plain and source-backed skill sends cannot consume staged Direct policy"
-  (dolist (location '(here worktree))
+  :doc "ordinary plain and source-backed skill sends cannot consume staged Direct policy"
+  (progn
     (dolist (stage '(close insertion))
       (dolist (kind '(plain skill))
-        (mevedel-handoff-owner-test--with-target location
+        (mevedel-handoff-owner-test--with-target
           (setf (plist-get selection :execution) 'direct)
-          (mevedel-plan--metadata-put target-session :implementation-goal-id nil)
           (let* ((view (generate-new-buffer " *staged-owner-view*"))
                  (skills-root (file-name-concat root ".mevedel" "skills"))
                  (mevedel-skill-dirs (list skills-root))
@@ -34,7 +33,7 @@
                                     "A separate ordinary question."))
                  (accepted-prompt (mevedel-prompt-submission-input submission))
                  (accepted-context (list :effort nil))
-                 attempted blocked blocked-type newer sent draft observations)
+                 attempted blocked newer sent draft observations)
             (unwind-protect
                 (save-window-excursion
                   (when (eq kind 'skill)
@@ -42,11 +41,11 @@
                      skills-root "alpha"
                      "name: alpha\ndescription: Ordinary staged ownership fixture\ncontext: inline\nallowed-tools: Read\n"
                      "Read evidence for the separate ordinary question.")
-                    (mevedel-skills-install target-session target-buffer))
+                    (mevedel-skills-install session buffer))
                   (mevedel-prompt-submission-set-outcome
                    submission (list :model-input accepted-prompt :transcript-input accepted-prompt
                                     :request-context accepted-context))
-                  (mevedel-view--setup view target-buffer)
+                  (mevedel-view--setup view buffer)
                   (set-window-buffer (selected-window) view)
                   (with-current-buffer view
                     (goto-char (mevedel-view--input-start))
@@ -71,14 +70,14 @@
                            (condition-case err
                                (mevedel-view-send)
                              (user-error
-                              (setq blocked (error-message-string err) blocked-type (car err)))))
+                              (setq blocked (error-message-string err)))))
                          (setq newer mevedel--current-request
                                observations
                                (list :text-unchanged (equal text (buffer-string))
                                      :context-unchanged (eq context mevedel-skills--pending-request-context)
                                      :pending-unchanged (eq pending mevedel--pending-implementation-policy))))
                        ;; The user's baseline edit is not owned by kickoff.
-                       (mevedel-model-set-session-effort target-session 'low target-buffer)))
+                       (mevedel-model-set-session-effort session 'low buffer)))
                    nil t)
                   (cl-letf (((symbol-function 'mevedel-auth-assert-ready) #'ignore)
                             ((symbol-function 'gptel-curl-get-response)
@@ -86,15 +85,13 @@
                     (unwind-protect
                         (progn
                           (mevedel-plan-handoff--dispatch-submission
-                           session buffer record selection accepted target-session target-buffer
+                           session buffer record selection accepted
                            "Implement" submission)
-                          (ert-info ((format "Staged %S/%S/%S: refusal=%S" location stage kind blocked))
+                          (ert-info ((format "Staged %S/%S: refusal=%S" stage kind blocked))
                             (should attempted)
                             (should blocked)
                             (should-not newer)
-                            (if (eq location 'here)
-                                (should (string-match-p "accepted plan implementation is pending" blocked))
-                              (should (eq 'mevedel-stale-implementation-preparation blocked-type)))
+                            (should (string-match-p "accepted plan implementation is pending" blocked))
                             (should (plist-get observations :text-unchanged))
                             (should (plist-get observations :context-unchanged))
                             (should (plist-get observations :pending-unchanged))
@@ -115,12 +112,12 @@
                               (should-not (string-match-p "A separate ordinary question" payload))
                               (gptel--fsm-transition fsm 'DONE)
                               (mevedel-test--await 5 "Staged accepted API request did not settle"
-                                (not (mevedel-turn-busy-p target-buffer))))
+                                (not (mevedel-turn-busy-p buffer))))
                             (should-not mevedel--pending-implementation-policy)
                             (should-not mevedel-skills--pending-request-context)
-                            (should (equal "Fast:fast-model" (mevedel-session-model-provider target-session)))
-                            (should (eq 'low (mevedel-session-reasoning-effort target-session)))
-                            (should (eq 'ask (mevedel-session-permission-mode target-session)))
+                            (should (equal "Fast:fast-model" (mevedel-session-model-provider session)))
+                            (should (eq 'low (mevedel-session-reasoning-effort session)))
+                            (should (eq 'ask (mevedel-session-permission-mode session)))
                             ;; Actual public ordinary input works after admission
                             ;; and settlement, with the new baseline effort.
                             (with-current-buffer view
@@ -135,22 +132,21 @@
                               (should-not (mevedel-request-permission-mode-override request))
                               (gptel--fsm-transition fsm 'DONE)
                               (mevedel-test--await 5 "Staged API baseline follow-up did not settle"
-                                (not (mevedel-turn-busy-p target-buffer))))))
+                                (not (mevedel-turn-busy-p buffer))))))
                       (dolist (fsm sent)
                         (unless (eq 'DONE (gptel-fsm-state fsm))
                           (gptel--fsm-transition fsm 'ABRT)))
                       (mevedel-test--await 5 "Staged API fixture cleanup did not settle"
-                        (not (mevedel-turn-busy-p target-buffer))))))
+                        (not (mevedel-turn-busy-p buffer))))))
               (with-current-buffer view (mevedel-view-stream-stop))
               (kill-buffer view)))))))
 
-  :doc "Here/Worktree native readiness cannot admit public ordinary input with staged Direct authority"
-  (dolist (location '(here worktree))
-    (mevedel-handoff-owner-test--with-target location
+  :doc "native readiness cannot admit public ordinary input with staged Direct authority"
+  (progn
+    (mevedel-handoff-owner-test--with-target
       (setf (plist-get selection :execution) 'direct
             (plist-get selection :model-provider) "Claude Code:sonnet")
       (setq policy (mevedel-implementation-policy-from-selection selection))
-      (mevedel-plan--metadata-put target-session :implementation-goal-id nil)
       (cl-letf (((symbol-function 'mevedel-claude-code-unavailable-reason) #'ignore))
         (mevedel-claude-code-register)
         (setq-local gptel-system-prompt "Staged native fixture" gptel-tools nil)
@@ -159,10 +155,10 @@
                (check (symbol-function 'mevedel-request-assert-target-ready))
                (prompt (symbol-function 'mevedel-acp-prompt))
                (mevedel-claude-code-directory (file-name-concat root "claude"))
-               attempted blocked blocked-type newer prompts launches draft sent)
+               attempted blocked newer prompts launches draft sent)
           (unwind-protect
               (save-window-excursion
-                (mevedel-view--setup view target-buffer)
+                (mevedel-view--setup view buffer)
                 (set-window-buffer (selected-window) view)
                 (with-current-buffer view
                   (goto-char (mevedel-view--input-start))
@@ -191,22 +187,20 @@
                                      (condition-case err
                                          (mevedel-view-send)
                                        (user-error
-                                        (setq blocked (error-message-string err) blocked-type (car err)))))
+                                        (setq blocked (error-message-string err)))))
                                    (should (equal text (buffer-string)))
                                    (should (eq pending mevedel--pending-implementation-policy)))
                                  (setq newer mevedel--current-request)
-                                 (mevedel-model-set-session-effort target-session 'low target-buffer))))))
+                                 (mevedel-model-set-session-effort session 'low buffer))))))
                   (mevedel-plan-handoff--dispatch-submission
-                   session buffer record selection accepted target-session target-buffer
+                   session buffer record selection accepted
                    "Implement" submission)
                   (mevedel-test--await 5 "Native staged accepted producer did not settle"
-                    (not (mevedel-turn-busy-p target-buffer)))
+                    (not (mevedel-turn-busy-p buffer)))
                   (should attempted)
                   (should blocked)
                   (should-not newer)
-                  (if (eq location 'here)
-                      (should (string-match-p "accepted plan implementation is pending" blocked))
-                    (should (eq 'mevedel-stale-implementation-preparation blocked-type)))
+                  (should (string-match-p "accepted plan implementation is pending" blocked))
                   (should (= 1 (length launches)))
                   (should (equal '("sonnet" nil) (cdar launches)))
                   (let ((request (caar launches)))
@@ -219,7 +213,7 @@
                   (should-not (cl-some (lambda (input) (string-match-p (regexp-quote ordinary-prompt) input)) prompts))
                   (with-current-buffer view (should (equal draft (mevedel-view--input-text))))
                   (should-not mevedel--pending-implementation-policy)
-                  (should (eq 'low (mevedel-session-reasoning-effort target-session)))
+                  (should (eq 'low (mevedel-session-reasoning-effort session)))
                   (with-current-buffer view
                     (mevedel-view--clear-input)
                     (insert "Ordinary native-startup baseline follow-up")
@@ -232,7 +226,7 @@
                     (should-not (mevedel-request-permission-mode-override request))
                     (gptel--fsm-transition fsm 'DONE)
                     (mevedel-test--await 5 "Native staged baseline follow-up did not settle"
-                      (not (mevedel-turn-busy-p target-buffer))))))
+                      (not (mevedel-turn-busy-p buffer))))))
             (with-current-buffer view (mevedel-view-stream-stop))
             (kill-buffer view)))))))
 
