@@ -127,34 +127,43 @@ not the bare symbol %s" v)))))
 (defun mevedel-ptc-driver--argument-value (value schema)
   "Convert guest VALUE using the trusted argument SCHEMA.
 Declared object keys become host keywords; undeclared keys remain private.
+A schema that declares `:properties' without a `:type' accepts either a
+keyword plist, converted like an object, or other data unchanged; Ask's
+options are strings or objects.
 JSON booleans and null use the same representations as native tool calls.
 Data no schema describes is checked by `mevedel-ptc-driver--check-data'."
-  (cond
-   ((and (symbolp value) (member (symbol-name value) '(":null" ":json-false")))
-    (intern (symbol-name value)))
-   ((and (null value) (eq (plist-get schema :type) 'boolean)) :json-false)
-   ((eq (plist-get schema :type) 'object)
-    (if (null value) (make-hash-table :test #'equal)
-      (unless (and (proper-list-p value) (cl-evenp (length value))
-                   (cl-loop for key in value by #'cddr always (mevedel-ptc-keyword-p key)))
-        (mevedel-ptc-driver--object-error value))
-      (let ((rest value) (properties (plist-get schema :properties)) result)
-        (while (consp rest)
-          (let* ((key (pop rest))
-                 (name (symbol-name key))
-                 (declared (cl-find name properties :test #'equal
-                                    :key (lambda (item) (and (symbolp item) (symbol-name item)))))
-                 (property-schema (and declared (plist-get properties declared))))
-            (setq result
-                  (append result (list (or declared key)
-                                       (mevedel-ptc-driver--argument-value
-                                        (pop rest) property-schema))))))
-        result)))
-   ((eq (plist-get schema :type) 'array)
-    (vconcat (mapcar (lambda (item)
-                      (mevedel-ptc-driver--argument-value item (plist-get schema :items)))
-                    value)))
-   (t (mevedel-ptc-driver--check-data value))))
+  (cl-flet ((plist-p (v)
+              (and (consp v) (proper-list-p v) (cl-evenp (length v))
+                   (cl-loop for key in v by #'cddr always (mevedel-ptc-keyword-p key))))
+            (convert-object (v)
+              (let ((rest v) (properties (plist-get schema :properties)) result)
+                (while (consp rest)
+                  (let* ((key (pop rest))
+                         (name (symbol-name key))
+                         (declared (cl-find name properties :test #'equal
+                                            :key (lambda (item) (and (symbolp item) (symbol-name item)))))
+                         (property-schema (and declared (plist-get properties declared))))
+                    (setq result
+                          (append result (list (or declared key)
+                                               (mevedel-ptc-driver--argument-value
+                                                (pop rest) property-schema))))))
+                result)))
+    (cond
+     ((and (symbolp value) (member (symbol-name value) '(":null" ":json-false")))
+      (intern (symbol-name value)))
+     ((and (null value) (eq (plist-get schema :type) 'boolean)) :json-false)
+     ((eq (plist-get schema :type) 'object)
+      (if (null value) (make-hash-table :test #'equal)
+        (unless (plist-p value)
+          (mevedel-ptc-driver--object-error value))
+        (convert-object value)))
+     ((and (plist-get schema :properties) (not (plist-get schema :type)) (plist-p value))
+      (convert-object value))
+     ((eq (plist-get schema :type) 'array)
+      (vconcat (mapcar (lambda (item)
+                        (mevedel-ptc-driver--argument-value item (plist-get schema :items)))
+                      value)))
+     (t (mevedel-ptc-driver--check-data value)))))
 
 (defun mevedel-ptc-driver--convert-args (tool guest-args)
   "Convert GUEST-ARGS into a host keyword plist validated against TOOL.

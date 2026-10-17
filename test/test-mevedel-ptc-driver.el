@@ -194,6 +194,29 @@ With RAW-P, retain the full pipeline result including hidden render data."
     (should (eq :null (plist-get payload :nothing)))
     (should (string-search "false" (json-serialize args :null-object :null :false-object :json-false))))
 
+  :doc "converts Ask questions and string-or-object options from keyword plists"
+  (progn
+    (require 'mevedel-tool-ask)
+    (mevedel-tool-ask-register)
+    (let* ((u (obarray-make))
+           (k (lambda (name) (intern (concat ":" name) u)))
+           (guest (list (funcall k "questions")
+                        (vector (list (funcall k "question") "Where?"
+                                      (funcall k "options")
+                                      (vector "Here (Recommended)"
+                                              (list (funcall k "label") "There"
+                                                    (funcall k "description") "Far"))))))
+           (question (aref (plist-get (mevedel-ptc-driver--convert-args
+                                       (mevedel-tool-get "Ask") guest)
+                                      :questions)
+                           0))
+           (options (plist-get question :options)))
+      (ert-info ("Ask fields declared only in nested schemas reach the form")
+        (should (equal "Where?" (plist-get question :question)))
+        (should (equal "Here (Recommended)" (aref options 0)))
+        (should (equal "There" (plist-get (aref options 1) :label)))
+        (should (equal "Far" (plist-get (aref options 1) :description))))))
+
   :doc "interns declared guest keywords as host keywords"
   (progn
     (mevedel-tool-fs--register)

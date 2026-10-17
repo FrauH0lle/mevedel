@@ -8,7 +8,9 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'mevedel-tool-registry))
+  (require 'mevedel-tool-registry)
+  (require 'subr-x))
+(require 'seq)
 
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
@@ -33,12 +35,36 @@
 ;;
 ;;; Handler
 
+(defun mevedel-tool-ask--validate (questions)
+  "Signal an error naming the first malformed entry of QUESTIONS.
+A malformed question must fail back to the model rather than reach the
+user as an empty or `nil' form."
+  (let ((index 0))
+    (seq-doseq (question questions)
+      (setq index (1+ index))
+      (let ((text (and (listp question) (plist-get question :question)))
+            (options (and (listp question) (plist-get question :options))))
+        (unless (and (stringp text) (not (string-blank-p text)))
+          (error "Ask question %d needs a non-empty question string; got %S"
+                 index question))
+        (unless (and (sequencep options) (not (stringp options))
+                     (> (length options) 0))
+          (error "Ask question %d (%s) needs a non-empty options list" index text))
+        (seq-doseq (option options)
+          (unless (or (and (stringp option) (not (string-blank-p option)))
+                      (and (listp option)
+                           (stringp (plist-get option :label))
+                           (not (string-blank-p (plist-get option :label)))))
+            (error "Ask question %d (%s): each option must be a string or an \
+object with a non-empty label; got %S" index text option)))))))
+
 (defun mevedel-tool-ask--ask (callback args)
   "Ask the user questions.
 CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
   (let ((questions (plist-get args :questions)))
     (unless questions
       (error "Parameter questions is required"))
+    (mevedel-tool-ask--validate questions)
     (mevedel-tool-ask-ui-show
      (lambda (value)
        (funcall callback
@@ -84,7 +110,16 @@ CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
     :handler #'mevedel-tool-ask--ask
     :args ((questions array :required
                       "Array of question objects. Each question must have predefined answer options. Options may be strings or objects with label, description, and sample fields. Mark exactly one option per question by appending \` (Recommended)\` to that option label."
-                      :items (:type object)
+                      :items (:type object
+                              :properties
+                              (:question (:type string :description "The question to ask.")
+                               :options
+                               (:type array
+                                :description "Predefined answers: strings, or objects with label, description and sample."
+                                :items (:properties
+                                        (:label (:type string)
+                                         :description (:type string)
+                                         :sample (:type string))))))
                       :minItems 1))
     :async-p t
     :max-result-size 30000

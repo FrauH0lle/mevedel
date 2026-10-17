@@ -34,6 +34,27 @@
        '(:questions [(:question "Proceed?" :options ["Yes" "No"])])))
     (should (equal '(:result "answers") delivered)))
 
+  :doc "malformed questions fail back to the model instead of showing nil"
+  (cl-letf (((symbol-function 'mevedel-tool-ask-ui-show)
+             (lambda (&rest _) (ert-fail "showed a malformed questionnaire"))))
+    (dolist (case '(([(:options ["Yes"])] . "needs a non-empty question")
+                    ([(:question "  " :options ["Yes"])] . "needs a non-empty question")
+                    ([(:question "Go?")] . "needs a non-empty options")
+                    ([(:question "Go?" :options [])] . "needs a non-empty options")
+                    ([(:question "Go?" :options [(:description "no label")])] . "non-empty label")
+                    ([(:question "Go?" :options [""])] . "non-empty label")))
+      (let ((err (should-error (mevedel-tool-ask--ask #'ignore (list :questions (car case))))))
+        (should (string-search (cdr case) (error-message-string err))))))
+
+  :doc "options may mix strings and labelled objects"
+  (let (shown)
+    (cl-letf (((symbol-function 'mevedel-tool-ask-ui-show)
+               (lambda (_callback questions) (setq shown questions))))
+      (mevedel-tool-ask--ask
+       #'ignore
+       '(:questions [(:question "Where?" :options ["Here" (:label "There" :description "Far")])]))
+      (should shown)))
+
   :doc "a cancelled questionnaire reports an error result, not success"
   ;; Quit settles with the bare symbol `aborted'; passed through, the
   ;; pipeline recorded the call as a success the renderer showed as
