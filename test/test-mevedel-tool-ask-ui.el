@@ -47,6 +47,23 @@ registered-overlay and result for questionnaire assertions."
            (with-current-buffer data-buffer
              ,@body))))))
 
+(defun test-mevedel-tool-ask-ui--panel-rows (body)
+  "Return BODY's sample panel rows as trimmed strings, top to bottom.
+A panel row is a line whose text sits on the source block face."
+  (with-temp-buffer
+    (insert body)
+    (goto-char (point-min))
+    (let (rows)
+      (while (not (eobp))
+        (let ((face (get-text-property (+ (point) 5) 'font-lock-face)))
+          (when (and (< (+ (point) 5) (line-end-position))
+                     (memq 'mevedel-view-source-block (ensure-list face)))
+            (push (string-trim (buffer-substring-no-properties
+                                (point) (line-end-position)))
+                  rows)))
+        (forward-line 1))
+      (nreverse rows))))
+
 
 ;;
 ;;; Ask User
@@ -85,122 +102,108 @@ registered-overlay and result for questionnaire assertions."
     (should-not (get-text-property start 'font-lock-face formatted))))
 
 
-(mevedel-deftest mevedel-tool-ask-ui--question-anchor ()
+(mevedel-deftest mevedel-tool-ask-ui--sample-panel ()
   ,test
   (test)
-  :doc "anchors each question to its own block and the last to the form end"
+  :doc "a question's panel is as tall as its longest sample and follows sample-bearing options at point"
   (test-mevedel-tool-ask-ui--with-form
     (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "Which file?"
+       :options [(:label "Project" :sample "# Project\n- one\n- two\n")
+                 (:label "Local" :sample "# Local")
+                 "Neither"])
+      (:question "Second?" :options ["Yes" "No"])])
+    ;; The first sample shows before any motion; a trailing newline in the
+    ;; sample does not add a row.
+    (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
+                   '("Sample · Project" "# Project" "- one" "- two")))
+    (call-interactively (lookup-key rendered-keymap (kbd "n")))
+    ;; A shorter sample keeps the question's panel height, so nothing
+    ;; below it moves while options are compared.
+    (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
+                   '("Sample · Local" "# Local" "" "")))
+    (with-current-buffer view-buffer
+      (should (equal '(0 . 1) (get-text-property (point) 'mevedel-ask-entry)))
+      (should (eq (char-after) ?○)))
+    ;; Options without a sample, the other question, and returning to
+    ;; the shown option leave the panel and the buffer untouched.
+    (let ((body rendered-body)
+          (tick (with-current-buffer view-buffer
+                  (buffer-chars-modified-tick))))
+      (dolist (key '("n" "n" "n" "p" "p" "p"))
+        (call-interactively (lookup-key rendered-keymap (kbd key))))
+      (with-current-buffer view-buffer
+        (should (equal '(0 . 1) (get-text-property (point) 'mevedel-ask-entry)))
+        (should (= tick (buffer-chars-modified-tick))))
+      (should (eq body rendered-body)))
+    ;; Answering collapses the question and its panel; the model is told
+    ;; which sample the answer was chosen from.
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (should-not (test-mevedel-tool-ask-ui--panel-rows rendered-body))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "A1: Local\nSample shown for A1:\n# Local\n" result)))
+
+  :doc "a panel repaint triggered by motion preserves a multiline composer draft"
+  (test-mevedel-tool-ask-ui--with-form
+    (with-current-buffer view-buffer
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+    (mevedel-tool-ask-ui-show
      #'ignore
-     [(:question "One?" :options ["Yes" "No"])
-      (:question "Two?" :options ["Yes" "No"])
-      (:question "Three?" :options ["Yes" "No"])])
-    (with-temp-buffer
-      (insert rendered-body)
-      (let* ((overlay (make-overlay (point-min) (point-max)))
-             (start-0 (mevedel-tool-ask-ui--question-start overlay 0))
-             (start-1 (mevedel-tool-ask-ui--question-start overlay 1))
-             (anchor-0 (mevedel-tool-ask-ui--question-anchor overlay 0))
-             (anchor-1 (mevedel-tool-ask-ui--question-anchor overlay 1))
-             (anchor-2 (mevedel-tool-ask-ui--question-anchor overlay 2)))
-        ;; Every block is findable, in order.
-        (should start-0)
-        (should start-1)
-        (should (< start-0 start-1))
-        ;; A question's anchor sits inside its own block, below the
-        ;; options being compared and above the next question.
-        (should (< start-0 anchor-0))
-        (should (< anchor-0 start-1))
-        (should (< anchor-0 anchor-1))
-        ;; The last block has no successor, so it anchors to the
-        ;; end of the whole form.
-        (should (= anchor-2 (overlay-end overlay)))))))
+     [(:question "Which?" :options [(:label "A" :sample "a") (:label "B" :sample "b")])])
+    (with-current-buffer view-buffer
+      (goto-char (cdr (assoc '(0 . 1) (mevedel-tool-ask-ui--entry-positions
+                                      (car mevedel-tool-ask-ui--states)))))
+      (run-hooks 'post-command-hook)
+      (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
+                     '("Sample · B" "b")))
+      (should (equal '(0 . 1) (get-text-property (point) 'mevedel-ask-entry)))
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))
 
 
-(mevedel-deftest mevedel-tool-ask-ui--sample-show ()
+(mevedel-deftest mevedel-tool-ask-ui--sample-scroll ()
   ,test
   (test)
-  :doc "samples use the top-level parent from ordinary and nested question windows"
-  (dolist (source '(top child grandchild))
-    (with-temp-buffer
-      (insert "Question?\n")
-      (let ((overlay (make-overlay (point-min) (point-max)))
-            (window (selected-window))
-            (noninteractive nil)
-            ensured placed shown)
-        (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) window))
-                  ((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) t))
-                  ((symbol-function 'window-frame) (lambda (_) source))
-                  ((symbol-function 'frame-parent)
-                   (lambda (frame) (cdr (assq frame '((grandchild . child) (child . top))))))
-                  ((symbol-function 'mevedel-tool-ask-ui--sample-work-buffer)
-                   #'current-buffer)
-                  ((symbol-function 'mevedel-view--fontify-as)
-                   (lambda (text _) text))
-                  ((symbol-function 'mevedel-tool-ask-ui--sample-ensure-frame)
-                   (lambda (parent) (setq ensured parent) 'sample))
-                  ((symbol-function 'frame-root-window) (lambda (_) window))
-                  ((symbol-function 'set-window-buffer) #'ignore)
-                  ((symbol-function 'mevedel-tool-ask-ui--sample-place)
-                   (lambda (frame parent source-window position)
-                     (setq placed (list frame parent source-window position))))
-                  ((symbol-function 'make-frame-visible)
-                   (lambda (frame) (setq shown frame))))
-          (mevedel-tool-ask-ui--sample-show "Sample" overlay 0)
-          (should (eq ensured 'top))
-          (should (equal placed (list 'sample 'top window 11)))
-          (should (eq shown 'sample)))))))
+  :doc "an overflowing panel pages with C-v and M-v and keeps point on its option"
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((mevedel-ask-sample-height 3))
+      (mevedel-tool-ask-ui-show
+       #'ignore
+       [(:question "Which?" :options [(:label "Long" :sample "a\nb\nc\nd\ne\nf")
+                                      "Plain"])])
+      (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
+                     '("Sample · Long  ·  lines 1–3 of 6  C-v/M-v" "a" "b" "c")))
+      ;; A page keeps one line of context.
+      (call-interactively (lookup-key rendered-keymap (kbd "C-v")))
+      (should (equal (cdr (test-mevedel-tool-ask-ui--panel-rows rendered-body))
+                     '("c" "d" "e")))
+      ;; The last page stops at the sample's end.
+      (call-interactively (lookup-key rendered-keymap (kbd "C-v")))
+      (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
+                     '("Sample · Long  ·  lines 4–6 of 6  C-v/M-v" "d" "e" "f")))
+      (call-interactively (lookup-key rendered-keymap (kbd "M-v")))
+      (call-interactively (lookup-key rendered-keymap (kbd "M-v")))
+      (should (equal (cdr (test-mevedel-tool-ask-ui--panel-rows rendered-body))
+                     '("a" "b" "c")))
+      (with-current-buffer view-buffer
+        (should (equal '(0 . 0) (get-text-property (point) 'mevedel-ask-entry))))))
 
-
-(mevedel-deftest mevedel-tool-ask-ui--sample-place ()
-  ,test
-  (test)
-  :doc "placement translates native coordinates through nested frames, including unavailable display origins"
-  ;; Top-level, nested display coordinates, and Wayland-style child origins
-  ;; all describe the same glyph at (140, 160) in the top-level native frame.
-  (dolist (fixture '((top (1140 . 2160))
-                     (child (1140 . 2160))
-                     (grandchild (27 . 27))
-                     (child (59 . 59))))
-    (let* ((source (car fixture))
-           (pixels (cadr fixture))
-           (display-origin (equal pixels '(1140 . 2160)))
-           (mevedel-ask-sample-frame-width 0.5)
-           (mevedel-ask-sample-frame-height 5)
-           size position visible)
-      (cl-letf (((symbol-function 'window-absolute-pixel-position)
-                 (lambda (&rest _) pixels))
-                ((symbol-function 'window-frame) (lambda (_) source))
-                ((symbol-function 'frame-parent)
-                 (lambda (frame) (cdr (assq frame '((grandchild . child) (child . top))))))
-                ((symbol-function 'frame-edges)
-                 (lambda (frame kind)
-                   (let ((origin (pcase frame
-                                   ('top '(1000 2000))
-                                   ('child (if display-origin '(1080 2100) '(-1 -1)))
-                                   ('grandchild '(-2 -2)))))
-                     ;; Children have a one-pixel external border.
-                     (if (and (not (eq frame 'top)) (eq kind 'native-edges))
-                         (mapcar #'1+ origin)
-                       origin))))
-                ((symbol-function 'frame-parameter)
-                 (lambda (frame key)
-                   (pcase (list frame key)
-                     (`(child left) 80) (`(child top) 100)
-                     (`(grandchild left) 30) (`(grandchild top) 30))))
-                ((symbol-function 'frame-char-height) (lambda (_) 20))
-                ((symbol-function 'frame-pixel-width) (lambda (_) 800))
-                ((symbol-function 'frame-pixel-height) (lambda (_) 600))
-                ((symbol-function 'set-frame-size)
-                 (lambda (_ width height pixelwise) (setq size (list width height pixelwise))))
-                ((symbol-function 'set-frame-position)
-                 (lambda (_ x y) (setq position (list x y))))
-                ((symbol-function 'fit-frame-to-buffer)
-                 (lambda (&rest args) (setq visible args))))
-        (should (mevedel-tool-ask-ui--sample-place 'sample 'top 'window 1))
-        (should (equal size '(400 100 t)))
-        (should (equal position '(140 180)))
-        (should (eq (car (last visible)) 'vertically))))))
+  :doc "without an overflowing panel C-v and M-v scroll the window as usual"
+  (test-mevedel-tool-ask-ui--with-form
+    (let (scrolled)
+      (cl-letf (((symbol-function 'scroll-up-command)
+                 (lambda () (interactive) (push 'up scrolled)))
+                ((symbol-function 'scroll-down-command)
+                 (lambda () (interactive) (push 'down scrolled))))
+        (mevedel-tool-ask-ui-show
+         #'ignore
+         [(:question "Which?" :options [(:label "Short" :sample "a") "Plain"])
+          (:question "Second?" :options ["Yes" "No"])])
+        (call-interactively (lookup-key rendered-keymap (kbd "C-v")))
+        (with-current-buffer view-buffer
+          (mevedel-tool-ask-ui--goto-entry (car mevedel-tool-ask-ui--states) '(1 . 0)))
+        (call-interactively (lookup-key rendered-keymap (kbd "M-v")))
+        (should (equal scrolled '(down up)))))))
 
 
 (mevedel-deftest mevedel-tool-ask-ui--entry-at-point ()
@@ -228,6 +231,11 @@ registered-overlay and result for questionnaire assertions."
         (mevedel-tool-ask-ui--goto-entry state '(0 . 2))
         (should (equal '(0 . 2) (mevedel-tool-ask-ui--entry-at-point state)))
         (should (eq (char-after) ?○))
+        ;; The newline ending a row still belongs to it.
+        (end-of-line)
+        (should (equal '(0 . 2) (mevedel-tool-ask-ui--entry-at-point state)))
+        (forward-line 1)
+        (should-not (mevedel-tool-ask-ui--entry-at-point state))
         (goto-char (overlay-start registered-overlay))
         (should-not (mevedel-tool-ask-ui--entry-at-point state))
         (search-forward "Choose a layout")
@@ -240,7 +248,7 @@ registered-overlay and result for questionnaire assertions."
 (mevedel-deftest mevedel-tool-ask-ui--post-command ()
   ,test
   (test)
-  :doc "native motion synchronizes samples only on entry changes and leaving the form"
+  :doc "native motion synchronizes samples only on entry changes, not on leaving the form"
   (test-mevedel-tool-ask-ui--with-form
     (let (focused)
       (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sync-sample)
@@ -264,7 +272,7 @@ registered-overlay and result for questionnaire assertions."
             (should (= 1 (mevedel-tool-ask-ui--state-focus-option state)))
             (goto-char (point-max))
             (run-hooks 'post-command-hook)
-            (should (equal focused '(nil (0 . 1) (0 . 0))))
+            (should (equal focused '((0 . 1) (0 . 0))))
             (should-not (mevedel-tool-ask-ui--focused-option state))
             (should (= tick (buffer-chars-modified-tick)))))))))
 
@@ -461,40 +469,31 @@ registered-overlay and result for questionnaire assertions."
     ;; learns whether the user took its recommendation.
     (should (string-match-p "A1: Balanced (Recommended)" result)))
 
-  :doc "object options show descriptions inline and echo the chosen sample"
+  :doc "object options show descriptions and samples inline and echo the chosen sample"
   (test-mevedel-tool-ask-ui--with-form
-    (let (shown-sample)
-      (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sample-show)
-                 (lambda (sample _overlay _question)
-                   (setq shown-sample sample)))
-                ((symbol-function 'mevedel-tool-ask-ui--sample-close)
-                 (lambda () (setq shown-sample nil))))
-        (mevedel-tool-ask-ui-show
-         (lambda (value) (setq result value))
-         [(:question "What should I write?"
-                     :options [(:label "Project AGENTS.md (Recommended)"
-                                :description "Shared repo guidance"
-                                :sample "# Repository Guidelines\n- Run tests")
-                               (:label "Personal AGENTS.local.md"
-                                :description "Private notes"
-                                :sample "# Local notes")])])
-        (should (string-match-p "Shared repo guidance" rendered-body))
-        ;; The sample belongs to the frame beside the form, never to
-        ;; the form itself.
-        (should-not (string-match-p "# Repository Guidelines" rendered-body))
-        (should (equal "# Repository Guidelines\n- Run tests" shown-sample))
-        (call-interactively (lookup-key rendered-keymap (kbd "n")))
-        (should (equal "# Local notes" shown-sample))
-        (call-interactively (lookup-key rendered-keymap (kbd "n")))
-        (should-not shown-sample)
-        (call-interactively (lookup-key rendered-keymap (kbd "1")))
-        (should (equal "# Repository Guidelines\n- Run tests" shown-sample))
-        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
-        (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
-        (should (string-match-p "A1: Project AGENTS.md (Recommended)"
-                                result))
-        (should (string-match-p "Sample shown for A1:" result))
-        (should (string-match-p "# Repository Guidelines" result)))))
+    (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "What should I write?"
+                 :options [(:label "Project AGENTS.md (Recommended)"
+                            :description "Shared repo guidance"
+                            :sample "# Repository Guidelines\n- Run tests")
+                           (:label "Personal AGENTS.local.md"
+                            :description "Private notes"
+                            :sample "# Local notes")])])
+    (should (string-match-p "Shared repo guidance" rendered-body))
+    (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
+                   '("Sample · Project AGENTS.md (Recommended)"
+                     "# Repository Guidelines" "- Run tests")))
+    (call-interactively (lookup-key rendered-keymap (kbd "n")))
+    (should (equal (cdr (test-mevedel-tool-ask-ui--panel-rows rendered-body))
+                   '("# Local notes" "")))
+    (call-interactively (lookup-key rendered-keymap (kbd "1")))
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "A1: Project AGENTS.md (Recommended)"
+                            result))
+    (should (string-match-p "Sample shown for A1:" result))
+    (should (string-match-p "# Repository Guidelines" result)))
 
   :doc "cursor movement does not re-announce the form to remote guests"
   (test-mevedel-tool-ask-ui--with-form

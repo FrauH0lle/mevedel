@@ -17,9 +17,6 @@
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 (autoload 'mevedel-abort "mevedel-chat" nil t)
 
-;; `mevedel-directive-frame'
-(defvar mevedel--child-frame-parameters)
-
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--data-buffer "mevedel-interaction-prompt"
                   (&optional buffer))
@@ -58,6 +55,11 @@
 (autoload 'mevedel-view--interaction-register "mevedel-view-interaction")
 (autoload 'mevedel-view--interaction-target-buffer
   "mevedel-view-interaction")
+
+;; `mevedel-view-markdown'
+(declare-function mevedel-view--source-block-font-lock-face
+                  "mevedel-view-markdown" (face))
+(autoload 'mevedel-view--source-block-font-lock-face "mevedel-view-markdown")
 
 
 ;;
@@ -113,9 +115,9 @@ able to tell that from an answered question without reading a nil.")
 
 (defun mevedel-tool-ask-ui--option-sample (option)
   "Return OPTION's sample string, or nil.
-The sample is the model-authored artifact shown beside the option list;
-`preview' names an interaction kind elsewhere in mevedel and is
-deliberately not reused here."
+The sample is the model-authored artifact shown in its question's
+sample panel; `preview' names an interaction kind elsewhere in mevedel
+and is deliberately not reused here."
   (let ((sample (and (not (stringp option))
                      (mevedel-tool-ask-ui--option-field option :sample))))
     (cond
@@ -153,202 +155,18 @@ deliberately not reused here."
 
 
 ;;
-;;; Sample frame
-
-(defcustom mevedel-ask-sample-frame-width 0.5
-  "Width of the Ask sample frame as a fraction of its parent frame."
-  :type 'float
-  :group 'mevedel)
-
-(defcustom mevedel-ask-sample-frame-height 20
-  "Largest height of the Ask sample frame, in lines."
-  :type 'integer
-  :group 'mevedel)
-
-(defcustom mevedel-ask-sample-frame-min-height 3
-  "Smallest height of the Ask sample frame, in lines.
-The frame fits itself to its sample between this and
-`mevedel-ask-sample-frame-height'."
-  :type 'integer
-  :group 'mevedel)
-
-(defvar mevedel-tool-ask-ui--sample-frame nil
-  "The live Ask sample frame, or nil.")
-
-(defvar mevedel-tool-ask-ui--sample-buffer nil
-  "Buffer backing the Ask sample frame.")
-
-(defun mevedel-tool-ask-ui--question-start (overlay index)
-  "Return where question INDEX's block starts inside OVERLAY, or nil.
-Runs in OVERLAY's buffer.  The form is handed to the interaction painter
-as one string, so the only way back to a single question's position is
-the property `question-block' stamps on it."
-  (let ((position (overlay-start overlay))
-        (limit (overlay-end overlay))
-        (found nil))
-    (while (and position (< position limit) (not found))
-      (if (eq index (get-text-property position 'mevedel-ask-question))
-          (setq found position)
-        (setq position (next-single-property-change
-                        position 'mevedel-ask-question nil limit))))
-    found))
-
-(defun mevedel-tool-ask-ui--question-anchor (overlay index)
-  "Return the position just past question INDEX's block in OVERLAY.
-Falls back to the end of the whole form when the block cannot be found,
-so a sample still opens somewhere sensible if a render is in flight."
-  (let ((buffer (and (overlayp overlay) (overlay-buffer overlay))))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (let* ((limit (overlay-end overlay))
-               (start (mevedel-tool-ask-ui--question-start overlay index))
-               (next (and start
-                          (mevedel-tool-ask-ui--question-start
-                           overlay (1+ index)))))
-          ;; The character before the next block is the blank line
-          ;; between them, which puts the frame under this question's
-          ;; options rather than over them.
-          (cond ((and next (> next start)) (1- next))
-                (t limit)))))))
-
-
-(defun mevedel-tool-ask-ui--sample-work-buffer ()
-  "Return the live buffer backing the Ask sample frame."
-  (if (buffer-live-p mevedel-tool-ask-ui--sample-buffer)
-      mevedel-tool-ask-ui--sample-buffer
-    (setq mevedel-tool-ask-ui--sample-buffer
-          (get-buffer-create " *mevedel-ask-sample*"))))
-
-(defun mevedel-tool-ask-ui--sample-close ()
-  "Close the Ask sample frame."
-  (when (frame-live-p mevedel-tool-ask-ui--sample-frame)
-    (delete-frame mevedel-tool-ask-ui--sample-frame))
-  (setq mevedel-tool-ask-ui--sample-frame nil))
-
-(defun mevedel-tool-ask-ui--sample-teardown (&rest _)
-  "Close the Ask sample frame when any prompt settles.
-The frame is a singleton owned by whichever questionnaire is open, so an
-unrelated prompt settling under one closes a frame the next cursor move
-reopens -- cheaper than tracking which overlay owns it."
-  (mevedel-tool-ask-ui--sample-close))
-
-(add-hook 'mevedel-interaction-prompt-settled-hook
-          #'mevedel-tool-ask-ui--sample-teardown)
-
-(defun mevedel-tool-ask-ui--sample-ensure-frame (parent)
-  "Return the Ask sample child frame of PARENT, creating it when needed."
-  (let ((frame mevedel-tool-ask-ui--sample-frame))
-    (unless (and (frame-live-p frame)
-                 (eq (frame-parent frame) parent))
-      (when (frame-live-p frame) (delete-frame frame))
-      (setq frame
-            (make-frame
-             `((name . "mevedel-ask-sample")
-               (parent-frame . ,parent)
-               (minibuffer . ,(minibuffer-window parent))
-               (font . ,(frame-parameter parent 'font))
-               (width . 0) (height . 0) (visibility . nil)
-               (internal-border-width . 1)
-               (child-frame-border-width . 1)
-               (no-accept-focus . t)
-               (no-focus-on-map . t)
-               (cursor-type . nil)
-               ,@mevedel--child-frame-parameters)))
-      (let ((window (frame-root-window frame)))
-        (set-window-parameter window 'no-delete-other-windows t)
-        (set-window-parameter window 'mode-line-format 'none)
-        (set-window-parameter window 'header-line-format 'none)
-        (set-window-fringes window 0 0))
-      (setq mevedel-tool-ask-ui--sample-frame frame))
-    frame))
-
-(defun mevedel-tool-ask-ui--sample-place (frame parent window position)
-  "Size and place FRAME in PARENT under buffer POSITION in WINDOW."
-  (when-let* ((pixels (window-absolute-pixel-position position window)))
-    (let* ((source (window-frame window))
-           (native (frame-edges source 'native-edges))
-           (char-height (frame-char-height parent))
-           (parent-width (frame-pixel-width parent))
-           (parent-height (frame-pixel-height parent))
-           (width (round (* mevedel-ask-sample-frame-width parent-width)))
-           (height (* mevedel-ask-sample-frame-height char-height))
-           (anchor-x (- (car pixels) (nth 0 native)))
-           (anchor-y (- (cdr pixels) (nth 1 native))))
-      ;; Translate from each child's native origin through its parent-relative
-      ;; outer position.  Display origins for child frames can be unavailable
-      ;; on Wayland; only differences within the same frame are reliable.
-      (while (not (eq source parent))
-        (let ((outer (frame-edges source 'outer-edges)))
-          (cl-incf anchor-x (+ (frame-parameter source 'left)
-                              (- (car native) (car outer))))
-          (cl-incf anchor-y (+ (frame-parameter source 'top)
-                              (- (cadr native) (cadr outer)))))
-        (setq source (frame-parent source)
-              native (frame-edges source 'native-edges)))
-      (let* ((below (+ anchor-y char-height))
-             (x (max 0 (min anchor-x (- parent-width width))))
-             ;; Flip above the form when there is no room below it.
-             (y (if (<= (+ below height) parent-height)
-                    below
-                  (max 0 (- anchor-y height)))))
-        (set-frame-size frame width height t)
-        (set-frame-position frame x y)
-        ;; `vertically' only: fitting both dimensions widens the frame to
-        ;; the sample's longest unwrapped line, which a code block readily
-        ;; pushes past the parent.
-        (fit-frame-to-buffer frame
-                             mevedel-ask-sample-frame-height
-                             mevedel-ask-sample-frame-min-height
-                             nil nil 'vertically)
-        t))))
-
-(defun mevedel-tool-ask-ui--sample-show (sample overlay index)
-  "Show SAMPLE in a child frame under question INDEX's block in OVERLAY.
-Anchoring to the question rather than to the focused option keeps the
-frame still while the cursor walks the options being compared.  Closes
-the frame instead when the block is not on screen."
-  (let* ((buffer (and (overlayp overlay) (overlay-buffer overlay)))
-         (window (and (buffer-live-p buffer) (get-buffer-window buffer t)))
-         (position (mevedel-tool-ask-ui--question-anchor overlay index)))
-    ;; A batch session has no terminal, so `make-frame' signals there.
-    (if (or noninteractive
-            (not (and (window-live-p window)
-                      (pos-visible-in-window-p position window))))
-        (mevedel-tool-ask-ui--sample-close)
-      (let ((parent (window-frame window))
-            (work (mevedel-tool-ask-ui--sample-work-buffer)))
-        (while (frame-parent parent)
-          (setq parent (frame-parent parent)))
-        (with-current-buffer work
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (insert (mevedel-view--fontify-as sample 'markdown-mode))
-            (goto-char (point-min)))
-          (setq-local mode-line-format nil)
-          (setq-local header-line-format nil)
-          (setq-local truncate-lines nil))
-        (let ((frame (mevedel-tool-ask-ui--sample-ensure-frame parent)))
-          (set-window-buffer (frame-root-window frame) work)
-          (if (mevedel-tool-ask-ui--sample-place frame parent window position)
-              (make-frame-visible frame)
-            (mevedel-tool-ask-ui--sample-close)))))))
-
-(defun mevedel-tool-ask-ui--sample-scroll (command)
-  "Run scroll COMMAND inside the sample frame without selecting it."
-  (when (frame-live-p mevedel-tool-ask-ui--sample-frame)
-    (with-selected-window (frame-root-window mevedel-tool-ask-ui--sample-frame)
-      (condition-case nil (funcall command) (error nil)))))
-
-
-;;
 ;;; Ask form state and controllers
 
 (cl-defstruct
     (mevedel-tool-ask-ui--state
      (:constructor mevedel-tool-ask-ui--state-create))
-  "Mutable state of one Ask questionnaire."
+  "Mutable state of one Ask questionnaire.
+SAMPLE-SHOWN and SAMPLE-OFFSETS are alists from question index to the
+option its sample panel shows and to the panel's first visible line.
+SAMPLE-CACHE maps sample strings to their fontified lines."
   callback source-buffer origin questions count answers chat-buffer
-  interaction-id overlay focus-question focus-option expanded)
+  interaction-id overlay focus-question focus-option expanded
+  sample-shown sample-offsets sample-cache)
 
 (defvar-local mevedel-tool-ask-ui--states nil
   "Live Ask forms in this buffer.")
@@ -366,7 +184,12 @@ the frame instead when the block is not on screen."
                (eq (overlay-buffer overlay) (current-buffer))
                (<= (overlay-start overlay) (point))
                (< (point) (overlay-end overlay)))
-      (get-text-property (point) 'mevedel-ask-entry))))
+      (or (get-text-property (point) 'mevedel-ask-entry)
+          ;; The newline ending a row belongs to it, so RET after C-e
+          ;; still answers the row point is on.
+          (and (eq (char-after) ?\n)
+               (< (overlay-start overlay) (point))
+               (get-text-property (1- (point)) 'mevedel-ask-entry))))))
 
 (defun mevedel-tool-ask-ui--entry-positions (state)
   "Return ordered (IDENTITY . POSITION) pairs for STATE's visible entries."
@@ -392,27 +215,32 @@ the frame instead when the block is not on screen."
   (mevedel-tool-ask-ui--post-command))
 
 (defun mevedel-tool-ask-ui--post-command ()
-  "Synchronize samples with point, including native motion out of a form."
-  (let* ((state (cl-find-if #'mevedel-tool-ask-ui--entry-at-point
-                            mevedel-tool-ask-ui--states))
-         (entry (and state (mevedel-tool-ask-ui--entry-at-point state))))
-    (unless (and (eq state mevedel-tool-ask-ui--active-state)
-                 (equal entry mevedel-tool-ask-ui--active-entry))
-      (when (and mevedel-tool-ask-ui--active-state
-                 (not (eq state mevedel-tool-ask-ui--active-state)))
-        (setf (mevedel-tool-ask-ui--state-focus-question
-               mevedel-tool-ask-ui--active-state) nil
-              (mevedel-tool-ask-ui--state-focus-option
-               mevedel-tool-ask-ui--active-state) nil)
-        (mevedel-tool-ask-ui--sync-sample mevedel-tool-ask-ui--active-state))
-      (setq mevedel-tool-ask-ui--active-state state
-            mevedel-tool-ask-ui--active-entry entry)
-      (when state
-        (setf (mevedel-tool-ask-ui--state-focus-question state)
-              (and (consp entry) (car entry))
-              (mevedel-tool-ask-ui--state-focus-option state)
-              (and (consp entry) (integerp (cdr entry)) (cdr entry)))
-        (mevedel-tool-ask-ui--sync-sample state)))))
+  "Track the entry at point and show its sample, whatever moved point.
+Leaving a form clears its focus but keeps its sample panels as they are."
+  ;; Emacs drops a `post-command-hook' function that signals; a broken
+  ;; render must not silently stop samples following point for good.
+  (with-demoted-errors "mevedel: Ask sample sync failed: %S"
+    (let* ((state (cl-find-if #'mevedel-tool-ask-ui--entry-at-point
+                              mevedel-tool-ask-ui--states))
+           (entry (and state (mevedel-tool-ask-ui--entry-at-point state))))
+      (unless (and (eq state mevedel-tool-ask-ui--active-state)
+                   (equal entry mevedel-tool-ask-ui--active-entry))
+        (when (and mevedel-tool-ask-ui--active-state
+                   (not (eq state mevedel-tool-ask-ui--active-state)))
+          (setf (mevedel-tool-ask-ui--state-focus-question
+                 mevedel-tool-ask-ui--active-state)
+                nil
+                (mevedel-tool-ask-ui--state-focus-option
+                 mevedel-tool-ask-ui--active-state)
+                nil))
+        (setq mevedel-tool-ask-ui--active-state state
+              mevedel-tool-ask-ui--active-entry entry)
+        (when state
+          (setf (mevedel-tool-ask-ui--state-focus-question state)
+                (and (consp entry) (car entry))
+                (mevedel-tool-ask-ui--state-focus-option state)
+                (and (consp entry) (integerp (cdr entry)) (cdr entry)))
+          (mevedel-tool-ask-ui--sync-sample state))))))
 
 (defun mevedel-tool-ask-ui--retire (state)
   "Remove STATE's motion tracking after settlement."
@@ -522,14 +350,152 @@ the frame instead when the block is not on screen."
     (when answer (list (cons "answer" answer))))))
 
 (defun mevedel-tool-ask-ui--sync-sample (state)
-  "Show STATE's focused sample, or close the sample frame."
+  "Show the sample of STATE's option at point in its question's panel.
+Repaints only when point reaches a sample-bearing option its panel does
+not already show; all other motion leaves the form untouched."
   (let ((question (mevedel-tool-ask-ui--state-focus-question state))
-        (sample (mevedel-tool-ask-ui--option-sample
-                 (mevedel-tool-ask-ui--focused-option state))))
-    (if sample
-        (mevedel-tool-ask-ui--sample-show
-         sample (mevedel-tool-ask-ui--state-overlay state) question)
-      (mevedel-tool-ask-ui--sample-close))))
+        (option (mevedel-tool-ask-ui--state-focus-option state)))
+    (when (and (mevedel-tool-ask-ui--option-sample
+                (mevedel-tool-ask-ui--focused-option state))
+               (not (eql option (mevedel-tool-ask-ui--shown-sample
+                                 state question))))
+      (setf (alist-get question
+                       (mevedel-tool-ask-ui--state-sample-shown state))
+            option
+            (alist-get question
+                       (mevedel-tool-ask-ui--state-sample-offsets state)
+                       nil t)
+            nil)
+      (mevedel-tool-ask-ui--refresh state))))
+
+
+;;
+;;; Sample panel
+
+(defcustom mevedel-ask-sample-height 12
+  "Most sample lines an Ask question shows at once.
+A question's sample panel is as tall as its longest sample up to this
+limit, so moving between its options never shifts the form.  Longer
+samples scroll with \\`C-v' and \\`M-v'."
+  :type 'natural
+  :group 'mevedel)
+
+(defun mevedel-tool-ask-ui--sample-lines (state sample)
+  "Return SAMPLE fontified and split into lines, cached in STATE.
+Moving between options repaints the panel, so each sample is fontified
+once per form rather than on every repaint."
+  (let ((cache (or (mevedel-tool-ask-ui--state-sample-cache state)
+                   (setf (mevedel-tool-ask-ui--state-sample-cache state)
+                         (make-hash-table :test #'equal)))))
+    (or (gethash sample cache)
+        (puthash sample
+                 (split-string
+                  (mevedel-view--fontify-as (string-trim-right sample)
+                                            'markdown-mode)
+                  "\n")
+                 cache))))
+
+(defun mevedel-tool-ask-ui--shown-sample (state index)
+  "Return the option index whose sample question INDEX's panel shows.
+STATE holds the form.  The panel keeps the sample-bearing option point
+visited last, so leaving the question or moving onto an option without
+a sample changes nothing.  Before any visit it shows the answer's
+sample, else the first one.  Nil when the question has no samples."
+  (let ((options (mevedel-tool-ask-ui--question-options state index)))
+    (or (alist-get index (mevedel-tool-ask-ui--state-sample-shown state))
+        (when-let* ((answered (mevedel-tool-ask-ui--answered-entry
+                               state index))
+                    ((mevedel-tool-ask-ui--option-sample
+                      (nth answered options))))
+          answered)
+        (cl-position-if #'mevedel-tool-ask-ui--option-sample options))))
+
+(defun mevedel-tool-ask-ui--sample-view (state index)
+  "Return what question INDEX's sample panel shows in STATE, or nil.
+The value is (OPTION LINES HEIGHT OFFSET): the shown option index, its
+sample's fontified lines, the panel height, and the first visible line.
+HEIGHT covers the question's longest sample, not the shown one."
+  (when-let* ((option (mevedel-tool-ask-ui--shown-sample state index)))
+    (let* ((options (mevedel-tool-ask-ui--question-options state index))
+           (lines (mevedel-tool-ask-ui--sample-lines
+                   state (mevedel-tool-ask-ui--option-sample
+                          (nth option options))))
+           (height
+            (max 1 (min mevedel-ask-sample-height
+                        (cl-loop
+                         for candidate in options
+                         for sample = (mevedel-tool-ask-ui--option-sample
+                                       candidate)
+                         when sample
+                         maximize (length (mevedel-tool-ask-ui--sample-lines
+                                           state sample)))))))
+      (list option lines height
+            (min (alist-get index
+                            (mevedel-tool-ask-ui--state-sample-offsets state)
+                            0)
+                 (max 0 (- (length lines) height)))))))
+
+(defun mevedel-tool-ask-ui--sample-row (text)
+  "Return TEXT as one sample panel row, terminating newline included.
+The panel face is layered under TEXT's own fontification, as in
+rendered source blocks; the newline carries it to the window edge."
+  (let* ((row (concat " " text "\n"))
+         (end (length row))
+         (position 0))
+    (while (< position end)
+      (let ((next (or (next-single-property-change
+                       position 'font-lock-face row end)
+                      end)))
+        (put-text-property
+         position next 'font-lock-face
+         (mevedel-view--source-block-font-lock-face
+          (get-text-property position 'font-lock-face row))
+         row)
+        (setq position next)))
+    (concat "     " (propertize row 'wrap-prefix "      "))))
+
+(defun mevedel-tool-ask-ui--sample-panel (state index)
+  "Return question INDEX's sample panel for STATE, or the empty string.
+The panel is a title row naming the shown option followed by exactly
+its question's panel height of sample rows."
+  (pcase (mevedel-tool-ask-ui--sample-view state index)
+    (`(,option ,lines ,height ,offset)
+     (let ((total (length lines)))
+       (concat
+        (mevedel-tool-ask-ui--sample-row
+         (concat
+          (propertize "Sample · " 'font-lock-face 'shadow)
+          (mevedel-tool-ask-ui--format-option
+           (nth option (mevedel-tool-ask-ui--question-options state index)))
+          (when (> total height)
+            (propertize
+             (format "  ·  lines %d–%d of %d  C-v/M-v"
+                     (1+ offset) (+ offset height) total)
+             'font-lock-face 'shadow))))
+        (mapconcat #'mevedel-tool-ask-ui--sample-row
+                   (cl-loop for line from offset below (+ offset height)
+                            collect (or (nth line lines) ""))
+                   ""))))
+    (_ "")))
+
+(defun mevedel-tool-ask-ui--sample-scroll (state pages)
+  "Scroll the sample panel at point in STATE by PAGES.
+Without a panel taller than its window, scroll the window instead, so
+\\`C-v' and \\`M-v' keep their usual meaning elsewhere in the form."
+  (pcase-let* ((index (get-text-property (point) 'mevedel-ask-question))
+               (`(,_ ,lines ,height ,offset)
+                (and (integerp index)
+                     (mevedel-tool-ask-ui--sample-view state index))))
+    (if (not (and lines (> (length lines) height)))
+        (call-interactively
+         (if (> pages 0) #'scroll-up-command #'scroll-down-command))
+      (let ((target (max 0 (min (- (length lines) height)
+                                (+ offset (* pages (max 1 (1- height))))))))
+        (unless (= target offset)
+          (setf (alist-get index
+                           (mevedel-tool-ask-ui--state-sample-offsets state))
+                target)
+          (mevedel-tool-ask-ui--refresh state))))))
 
 (defun mevedel-tool-ask-ui--dispatch (state action &optional value)
   "Apply ACTION with optional VALUE to Ask STATE."
@@ -586,17 +552,16 @@ the frame instead when the block is not on screen."
                     (cons next 0)
                   'submit)))
       ('submit
-       (mevedel-tool-ask-ui--sample-close)
        (mevedel--prompt--settle
         (mevedel-tool-ask-ui--state-overlay state)
         (mevedel-tool-ask-ui--submission-text state)))
       ('cancel
-       (mevedel-tool-ask-ui--sample-close)
        (mevedel--prompt--settle
         (mevedel-tool-ask-ui--state-overlay state) 'aborted))
       ('abort
        (mevedel-tool-ask-ui--dispatch state 'cancel)
        (mevedel-abort))
+      ('scroll (mevedel-tool-ask-ui--sample-scroll state value))
       ('remote-answer
        (when (= (length value) (mevedel-tool-ask-ui--state-count state))
          (cl-loop for answer in value
@@ -636,12 +601,12 @@ the frame instead when the block is not on screen."
      keymap (kbd "C-v")
      (lambda ()
        (interactive)
-       (mevedel-tool-ask-ui--sample-scroll #'scroll-up-command)))
+       (mevedel-tool-ask-ui--dispatch state 'scroll 1)))
     (define-key
      keymap (kbd "M-v")
      (lambda ()
        (interactive)
-       (mevedel-tool-ask-ui--sample-scroll #'scroll-down-command)))
+       (mevedel-tool-ask-ui--dispatch state 'scroll -1)))
     keymap))
 
 (defun mevedel-tool-ask-ui--option-lines (state index entry)
@@ -691,7 +656,7 @@ the frame instead when the block is not on screen."
                       'mouse-face 'highlight))))
 
 (defun mevedel-tool-ask-ui--question-block (state index)
-  "Return question INDEX rendered for STATE."
+  "Return question INDEX rendered for STATE, terminating newline included."
   (let* ((question
           (plist-get
            (nth index (mevedel-tool-ask-ui--state-questions state))
@@ -713,15 +678,19 @@ the frame instead when the block is not on screen."
            'wrap-prefix "     ")))
     (propertize
      (if collapsed
-         (propertize heading 'mevedel-ask-entry (cons index 'summary)
-                     'mouse-face 'highlight
-                     'help-echo "RET or click to edit this answer")
+         (concat
+          (propertize heading 'mevedel-ask-entry (cons index 'summary)
+                      'mouse-face 'highlight
+                      'help-echo "RET or click to edit this answer")
+          "\n")
        (concat heading "\n"
                (mapconcat
                 (lambda (entry)
                   (string-join (mevedel-tool-ask-ui--option-lines state index entry) "\n"))
                 (number-sequence 0 (1- (mevedel-tool-ask-ui--entry-count state index)))
-                "\n")))
+                "\n")
+               "\n"
+               (mevedel-tool-ask-ui--sample-panel state index)))
      'mevedel-ask-question index)))
 
 (defun mevedel-tool-ask-ui--footer ()
@@ -746,8 +715,8 @@ the frame instead when the block is not on screen."
            (mapconcat
             (lambda (index) (mevedel-tool-ask-ui--question-block state index))
             (number-sequence 0 (1- (mevedel-tool-ask-ui--state-count state)))
-            "\n\n")
-           "\n\n"
+            "\n")
+           "\n"
            (propertize
             (concat
              (propertize "  [ Submit ]" 'font-lock-face 'bold)
@@ -825,7 +794,6 @@ the frame instead when the block is not on screen."
   "Show QUESTIONS as one form and settle it through CALLBACK."
   (mevedel-tools--validate-params callback mevedel-tool-ask-ui-show
     (questions (vectorp . "array")))
-  (require 'mevedel-directive-frame)
   (let* ((source-buffer (current-buffer))
          (questions-list (append questions nil))
          (state
