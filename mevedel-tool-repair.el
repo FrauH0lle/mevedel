@@ -160,8 +160,11 @@
    (t 'unknown)))
 
 (defun mevedel-tool-repair--type-p (type value)
-  "Return non-nil when VALUE satisfies schema TYPE."
+  "Return non-nil when VALUE satisfies schema TYPE.
+A schema without a type accepts any value, as in JSON Schema; Ask options
+are strings or objects."
   (pcase type
+    ('nil t)
     ((or 'string 'path 'path-or-resource) (stringp value))
     ('integer (integerp value))
     ('number (numberp value))

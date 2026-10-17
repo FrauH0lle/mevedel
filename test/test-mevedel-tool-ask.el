@@ -55,6 +55,17 @@
        '(:questions [(:question "Where?" :options ["Here" (:label "There" :description "Far")])]))
       (should shown)))
 
+  :doc "the registered schema validates mixed string and object options"
+  (progn
+    (require 'mevedel-tool-repair)
+    (mevedel-tool-ask-register)
+    (let ((tool (mevedel-tool-get "Ask")))
+      ;; The live failure was the schema check itself, not the arguments.
+      (should-not
+       (mevedel-tool-repair-validate
+        tool '(:questions [(:question "Where?"
+                            :options ["Here" (:label "There" :sample "far")])])))))
+
   :doc "a cancelled questionnaire reports an error result, not success"
   ;; Quit settles with the bare symbol `aborted'; passed through, the
   ;; pipeline recorded the call as a success the renderer showed as
