@@ -863,7 +863,7 @@ Returns (buffer . overlay)."
                                         (plist-get result :reminder)))
             (should (equal (secure-hash
                             'sha1 "1\tcommitted artifact\n")
-                           (plist-get result :hash)))))
+                           (plist-get result :hash))))
           (delete-file fixed)
           (let ((result
                  (mevedel--handle-file-mention
@@ -940,9 +940,13 @@ Returns (buffer . overlay)."
                             (buffer-string))))
                   (mevedel-request-drain-cancellers request)
                   (should-not (file-exists-p staged))
-                  (should-not gptel-context)))))
+                  (should-not gptel-context))))))
       (when (file-directory-p local-root)
-        (delete-directory local-root t))))
+        (delete-directory local-root t))
+      ;; All remote checks must stay inside the connection-owning fixture.
+      ;; A surviving shell becomes unusable after another test reloads TRAMP.
+      (should-not (tramp-get-connection-process
+                   (tramp-dissect-file-name remote-root)))))
 
   :doc "media file on unsupported model yields graceful placeholder"
   (let* ((tmp (make-temp-file "mevedel-file-" nil ".png" "not really png\n"))
