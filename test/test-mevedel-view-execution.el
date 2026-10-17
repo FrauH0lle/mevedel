@@ -166,6 +166,18 @@
       (cl-letf (((symbol-function 'mevedel-background-list-open) (lambda (&optional _) (setq opened t))))
         (mevedel-view-execution-test--activate "[Manage]")
         (should opened))))
+  :doc "hover highlight covers one row, not its neighbours"
+  (mevedel-view-execution-test--with-view
+    (setq live (append live (list (plist-put (copy-sequence (car live)) :execution-id "e2"))))
+    (mevedel-view--render-status)
+    (mevedel-view-execution-test--at "  ▸ Running")
+    (let ((start (point)))
+      (should (eq 'highlight (get-text-property start 'mouse-face)))
+      (end-of-line)
+      ;; The newline still activates the row but ends its highlight run.
+      (should-not (get-text-property (point) 'mouse-face))
+      (should (functionp (get-text-property (point) 'mevedel-view-zone-activate)))
+      (should (= (point) (next-single-property-change start 'mouse-face)))))
   :doc "same-command IDs have independent selection and one expanded item"
   (mevedel-view-execution-test--with-view
     (setq live (append live (list (plist-put (copy-sequence (car live)) :execution-id "e2"))))

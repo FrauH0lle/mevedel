@@ -160,11 +160,17 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
   (mevedel-view--render-status))
 
 (defun mevedel-view-execution--action (text function)
-  "Return TEXT carrying the local action FUNCTION, including its margins."
-  (propertize text
-              'keymap (mevedel-view--display-fragment-keymap)
-              'mouse-face 'highlight
-              'mevedel-view-zone-activate function))
+  "Return TEXT carrying the local action FUNCTION, including its margins.
+A trailing newline stays activatable but gets no `mouse-face': Emacs
+highlights a contiguous run of one `mouse-face' as a single region, so
+highlighting row ends would join adjacent rows into one hover."
+  (let ((text (propertize text
+                          'keymap (mevedel-view--display-fragment-keymap)
+                          'mouse-face 'highlight
+                          'mevedel-view-zone-activate function)))
+    (when (string-suffix-p "\n" text)
+      (remove-text-properties (1- (length text)) (length text) '(mouse-face nil) text))
+    text))
 
 (defun mevedel-view-execution--face (text face)
   "Return TEXT displayed with FACE, whether or not font-lock is active."
