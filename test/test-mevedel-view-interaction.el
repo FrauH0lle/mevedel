@@ -97,7 +97,8 @@
         (should (get-text-property (point) 'mevedel-prompt-focus))
         (call-interactively (key-binding (kbd "RET")))
         (should-not answer)
-        (should (get-text-property (point) 'mevedel-prompt-focus))
+        ;; Answering the only question keeps point in the form, on Submit.
+        (should (eq 'submit (get-text-property (point) 'mevedel-ask-entry)))
         (call-interactively (key-binding (kbd "C-c C-c")))
         (should (string-match-p "A1: Yes" answer))
         (should (= (point) (+ (mevedel-view--input-start) 3)))
