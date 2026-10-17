@@ -523,11 +523,17 @@
   (test)
   :doc "accepts the minimal spawn contract and rejects malformed values"
   (let ((session (mevedel-agent-control-test--session)))
-    (should-not
-     (mevedel-agent-control--validate-spawn session "task_2" "Do work."))
-    (dolist (task-name '(nil "" "Upper" "two/parts" "root"))
-      (should-error
+    (dolist (task-name '("task_2" "switch-buffer-error" "task-2_child" "-"))
+      (should-not
        (mevedel-agent-control--validate-spawn session task-name "Do work.")))
+    (dolist (task-name '(nil "" "Upper" "two/parts" "root" "." ".."
+                        "two words" "task.name" "task\\name" "caf\u00e9"))
+      (let ((err (should-error
+                  (mevedel-agent-control--validate-spawn
+                   session task-name "Do work.")
+                  :type 'user-error)))
+        (should (equal "Agent task_name must match [a-z0-9_-]+ and must not be root"
+                       (cadr err)))))
     (dolist (message '(nil ""))
       (should-error
        (mevedel-agent-control--validate-spawn session "task" message)))))

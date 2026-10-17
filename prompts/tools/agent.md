@@ -13,7 +13,8 @@ agent with your effective instructions and capabilities.
 
 ### How to use `Agent`
 
-- `task_name` is one lowercase ASCII segment of letters, digits, and underscores.
+- `task_name` is one segment matching `[a-z0-9_-]+`: lowercase ASCII letters,
+  digits, underscores, or hyphens. The name `root` is reserved.
   `message` is the complete assigned task, even when copying parent context.
   Success returns the child's canonical path, such as `/root/spec_review`.
 - **General-purpose (omit `role`)**: use for ordinary delegation, including

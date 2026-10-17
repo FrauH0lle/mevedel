@@ -178,10 +178,14 @@
   ,test
   (test)
   :doc "accepts root and lowercase ASCII descendant segments only"
-  (dolist (path '("/root" "/root/alpha" "/root/alpha/child_2"))
+  (dolist (path '("/root" "/root/alpha" "/root/alpha/child_2"
+                  "/root/switch-buffer-error" "/root/task-2/child_3-next"
+                  "/root/-"))
     (should (mevedel-agent-path-p path)))
   (dolist (path '(nil "" "root" "/root/" "/root/Upper"
                   "/root/../peer" "/root/alpha//child"
+                  "/root/." "/root/two words" "/root/task.name"
+                  "/root/task\\name" "/root/caf\u00e9"
                   "default--opaque"))
     (should-not (mevedel-agent-path-p path))))
 

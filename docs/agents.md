@@ -9,9 +9,11 @@ stay within its existing JSON response schema. Only the main prompt receives
 the recent journal map; all roles may use permitted journal reads on demand.
 
 The model-facing `Agent` tool starts a retained child asynchronously. It
-accepts a lowercase `task_name` path segment, a complete `message`, and
-optional `role`, `context`, `model`, and `effort` controls, then returns the
-committed canonical path after preparation and provider dispatch succeed.
+accepts a `task_name` path segment matching `[a-z0-9_-]+` (lowercase ASCII
+letters, digits, underscores, and hyphens; `root` is reserved), a complete
+`message`, and optional `role`, `context`, `model`, and `effort` controls, then
+returns the committed canonical path after preparation and provider dispatch
+succeed.
 An omitted role selects `default` and inherits the delegator's effective
 instructions, tools, model policy, and delegation capability. A named role
 supplies its own configuration rather than intersecting its tools with the

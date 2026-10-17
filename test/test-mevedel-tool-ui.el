@@ -117,6 +117,20 @@
       (should (string-match-p "Select a named role for its specialization"
                               (plist-get role-arg :description)))))
 
+  :doc "Agent advertises the exact task-name alphabet and reserved name"
+  (progn
+    (mevedel-tool-ui--register)
+    (let* ((tool (mevedel-tool-get "Agent"))
+           (provider-tool (mevedel-tool-gptel-tool tool))
+           (task-arg (cl-find "task_name" (gptel-tool-args provider-tool)
+                              :key (lambda (arg) (plist-get arg :name))
+                              :test #'equal)))
+      (dolist (text (list (mevedel-tool-prompt tool)
+                         (plist-get task-arg :description)))
+        (should (string-match-p (regexp-quote "[a-z0-9_-]+") text))
+        (should (string-match-p "hyphens" text))
+        (should (string-match-p "root.*reserved" text)))))
+
   :doc "a request's role and model rosters never reach the shared schema"
   (let ((gptel--known-tools nil)
         (mevedel-agent--registry
@@ -330,9 +344,15 @@
             (let (result)
               (mevedel-tool-ui--agent
                (lambda (value &rest _) (setq result value))
-               '(:task_name "after_completion"
+               '(:task_name "switch-buffer-error"
                  :message "Use the released slot."))
-              (should result))
+              (should (equal "/root/switch-buffer-error"
+                             (gethash "path" (json-parse-string
+                                              (plist-get result :result)))))
+              (dolist (target '("switch-buffer-error" "/root/switch-buffer-error"))
+                (should (equal "/root/switch-buffer-error"
+                               (mevedel-agent-control-resolve-path
+                                session "/root" target)))))
             (should-error
              (mevedel-tool-ui--agent
               #'ignore

@@ -219,7 +219,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **agent context selection** — The context chosen when creating a child agent: isolated, task-focused summary, complete parent context, or a positive number of recent parent turns. Any parent material is frozen at selection time and later parent turns are not synchronized into the child. _Avoid_: agent context fork
 - **agent task background** — A task-focused handoff context summary persisted as advisory child conversation context immediately before the authoritative Agent Task. It is neither a replayed parent turn nor a child assignment.
 - **agent model policy** — The model and reasoning effort resolved for an agent from parent defaults, then role or workload policy, then optional explicit Agent overrides.
-- **agent task name** — The caller-supplied local name of a child agent, restricted to lowercase ASCII letters, digits, and underscores.
+- **agent task name** — The caller-supplied local name of a child agent, restricted to lowercase ASCII letters, digits, underscores, and hyphens; `root` is reserved.
 - **agent path** — The stable model- and user-facing address formed by joining an agent's task name to its parent's path, such as `/root/spec_review`. It is distinct from the opaque storage identity.
 - **relative agent path** — A model-facing descendant address resolved beneath the caller's canonical path. Cross-branch or ancestor targets use canonical paths instead.
 - **agent roster** — The tree-wide, path-sorted list of retained agents exposed by ListAgents, with each agent's path, role, and current activity status.

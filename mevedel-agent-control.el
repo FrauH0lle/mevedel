@@ -889,10 +889,10 @@ rewrite after the complete registry has been repaired."
     (error "Agent requires an active mevedel session"))
   (unless (and (stringp task-name)
                (let ((case-fold-search nil))
-                 (string-match-p "\\`[a-z0-9_]+\\'" task-name))
+                 (string-match-p "\\`[a-z0-9_-]+\\'" task-name))
                (not (equal task-name "root")))
     (user-error
-     "Agent task_name must be one lowercase ASCII path segment"))
+     "Agent task_name must match [a-z0-9_-]+ and must not be root"))
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "Agent message must be non-empty plain text")))
 

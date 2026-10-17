@@ -32,7 +32,7 @@
   (and (stringp path)
        (let ((case-fold-search nil))
          (string-match-p
-          "\\`/root\\(?:/[a-z0-9_]+\\)*\\'" path))))
+          "\\`/root\\(?:/[a-z0-9_-]+\\)*\\'" path))))
 
 
 ;;
