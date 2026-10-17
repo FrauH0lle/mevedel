@@ -30,7 +30,6 @@
 (declare-function mevedel--prompt-attribution-line
                   "mevedel-interaction-prompt" (origin))
 (defvar mevedel--prompt-overlays)
-(defvar mevedel-interaction-prompt-settled-hook)
 (autoload 'mevedel--prompt--data-buffer "mevedel-interaction-prompt")
 (autoload 'mevedel--prompt--register-canceller "mevedel-interaction-prompt")
 (autoload 'mevedel--prompt--settle "mevedel-interaction-prompt")
@@ -162,11 +161,12 @@ and is deliberately not reused here."
      (:constructor mevedel-tool-ask-ui--state-create))
   "Mutable state of one Ask questionnaire.
 SAMPLE-SHOWN and SAMPLE-OFFSETS are alists from question index to the
-option its sample panel shows and to the panel's first visible line.
-SAMPLE-CACHE maps sample strings to their fontified lines."
+option its sample panel shows and to the panel's first visible row.
+SAMPLE-CACHE maps sample strings to their fontified lines; SAMPLE-ROWS
+is (WIDTH . TABLE), mapping samples to their rows at WIDTH."
   callback source-buffer origin questions count answers chat-buffer
-  interaction-id overlay focus-question focus-option expanded
-  sample-shown sample-offsets sample-cache)
+  interaction-id overlay expanded
+  sample-shown sample-offsets sample-cache sample-rows)
 
 (defvar-local mevedel-tool-ask-ui--states nil
   "Live Ask forms in this buffer.")
@@ -227,8 +227,7 @@ group, named `submit'."
     (nreverse heads)))
 
 (defun mevedel-tool-ask-ui--post-command ()
-  "Track the entry at point and show its sample, whatever moved point.
-Leaving a form clears its focus but keeps its sample panels as they are."
+  "Track the entry at point and show its sample, whatever moved point."
   ;; Emacs drops a `post-command-hook' function that signals; a broken
   ;; render must not silently stop samples following point for good.
   (with-demoted-errors "mevedel: Ask sample sync failed: %S"
@@ -237,22 +236,17 @@ Leaving a form clears its focus but keeps its sample panels as they are."
            (entry (and state (mevedel-tool-ask-ui--entry-at-point state))))
       (unless (and (eq state mevedel-tool-ask-ui--active-state)
                    (equal entry mevedel-tool-ask-ui--active-entry))
-        (when (and mevedel-tool-ask-ui--active-state
-                   (not (eq state mevedel-tool-ask-ui--active-state)))
-          (setf (mevedel-tool-ask-ui--state-focus-question
-                 mevedel-tool-ask-ui--active-state)
-                nil
-                (mevedel-tool-ask-ui--state-focus-option
-                 mevedel-tool-ask-ui--active-state)
-                nil))
         (setq mevedel-tool-ask-ui--active-state state
               mevedel-tool-ask-ui--active-entry entry)
         (when state
-          (setf (mevedel-tool-ask-ui--state-focus-question state)
-                (and (consp entry) (car entry))
-                (mevedel-tool-ask-ui--state-focus-option state)
-                (and (consp entry) (integerp (cdr entry)) (cdr entry)))
-          (mevedel-tool-ask-ui--sync-sample state))))))
+          (mevedel-tool-ask-ui--sync-sample state entry))))))
+
+(defun mevedel-tool-ask-ui--settled-p (state)
+  "Return non-nil once STATE's form has been settled.
+A minibuffer answer can return after a run abort or a guest answer
+settled the form; nothing may repaint or record into it then."
+  (when-let* ((overlay (mevedel-tool-ask-ui--state-overlay state)))
+    (overlay-get overlay 'mevedel-settled)))
 
 (defun mevedel-tool-ask-ui--retire (state)
   "Remove STATE's motion tracking after settlement."
@@ -280,13 +274,17 @@ Leaving a form clears its focus but keeps its sample panels as they are."
   "Return non-nil when OPTION is question INDEX's custom entry in STATE."
   (= option (length (mevedel-tool-ask-ui--question-options state index))))
 
-(defun mevedel-tool-ask-ui--focused-option (state)
-  "Return the option object currently focused in STATE, or nil."
-  (let ((question (mevedel-tool-ask-ui--state-focus-question state))
-        (option (mevedel-tool-ask-ui--state-focus-option state)))
-    (when (and (integerp question) (integerp option)
-               (not (mevedel-tool-ask-ui--custom-entry-p state question option)))
-      (nth option (mevedel-tool-ask-ui--question-options state question)))))
+(defun mevedel-tool-ask-ui--entry-option (state entry)
+  "Return the option object ENTRY names in STATE, or nil.
+Custom rows, summaries and Submit name no option."
+  (pcase entry
+    (`(,question . ,(and (pred integerp) option))
+     (nth option (mevedel-tool-ask-ui--question-options state question)))))
+
+(defun mevedel-tool-ask-ui--question-open-p (state index)
+  "Return non-nil when question INDEX of STATE shows its options."
+  (or (not (aref (mevedel-tool-ask-ui--state-answers state) index))
+      (memq index (mevedel-tool-ask-ui--state-expanded state))))
 
 (defun mevedel-tool-ask-ui--answered-entry (state index)
   "Return the entry selected by question INDEX's answer in STATE."
@@ -303,13 +301,13 @@ Leaving a form clears its focus but keeps its sample panels as they are."
   (cl-count-if #'identity
                (mevedel-tool-ask-ui--state-answers state)))
 
-(defun mevedel-tool-ask-ui--next-unanswered (state)
-  "Return the next unanswered question index in STATE, or nil."
+(defun mevedel-tool-ask-ui--next-unanswered (state from)
+  "Return the next unanswered question index in STATE after FROM, or nil.
+The search wraps around to questions before FROM."
   (let ((count (mevedel-tool-ask-ui--state-count state))
-        (current (mevedel-tool-ask-ui--state-focus-question state))
         (answers (mevedel-tool-ask-ui--state-answers state)))
     (cl-loop for step from 1 to count
-             for index = (% (+ current step) count)
+             for index = (% (+ from step) count)
              unless (aref answers index) return index)))
 
 (defun mevedel-tool-ask-ui--submission-text (state)
@@ -361,14 +359,14 @@ Leaving a form clears its focus but keeps its sample panels as they are."
         (mevedel-tool-ask-ui--question-options state index)))))
     (when answer (list (cons "answer" answer))))))
 
-(defun mevedel-tool-ask-ui--sync-sample (state)
-  "Show the sample of STATE's option at point in its question's panel.
+(defun mevedel-tool-ask-ui--sync-sample (state entry)
+  "Show the sample of ENTRY, the row at point, in its question's panel.
+STATE holds the form.
 Repaints only when point reaches a sample-bearing option its panel does
 not already show; all other motion leaves the form untouched."
-  (let ((question (mevedel-tool-ask-ui--state-focus-question state))
-        (option (mevedel-tool-ask-ui--state-focus-option state)))
+  (pcase-let ((`(,question . ,option) entry))
     (when (and (mevedel-tool-ask-ui--option-sample
-                (mevedel-tool-ask-ui--focused-option state))
+                (mevedel-tool-ask-ui--entry-option state entry))
                (not (eql option (mevedel-tool-ask-ui--shown-sample
                                  state question))))
       (setf (alist-get question
@@ -403,46 +401,70 @@ samples scroll with \\`C-v' and \\`M-v'."
 (defun mevedel-tool-ask-ui--wrap-sample-line (line width)
   "Split fontified LINE into rows at WIDTH, marking continuation rows.
 Prefer whitespace boundaries, preserving all text and its properties.
-Long words break at a character boundary that fits the display width.
-Expand tabs so their width is independent of the panel's indentation."
+Long words break only between glyphs.  An oversized glyph gets its own
+row, even if it exceeds WIDTH, so wrapping always makes progress.
+Expand tabs so their width is independent of the panel's indentation.
+Column widths are conservative for composed glyphs such as emoji."
   (when (string-match-p "\t" line)
     (setq line (with-temp-buffer
                  (insert line)
                  (untabify (point-min) (point-max))
                  (buffer-string))))
-  (let ((prefix "") rows)
-    (while (> (string-width line) (- width (string-width prefix)))
-      (let* ((chunk (truncate-string-to-width
-                     line (- width (string-width prefix))))
-             (cut (length chunk))
-             (position 0)
-             boundary)
-        (while (string-match "[^ \t]+[ \t]+" chunk position)
-          (setq boundary (match-end 0)
-                position boundary))
-        (when boundary (setq cut boundary))
-        (push (concat prefix (substring line 0 cut)) rows)
-        (setq line (substring line cut)
-              prefix (propertize "↪ " 'font-lock-face 'shadow))))
-    (nreverse (cons (concat prefix line) rows))))
+  (let ((glyphs (mapcar
+                 (lambda (glyph) (cons glyph (string-width glyph)))
+                 ;; Automatic composition needs a displayed buffer, including
+                 ;; when a hidden view is rendered before it is first shown.
+                 (with-current-buffer
+                     (window-buffer (or (get-buffer-window (current-buffer) t)
+                                        (selected-window)))
+                   (string-glyph-split line))))
+        (prefix "") rows)
+    (while glyphs
+      (let ((columns (string-width prefix)) row word boundary rest)
+        ;; Accept at least one whole glyph, even when it cannot fit.
+        (while (and glyphs
+                    (or (null row) (<= (+ columns (cdar glyphs)) width)))
+          (let ((glyph (pop glyphs)))
+            (setq columns (+ columns (cdr glyph)))
+            (push (car glyph) row)
+            (if (string-match-p "\\`[ \t]+\\'" (car glyph))
+                (when word (setq boundary row rest glyphs))
+              (setq word t))))
+        (when glyphs
+          (if boundary
+              (setq row boundary glyphs rest)
+            ;; A space just beyond a full word belongs to that row, not
+            ;; after the continuation marker.  Keep all original text.
+            (when word
+              (while (and glyphs
+                          (string-match-p "\\`[ \t]+\\'" (caar glyphs)))
+                (push (car (pop glyphs)) row)))))
+        (push (concat prefix (apply #'concat (nreverse row))) rows)
+        (setq prefix (propertize "↪ " 'font-lock-face 'shadow))))
+    (or (nreverse rows) '(""))))
 
 (defun mevedel-tool-ask-ui--sample-lines (state sample width)
   "Return SAMPLE fontified and wrapped to WIDTH, cached in STATE.
 Moving between options repaints the panel, so each sample is fontified
-and wrapped once per width rather than on every repaint."
-  (let ((cache (or (mevedel-tool-ask-ui--state-sample-cache state)
-                   (setf (mevedel-tool-ask-ui--state-sample-cache state)
-                         (make-hash-table :test #'equal)))))
-    (or (gethash (cons sample width) cache)
-        (puthash (cons sample width)
-                 (mapcan
-                  (lambda (line)
-                    (mevedel-tool-ask-ui--wrap-sample-line line width))
-                  (split-string
-                   (mevedel-view--fontify-as (string-trim-right sample)
-                                           'markdown-mode)
-                   "\n"))
-                 cache))))
+once per form and wrapped once per width.  Only the current width's rows
+are kept, so resizing does not accumulate them."
+  (let ((fontified (or (mevedel-tool-ask-ui--state-sample-cache state)
+                       (setf (mevedel-tool-ask-ui--state-sample-cache state)
+                             (make-hash-table :test #'equal))))
+        (rows (mevedel-tool-ask-ui--state-sample-rows state)))
+    (unless (eql (car rows) width)
+      (setq rows (setf (mevedel-tool-ask-ui--state-sample-rows state)
+                       (cons width (make-hash-table :test #'equal)))))
+    (with-memoization (gethash sample (cdr rows))
+      (mapcan
+       (lambda (line)
+         (mevedel-tool-ask-ui--wrap-sample-line line width))
+       (copy-sequence
+        (with-memoization (gethash sample fontified)
+          (split-string
+           (mevedel-view--fontify-as (string-trim-right sample)
+                                     'markdown-mode)
+           "\n")))))))
 
 (defun mevedel-tool-ask-ui--shown-sample (state index)
   "Return the option index whose sample question INDEX's panel shows.
@@ -542,9 +564,7 @@ Without an overflowing visible panel, scroll the window instead, so
   (pcase-let* ((index (get-text-property (point) 'mevedel-ask-question))
                (`(,_ ,lines ,height ,offset)
                 (and (integerp index)
-                     (or (not (aref (mevedel-tool-ask-ui--state-answers state)
-                                    index))
-                         (memq index (mevedel-tool-ask-ui--state-expanded state)))
+                     (mevedel-tool-ask-ui--question-open-p state index)
                      (mevedel-tool-ask-ui--sample-view state index))))
     (if (not (and lines (> (length lines) height)))
         (call-interactively
@@ -558,96 +578,112 @@ Without an overflowing visible panel, scroll the window instead, so
           (mevedel-tool-ask-ui--refresh state))))))
 
 (defun mevedel-tool-ask-ui--dispatch (state action &optional value)
-  "Apply ACTION with optional VALUE to Ask STATE."
+  "Apply ACTION with optional VALUE to Ask STATE.
+Actions act on the entry at point; `record' takes (QUESTION . ANSWER)
+instead, because a minibuffer answer returns after point may have moved.
+A settled form ignores every action."
   (with-current-buffer (mevedel-tool-ask-ui--state-chat-buffer state)
-   (mevedel-tool-ask-ui--post-command)
-   (let* ((identity (mevedel-tool-ask-ui--entry-at-point state))
-          (question (and (consp identity) (car identity)))
-          (option (and (consp identity) (cdr identity))))
-    (pcase action
-      ((or 'next 'previous)
-       (let* ((entries (mevedel-tool-ask-ui--entry-positions state))
-              (positions (if (eq action 'next) entries (reverse entries)))
-              (target (cl-find-if
-                       (lambda (entry)
-                         (if (eq action 'next)
-                             (> (cdr entry) (point))
-                           (< (cdr entry)
-                              (or (cdr (assoc identity entries)) (point)))))
-                       positions)))
-         (when target
-           (mevedel-tool-ask-ui--goto-entry state (car target)))))
-      ((or 'next-question 'previous-question)
-       (let* ((heads (mevedel-tool-ask-ui--question-heads state))
-              (current (or (and (consp identity) (car identity))
-                           identity
+    (unless (mevedel-tool-ask-ui--settled-p state)
+      (mevedel-tool-ask-ui--post-command)
+      (let* ((identity (mevedel-tool-ask-ui--entry-at-point state))
+             (question (or (and (consp identity) (car identity))
                            (get-text-property (point) 'mevedel-ask-question)))
-              (index (cl-position current heads :key #'car :test #'equal))
-              (target
-               (if (eq action 'next-question)
-                   (if index
-                       (nth (1+ index) heads)
-                     (cl-find-if (lambda (head) (> (cddr head) (point))) heads))
-                 (if index
-                     (and (> index 0) (nth (1- index) heads))
-                   (cl-find-if (lambda (head) (< (cddr head) (point)))
-                               (reverse heads))))))
-         (when target
-           (mevedel-tool-ask-ui--goto-entry state (cadr target)))))
-      ('focus
-       (when (and question (integerp option)
-                  (< value (mevedel-tool-ask-ui--entry-count state question)))
-         (mevedel-tool-ask-ui--goto-entry state (cons question value))))
-      ('pick
-       (cond
-        ((eq identity 'submit) (mevedel-tool-ask-ui--dispatch state 'submit))
-        ((eq option 'summary)
-         (cl-pushnew question (mevedel-tool-ask-ui--state-expanded state))
-         (mevedel-tool-ask-ui--refresh
-          state nil (cons question (mevedel-tool-ask-ui--answered-entry state question))))
-        ((integerp option)
-         (if (mevedel-tool-ask-ui--custom-entry-p state question option)
-             (mevedel-tool-ask-ui--dispatch state 'custom)
-           (mevedel-tool-ask-ui--dispatch
-            state 'record
-            (mevedel-tool-ask-ui--option-label
-             (nth option (mevedel-tool-ask-ui--question-options state question))))))))
-      ('custom
-       (when question
-         (let ((answer
-                (read-string
-                 (format "Answer %d: " (1+ question))
-                 (aref (mevedel-tool-ask-ui--state-answers state) question))))
-           (unless (string-blank-p answer)
-             (mevedel-tool-ask-ui--dispatch state 'record answer)))))
-      ('record
-       (aset (mevedel-tool-ask-ui--state-answers state) question value)
-       (setf (mevedel-tool-ask-ui--state-expanded state)
-             (delq question (mevedel-tool-ask-ui--state-expanded state)))
-       (mevedel-tool-ask-ui--refresh
-        state t (if-let* ((next (mevedel-tool-ask-ui--next-unanswered state)))
-                    (cons next 0)
-                  'submit)))
-      ('submit
-       (mevedel--prompt--settle
-        (mevedel-tool-ask-ui--state-overlay state)
-        (mevedel-tool-ask-ui--submission-text state)))
-      ('cancel
-       (mevedel--prompt--settle
-        (mevedel-tool-ask-ui--state-overlay state) 'aborted))
-      ('abort
-       (mevedel-tool-ask-ui--dispatch state 'cancel)
-       (mevedel-abort))
-      ('scroll (mevedel-tool-ask-ui--sample-scroll state value))
-      ('remote-answer
-       (when (= (length value) (mevedel-tool-ask-ui--state-count state))
-         (cl-loop for answer in value
-                  for index from 0
-                  do (aset
-                      (mevedel-tool-ask-ui--state-answers state)
-                      index
-                      (unless (string-blank-p answer) answer)))
-         (mevedel-tool-ask-ui--dispatch state 'submit)))))))
+             (option (and (consp identity) (cdr identity))))
+        (pcase action
+          ((or 'next 'previous)
+           ;; Measure from the row's glyph, not point: a row's identity
+           ;; starts at its indentation, so from column 0 `next' would
+           ;; otherwise find the row point is already on.
+           (let* ((entries (mevedel-tool-ask-ui--entry-positions state))
+                  (from (or (cdr (assoc identity entries)) (point)))
+                  (target (if (eq action 'next)
+                              (cl-find-if (lambda (entry) (> (cdr entry) from))
+                                          entries)
+                            (cl-find-if (lambda (entry) (< (cdr entry) from))
+                                        (reverse entries)))))
+             (when target
+               (mevedel-tool-ask-ui--goto-entry state (car target)))))
+          ((or 'next-question 'previous-question)
+           (let* ((heads (mevedel-tool-ask-ui--question-heads state))
+                  (index (cl-position (or question identity) heads
+                                      :key #'car :test #'equal))
+                  (target
+                   (if (eq action 'next-question)
+                       (if index
+                           (nth (1+ index) heads)
+                         (cl-find-if (lambda (head) (> (cddr head) (point)))
+                                     heads))
+                     (if index
+                         (and (> index 0) (nth (1- index) heads))
+                       (cl-find-if (lambda (head) (< (cddr head) (point)))
+                                   (reverse heads))))))
+             (when target
+               (mevedel-tool-ask-ui--goto-entry state (cadr target)))))
+          ('focus
+           ;; Digits pick among the open question's options, from its
+           ;; heading too; the custom row is reached with `c'.
+           (when (and (integerp question)
+                      (mevedel-tool-ask-ui--question-open-p state question)
+                      (< value (length (mevedel-tool-ask-ui--question-options
+                                        state question))))
+             (mevedel-tool-ask-ui--goto-entry state (cons question value))))
+          ('pick
+           (cond
+            ((eq identity 'submit) (mevedel-tool-ask-ui--dispatch state 'submit))
+            ((eq option 'summary)
+             (cl-pushnew question (mevedel-tool-ask-ui--state-expanded state))
+             (mevedel-tool-ask-ui--refresh
+              state nil
+              (cons question (mevedel-tool-ask-ui--answered-entry state question))))
+            ((integerp option)
+             (if (mevedel-tool-ask-ui--custom-entry-p state question option)
+                 (mevedel-tool-ask-ui--dispatch state 'custom)
+               (mevedel-tool-ask-ui--dispatch
+                state 'record
+                (cons question
+                      (mevedel-tool-ask-ui--option-label
+                       (mevedel-tool-ask-ui--entry-option state identity))))))))
+          ('custom
+           (when (and (integerp question)
+                      (mevedel-tool-ask-ui--question-open-p state question))
+             (let ((answer
+                    (read-string
+                     (format "Answer %d: " (1+ question))
+                     (aref (mevedel-tool-ask-ui--state-answers state) question))))
+               (unless (string-blank-p answer)
+                 (mevedel-tool-ask-ui--dispatch state 'record
+                                                (cons question answer))))))
+          ('record
+           (pcase-let ((`(,answered . ,answer) value))
+             (aset (mevedel-tool-ask-ui--state-answers state) answered answer)
+             (setf (mevedel-tool-ask-ui--state-expanded state)
+                   (delq answered (mevedel-tool-ask-ui--state-expanded state)))
+             (mevedel-tool-ask-ui--refresh
+              state t
+              (if-let* ((next (mevedel-tool-ask-ui--next-unanswered
+                               state answered)))
+                  (cons next 0)
+                'submit))))
+          ('submit
+           (mevedel--prompt--settle
+            (mevedel-tool-ask-ui--state-overlay state)
+            (mevedel-tool-ask-ui--submission-text state)))
+          ('cancel
+           (mevedel--prompt--settle
+            (mevedel-tool-ask-ui--state-overlay state) 'aborted))
+          ('abort
+           (mevedel-tool-ask-ui--dispatch state 'cancel)
+           (mevedel-abort))
+          ('scroll (mevedel-tool-ask-ui--sample-scroll state value))
+          ('remote-answer
+           (when (= (length value) (mevedel-tool-ask-ui--state-count state))
+             (cl-loop for answer in value
+                      for index from 0
+                      do (aset
+                          (mevedel-tool-ask-ui--state-answers state)
+                          index
+                          (unless (string-blank-p answer) answer)))
+             (mevedel-tool-ask-ui--dispatch state 'submit))))))))
 
 (defun mevedel-tool-ask-ui--keymap (state)
   "Return the interaction keymap controlling STATE."
@@ -786,7 +822,8 @@ Question jumps are only advertised when there is another question."
           (mevedel-tool-ask-ui--key "C-c C-c") " submit  "
           (mevedel-tool-ask-ui--key "q") " cancel\n")))
     (add-face-text-property 0 (length text) 'shadow t text)
-    text))
+    ;; Narrow windows wrap the hints; keep them under the first one.
+    (propertize text 'wrap-prefix "  ")))
 
 (defun mevedel-tool-ask-ui--form-body (state)
   "Return the rendered questionnaire body for STATE."
@@ -864,12 +901,36 @@ Question jumps are only advertised when there is another question."
         (mevedel--prompt-announce overlay)))))
 
 (defun mevedel-tool-ask-ui--refresh (state &optional announce identity)
-  "Render STATE, optionally ANNOUNCE it and move point to IDENTITY."
-  (mevedel-tool-ask-ui--render state announce)
-  (with-current-buffer (mevedel-tool-ask-ui--state-chat-buffer state)
-    (if identity
-        (mevedel-tool-ask-ui--goto-entry state identity)
-      (mevedel-tool-ask-ui--post-command))))
+  "Render STATE, optionally ANNOUNCE it and move point to IDENTITY.
+Without IDENTITY, point stays on its entry at the same offset into it.
+The view restores point by its offset into the whole form, which lands
+elsewhere when text above point changed height, as a re-wrapped sample
+panel does after a resize."
+  (unless (mevedel-tool-ask-ui--settled-p state)
+    (with-current-buffer (mevedel-tool-ask-ui--state-chat-buffer state)
+      (let* ((anchor (and (not identity)
+                          (mevedel-tool-ask-ui--entry-at-point state)))
+             (offset (and anchor
+                          (- (point)
+                             (cdr (assoc anchor
+                                         (mevedel-tool-ask-ui--entry-positions
+                                          state)))))))
+        (mevedel-tool-ask-ui--render state announce)
+        (cond
+         (identity (mevedel-tool-ask-ui--goto-entry state identity))
+         (anchor
+          (when-let* ((position (cdr (assoc anchor
+                                            (mevedel-tool-ask-ui--entry-positions
+                                             state)))))
+            (goto-char position)
+            ;; Keep the column inside the row when it still belongs to it.
+            (when (and (<= (point-min) (+ position offset))
+                       (< (+ position offset) (point-max))
+                       (equal anchor (get-text-property (+ position offset)
+                                                        'mevedel-ask-entry)))
+              (goto-char (+ position offset))))
+          (mevedel-tool-ask-ui--post-command))
+         (t (mevedel-tool-ask-ui--post-command)))))))
 
 (cl-defun mevedel-tool-ask-ui-show (callback questions)
   "Show QUESTIONS as one form and settle it through CALLBACK."
@@ -891,9 +952,7 @@ Question jumps are only advertised when there is another question."
              (with-current-buffer source-buffer
                (mevedel--prompt--data-buffer)))
             (error "No live view for Ask prompt"))
-           :interaction-id (list :ask (gensym "ask-"))
-           :focus-question 0
-           :focus-option 0)))
+           :interaction-id (list :ask (gensym "ask-")))))
     (mevedel-tool-ask-ui--refresh state t)))
 
 (provide 'mevedel-tool-ask-ui)

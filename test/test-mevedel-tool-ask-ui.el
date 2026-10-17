@@ -117,7 +117,29 @@ A panel row is a line whose text sits on the source block face."
   (should (equal '("short") (mevedel-tool-ask-ui--wrap-sample-line "short" 8)))
   :doc "tabs expand before wrapping even when narrower than a tab stop"
   (should (equal '("    " "↪   " "↪   " "↪ x")
-                 (mevedel-tool-ask-ui--wrap-sample-line "\tx" 4))))
+                 (mevedel-tool-ask-ui--wrap-sample-line "\tx" 4)))
+  :doc "oversized characters terminate even on a narrower continuation row"
+  (let* ((byte (string-to-multibyte (unibyte-string 255)))
+         (text (concat byte byte byte))
+         (measure (symbol-function 'string-width))
+         (calls 0))
+    ;; Bound the old loop's width queries: a regression must fail, not hang.
+    (cl-letf (((symbol-function 'string-width)
+               (lambda (&rest args)
+                 (when (> (cl-incf calls) 50)
+                   (error "Wrapping failed to make progress"))
+                 (apply measure args))))
+      (should (equal (list byte (concat "↪ " byte) (concat "↪ " byte))
+                     (mevedel-tool-ask-ui--wrap-sample-line text 4)))))
+  :doc "composed emoji and combining marks never split across rows"
+  (let* ((emoji (propertize "👍🏽" 'font-lock-face 'bold))
+         (rows (mevedel-tool-ask-ui--wrap-sample-line
+                (concat emoji emoji "é") 4)))
+    (should (equal rows '("👍🏽" "↪ 👍🏽" "↪ é")))
+    (should (eq 'bold (get-text-property 3 'font-lock-face (cadr rows)))))
+  :doc "a space just beyond a full word stays before the line break"
+  (should (equal '("abcdefgh " "↪ ijk")
+                 (mevedel-tool-ask-ui--wrap-sample-line "abcdefgh ijk" 8))))
 
 (mevedel-deftest mevedel-tool-ask-ui--sample-width ()
   ,test
@@ -136,7 +158,7 @@ A panel row is a line whose text sits on the source block face."
 (mevedel-deftest mevedel-tool-ask-ui--sample-lines ()
   ,test
   (test)
-  :doc "wrapped rows are cached per sample and width, not across widths"
+  :doc "samples are fontified once per form; rows are kept for the current width only"
   (let ((state (mevedel-tool-ask-ui--state-create))
         (fontify (symbol-function 'mevedel-view--fontify-as))
         (calls 0))
@@ -149,7 +171,15 @@ A panel row is a line whose text sits on the source block face."
         (should (= 1 calls))
         (should (equal '("abcdef" "↪ ghij" "↪ k")
                        (mevedel-tool-ask-ui--sample-lines state "abcdefghijk" 6)))
-        (should (= 2 calls))))))
+        ;; A new width re-wraps without fontifying again, and drops the
+        ;; rows of the old width.
+        (should (= 1 calls))
+        (let ((cached (mevedel-tool-ask-ui--state-sample-rows state)))
+          (should (= 6 (car cached)))
+          (should (= 1 (hash-table-count (cdr cached)))))
+        (should (equal rows (mevedel-tool-ask-ui--sample-lines
+                             state "abcdefghijk" 8)))
+        (should (= 1 calls))))))
 
 (mevedel-deftest mevedel-tool-ask-ui--sample-panel ()
   ,test
@@ -350,16 +380,14 @@ A panel row is a line whose text sits on the source block face."
   (test-mevedel-tool-ask-ui--with-form
     (let (focused)
       (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sync-sample)
-                 (lambda (state)
-                   (push (mevedel-tool-ask-ui--entry-at-point state) focused))))
+                 (lambda (_state entry) (push entry focused))))
         (mevedel-tool-ask-ui-show
          #'ignore
          [(:question "Layout?"
            :options [(:label "Compact" :description "A long description") "Spacious"])])
         (should (equal focused '((0 . 0))))
         (with-current-buffer view-buffer
-          (let ((tick (buffer-chars-modified-tick))
-                (state (car mevedel-tool-ask-ui--states)))
+          (let ((tick (buffer-chars-modified-tick)))
             (forward-char 3)
             (run-hooks 'post-command-hook)
             (should (equal focused '((0 . 0))))
@@ -367,12 +395,76 @@ A panel row is a line whose text sits on the source block face."
             (backward-char)
             (run-hooks 'post-command-hook)
             (should (equal focused '((0 . 1) (0 . 0))))
-            (should (= 1 (mevedel-tool-ask-ui--state-focus-option state)))
+            (should (equal '(0 . 1) mevedel-tool-ask-ui--active-entry))
             (goto-char (point-max))
             (run-hooks 'post-command-hook)
             (should (equal focused '((0 . 1) (0 . 0))))
-            (should-not (mevedel-tool-ask-ui--focused-option state))
+            (should-not mevedel-tool-ask-ui--active-entry)
             (should (= tick (buffer-chars-modified-tick)))))))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--entry-option ()
+  ,test
+  (test)
+  :doc "only option rows name an option; custom, summary and Submit do not"
+  (let ((state (mevedel-tool-ask-ui--state-create
+                :questions '((:question "Q?" :options ["A" (:label "B")])))))
+    (should (equal "A" (mevedel-tool-ask-ui--entry-option state '(0 . 0))))
+    (should (equal '(:label "B") (mevedel-tool-ask-ui--entry-option state '(0 . 1))))
+    (should-not (mevedel-tool-ask-ui--entry-option state '(0 . 2)))
+    (should-not (mevedel-tool-ask-ui--entry-option state '(0 . summary)))
+    (should-not (mevedel-tool-ask-ui--entry-option state 'submit))
+    (should-not (mevedel-tool-ask-ui--entry-option state nil))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--question-open-p ()
+  ,test
+  (test)
+  :doc "unanswered and reopened questions are open; answered ones are not"
+  (let ((state (mevedel-tool-ask-ui--state-create
+                :answers (vector nil "A" "B") :expanded '(2))))
+    (should (mevedel-tool-ask-ui--question-open-p state 0))
+    (should-not (mevedel-tool-ask-ui--question-open-p state 1))
+    (should (mevedel-tool-ask-ui--question-open-p state 2))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--refresh ()
+  ,test
+  (test)
+  :doc "a panel repaint keeps point on its row when a re-wrapped panel above it grew"
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((width 60))
+      (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sample-width)
+                 (lambda (_state) width)))
+        (mevedel-tool-ask-ui-show
+         #'ignore
+         [(:question "First?"
+           :options [(:label "Wide" :sample "one two three four five six seven eight nine ten eleven")
+                     "Plain"])
+          (:question "Second?"
+           :options [(:label "A" :sample "a") (:label "B" :sample "b")])])
+        (with-current-buffer view-buffer
+          (let ((state (car mevedel-tool-ask-ui--states)))
+            (mevedel-tool-ask-ui--goto-entry state '(1 . 0))
+            ;; The window narrows: the first panel now wraps into more rows
+            ;; above point.  Reaching B repaints the form.
+            (setq width 20)
+            (call-interactively (lookup-key rendered-keymap (kbd "n")))
+            (should (equal '(1 . 1) (get-text-property (point) 'mevedel-ask-entry)))
+            (should (eq (char-after) ?○))
+            (should (member "Sample · B" (test-mevedel-tool-ask-ui--panel-rows
+                                          rendered-body))))))))
+
+  :doc "a settled form is never repainted"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show #'ignore [(:question "First?" :options ["A"])])
+    (let ((state (with-current-buffer view-buffer (car mevedel-tool-ask-ui--states)))
+          (registrations 0))
+      (mevedel--prompt--settle registered-overlay 'aborted)
+      (cl-letf (((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (&rest _) (cl-incf registrations))))
+        (mevedel-tool-ask-ui--refresh state))
+      (should (= 0 registrations)))))
 
 
 (mevedel-deftest mevedel-tool-ask-ui--retire ()
@@ -504,6 +596,49 @@ A panel row is a line whose text sits on the source block face."
       (should (equal "My layout" initial)))
     (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
     (should (string-match-p "A1: My layout" result)))
+
+  :doc "a custom answer that returns after the form was settled changes nothing"
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((settled 0))
+      (mevedel-tool-ask-ui-show
+       (lambda (_value) (cl-incf settled))
+       [(:question "Layout?" :options ["Compact" "Spacious"])
+        (:question "Colour?" :options ["Red" "Blue"])])
+      (let ((overlay registered-overlay))
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _)
+                     ;; A run abort settles the form while the minibuffer is open.
+                     (mevedel--prompt--settle overlay 'aborted)
+                     (setq rendered-body nil)
+                     "Late answer")))
+          (call-interactively (lookup-key rendered-keymap (kbd "c")))))
+      (should (= 1 settled))
+      ;; Nothing re-registered the settled form.
+      (should-not rendered-body)
+      (with-current-buffer view-buffer
+        (should-not mevedel-tool-ask-ui--states))))
+
+  :doc "n from the start of a row moves to the next row"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show #'ignore [(:question "Layout?" :options ["A" "B"])])
+    (with-current-buffer view-buffer
+      (beginning-of-line)
+      (should (equal '(0 . 0) (get-text-property (point) 'mevedel-ask-entry)))
+      (call-interactively (lookup-key rendered-keymap (kbd "n")))
+      (should (equal '(0 . 1) (get-text-property (point) 'mevedel-ask-entry)))
+      (beginning-of-line)
+      (call-interactively (lookup-key rendered-keymap (kbd "p")))
+      (should (equal '(0 . 0) (get-text-property (point) 'mevedel-ask-entry)))))
+
+  :doc "digits focus options from the heading but never the custom row"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show #'ignore [(:question "Layout?" :options ["A" "B"])])
+    (with-current-buffer view-buffer
+      (search-backward "Layout?")
+      (call-interactively (lookup-key rendered-keymap (kbd "2")))
+      (should (equal '(0 . 1) (get-text-property (point) 'mevedel-ask-entry)))
+      (call-interactively (lookup-key rendered-keymap (kbd "3")))
+      (should (equal '(0 . 1) (get-text-property (point) 'mevedel-ask-entry)))))
 
   :doc "mouse activation selects the clicked row rather than the previous point"
   (test-mevedel-tool-ask-ui--with-form

@@ -749,7 +749,8 @@ authority is part of the normal permission pipeline, not a model-visible tool.
 Ask displays unanswered questions together in the interaction zone. Point is
 the focused entry: `n`/`p`, `C-n`/`C-p`, and the arrow keys move between entries
 without repainting the form; `TAB`/`S-TAB` jump to the next or previous
-question, Submit included; `1`–`9` focus an entry in the current question.
+question, Submit included; `1`–`9` focus that option of the open question at
+point, from its heading too.
 `RET` or a click chooses the entry, including when point is on its description.
 `c` edits a custom answer in the minibuffer, retaining the previous answer as
 the initial text. Answered questions collapse to summaries; `RET` or a click
