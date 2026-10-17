@@ -115,39 +115,51 @@
                          "    ▸ Running   agent    /root/counter/sub\n"
                          "  ▸ Blocked   agent    /root/reviewer · waiting for permission\n")
                  text)))))
-  :doc "a row finishing under point stays inert and dimmed until point leaves"
+  :doc "a finished row lingers while point is on the panel and the grace period restarts on leaving"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
       (switch-to-buffer view-buf)
-      (setf (plist-get (car live) :started-at) 1.0
-            (plist-get (car live) :description) "Run tests")
-      (setq live (append live (list (list :execution-id "e2" :owner "/root" :yielded t
-                                          :state 'running :command "serve"
-                                          :started-at 2.0))))
-      (mevedel-view--render-status)
-      (mevedel-view-execution-test--at "  ▸ Running   bash     serve")
-      ;; e1 finishes with exit 0 while point is on the panel.
-      (mevedel-view-execution--event
-       (list :session session :data-buffer data-buf :owner "/root" :type 'terminal
-             :facts '(:execution-id "e1" :state completed :termination exited :exit-code 0)))
-      (setq live (list (cadr live)))
-      (mevedel-view--render-status)
-      (unwind-protect
-          (progn
-            (should (string-search "  ✓ Completed bash     Run tests · exit 0\n" (buffer-string)))
-            (mevedel-view-execution-test--at "  ✓ Completed")
-            (should-not (get-text-property (point) 'mevedel-view-zone-activate))
-            (should (timerp mevedel-view-execution--release-timer))
-            ;; Point still on the panel: the check keeps the row.
-            (mevedel-view-execution--check-release view-buf)
-            (should (string-search "✓ Completed" (buffer-string)))
-            ;; Point leaves for the composer: the row goes, the timer stops.
-            (goto-char (point-max))
-            (mevedel-view-execution--check-release view-buf)
-            (should-not (string-search "✓ Completed" (buffer-string)))
-            (should-not mevedel-view-execution--release-timer)
-            (should (string-search "▸ Running   bash     serve" (buffer-string))))
-        (mevedel-view-execution--cancel-release))))
+      (let* ((clock 1000.0)
+             (float-time-orig (symbol-function 'float-time)))
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda (&optional time) (if time (funcall float-time-orig time) clock))))
+          (setf (plist-get (car live) :started-at) 1.0
+                (plist-get (car live) :description) "Run tests")
+          (setq live (append live (list (list :execution-id "e2" :owner "/root" :yielded t
+                                              :state 'running :command "serve"
+                                              :started-at 2.0))))
+          (mevedel-view--render-status)
+          (mevedel-view-execution-test--at "  ▸ Running   bash     serve")
+          ;; e1 finishes with exit 0 while point is on the panel.
+          (mevedel-view-execution--event
+           (list :session session :data-buffer data-buf :owner "/root" :type 'terminal
+                 :facts '(:execution-id "e1" :state completed :termination exited :exit-code 0)))
+          (setq live (list (cadr live)))
+          (mevedel-view--render-status)
+          (unwind-protect
+              (progn
+                (should (string-search "  ✓ Completed bash     Run tests · exit 0\n" (buffer-string)))
+                (mevedel-view-execution-test--at "  ✓ Completed")
+                (should-not (get-text-property (point) 'mevedel-view-zone-activate))
+                (should (timerp mevedel-view-execution--release-timer))
+                ;; Long past the grace period, point is still on the panel.
+                (setq clock 1100.0)
+                (mevedel-view-execution--check-release view-buf)
+                (mevedel-view--render-status)
+                (should (string-search "✓ Completed" (buffer-string)))
+                ;; Leaving restarts the full grace period.
+                (goto-char (point-max))
+                (mevedel-view-execution--check-release view-buf)
+                (setq clock 1109.0)
+                (mevedel-view-execution--check-release view-buf)
+                (should (string-search "✓ Completed" (buffer-string)))
+                (setq clock 1110.5)
+                (mevedel-view-execution--check-release view-buf)
+                (should-not (string-search "✓ Completed" (buffer-string)))
+                (mevedel-view-execution--check-release view-buf)
+                (should-not mevedel-view-execution--release-timer)
+                (should (string-search "▸ Running   bash     serve" (buffer-string))))
+            (mevedel-view-execution--cancel-release))))))
   :doc "a hidden overflow row that finishes is not held"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
@@ -206,16 +218,29 @@
                 (should (string-search "▸ Running   bash     cmd 6" (buffer-string)))
                 (should-not (string-search "✓ Completed" (buffer-string))))
             (mevedel-view-execution--cancel-release))))))
-  :doc "a row finishing while point is elsewhere disappears at once"
+  :doc "a row finishing while point is elsewhere lingers for the grace period"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
       (switch-to-buffer view-buf)
-      (mevedel-view--render-status)
-      (goto-char (point-max))
-      (setq live nil)
-      (should-not (mevedel-view-execution-fragment session))
-      (should-not mevedel-view-execution--held)
-      (should-not mevedel-view-execution--release-timer)))
+      (let* ((clock 1000.0)
+             (float-time-orig (symbol-function 'float-time)))
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda (&optional time) (if time (funcall float-time-orig time) clock))))
+          (mevedel-view--render-status)
+          (goto-char (point-max))
+          (setq live nil)
+          (unwind-protect
+              (progn
+                (mevedel-view--render-status)
+                (should (string-search "✓ Completed bash     same command" (buffer-string)))
+                (setq clock (+ 1000.0 (1- mevedel-view-execution-grace-seconds)))
+                (mevedel-view-execution--check-release view-buf)
+                (should (string-search "✓ Completed" (buffer-string)))
+                (setq clock (+ 1000.0 mevedel-view-execution-grace-seconds 0.5))
+                (mevedel-view-execution--check-release view-buf)
+                (should-not (mevedel-view-execution-fragment session))
+                (should-not mevedel-view-execution--held))
+            (mevedel-view-execution--cancel-release))))))
   :doc "changing sessions drops retained selection even with equal IDs"
   (mevedel-view-execution-test--with-view
     (setq mevedel-view-execution--selected (plist-put (copy-sequence (car live)) :session session))

@@ -1430,14 +1430,18 @@ directive, historical, agent, and side scopes cannot create one.
 
 The status zone shows one **background work** panel for everything that runs
 beside the conversation: active agents, yielded Bash commands, and Monitors.
-Finished items leave the panel; their transcript notices take over. While point
-(in any window showing the view) or the mouse is on the panel, the panel keeps
-exactly the rows it showed, so the row being aimed at cannot shift: a row that
-finishes stays in place as an inert, dimmed `✓ Completed` (or `✓ Finished` for
-an agent) line, and new work, including a new child agent, is only counted in
-the rule and `[Show all N]` until both leave. In-place updates still apply. A
-timer runs only while the panel is held, to notice that the pointer left; the
-layout then recomputes in one step.
+A finished item stays in place for ten seconds
+(`mevedel-view-execution-grace-seconds`) as an inert, dimmed `✓ Completed` (or
+`✓ Finished` for an agent) line, so a glance shows what just ended; its
+transcript notice remains the durable record. While point (in any window
+showing the view) or the mouse is on the panel, finished lines never leave, and
+leaving restarts their grace period. The panel then also keeps exactly the rows
+it showed, so the row being aimed at cannot shift: new work, including a new
+child agent, is only counted in the rule and `[Show all N]` until both leave.
+In-place updates still apply. A timer runs only while finished lines are held,
+to notice the pointer leaving and grace periods ending; the layout then
+recomputes in one step. Collapsing a retained finished inspector removes it at
+once.
 
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──

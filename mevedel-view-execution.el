@@ -107,6 +107,14 @@ start would otherwise be lost.")
 (defconst mevedel-view-execution--release-interval 0.5
   "Seconds between checks whether held rows can be released.")
 
+(defvar mevedel-view-execution-grace-seconds 10
+  "Seconds a finished row stays on the panel after the pointer is away.
+While point or the mouse is on the panel, finished rows never leave;
+leaving restarts this period.")
+
+(defvar-local mevedel-view-execution--hovering nil
+  "Whether the pointer was on the panel at the last check.")
+
 (defun mevedel-view-execution--same-p (left right)
   "Whether LEFT and RIGHT identify the same owner's execution."
   (and left right
@@ -179,7 +187,8 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
         mevedel-view-execution--show-all nil
         mevedel-view-execution--shown nil
         mevedel-view-execution--held nil
-        mevedel-view-execution--unit-starts nil)
+        mevedel-view-execution--unit-starts nil
+        mevedel-view-execution--hovering nil)
   (mevedel-view-execution--cancel-release)
   (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key nil)
   (mevedel-view--render-status))
@@ -281,40 +290,53 @@ Point counts in every window showing this view."
   (setq mevedel-view-execution--release-timer nil))
 
 (defun mevedel-view-execution--check-release (buffer &optional timer)
-  "Release BUFFER's held rows once the pointer has left its panel.
+  "Re-render BUFFER's panel when its held rows may change.
+That is when the pointer enters or leaves the panel, restarting the grace
+period, or when a held row's grace period ends away from the pointer.
 TIMER is the calling timer, cancelled alone when BUFFER is gone."
   (if (not (buffer-live-p buffer))
       (when (timerp timer) (cancel-timer timer))
     (with-current-buffer buffer
-      (cond
-       ((null mevedel-view-execution--held)
-        (mevedel-view-execution--cancel-release))
-       ((not (mevedel-view-execution--pointer-on-panel-p))
-        (setq mevedel-view-execution--held nil)
-        (mevedel-view-execution--cancel-release)
-        (mevedel-view--render-status))))))
+      (if (null mevedel-view-execution--held)
+          (mevedel-view-execution--cancel-release)
+        (let ((hover (mevedel-view-execution--pointer-on-panel-p))
+              (now (float-time)))
+          (when (or (not (eq hover mevedel-view-execution--hovering))
+                    (and (not hover)
+                         (cl-some (lambda (held)
+                                    (<= (plist-get (nth 2 held) :release-at) now))
+                                  mevedel-view-execution--held)))
+            (mevedel-view--render-status)))))))
 
 (defun mevedel-view-execution--update-held (entries hover)
   "Return held rows after rendering live ENTRIES, scheduling their release.
-Rows shown last time and finished since are held while HOVER, the pointer
-or point being on the panel, holds; otherwise every held row is released
-at once."
-  (let ((live-keys (mapcar #'car entries)))
-    (if (not hover)
-        (setq mevedel-view-execution--held nil)
-      (dolist (shown mevedel-view-execution--shown)
-        (unless (or (member (car shown) live-keys)
-                    (assoc (car shown) mevedel-view-execution--held)
-                    ;; An expanded execution keeps its own terminal inspector.
-                    (and (eq (nth 1 shown) 'execution)
-                         (mevedel-view-execution--same-p
-                          (nth 2 shown) mevedel-view-execution--selected)))
-          (push (list (car shown) (nth 1 shown)
-                      (plist-put (copy-sequence (nth 2 shown)) :held-p t))
-                mevedel-view-execution--held)))
-      ;; A row that reappeared is live again.
+Rows shown last time and finished since stay for
+`mevedel-view-execution-grace-seconds'.  While HOVER, the pointer or point
+being on the panel, holds they never leave; leaving restarts the period."
+  (let ((live-keys (mapcar #'car entries))
+        (deadline (+ (float-time) mevedel-view-execution-grace-seconds)))
+    (dolist (shown mevedel-view-execution--shown)
+      (unless (or (member (car shown) live-keys)
+                  (assoc (car shown) mevedel-view-execution--held)
+                  ;; An expanded execution keeps its own terminal inspector.
+                  (and (eq (nth 1 shown) 'execution)
+                       (mevedel-view-execution--same-p
+                        (nth 2 shown) mevedel-view-execution--selected)))
+        (push (list (car shown) (nth 1 shown)
+                    (plist-put (plist-put (copy-sequence (nth 2 shown)) :held-p t)
+                               :release-at deadline))
+              mevedel-view-execution--held)))
+    (when (and mevedel-view-execution--hovering (not hover))
+      ;; Leaving the panel restarts every held row's grace period.
+      (dolist (held mevedel-view-execution--held)
+        (setcar (nthcdr 2 held) (plist-put (nth 2 held) :release-at deadline))))
+    (setq mevedel-view-execution--hovering hover)
+    (let ((now (float-time)))
       (setq mevedel-view-execution--held
-            (cl-remove-if (lambda (held) (member (car held) live-keys))
+            (cl-remove-if (lambda (held)
+                            (or (member (car held) live-keys)
+                                (and (not hover)
+                                     (<= (plist-get (nth 2 held) :release-at) now))))
                           mevedel-view-execution--held)))
     (if mevedel-view-execution--held
         (unless (timerp mevedel-view-execution--release-timer)
@@ -325,7 +347,9 @@ at once."
                          mevedel-view-execution--release-interval
                          (lambda ()
                            (mevedel-view-execution--check-release buffer timer)))
-                  mevedel-view-execution--release-timer timer)))
+                  mevedel-view-execution--release-timer timer)
+            ;; A held row must not keep a timer alive past its view.
+            (add-hook 'kill-buffer-hook #'mevedel-view-execution--cancel-release nil t)))
       (mevedel-view-execution--cancel-release))
     mevedel-view-execution--held))
 
@@ -742,7 +766,7 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                              (list (mevedel-view-execution--key 'execution item)
                                    'execution item))
                            live)))
-         (hover (and mevedel-view-execution--shown
+         (hover (and (or mevedel-view-execution--shown mevedel-view-execution--held)
                      (mevedel-view-execution--pointer-on-panel-p)))
          (held (mevedel-view-execution--update-held entries hover))
          (items (mapcar (lambda (entry) (cons (nth 1 entry) (nth 2 entry)))
@@ -791,14 +815,18 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                          (list selected-item))))
     (when (and mevedel-view-execution--selected (not selected-live))
       (setq rows (append rows (list (cons 'execution mevedel-view-execution--selected)))))
-    ;; Only rows actually shown can be under the pointer; hidden overflow
-    ;; and a collapsed panel hold nothing.
+    ;; Only live rows actually shown can finish under the pointer; hidden
+    ;; overflow, a collapsed panel and a retained finished inspector hold
+    ;; nothing.
     (setq mevedel-view-execution--shown
           (unless collapsed
-            (mapcar (lambda (item)
-                      (list (mevedel-view-execution--key (car item) (cdr item))
-                            (car item) (cdr item)))
-                    (cl-remove-if (lambda (item) (plist-get (cdr item) :held-p)) rows))))
+            (let ((live-keys (mapcar #'car entries)))
+              (delq nil
+                    (mapcar (lambda (item)
+                              (let ((key (mevedel-view-execution--key (car item) (cdr item))))
+                                (and (member key live-keys)
+                                     (list key (car item) (cdr item)))))
+                            rows)))))
     (when rows
       (let ((body (mevedel-view-execution--header session agents live collapsed)))
         (unless collapsed

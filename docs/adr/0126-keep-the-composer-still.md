@@ -27,6 +27,9 @@ Background-work rows are in stable start order, newest farthest from the
 composer; state changes, including blocking, update rows in place. While point
 or the mouse is on the panel, it keeps exactly the rows it showed: finished rows
 stay as inert dimmed lines and new work is only counted, until both leave.
+A finished row also lingers for ten seconds after the pointer is away, and
+leaving the panel restarts that period, so removals happen when nobody is
+aiming at the panel.
 
 ## Rationale and consequences
 
@@ -53,6 +56,14 @@ the pointer left.
 Automatic focus let a keystroke typed into the draft land on a newly arrived
 approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
+
+## Decision history
+
+- **Grace period for finished rows (2026-10).** Finished rows first left the
+  panel at once, since the transcript notice takes over. The user asked for a
+  short grace period, as Claude Code keeps finished agents for 30 s, restarted
+  whenever the pointer leaves the panel. Ten seconds was chosen: the notice is
+  the durable record, so the panel only needs to show what just ended at a glance.
 
 Anchoring costs about 41 µs per displayed window per mutation (compiled, 20-row
 window), dominated by `vertical-motion`; the rail's no-op render about 7 µs and
