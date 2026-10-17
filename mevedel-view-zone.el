@@ -652,6 +652,25 @@ priorities."
       (set-marker start nil)
       (set-marker end nil))))
 
+(defun mevedel-view-zone--capture-trailing-overlays (region)
+  "Return foreign overlays starting exactly where REGION ends.
+Such an overlay belongs to the text after the zone, such as `hl-line' on
+the composer's line.  Re-rendering the zone deletes and reinserts text at
+that boundary, which an overlay without front advance would swallow; the
+rail directly above the composer re-renders every second."
+  (let ((end (overlay-end region)))
+    (seq-filter (lambda (overlay)
+                  (and (= (overlay-start overlay) end)
+                       (not (overlay-get overlay 'mevedel-view-zone))))
+                (overlays-in end (min (point-max) (1+ end))))))
+
+(defun mevedel-view-zone--restore-trailing-overlays (region overlays)
+  "Start each of OVERLAYS at REGION's end again, as before reconciliation."
+  (let ((end (overlay-end region)))
+    (dolist (overlay overlays)
+      (when (and (overlay-buffer overlay) (< (overlay-start overlay) end))
+        (move-overlay overlay end (max end (overlay-end overlay)))))))
+
 (defun mevedel-view-zone--delete-stale-text (zone region)
   "Delete ZONE text not owned by live REGION."
   (let ((inhibit-read-only t)
@@ -776,7 +795,9 @@ live zone text keeps its current bounds until reconciliation finishes."
                       (overlay-start region) (overlay-end region)
                       'mevedel-view-zone-region region)))
           (let ((neighbors (mevedel-view-zone--capture-neighbor-regions
-                            zone region)))
+                            zone region))
+                (trailing (and owned-p
+                               (mevedel-view-zone--capture-trailing-overlays region))))
             (unwind-protect
                 (progn
                   (mevedel-view-zone--call-preserving
@@ -786,7 +807,9 @@ live zone text keeps its current bounds until reconciliation finishes."
                      (unless owned-p
                        (move-overlay region start end (current-buffer)))
                      (mevedel-view-zone--reconcile region zone fragments))))
-              (mevedel-view-zone--restore-neighbor-regions neighbors)))
+              (mevedel-view-zone--restore-neighbor-regions neighbors)
+              (when (overlay-buffer region)
+                (mevedel-view-zone--restore-trailing-overlays region trailing))))
           (mevedel-view-zone--restore-logical-state zone logical-state)
           (if fragments
               region

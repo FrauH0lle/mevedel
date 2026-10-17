@@ -59,6 +59,26 @@
     (insert "> draft")
     (mevedel-view-zone-test--setup-markers)
     (mevedel-view-zone-reconcile
+     'progress (point-min) (point-min)
+     '((:namespace progress :id request :body "Working 1s")))
+    (let* ((end (overlay-end (mevedel-view-zone-region 'progress)))
+           ;; Like `hl-line' on the composer's line: starts at the zone end.
+           (line (make-overlay end (point-max))))
+      (dolist (body '("Working 2s" "Working... 3s" "W 4s"))
+        (mevedel-view-zone-reconcile
+         'progress (point-min) (point-min)
+         `((:namespace progress :id request :body ,body)))
+        (ert-info ((format "after rendering %S" body))
+          (should (= (overlay-start line)
+                     (overlay-end (mevedel-view-zone-region 'progress))))
+          (should (equal "> draft" (buffer-substring-no-properties
+                                    (overlay-start line) (overlay-end line))))))))
+
+  :doc "reconciles a fixed zone while preserving lower marker ordering"
+  (with-temp-buffer
+    (insert "> draft")
+    (mevedel-view-zone-test--setup-markers)
+    (mevedel-view-zone-reconcile
      'status (point-min) (point-min)
      '((:namespace status :id tasks :body "Tasks")))
     (should (equal "Tasks\n> draft" (buffer-substring-no-properties
