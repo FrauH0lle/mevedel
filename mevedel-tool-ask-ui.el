@@ -373,26 +373,63 @@ not already show; all other motion leaves the form untouched."
 ;;; Sample panel
 
 (defcustom mevedel-ask-sample-height 12
-  "Most sample lines an Ask question shows at once.
+  "Most sample rows an Ask question shows at once.
 A question's sample panel is as tall as its longest sample up to this
 limit, so moving between its options never shifts the form.  Longer
 samples scroll with \\`C-v' and \\`M-v'."
   :type 'natural
   :group 'mevedel)
 
-(defun mevedel-tool-ask-ui--sample-lines (state sample)
-  "Return SAMPLE fontified and split into lines, cached in STATE.
+(defun mevedel-tool-ask-ui--sample-width (state)
+  "Return the available sample row width for STATE's view buffer."
+  (max 4 (- (if-let* ((window (get-buffer-window
+                              (mevedel-tool-ask-ui--state-chat-buffer state) t)))
+                (window-body-width window)
+              (frame-width))
+            7)))
+
+(defun mevedel-tool-ask-ui--wrap-sample-line (line width)
+  "Split fontified LINE into rows at WIDTH, marking continuation rows.
+Prefer whitespace boundaries, preserving all text and its properties.
+Long words break at a character boundary that fits the display width.
+Expand tabs so their width is independent of the panel's indentation."
+  (when (string-match-p "\t" line)
+    (setq line (with-temp-buffer
+                 (insert line)
+                 (untabify (point-min) (point-max))
+                 (buffer-string))))
+  (let ((prefix "") rows)
+    (while (> (string-width line) (- width (string-width prefix)))
+      (let* ((chunk (truncate-string-to-width
+                     line (- width (string-width prefix))))
+             (cut (length chunk))
+             (position 0)
+             boundary)
+        (while (string-match "[^ \t]+[ \t]+" chunk position)
+          (setq boundary (match-end 0)
+                position boundary))
+        (when boundary (setq cut boundary))
+        (push (concat prefix (substring line 0 cut)) rows)
+        (setq line (substring line cut)
+              prefix (propertize "↪ " 'font-lock-face 'shadow))))
+    (nreverse (cons (concat prefix line) rows))))
+
+(defun mevedel-tool-ask-ui--sample-lines (state sample width)
+  "Return SAMPLE fontified and wrapped to WIDTH, cached in STATE.
 Moving between options repaints the panel, so each sample is fontified
-once per form rather than on every repaint."
+and wrapped once per width rather than on every repaint."
   (let ((cache (or (mevedel-tool-ask-ui--state-sample-cache state)
                    (setf (mevedel-tool-ask-ui--state-sample-cache state)
                          (make-hash-table :test #'equal)))))
-    (or (gethash sample cache)
-        (puthash sample
-                 (split-string
-                  (mevedel-view--fontify-as (string-trim-right sample)
-                                            'markdown-mode)
-                  "\n")
+    (or (gethash (cons sample width) cache)
+        (puthash (cons sample width)
+                 (mapcan
+                  (lambda (line)
+                    (mevedel-tool-ask-ui--wrap-sample-line line width))
+                  (split-string
+                   (mevedel-view--fontify-as (string-trim-right sample)
+                                           'markdown-mode)
+                   "\n"))
                  cache))))
 
 (defun mevedel-tool-ask-ui--shown-sample (state index)
@@ -413,13 +450,14 @@ sample, else the first one.  Nil when the question has no samples."
 (defun mevedel-tool-ask-ui--sample-view (state index)
   "Return what question INDEX's sample panel shows in STATE, or nil.
 The value is (OPTION LINES HEIGHT OFFSET): the shown option index, its
-sample's fontified lines, the panel height, and the first visible line.
+sample's fontified rows, the panel height, and the first visible row.
 HEIGHT covers the question's longest sample, not the shown one."
   (when-let* ((option (mevedel-tool-ask-ui--shown-sample state index)))
-    (let* ((options (mevedel-tool-ask-ui--question-options state index))
+    (let* ((width (mevedel-tool-ask-ui--sample-width state))
+           (options (mevedel-tool-ask-ui--question-options state index))
            (lines (mevedel-tool-ask-ui--sample-lines
                    state (mevedel-tool-ask-ui--option-sample
-                          (nth option options))))
+                          (nth option options)) width))
            (height
             (max 1 (min mevedel-ask-sample-height
                         (cl-loop
@@ -428,7 +466,7 @@ HEIGHT covers the question's longest sample, not the shown one."
                                        candidate)
                          when sample
                          maximize (length (mevedel-tool-ask-ui--sample-lines
-                                           state sample)))))))
+                                           state sample width)))))))
       (list option lines height
             (min (alist-get index
                             (mevedel-tool-ask-ui--state-sample-offsets state)
@@ -460,18 +498,25 @@ The panel is a title row naming the shown option followed by exactly
 its question's panel height of sample rows."
   (pcase (mevedel-tool-ask-ui--sample-view state index)
     (`(,option ,lines ,height ,offset)
-     (let ((total (length lines)))
+     (let* ((total (length lines))
+            (width (mevedel-tool-ask-ui--sample-width state))
+            (info (if (> total height)
+                      (truncate-string-to-width
+                       (format "  ·  rows %d–%d of %d  C-v/M-v"
+                               (1+ offset) (+ offset height) total)
+                       width nil nil "…")
+                    "")))
        (concat
         (mevedel-tool-ask-ui--sample-row
          (concat
-          (propertize "Sample · " 'font-lock-face 'shadow)
-          (mevedel-tool-ask-ui--format-option
-           (nth option (mevedel-tool-ask-ui--question-options state index)))
-          (when (> total height)
-            (propertize
-             (format "  ·  lines %d–%d of %d  C-v/M-v"
-                     (1+ offset) (+ offset height) total)
-             'font-lock-face 'shadow))))
+          (when (> width (string-width info))
+            (truncate-string-to-width
+             (concat
+              (propertize "Sample · " 'font-lock-face 'shadow)
+              (mevedel-tool-ask-ui--format-option
+               (nth option (mevedel-tool-ask-ui--question-options state index))))
+             (- width (string-width info)) nil nil "…"))
+          (propertize info 'font-lock-face 'shadow)))
         (mapconcat #'mevedel-tool-ask-ui--sample-row
                    (cl-loop for line from offset below (+ offset height)
                             collect (or (nth line lines) ""))
@@ -480,11 +525,14 @@ its question's panel height of sample rows."
 
 (defun mevedel-tool-ask-ui--sample-scroll (state pages)
   "Scroll the sample panel at point in STATE by PAGES.
-Without a panel taller than its window, scroll the window instead, so
+Without an overflowing visible panel, scroll the window instead, so
 \\`C-v' and \\`M-v' keep their usual meaning elsewhere in the form."
   (pcase-let* ((index (get-text-property (point) 'mevedel-ask-question))
                (`(,_ ,lines ,height ,offset)
                 (and (integerp index)
+                     (or (not (aref (mevedel-tool-ask-ui--state-answers state)
+                                    index))
+                         (memq index (mevedel-tool-ask-ui--state-expanded state)))
                      (mevedel-tool-ask-ui--sample-view state index))))
     (if (not (and lines (> (length lines) height)))
         (call-interactively

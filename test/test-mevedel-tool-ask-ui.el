@@ -102,6 +102,55 @@ A panel row is a line whose text sits on the source block face."
     (should-not (get-text-property start 'font-lock-face formatted))))
 
 
+(mevedel-deftest mevedel-tool-ask-ui--wrap-sample-line ()
+  ,test
+  (test)
+  :doc "wrapping preserves text, properties and wide characters"
+  (let* ((text (propertize "alpha beta 界界界界" 'font-lock-face 'bold))
+         (rows (mevedel-tool-ask-ui--wrap-sample-line text 8)))
+    (should (equal rows '("alpha " "↪ beta " "↪ 界界界" "↪ 界")))
+    (should (cl-every (lambda (row) (<= (string-width row) 8)) rows))
+    (should (eq 'bold (get-text-property 2 'font-lock-face (cadr rows))))
+    (should (eq 'shadow (get-text-property 0 'font-lock-face (cadr rows)))))
+  :doc "short and empty lines remain one row"
+  (should (equal '("") (mevedel-tool-ask-ui--wrap-sample-line "" 8)))
+  (should (equal '("short") (mevedel-tool-ask-ui--wrap-sample-line "short" 8)))
+  :doc "tabs expand before wrapping even when narrower than a tab stop"
+  (should (equal '("    " "↪   " "↪   " "↪ x")
+                 (mevedel-tool-ask-ui--wrap-sample-line "\tx" 4))))
+
+(mevedel-deftest mevedel-tool-ask-ui--sample-width ()
+  ,test
+  (test)
+  :doc "panel width uses the view window and falls back to frame width"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show #'ignore [(:question "Q" :options ["A"])])
+    (with-current-buffer view-buffer
+      (let ((state (car mevedel-tool-ask-ui--states)))
+        (should (= (mevedel-tool-ask-ui--sample-width state)
+                   (max 4 (- (window-body-width (selected-window)) 7))))
+        (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) nil)))
+          (should (= (mevedel-tool-ask-ui--sample-width state)
+                     (max 4 (- (frame-width) 7)))))))))
+
+(mevedel-deftest mevedel-tool-ask-ui--sample-lines ()
+  ,test
+  (test)
+  :doc "wrapped rows are cached per sample and width, not across widths"
+  (let ((state (mevedel-tool-ask-ui--state-create))
+        (fontify (symbol-function 'mevedel-view--fontify-as))
+        (calls 0))
+    (cl-letf (((symbol-function 'mevedel-view--fontify-as)
+               (lambda (&rest args)
+                 (cl-incf calls)
+                 (apply fontify args))))
+      (let ((rows (mevedel-tool-ask-ui--sample-lines state "abcdefghijk" 8)))
+        (should (eq rows (mevedel-tool-ask-ui--sample-lines state "abcdefghijk" 8)))
+        (should (= 1 calls))
+        (should (equal '("abcdef" "↪ ghij" "↪ k")
+                       (mevedel-tool-ask-ui--sample-lines state "abcdefghijk" 6)))
+        (should (= 2 calls))))))
+
 (mevedel-deftest mevedel-tool-ask-ui--sample-panel ()
   ,test
   (test)
@@ -144,6 +193,35 @@ A panel row is a line whose text sits on the source block face."
     (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
     (should (string-match-p "A1: Local\nSample shown for A1:\n# Local\n" result)))
 
+  :doc "wrapped samples keep a fixed row count and scroll by rows"
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((mevedel-ask-sample-height 3))
+      (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sample-width)
+                 (lambda (_) 40)))
+        (mevedel-tool-ask-ui-show
+         #'ignore
+         (vector (list :question "Which?"
+                       :options (vector (list :label (make-string 60 ?L)
+                                              :sample (make-string 150 ?x))
+                                        '(:label "Short" :sample "a")))))
+        (let ((rows (test-mevedel-tool-ask-ui--panel-rows rendered-body)))
+          (should (= 4 (length rows)))
+          (should (cl-every (lambda (row) (<= (string-width row) 40)) rows))
+          (should (string-prefix-p "↪ " (nth 2 rows)))
+          (should (string-match-p "rows 1–3 of 4" (car rows))))
+        (call-interactively (lookup-key rendered-keymap (kbd "C-v")))
+        (let ((rows (test-mevedel-tool-ask-ui--panel-rows rendered-body)))
+          (should (string-match-p "rows 2–4 of 4" (car rows)))
+          (should (string-prefix-p "↪ " (cadr rows))))
+        (call-interactively (lookup-key rendered-keymap (kbd "n")))
+        (should (= 4 (length (test-mevedel-tool-ask-ui--panel-rows rendered-body))))
+        (with-current-buffer view-buffer
+          (let ((cache (mevedel-tool-ask-ui--state-sample-cache
+                        (car mevedel-tool-ask-ui--states))))
+            (should (= 2 (hash-table-count cache)))
+            (call-interactively (lookup-key rendered-keymap (kbd "p")))
+            (should (= 2 (hash-table-count cache))))))))
+
   :doc "a panel repaint triggered by motion preserves a multiline composer draft"
   (test-mevedel-tool-ask-ui--with-form
     (with-current-buffer view-buffer
@@ -172,7 +250,7 @@ A panel row is a line whose text sits on the source block face."
        [(:question "Which?" :options [(:label "Long" :sample "a\nb\nc\nd\ne\nf")
                                       "Plain"])])
       (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
-                     '("Sample · Long  ·  lines 1–3 of 6  C-v/M-v" "a" "b" "c")))
+                     '("Sample · Long  ·  rows 1–3 of 6  C-v/M-v" "a" "b" "c")))
       ;; A page keeps one line of context.
       (call-interactively (lookup-key rendered-keymap (kbd "C-v")))
       (should (equal (cdr (test-mevedel-tool-ask-ui--panel-rows rendered-body))
@@ -180,13 +258,33 @@ A panel row is a line whose text sits on the source block face."
       ;; The last page stops at the sample's end.
       (call-interactively (lookup-key rendered-keymap (kbd "C-v")))
       (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
-                     '("Sample · Long  ·  lines 4–6 of 6  C-v/M-v" "d" "e" "f")))
+                     '("Sample · Long  ·  rows 4–6 of 6  C-v/M-v" "d" "e" "f")))
       (call-interactively (lookup-key rendered-keymap (kbd "M-v")))
       (call-interactively (lookup-key rendered-keymap (kbd "M-v")))
       (should (equal (cdr (test-mevedel-tool-ask-ui--panel-rows rendered-body))
                      '("a" "b" "c")))
       (with-current-buffer view-buffer
         (should (equal '(0 . 0) (get-text-property (point) 'mevedel-ask-entry))))))
+
+  :doc "collapsed answers scroll the window, not their hidden sample panel"
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((mevedel-ask-sample-height 2)
+          scrolled)
+      (cl-letf (((symbol-function 'scroll-up-command)
+                 (lambda () (interactive) (push 'up scrolled)))
+                ((symbol-function 'scroll-down-command)
+                 (lambda () (interactive) (push 'down scrolled))))
+        (mevedel-tool-ask-ui-show
+         #'ignore
+         [(:question "Which?" :options [(:label "Long" :sample "a\nb\nc\nd")])])
+        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+        (with-current-buffer view-buffer
+          (mevedel-tool-ask-ui--goto-entry
+           (car mevedel-tool-ask-ui--states) '(0 . summary)))
+        (should-not (test-mevedel-tool-ask-ui--panel-rows rendered-body))
+        (call-interactively (lookup-key rendered-keymap (kbd "C-v")))
+        (call-interactively (lookup-key rendered-keymap (kbd "M-v")))
+        (should (equal scrolled '(down up))))))
 
   :doc "without an overflowing panel C-v and M-v scroll the window as usual"
   (test-mevedel-tool-ask-ui--with-form
