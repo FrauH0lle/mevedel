@@ -471,22 +471,32 @@ buttons, Markdown, or interaction authority."
 
 (defun mevedel-view--pending-input-category-body (label entries &optional session selected)
   "Return compact pending-input summary for LABEL and ENTRIES.
-SESSION and SELECTED identify the locally expanded entry."
+SESSION and SELECTED identify the locally expanded entry.  Only an entry
+whose summary line cuts its input short can expand: expanding a fully
+shown input would repeat it."
   (let ((index 0)
         lines)
     (dolist (entry (seq-take entries 3))
       (cl-incf index)
       (let* ((id (plist-get entry :id))
-             (expanded (and id (equal id selected)))
+             (input (or (plist-get entry :input) ""))
+             (preview (mevedel-view--pending-input-preview input))
+             ;; Compare within the preview's own bounded prefix: a pasted
+             ;; megabyte must not be normalized on every render.
+             (prefix (substring-no-properties input 0 (min (length input) 1024)))
+             (partial (or (> (length input) (length prefix))
+                          (not (equal preview
+                                      (string-trim
+                                       (mevedel--normalize-message-text prefix))))))
+             (expanded (and partial id (equal id selected)))
              (text (format "%d. %s %s"
-                           index (if expanded "[-]" "[+]")
+                           index (cond (expanded "[-]") (partial "[+]") (t "   "))
                            (concat
                             (when-let* ((scope (plist-get entry :scope)))
                               (format "[◆ %s] "
                                       (mevedel-view-composer-scope-label scope)))
-                            (mevedel-view--pending-input-preview
-                             (or (plist-get entry :input) ""))))))
-        (when (and session id)
+                            preview))))
+        (when (and session id partial)
           (add-text-properties
            0 (length text)
            (list 'mevedel-pending-input-target (cons session id)

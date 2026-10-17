@@ -257,6 +257,19 @@
   :doc "oversized plain input is bounded and labels omitted content honestly"
   (mevedel-pending-inputs-test--with-session
     (mevedel-session-enqueue-pending-input
+     session 'steering '(:input "The highlighting is flickering"))
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-rebuild)
+      (ert-info ("a fully shown one-line input has no disclosure and cannot repeat itself")
+        (should (string-search "1.     The highlighting is flickering\n" (buffer-string)))
+        (should-not (string-search "[+]" (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "The highlighting")
+        (should-not (get-text-property (point) 'mevedel-pending-input-target)))))
+
+  :doc "oversized plain input is bounded and labels omitted content honestly"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
      session 'follow-up (list :input (concat "large\n" (make-string 10000 ?x) "TAIL")))
     (with-current-buffer view-buf
       (mevedel-view--interaction-rebuild)
