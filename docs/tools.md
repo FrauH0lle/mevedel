@@ -748,7 +748,8 @@ authority is part of the normal permission pipeline, not a model-visible tool.
 
 Ask displays unanswered questions together in the interaction zone. Point is
 the focused entry: `n`/`p`, `C-n`/`C-p`, and the arrow keys move between entries
-without repainting the form; `1`–`9` focus an entry in the current question.
+without repainting the form; `TAB`/`S-TAB` jump to the next or previous
+question, Submit included; `1`–`9` focus an entry in the current question.
 `RET` or a click chooses the entry, including when point is on its description.
 `c` edits a custom answer in the minibuffer, retaining the previous answer as
 the initial text. Answered questions collapse to summaries; `RET` or a click
@@ -761,10 +762,12 @@ line, with hanging indentation for wrapped questions and descriptions.
 
 A question whose options carry samples ends in a sample panel, rendered as a
 source block titled with the option it shows. The panel shows the
-sample-bearing option point visited last, and its height is the question's
-longest sample, capped by `mevedel-ask-sample-height`, so comparing options
-never moves the rest of the form. With point in that question, `C-v`/`M-v` page
-an overflowing sample; otherwise they scroll the window. See
+sample-bearing option point visited last. Samples are wrapped to the window's
+width into rows, continuation rows marked `↪`, and the panel's height is the
+question's longest sample in rows, capped by `mevedel-ask-sample-height`, so
+comparing options never moves the rest of the form. After a resize, rows
+re-wrap on the form's next repaint. With point in an open question, `C-v`/`M-v`
+page an overflowing sample; otherwise they scroll the window. See
 [ADR 0113](adr/0113-show-ask-samples-inline.md).
 
 Agent's required inputs are `task_name` and `message`. Its optional `role`,

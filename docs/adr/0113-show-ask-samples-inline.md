@@ -9,13 +9,14 @@ its question's option list. The panel uses the rendered source block face, so a
 sample reads like a code block elsewhere in the transcript, and its title names
 the option it belongs to.
 
-The panel's height is fixed per question: the longest of that question's
-samples, capped by `mevedel-ask-sample-height`. Moving between options therefore
-never moves anything below the panel. The panel shows the sample-bearing option
-point visited last. Moving onto an option without a sample, or out of the
-question, leaves the panel unchanged, and only reaching a different
-sample-bearing option repaints the form. Longer samples page with `C-v`/`M-v`
-while point is in their question.
+Samples are wrapped into rows at the view window's width, continuation rows
+marked `↪`. The panel's height is fixed per question: the longest of that
+question's samples in rows, capped by `mevedel-ask-sample-height`. Moving between
+options therefore never moves anything below the panel. The panel shows the
+sample-bearing option point visited last. Moving onto an option without a
+sample, or out of the question, leaves the panel unchanged, and only reaching a
+different sample-bearing option repaints the form. Longer samples page with
+`C-v`/`M-v` while point is in their open question.
 
 ## Rationale
 
@@ -34,7 +35,9 @@ as text in the reserved space.
 Fixed per-question height and the sticky shown sample are what keep
 comparison still: a panel that followed each sample's length, or emptied on
 options without samples, would shift the rest of the form while the user
-reads.
+reads. Height counts wrapped rows because Emacs soft-wraps by display width:
+counting logical lines let a sample of long lines occupy several times its
+line count, moving the next question by as much on an 80-column window.
 
 ## Consequences
 
@@ -42,6 +45,9 @@ reads.
   rows per question with samples. Answering a question collapses it, panel
   included.
 - Samples are fontified as Markdown once per form and cached.
+- Wrapping depends on the window width when the form repaints. After a resize,
+  rows soft-wrap until the next repaint re-wraps them; no resize hook keeps
+  them current.
 - Samples are not shown side by side with the options, as some terminal UIs do.
   An Emacs buffer has no column layout that wraps both sides independently.
 
