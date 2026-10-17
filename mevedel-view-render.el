@@ -5159,6 +5159,15 @@ whether a record is a terminal event."
              width "…")
             (if failed 'error 'mevedel-view-tool-metadata)))))
 
+(defun mevedel-view--own-completion-mail-p (open-tag sender)
+  "Return non-nil when OPEN-TAG from SENDER completes this transcript's own work.
+Its completion line is the breadcrumb this transcript already recorded when
+the work ended, so the delivery adds no second line.  A child agent's
+forwarded completion has no local breadcrumb and keeps its notice."
+  (and (member (mevedel-view--mail-attribute open-tag "type")
+               '("EXECUTION" "MONITOR_TERMINAL"))
+       (equal sender (or mevedel-view--agent-path "/root"))))
+
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
   "Replace OPEN-REGEX/CLOSE-TAG regions from START to END with mailbox cards.
@@ -5193,17 +5202,30 @@ both kinds to the same disclosure controls."
               (let* ((open-start (match-beginning 0))
                      (open-end (match-end 0))
                      (sender (match-string-no-properties 1))
+                     (own (and (not (eq kind 'agent-result))
+                               (mevedel-view--own-completion-mail-p
+                                (match-string-no-properties 0) sender)))
                      (notice
-                      (mevedel-view--mail-notice
-                       (match-string-no-properties 0) kind sender
-                       (buffer-substring-no-properties
-                        open-end
-                        (car (save-excursion
-                               (goto-char open-end)
-                               (mevedel-transcript--mailbox-find-close
-                                open-regex close-tag end-marker))))))
+                      (unless own
+                        (mevedel-view--mail-notice
+                         (match-string-no-properties 0) kind sender
+                         (buffer-substring-no-properties
+                          open-end
+                          (car (save-excursion
+                                 (goto-char open-end)
+                                 (mevedel-transcript--mailbox-find-close
+                                  open-regex close-tag end-marker)))))))
                      (attribution (mevedel-view--insert-attribution sender))
                      (inhibit-read-only t))
+                (if own
+                    (let ((close (save-excursion
+                                   (goto-char open-end)
+                                   (mevedel-transcript--mailbox-find-close
+                                    open-regex close-tag
+                                    (marker-position end-marker)))))
+                      (goto-char (if close (cdr close) open-end))
+                      (when (eq (char-after) ?\n) (forward-char 1))
+                      (delete-region open-start (point)))
                 (delete-region open-start open-end)
                 (goto-char open-start)
                 (let ((card-start (point))
@@ -5311,7 +5333,7 @@ both kinds to the same disclosure controls."
                                (or kind 'agent-message)
                                'mevedel-view-mailbox-agent-path sender
                                'mevedel-view-mailbox-notice (and notice t)
-                               'mevedel-view-collapsed long-body)))))))))
+                               'mevedel-view-collapsed long-body))))))))))
         (set-marker end-marker nil)))))
 
 (defun mevedel-view--decorate-agent-result-blocks (start end)
@@ -6062,19 +6084,26 @@ stay unchanged.  Each caller owns the returned entry's coalescing count."
 (defun mevedel-view--mailbox-activity-entry (seg data-buf)
   "Return the activity entry for mailbox SEG in DATA-BUF.
 Keep the canonical card text so grouped and standalone deliveries use
-one renderer, including execution summaries and sender links."
+one renderer, including execution summaries and sender links.  Return nil
+for this transcript's own completion delivery, which renders nothing."
   (let* ((text (mevedel-view--user-turn-text (list seg) data-buf))
+         (opener (and (string-match
+                       "\\`[ \t\n]*<\\(agent-result\\|agent-message\\)\\s-[^>]*>" text)
+                      (match-string 0 text)))
+         (result-p (and opener (equal (match-string 1 text) "agent-result")))
          (notice
-          (and (string-match "\\`[ \t\n]*<\\(agent-result\\|agent-message\\)\\s-[^>]*>" text)
-               (or (equal (match-string 1 text) "agent-result")
-                   (member (mevedel-view--mail-attribute
-                            (match-string 0 text) "type")
+          (and opener
+               (or result-p
+                   (member (mevedel-view--mail-attribute opener "type")
                            '("EXECUTION" "MONITOR" "MONITOR_TERMINAL"))))))
-    (list :kind 'mailbox :start (cadr seg) :end (caddr seg)
-          :notice-p notice
-          :group-child
-          (list :kind 'mailbox :status 'success
-                :rendering (list :mailbox-text text)))))
+    (unless (and notice (not result-p)
+                 (mevedel-view--own-completion-mail-p
+                  opener (mevedel-view--mail-attribute opener "sender")))
+      (list :kind 'mailbox :start (cadr seg) :end (caddr seg)
+            :notice-p notice
+            :group-child
+            (list :kind 'mailbox :status 'success
+                  :rendering (list :mailbox-text text))))))
 
 (defun mevedel-view--completion-record-p (record)
   "Return non-nil when hook audit RECORD is an execution breadcrumb."
@@ -6141,8 +6170,9 @@ there, and still renders as its own line when no group absorbs it."
            (when-let* ((entry (mevedel-view--tool-segment-entry seg data-buf)))
              (push entry out)))
           ('mailbox
-           (flush-thinking)
-           (push (mevedel-view--mailbox-activity-entry seg data-buf) out))
+           (when-let* ((entry (mevedel-view--mailbox-activity-entry seg data-buf)))
+             (flush-thinking)
+             (push entry out)))
           ('ignored
            (if (mevedel-view--hook-audit-only-segment-p
                 data-buf (cadr seg) (caddr seg))
@@ -6217,10 +6247,10 @@ activity when it ends in something they cannot join."
                              (mevedel-view--flush-thinking-group
                               thinking-group data-buf)
                              (setq thinking-group nil)
-                             (let* ((entry (mevedel-view--mailbox-activity-entry
-                                            seg data-buf))
-                                    (child (mevedel-view--tool-group-child
-                                            entry data-buf 0)))
+                             (when-let* ((entry (mevedel-view--mailbox-activity-entry
+                                                 seg data-buf))
+                                         (child (mevedel-view--tool-group-child
+                                                 entry data-buf 0)))
                                (mevedel-view--insert-child-call-block
                                 child (plist-get child :source) 'derive "")))
                          (push seg thinking-group))))
@@ -6250,11 +6280,14 @@ activity when it ends in something they cannot join."
                                                 :coalesce-key)
                                      (not (mevedel-view--tool-group-entry-p
                                            entry))))))))
-              (when (and run (not (eq (and special t) special-run)))
-                (render-run (nreverse run))
-                (setq run nil))
-              (setq special-run (and special t))
-              (push seg run)))
+              ;; This transcript's own completion delivery renders nothing,
+              ;; so it must not split the activity run around it either.
+              (unless (and (eq (car seg) 'mailbox) (null entry))
+                (when (and run (not (eq (and special t) special-run)))
+                  (render-run (nreverse run))
+                  (setq run nil))
+                (setq special-run (and special t))
+                (push seg run))))
           (when run (render-run (nreverse run) pending)))))
     (mevedel-view--mark-live-render-unit
      unit-start (cadr (car segments)))))

@@ -208,7 +208,7 @@
                         :description "ticker" :payload "tick 1")
                   (list :type 'MONITOR :sender "/root" :recipient "/root"
                         :description "ticker" :payload "tick 2")
-                  (list :type 'MONITOR_TERMINAL :sender "/root" :recipient "/root"
+                  (list :type 'MONITOR_TERMINAL :sender "/root/worker" :recipient "/root"
                         :description "ticker"
                         :meta '(:event-count 2
                                 :termination "stopped" :outcome "failure")

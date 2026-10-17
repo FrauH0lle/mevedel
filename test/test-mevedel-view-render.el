@@ -6992,12 +6992,12 @@
         (should (string-match-p "ordinary" text))
         (should-not (string-match-p "Bash completed" text)))))
 
-  :doc "Bash completion delivery renders a compact notice with a collapsed body"
+  :doc "forwarded Bash completion renders a compact notice with a collapsed body"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
      (concat
-      "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\" "
+      "<agent-message type=\"EXECUTION\" sender=\"/root/worker\" recipient=\"/root\" "
       "execution_id=\"exec-000001\" description=\"Run build\" command=\"make\" "
       "termination=\"exited\" outcome=\"success\" exit_code=\"0\">\n"
       "[sandbox: bubblewrap; filesystem: workspace-write; network: isolated]\n\n"
@@ -7036,7 +7036,7 @@
     (mevedel-view-test--insert-data
      data-buf
      (concat
-      "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\" "
+      "<agent-message type=\"EXECUTION\" sender=\"/root/worker\" recipient=\"/root\" "
       "execution_id=\"exec-2\" command=\"make test\" termination=\"exited\" "
       "outcome=\"failure\" exit_code=\"2\">\nfailing output\n</agent-message>\n")
      nil)
@@ -7084,7 +7084,7 @@
     (mevedel-view-test--insert-data
      data-buf
      (concat
-      "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\">\n"
+      "<agent-message type=\"EXECUTION\" sender=\"/root/worker\" recipient=\"/root\">\n"
       "<bash-execution execution_id=\"exec-1\" outcome=\"success\" "
       "output_bytes=\"0\" output_lines=\"0\"/>\n"
       "</agent-message>\n"
@@ -8024,13 +8024,13 @@
 (mevedel-deftest mevedel-view--mailbox-activity-entry ()
   ,test
   (test)
-  :doc "execution deliveries project one collapsed notice regardless of threshold"
+  :doc "forwarded execution deliveries project one collapsed notice at any threshold"
   (dolist (threshold '(0 1))
     (mevedel-view-test--with-buffers
       (let ((mevedel-view-mailbox-collapse-line-threshold threshold))
         (mevedel-view-test--insert-data
          data-buf
-         (concat "<agent-message type=\"EXECUTION\" sender=\"/root\" "
+         (concat "<agent-message type=\"EXECUTION\" sender=\"/root/worker\" "
                  "execution_id=\"exec-1\" description=\"exec one\" "
                  "outcome=\"success\" exit_code=\"0\">\n"
                  "raw output\nsecond line\n"
@@ -8054,11 +8054,27 @@
               (search-forward "raw output")
               (should (invisible-p (match-beginning 0)))))))))
 
+  :doc "own terminal deliveries have no activity entry in root or agent views"
+  (dolist (owner '(nil "/root/worker"))
+    (dolist (type '("EXECUTION" "MONITOR_TERMINAL"))
+      (mevedel-view-test--with-buffers
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "<agent-message type=\"%s\" sender=\"%s\">\nterminal output\n</agent-message>\n"
+                 type (or owner "/root"))
+         nil)
+        (with-current-buffer view-buf
+          (setq-local mevedel-view--agent-path owner)
+          (let ((seg (with-current-buffer data-buf
+                       (list 'mailbox (point-min) (point-max)))))
+            (should-not (mevedel-view--mailbox-activity-entry seg data-buf)))))))
+
   :doc "ordinary mail and notices are told apart for activity grouping"
   (mevedel-view-test--with-buffers
     (dolist (case '(("<agent-message type=\"MAIL\" sender=\"/root/a\">\nhi\n</agent-message>\n" . nil)
                     ("<agent-message type=\"MONITOR\" sender=\"/root\" description=\"tick\">\ne1\n</agent-message>\n" . t)
-                    ("<agent-result sender=\"/root/a\" outcome=\"completed\">\nok\n</agent-result>\n" . t)))
+                    ("<agent-result sender=\"/root/a\" outcome=\"completed\">\nok\n</agent-result>\n" . t)
+                    ("<agent-result sender=\"/root\" type=\"EXECUTION\" outcome=\"completed\">\nok\n</agent-result>\n" . t)))
       (with-current-buffer data-buf (erase-buffer))
       (mevedel-view-test--insert-data data-buf (car case) nil)
       (let ((seg (with-current-buffer data-buf
@@ -8068,6 +8084,37 @@
                                      seg data-buf)
                                     :notice-p)
                          t)))))))
+
+(mevedel-deftest mevedel-view--own-completion-activity ()
+  ,test
+  (test)
+  :doc "own completion mail does not split tool groups in live or rebuilt views"
+  (dolist (type '("EXECUTION" "MONITOR_TERMINAL"))
+    (mevedel-view-test--with-buffers
+      (dotimes (i 4)
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+                 i i)
+         `(tool . ,(format "call_%d" i)))
+        (when (= i 1)
+          (mevedel-view-test--insert-data
+           data-buf
+           (format "<agent-message type=\"%s\" sender=\"/root\">\nterminal output\n</agent-message>\n"
+                   type)
+           nil)))
+      (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (dolist (rebuild '(nil t))
+          (when rebuild (mevedel-view--full-rerender))
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "Read 4 files" text))
+            (should-not (string-match-p "terminal output\\|Background command\\|Monitor\\|received" text)))))
+      (with-current-buffer data-buf
+        (should (string-match-p "terminal output" (buffer-string)))))))
 
 (mevedel-deftest mevedel-view--tool-group-header ()
   ,test
@@ -8164,7 +8211,7 @@
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
                    "Read 4 files, 1 command completed, 1 failed" text))
-          (should-not (string-match-p "↳" text)))
+          (should-not (string-match-p "Background command" text)))
         ;; The folded group still counts as projecting its completions.
         (should (mevedel-view-audit-breadcrumb-present-p
                  '(:execution-id "b" :owner "/root")
@@ -8174,14 +8221,14 @@
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "↳ Completed: make a  \\[Show result\\]" text))
-          (should (string-match-p "↳ Failed: make b · exit 1  \\[Show result\\]"
+          (should (string-match-p "● Background command \"make a\" completed (exit code 0)  \\[Show result\\]" text))
+          (should (string-match-p "● Background command \"make b\" failed (exit code 1)  \\[Show result\\]"
                                   text)))
         (goto-char (point-min))
         (search-forward "Read 4 files")
         (mevedel-view-toggle-section)
         (should-not (string-match-p
-                     "↳" (buffer-substring-no-properties
+                     "Background command" (buffer-substring-no-properties
                           (point-min) mevedel-view--input-marker))))))
 
   :doc "collapsing a group removes a last call whose breadcrumb ends before it"
@@ -8220,7 +8267,7 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should-not (string-match-p "f3.el" text))
-          (should-not (string-match-p "↳" text))
+          (should-not (string-match-p "Background command" text))
           (should (equal folded text)))))))
 
 (mevedel-deftest mevedel-view--rendering-header-line/running ()

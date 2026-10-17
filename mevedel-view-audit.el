@@ -457,12 +457,16 @@ rewrite the retained live tail and force a whole-turn rebuild per update."
           (t "Completed"))))
 
 (defun mevedel-view-audit--breadcrumb-label (record)
-  "Return the compact terminal label for execution breadcrumb RECORD."
+  "Return the one completion line for execution breadcrumb RECORD.
+It is worded like a background notice; the transcript's own delivery of
+the same completion renders nothing, so this is the only line."
   (let* ((facts (plist-get record :facts))
          (termination (plist-get facts :termination))
          (status (mevedel-view-audit-breadcrumb-status record))
          (failed (equal status "Failed"))
          (code (plist-get facts :exit-code))
+         (monitor (eq (plist-get facts :kind) 'monitor))
+         (events (plist-get facts :event-count))
          (command (or (plist-get facts :description)
                       (plist-get record :command)
                       (plist-get facts :command) "Bash"))
@@ -471,18 +475,28 @@ rewrite the retained live tail and force a whole-turn rebuild per update."
          (sender (and (stringp owner)
                       (not (equal owner (or mevedel-view--agent-path "/root")))
                       (replace-regexp-in-string "[\n\r\t]+" " " owner))))
-    (format "  ↳ %s: %s%s%s  " status
-            (truncate-string-to-width command 64 nil nil "…")
-            (if (and failed (integerp code)
-                     (memq termination '(nil exited signaled interrupted)))
-                (format " · %s %d"
-                        (if (memq termination '(signaled interrupted))
-                            "signal" "exit")
-                        code)
-              "")
-            (if sender
-                (format " · %s" (truncate-string-to-width sender 48 nil nil "…"))
-              ""))))
+    (concat
+     "  "
+     (propertize "● " 'font-lock-face (if failed 'error 'mevedel-view-tool-metadata))
+     (format "%s \"%s\" %s%s%s  "
+             (if monitor "Monitor" "Background command")
+             (truncate-string-to-width command 64 nil nil "…")
+             (downcase status)
+             (cond
+              (monitor
+               (if (integerp events)
+                   (format " · %d event%s" events (if (= events 1) "" "s"))
+                 ""))
+              ((and (integerp code)
+                    (memq termination '(nil exited signaled interrupted)))
+               (format " (%s %d)"
+                       (if (memq termination '(signaled interrupted))
+                           "signal" "exit code")
+                       code))
+              (t ""))
+             (if sender
+                 (format " · %s" (truncate-string-to-width sender 48 nil nil "…"))
+               "")))))
 
 (defun mevedel-view-audit--insert-breadcrumb (record source)
   "Insert RECORD as a linked, non-expandable completion line at SOURCE."

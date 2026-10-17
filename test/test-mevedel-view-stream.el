@@ -893,7 +893,7 @@ turn's later text, live and after reconstruction."
         (let ((visible (buffer-substring-no-properties
                         (point-min) (mevedel-view--input-start))))
           (ert-info ((format "View after completion:\n%s" visible))
-            (should-not (string-search "Completed: make slow" visible))))
+            (should-not (string-search "Background command \"make slow\" completed" visible))))
         ;; Flush only what the completion itself scheduled.
         (mevedel-view--flush-scheduled-render view-buf t)
         (let ((visible (buffer-substring-no-properties
@@ -915,9 +915,9 @@ turn's later text, live and after reconstruction."
             (should (= 1 (mevedel-view-stream-test--count-substring
                           expected visible)))
             ;; A folded completion is not repeated as its own line.
-            (should (= (if (string-prefix-p "Completed" expected) 1 0)
+            (should (= (if (string-prefix-p "Background command" expected) 1 0)
                        (mevedel-view-stream-test--count-substring
-                        "Completed: make slow" visible)))
+                        "Background command \"make slow\" completed" visible)))
             (should (< (string-search expected visible)
                        (string-search "Both checks are done." visible))))
           (when (string-search "[Show result]" expected)
@@ -985,7 +985,9 @@ turn's later text, live and after reconstruction."
                           (point-min) (mevedel-view--input-start))))
             (should (= 1 (mevedel-view-stream-test--count-substring
                           "[Show result]" visible)))
-            (should (string-match-p "↳ Completed: printf run" visible))
+            (should (string-match-p
+                     "● Background command \"printf run\" completed (exit code 0)"
+                     visible))
             (should (equal draft (mevedel-view--input-text)))
             (should (= 4 (- (point) (mevedel-view--input-start))))
             (should mark-active)
@@ -1020,7 +1022,7 @@ turn's later text, live and after reconstruction."
   (mevedel-view-stream-test--check-mid-turn-breadcrumb 1 "1 command completed")
   :doc "an ungrouped mid-turn completion is one line before later text"
   (mevedel-view-stream-test--check-mid-turn-breadcrumb
-   0 "Completed: make slow · main  [Show result]"))
+   0 "Background command \"make slow\" completed (exit code 0) · main  [Show result]"))
 
 (mevedel-deftest mevedel-view-stream-terminal-breadcrumb-projection ()
   ,test

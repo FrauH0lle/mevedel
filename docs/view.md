@@ -179,10 +179,11 @@ Agent terminal results and Bash completions remain distinct. Expanding an agent
 notice reveals its final answer, and the agent path opens its transcript.
 A yielded execution keeps its compact completion breadcrumb at the original
 command row, identifying the command and terminal outcome and linking to its
-output. Receiving transcripts also show an expandable chronological completion
-notice from the mailbox record, including a parent receiving a child's completion.
-Notices do not suppress origin breadcrumbs. A command that finished before yielding
-has no breadcrumb. Model-facing mailbox payloads and agent settlement are unchanged.
+output. It is the only completion line: the transcript's own delivery of that
+completion renders nothing. A transcript receiving another owner's completion,
+such as a parent receiving a child's, shows an expandable notice from the
+mailbox record instead. A command that finished before yielding has no
+breadcrumb. Model-facing mailbox payloads and agent settlement are unchanged.
 
 Directive requests render in the ordinary session view as first-class turns.
 The directive header carries id, action, turn, and an exclusion badge; the
@@ -681,7 +682,9 @@ finished**, **● Background command "Run tests" completed (exit code 0)**,
 2 events**. Each Monitor event is a separate record and row in source order.
 RET expands the full record; collapsed notices have no line-count hint.
 Execution labels prefer the model-written description, falling back to the
-truncated command. Command notices and origin breadcrumbs share the terminal
+truncated command. A command's own completion appears once, as its breadcrumb
+worded like these notices with a `[Show result]` link; its delivery adds no
+second line. Command notices and breadcrumbs share the terminal
 vocabulary completed, failed, stopped, or timed out; an agent result uses
 finished, failed, interrupted, or incomplete. Stops
 are neutral, not errors. Missing agent outcomes never imply success. These
@@ -744,9 +747,9 @@ sibling rows, so repeated expansion never accumulates copies.
 Ordinary agent messages inside an activity run join the same group as
 independently expandable cards; `received N messages` counts them separately
 from tools. Background notices, including agent results, remain separate rows
-and split surrounding activity groups. The original yielded Bash row retains
-its compact linked completion breadcrumb, independently of the later delivery
-notice. Origin breadcrumbs can fold into activity groups as counted completions,
+and split surrounding activity groups; the transcript's own completion delivery
+renders nothing and splits nothing. The original yielded Bash row retains
+its linked completion breadcrumb. Breadcrumbs can fold into activity groups as counted completions,
 such as `3 commands completed, 1 failed`, and show linked rows when expanded.
 A newly formed group stays open when one
 of its rows is already open, so grouping

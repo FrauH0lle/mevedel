@@ -135,14 +135,14 @@
   ,test
   (test)
   :doc "terminal facts determine one compact breadcrumb without output"
-  (should (equal "  ↳ Completed: ./run-tests  "
+  (should (equal "  ● Background command \"./run-tests\" completed  "
                  (mevedel-view-audit--breadcrumb-label
                   '(:command "./run-tests" :facts (:outcome success)))))
-  (should (equal "  ↳ Failed: ./run-tests · exit 1  "
+  (should (equal "  ● Background command \"./run-tests\" failed (exit code 1)  "
                  (mevedel-view-audit--breadcrumb-label
                   '(:command "./run-tests"
                     :facts (:outcome error :exit-code 1)))))
-  (should (string-match-p "Stopped:"
+  (should (string-match-p "\"sleep\" stopped"
                           (mevedel-view-audit--breadcrumb-label
                            '(:command "sleep" :facts (:termination owner-stopped)))))
   (let ((label (mevedel-view-audit--breadcrumb-label
@@ -153,21 +153,33 @@
   (let ((label (mevedel-view-audit--breadcrumb-label
                 '(:command "sleep" :facts (:termination signaled
                                           :exit-code 13 :outcome failure)))))
-    (should (string-match-p "Failed:.*signal 13" label))
+    (should (string-match-p "\"sleep\" failed (signal 13)" label))
+    (should (eq 'error (get-text-property 2 'font-lock-face label)))
     (should-not (string-match-p "exit 13" label)))
   (let ((label (mevedel-view-audit--breadcrumb-label
                 '(:command "sleep" :facts (:termination interrupted
                                           :exit-code 2 :outcome failure)))))
-    (should (string-match-p "Stopped:" label))
-    (should-not (string-match-p "signal 2" label))
+    (should (string-match-p "\"sleep\" stopped (signal 2)" label))
     (should-not (string-match-p "exit 2" label)))
   (should-not (string-match-p "\n"
                               (mevedel-view-audit--breadcrumb-label
                                '(:command "printf first\nsecond"
                                  :facts (:outcome success)))))
+  :doc "monitor completion reports event counts rather than an exit code"
+  (dolist (count '(0 1 2))
+    (let ((label (mevedel-view-audit--breadcrumb-label
+                  (list :command "watch" :facts
+                        (list :kind 'monitor :description "ticker"
+                              :termination 'stopped :outcome 'failure
+                              :exit-code 15 :event-count count)))))
+      (should (equal (format "  ● Monitor \"ticker\" stopped · %d event%s  "
+                             count (if (= count 1) "" "s"))
+                     label))
+      (should (eq 'mevedel-view-tool-metadata
+                  (get-text-property 2 'font-lock-face label)))))
   :doc "forwarded child work names its agent except in that agent's own view"
   (should (string-match-p
-           "Completed: make test · /root/worker  "
+           "Background command \"make test\" completed · /root/worker  "
            (mevedel-view-audit--breadcrumb-label
             '(:owner "/root/worker" :command "make test"
               :facts (:outcome success)))))
@@ -193,7 +205,7 @@
     (should (equal "real" (plist-get record :execution-id)))
     (should (equal "make > test" (plist-get record :command)))
     (should (equal 'error (plist-get (plist-get record :facts) :outcome)))
-    (should (string-match-p "Failed: Run tests"
+    (should (string-match-p "Background command \"Run tests\" failed"
                             (mevedel-view-audit--breadcrumb-label record)))
     (should (equal "artifact://result" (plist-get (plist-get record :facts)
                                                     :output-path)))
@@ -321,12 +333,42 @@
     (should-not (text-property-not-all (point-min) (point-max)
                                       'mevedel-view-execution-breadcrumb nil))))
 
+(mevedel-deftest mevedel-view--own-completion-mail-p ()
+  ,test
+  (test)
+  :doc "own terminal mail disappears in root and agent transcripts"
+  (dolist (owner '(nil "/root/worker"))
+    (dolist (type '("EXECUTION" "MONITOR_TERMINAL"))
+      (with-temp-buffer
+        (setq-local mevedel-view--agent-path owner)
+        (let* ((sender (or owner "/root"))
+               (opener (format "<agent-message type=\"%s\" sender=\"%s\">"
+                               type sender)))
+          (should (mevedel-view--own-completion-mail-p opener sender))
+          (insert "before\n" opener "\nterminal output\n</agent-message>\nafter\n")
+          (mevedel-view--decorate-agent-message-blocks (point-min) (point-max))
+          (should (equal "before\nafter\n" (buffer-string)))))))
+  :doc "Monitor events and agent results from the owner remain visible"
+  (dolist (owner '(nil "/root/worker"))
+    (dolist (case '(("agent-message" "MONITOR" "Monitor event: tick")
+                    ("agent-result" "EXECUTION" "Agent %s finished")))
+      (with-temp-buffer
+        (setq-local mevedel-view--agent-path owner)
+        (let ((sender (or owner "/root")))
+          (insert (format "<%s type=\"%s\" sender=\"%s\" outcome=\"completed\">\ntick\n</%s>\n"
+                          (car case) (cadr case) sender (car case)))
+          (mevedel-view--decorate-agent-message-blocks (point-min) (point-max))
+          (mevedel-view--decorate-agent-result-blocks (point-min) (point-max))
+          (should (string-match-p (regexp-quote (format (caddr case) sender))
+                                  (buffer-string)))
+          (should (get-text-property (point-min) 'mevedel-view-mailbox-notice)))))))
+
 (mevedel-deftest mevedel-view--decorate-agent-message-blocks/point-after ()
   ,test
   (test)
   :doc "point stays after the notice so callers stamp and append past it"
   (with-temp-buffer
-    (insert "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
+    (insert "<agent-message type=\"EXECUTION\" sender=\"/root/worker\">\n"
             "<bash-execution execution_id=\"exec-1\" outcome=\"error\" "
             "exit_code=\"2\"/>\n</agent-message>\n")
     (mevedel-view--decorate-agent-message-blocks (point-min) (point))
@@ -1862,7 +1904,7 @@
                  (list :data-buffer data :tool-use-id "original" :facts facts)))
               (goto-char (point-min))
               (mevedel-view--expand-turn)
-              (should (= 1 (how-many "Completed: printf result"
+              (should (= 1 (how-many "Background command \"printf result\" completed"
                                      (point-min) (point-max))))
               (with-current-buffer data
                 (should (= 1 (length (mevedel-transcript-audit-records

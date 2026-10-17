@@ -22,10 +22,14 @@ polls do not add visible rows; actual input, stops, and failed control operation
 remain visible, and all tool results remain model-visible and inspectable in
 execution history. An execution that actually yielded gets one durable
 completion breadcrumb at its original row, independent of whether completion
-was collected by polling or delivered through a mailbox; receiving transcripts
-show a separate one-line background notice built from the mailbox record's
-structured opening-tag attributes (never payload text). Command notices and
-origin breadcrumbs use completed, failed, stopped, and timed out. A stop is
+was collected by polling or delivered through a mailbox. It is the one visible
+completion line, worded like a notice (`● Background command "Run tests"
+completed (exit code 0)  [Show result]`, `● Monitor "ticker" stopped · 2
+events`); the transcript's own delivery of the same completion renders nothing.
+A transcript receiving another owner's completion, such as a child agent's
+forwarded record, has no local breadcrumb and shows a one-line notice built
+from the mailbox record's structured opening-tag attributes (never payload
+text). Both use completed, failed, stopped, and timed out. A stop is
 neutral in the view while the outcome fact stays `failure`.
 The breadcrumb links to the original row or retained evidence and does not
 duplicate output. Inside an activity run it folds into that run's group as a
@@ -107,6 +111,13 @@ of the same command remain independently navigable.
 
 ## Decision history
 
+- **One completion line (2026-10).** The breadcrumb (`↳ Completed: …  [Show
+  result]`) and the notice of the transcript's own delivery
+  (`● Background command "…" completed`) sat next to each other for every
+  in-turn completion; the user read them as duplication. The breadcrumb is
+  recorded when the work ends, before delivery, so it stays as the one line in
+  notice wording, and the own delivery no longer renders. Forwarded child
+  completions keep their notice because their transcript has no breadcrumb.
 - **One background-work panel with agents (2026-10).** Commands and monitors
   had their own status block, with an `All…` link to an executions-only
   cockpit, while agents had a separate block with a `[-]` toggle and handle

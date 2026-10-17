@@ -1255,15 +1255,16 @@ subscribers cannot acknowledge delivery, and finished records never appear in
 live execution listings.
 
 Only commands that actually yielded produce a completion breadcrumb, which sits
-at the original command row. The compact line names the command and terminal
-outcome (Finished, Failed, Stopped, or Timed out) and links to the original
+at the original command row. The one line names the command and terminal
+outcome (completed, failed, stopped, or timed out) and links to the original
 Bash result; it has no expandable output copy or second metadata summary.
 Foreground completions produce none. The durable
 presentation identity is the session, owning agent, and execution ID, not
 command text, so repeated polls, event retries, and later mailbox delivery do
 not create a second breadcrumb, while concurrent identical commands remain
-distinct. The mailbox payload and model-facing delivery remain unchanged;
-receiving transcripts show the separate one-line background notice built from
+distinct. The mailbox payload and model-facing delivery remain unchanged; the
+owner's own delivery renders nothing in its transcript, and other receiving
+transcripts show a one-line background notice built from
 the `EXECUTION`, `MONITOR`, and `MONITOR_TERMINAL` opening-tag attributes (see
 [view](view.md)), never from payload text.
 `Show result` reveals the source row in the current, archived, or agent
