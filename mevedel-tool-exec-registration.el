@@ -29,7 +29,7 @@
    :args ((command string :required
                    "The Bash command to execute from the session working directory. Can include pipes and standard shell operators.")
           (description string :optional
-                       "Short description of the command, such as Run tests, shown in background work and completion notices.")
+                       "Short active label of three to six words, such as Run tests. Give one on every call: it names the command in background work and completion notices.")
           (yield_time_ms integer :optional
                          "Milliseconds to wait before yielding a still-running command. Defaults to 10000; range 250-30000."
                          :minimum 250 :maximum 30000)

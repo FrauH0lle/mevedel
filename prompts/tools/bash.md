@@ -14,8 +14,9 @@ Execute Bash commands for builds, tests, version control, and system operations.
 
 - Commands start in the session working directory. Quote shell arguments
   correctly; command substitution still executes inside double quotes.
-- Supply a short `description`, such as `Run tests`, for background-work rows
-  and completion notices; without one, the view uses the command.
+- Give every call a `description`: a short active label of three to six words,
+  such as `Run tests` or `Start dev server`. The user tracks running commands
+  and completion notices by it; without one they see the raw command line.
 - In Edits, commands run automatically with required confinement and no network
   by default. Full Access runs without confinement or permission prompts. Ask
   uses the configured sandbox preference and command policy. Request known
@@ -46,7 +47,7 @@ Execute Bash commands for builds, tests, version control, and system operations.
 
 <example>
 - Build, then test only if the build succeeds:
-Bash(command="make build && make test")
+Bash(command="make build && make test", description="Build and run tests")
 If it yields an execution_id, continue other work or end the turn; root completion
 arrives automatically. Use WriteStdin if intermediate output is needed.
 </example>
@@ -54,10 +55,18 @@ arrives automatically. Use WriteStdin if intermediate output is needed.
 ### Examples of bad usage
 
 <example>
-Bash(command="make test &")
+Bash(command="make test &", description="Run tests")
 <reasoning>
-Shell backgrounding is rejected. Use Bash(command="make test", yield_time_ms=1000)
+Shell backgrounding is rejected. Use Bash(command="make test", description="Run tests", yield_time_ms=1000)
 to yield through the managed execution lifecycle. Completion arrives automatically
 for root-owned commands; yielding itself is not success.
+</reasoning>
+</example>
+
+<example>
+Bash(command="for f in src/*.el; do emacs --batch -f batch-byte-compile \"$f\"; done")
+<reasoning>
+No description: the user sees this whole loop in background work and notices.
+Add description="Byte-compile sources".
 </reasoning>
 </example>

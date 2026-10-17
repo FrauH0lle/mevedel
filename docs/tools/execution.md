@@ -111,7 +111,9 @@ and tools requiring a terminal. Monitor has no PTY and rejects ordinary input.
 A single Ctrl-C character requests a process-group interrupt in either PTY or
 pipe mode (unavailable on Windows). The command may ignore it; it neither
 guarantees a stop nor suppresses a terminal wake. Use StopExecution to stop the
-execution without a waking terminal notice. A stop does not retract events
+execution for certain: its result holds the final state, and the short stop
+notice that follows is delivered with the next request but never wakes an idle
+session. A stop does not retract events
 already delivered or undo completed side effects. Do not send ordinary input
 to a finished execution or start a replacement merely because no new output arrived.
 

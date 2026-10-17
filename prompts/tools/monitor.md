@@ -28,8 +28,9 @@ Watch repeated events from a command's stdout and wake the model when they arriv
   with a visible reason; restart only with a tighter filter.
 - ListExecutions lists live monitors. WriteStdin polls combined unread stdout/stderr
   output; ordinary input is rejected. Ctrl-C requests an interrupt, not a guaranteed
-  stop or suppression of terminal wakeup. Use StopExecution to stop without a
-  waking terminal notice; already delivered events are not retracted.
+  stop, and its terminal notice can wake you. StopExecution stops it for certain;
+  its stop notice arrives with your next request but never wakes an idle
+  session. Already delivered events are not retracted.
 - Monitors are root-only, exist only during the current Emacs run, and are not
   restarted when a session resumes.
 - Uses Bash's permission checks and confinement. Request needed capabilities

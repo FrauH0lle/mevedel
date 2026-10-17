@@ -8,7 +8,7 @@ Stop one yielded Bash or Monitor execution owned by this agent.
 
 - Inferring a hang from quiet output alone; WriteStdin can wait for new evidence.
 - Requesting only an interrupt; WriteStdin accepts a single Ctrl-C character,
-  but that is not a guaranteed stop or a way to suppress terminal wakeup.
+  but that is not a guaranteed stop, and its terminal notice can wake you.
 
 ### How to use `StopExecution`
 
@@ -16,8 +16,10 @@ Stop one yielded Bash or Monitor execution owned by this agent.
   caller's yielded executions are addressable; monitors belong to root.
 - Returns the execution's final observation. Stopping ends that execution; it
   cannot be resumed and does not undo completed side effects.
-- A requested stop does not cause a waking terminal notice. Already delivered
-  events are not retracted.
+- The result already holds the final state. A short stop notice (for example
+  `stopped · 2 events`) still reaches you with your next request, but it never
+  wakes an idle session and needs no action. Already delivered events are not
+  retracted.
 
 ### Examples of good usage
 

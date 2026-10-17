@@ -9,7 +9,7 @@ Poll unread output from a Bash or Monitor execution, or send input to a Bash PTY
 - Starting a new command or sending ordinary input to a Monitor or pipe-mode
   Bash execution, whose stdin is closed.
 - Polling solely to keep root work moving: completion and Monitor events arrive
-  automatically. Use StopExecution for a definite stop without a waking terminal notice.
+  automatically. Use StopExecution for a definite stop; its stop notice never wakes you.
 
 ### How to use `WriteStdin`
 
