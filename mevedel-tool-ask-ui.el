@@ -148,11 +148,8 @@ deliberately not reused here."
       label)))
 
 (defun mevedel-tool-ask-ui--key (key)
-  "Return KEY propertized as a key binding.
-Only the key itself carries `help-key-binding': facing the surrounding
-label too draws a box around the prose."
-  (propertize key 'font-lock-face 'help-key-binding
-              'mevedel-prompt-focus (equal key "RET")))
+  "Return KEY with a quiet, unboxed emphasis."
+  (propertize key 'font-lock-face 'default))
 
 
 ;;
@@ -351,7 +348,82 @@ the frame instead when the block is not on screen."
      (:constructor mevedel-tool-ask-ui--state-create))
   "Mutable state of one Ask questionnaire."
   callback source-buffer origin questions count answers chat-buffer
-  interaction-id overlay focus-question focus-option)
+  interaction-id overlay focus-question focus-option expanded)
+
+(defvar-local mevedel-tool-ask-ui--states nil
+  "Live Ask forms in this buffer.")
+
+(defvar-local mevedel-tool-ask-ui--active-state nil
+  "Ask form containing point at the last command.")
+
+(defvar-local mevedel-tool-ask-ui--active-entry nil
+  "Entry identity at the last command, not a separate selection cursor.")
+
+(defun mevedel-tool-ask-ui--entry-at-point (state)
+  "Return the entry at point inside STATE's live overlay, or nil."
+  (let ((overlay (mevedel-tool-ask-ui--state-overlay state)))
+    (when (and (overlayp overlay)
+               (eq (overlay-buffer overlay) (current-buffer))
+               (<= (overlay-start overlay) (point))
+               (< (point) (overlay-end overlay)))
+      (get-text-property (point) 'mevedel-ask-entry))))
+
+(defun mevedel-tool-ask-ui--entry-positions (state)
+  "Return ordered (IDENTITY . POSITION) pairs for STATE's visible entries."
+  (let* ((overlay (mevedel-tool-ask-ui--state-overlay state))
+         (position (overlay-start overlay))
+         (end (overlay-end overlay)) entries)
+    (while (and position (< position end))
+      (when-let* ((entry (get-text-property position 'mevedel-ask-entry)))
+        (push (cons entry (save-excursion
+                            (goto-char position)
+                            (skip-chars-forward " " (line-end-position))
+                            (point)))
+              entries))
+      (setq position (next-single-property-change
+                      position 'mevedel-ask-entry nil end)))
+    (nreverse entries)))
+
+(defun mevedel-tool-ask-ui--goto-entry (state identity)
+  "Move point to IDENTITY in STATE, without repainting the form."
+  (when-let* ((position (cdr (assoc identity
+                                  (mevedel-tool-ask-ui--entry-positions state)))))
+    (goto-char position))
+  (mevedel-tool-ask-ui--post-command))
+
+(defun mevedel-tool-ask-ui--post-command ()
+  "Synchronize samples with point, including native motion out of a form."
+  (let* ((state (cl-find-if #'mevedel-tool-ask-ui--entry-at-point
+                            mevedel-tool-ask-ui--states))
+         (entry (and state (mevedel-tool-ask-ui--entry-at-point state))))
+    (unless (and (eq state mevedel-tool-ask-ui--active-state)
+                 (equal entry mevedel-tool-ask-ui--active-entry))
+      (when (and mevedel-tool-ask-ui--active-state
+                 (not (eq state mevedel-tool-ask-ui--active-state)))
+        (setf (mevedel-tool-ask-ui--state-focus-question
+               mevedel-tool-ask-ui--active-state) nil
+              (mevedel-tool-ask-ui--state-focus-option
+               mevedel-tool-ask-ui--active-state) nil)
+        (mevedel-tool-ask-ui--sync-sample mevedel-tool-ask-ui--active-state))
+      (setq mevedel-tool-ask-ui--active-state state
+            mevedel-tool-ask-ui--active-entry entry)
+      (when state
+        (setf (mevedel-tool-ask-ui--state-focus-question state)
+              (and (consp entry) (car entry))
+              (mevedel-tool-ask-ui--state-focus-option state)
+              (and (consp entry) (integerp (cdr entry)) (cdr entry)))
+        (mevedel-tool-ask-ui--sync-sample state)))))
+
+(defun mevedel-tool-ask-ui--retire (state)
+  "Remove STATE's motion tracking after settlement."
+  (when (buffer-live-p (mevedel-tool-ask-ui--state-chat-buffer state))
+    (with-current-buffer (mevedel-tool-ask-ui--state-chat-buffer state)
+      (setq mevedel-tool-ask-ui--states
+            (delq state mevedel-tool-ask-ui--states))
+      (mevedel-tool-ask-ui--post-command)
+      (unless mevedel-tool-ask-ui--states
+        (remove-hook 'post-command-hook
+                     #'mevedel-tool-ask-ui--post-command t)))))
 
 (defun mevedel-tool-ask-ui--question-options (state index)
   "Return option objects for question INDEX in STATE."
@@ -372,7 +444,8 @@ the frame instead when the block is not on screen."
   "Return the option object currently focused in STATE, or nil."
   (let ((question (mevedel-tool-ask-ui--state-focus-question state))
         (option (mevedel-tool-ask-ui--state-focus-option state)))
-    (unless (mevedel-tool-ask-ui--custom-entry-p state question option)
+    (when (and (integerp question) (integerp option)
+               (not (mevedel-tool-ask-ui--custom-entry-p state question option)))
       (nth option (mevedel-tool-ask-ui--question-options state question)))))
 
 (defun mevedel-tool-ask-ui--answered-entry (state index)
@@ -384,12 +457,6 @@ the frame instead when the block is not on screen."
                        :test #'equal
                        :key #'mevedel-tool-ask-ui--option-label)
           (length options)))))
-
-(defun mevedel-tool-ask-ui--enter-question (state index)
-  "Focus question INDEX in STATE, landing on its current answer."
-  (setf (mevedel-tool-ask-ui--state-focus-question state) index
-        (mevedel-tool-ask-ui--state-focus-option state)
-        (or (mevedel-tool-ask-ui--answered-entry state index) 0)))
 
 (defun mevedel-tool-ask-ui--answered-count (state)
   "Return the number of answered questions in STATE."
@@ -466,52 +533,58 @@ the frame instead when the block is not on screen."
 
 (defun mevedel-tool-ask-ui--dispatch (state action &optional value)
   "Apply ACTION with optional VALUE to Ask STATE."
-  (let ((question (mevedel-tool-ask-ui--state-focus-question state))
-        (option (mevedel-tool-ask-ui--state-focus-option state)))
+  (with-current-buffer (mevedel-tool-ask-ui--state-chat-buffer state)
+   (mevedel-tool-ask-ui--post-command)
+   (let* ((identity (mevedel-tool-ask-ui--entry-at-point state))
+          (question (and (consp identity) (car identity)))
+          (option (and (consp identity) (cdr identity))))
     (pcase action
-      ('next
-       (if (< option
-              (1- (mevedel-tool-ask-ui--entry-count state question)))
-           (setf (mevedel-tool-ask-ui--state-focus-option state) (1+ option))
-         (mevedel-tool-ask-ui--enter-question
-          state (% (1+ question) (mevedel-tool-ask-ui--state-count state))))
-       (mevedel-tool-ask-ui--refresh state))
-      ('previous
-       (if (> option 0)
-           (setf (mevedel-tool-ask-ui--state-focus-option state) (1- option))
-         (mevedel-tool-ask-ui--enter-question
-          state (mod (1- question) (mevedel-tool-ask-ui--state-count state))))
-       (mevedel-tool-ask-ui--refresh state))
+      ((or 'next 'previous)
+       (let* ((entries (mevedel-tool-ask-ui--entry-positions state))
+              (positions (if (eq action 'next) entries (reverse entries)))
+              (target (cl-find-if
+                       (lambda (entry)
+                         (if (eq action 'next)
+                             (> (cdr entry) (point))
+                           (< (cdr entry)
+                              (or (cdr (assoc identity entries)) (point)))))
+                       positions)))
+         (when target
+           (mevedel-tool-ask-ui--goto-entry state (car target)))))
       ('focus
-       (when (< value (mevedel-tool-ask-ui--entry-count state question))
-         (setf (mevedel-tool-ask-ui--state-focus-option state) value)
-         (mevedel-tool-ask-ui--refresh state)))
+       (when (and question (integerp option)
+                  (< value (mevedel-tool-ask-ui--entry-count state question)))
+         (mevedel-tool-ask-ui--goto-entry state (cons question value))))
       ('pick
-       (if (mevedel-tool-ask-ui--custom-entry-p state question option)
-           (mevedel-tool-ask-ui--dispatch state 'custom)
-         (mevedel-tool-ask-ui--dispatch
-          state 'record
-          (mevedel-tool-ask-ui--option-label
-           (mevedel-tool-ask-ui--focused-option state)))))
+       (cond
+        ((eq identity 'submit) (mevedel-tool-ask-ui--dispatch state 'submit))
+        ((eq option 'summary)
+         (cl-pushnew question (mevedel-tool-ask-ui--state-expanded state))
+         (mevedel-tool-ask-ui--refresh
+          state nil (cons question (mevedel-tool-ask-ui--answered-entry state question))))
+        ((integerp option)
+         (if (mevedel-tool-ask-ui--custom-entry-p state question option)
+             (mevedel-tool-ask-ui--dispatch state 'custom)
+           (mevedel-tool-ask-ui--dispatch
+            state 'record
+            (mevedel-tool-ask-ui--option-label
+             (nth option (mevedel-tool-ask-ui--question-options state question))))))))
       ('custom
-       (let ((answer
-              (read-string
-               (concat
-                (format
-                 "%s"
-                 (plist-get
-                  (nth question
-                       (mevedel-tool-ask-ui--state-questions state))
-                  :question))
-                " (custom): ")
-               (aref (mevedel-tool-ask-ui--state-answers state) question))))
-         (unless (string-blank-p answer)
-           (mevedel-tool-ask-ui--dispatch state 'record answer))))
+       (when question
+         (let ((answer
+                (read-string
+                 (format "Answer %d: " (1+ question))
+                 (aref (mevedel-tool-ask-ui--state-answers state) question))))
+           (unless (string-blank-p answer)
+             (mevedel-tool-ask-ui--dispatch state 'record answer)))))
       ('record
        (aset (mevedel-tool-ask-ui--state-answers state) question value)
-       (when-let* ((next (mevedel-tool-ask-ui--next-unanswered state)))
-         (mevedel-tool-ask-ui--enter-question state next))
-       (mevedel-tool-ask-ui--refresh state t))
+       (setf (mevedel-tool-ask-ui--state-expanded state)
+             (delq question (mevedel-tool-ask-ui--state-expanded state)))
+       (mevedel-tool-ask-ui--refresh
+        state t (if-let* ((next (mevedel-tool-ask-ui--next-unanswered state)))
+                    (cons next 0)
+                  'submit)))
       ('submit
        (mevedel-tool-ask-ui--sample-close)
        (mevedel--prompt--settle
@@ -532,7 +605,7 @@ the frame instead when the block is not on screen."
                       (mevedel-tool-ask-ui--state-answers state)
                       index
                       (unless (string-blank-p answer) answer)))
-         (mevedel-tool-ask-ui--dispatch state 'submit))))))
+         (mevedel-tool-ask-ui--dispatch state 'submit)))))))
 
 (defun mevedel-tool-ask-ui--keymap (state)
   "Return the interaction keymap controlling STATE."
@@ -554,6 +627,11 @@ the frame instead when the block is not on screen."
          (lambda ()
            (interactive)
            (mevedel-tool-ask-ui--dispatch state 'focus entry)))))
+    (define-key keymap [mouse-1]
+                (lambda (event)
+                  (interactive "e")
+                  (mouse-set-point event)
+                  (mevedel-tool-ask-ui--dispatch state 'pick)))
     (define-key
      keymap (kbd "C-v")
      (lambda ()
@@ -565,25 +643,6 @@ the frame instead when the block is not on screen."
        (interactive)
        (mevedel-tool-ask-ui--sample-scroll #'scroll-down-command)))
     keymap))
-
-(defun mevedel-tool-ask-ui--divider ()
-  "Return the rendered Ask divider."
-  (propertize "\n" 'font-lock-face
-              '(:inherit font-lock-string-face
-                :underline t :extend t)))
-
-(defun mevedel-tool-ask-ui--header (state)
-  "Return the rendered header for STATE."
-  (let ((count (mevedel-tool-ask-ui--state-count state))
-        (answered (mevedel-tool-ask-ui--answered-count state)))
-    (concat
-     (propertize
-      (format "Ask · %d question%s" count (if (= count 1) "" "s"))
-      'font-lock-face 'font-lock-string-face)
-     (propertize
-      (format "  ·  %d of %d answered" answered count)
-      'font-lock-face (if (= answered count) 'success 'shadow))
-     (mevedel-tool-ask-ui--divider))))
 
 (defun mevedel-tool-ask-ui--option-lines (state index entry)
   "Return rendered lines for ENTRY of question INDEX in STATE."
@@ -598,25 +657,20 @@ the frame instead when the block is not on screen."
                          answer options))
                  (equal answer
                         (mevedel-tool-ask-ui--option-label option)))))
-         (focusedp
-          (and (= index (mevedel-tool-ask-ui--state-focus-question state))
-               (= entry (mevedel-tool-ask-ui--state-focus-option state))))
          (description
           (and option (mevedel-tool-ask-ui--option-description option)))
          (lines
           (list
            (concat
-            (if focusedp
-                (propertize "    ▸ " 'font-lock-face 'success)
-              "      ")
-            (propertize
-             (if customp "c" (number-to-string (1+ entry)))
-             'font-lock-face 'shadow)
-            " "
+            "     "
             (if selectedp
                 (propertize "●" 'font-lock-face 'success)
               (propertize "○" 'font-lock-face 'shadow))
             " "
+            (propertize
+             (if customp "c" (number-to-string (1+ entry)))
+             'font-lock-face 'shadow)
+            "  "
             (if customp
                 (propertize
                  (concat mevedel-tool-ask-ui--custom-label "…")
@@ -628,8 +682,13 @@ the frame instead when the block is not on screen."
                     (list
                      (concat
                       "          "
-                      (propertize description 'font-lock-face 'shadow))))))
-    lines))
+                      (propertize
+                       (replace-regexp-in-string "\n" "\n          " description t t)
+                       'font-lock-face 'shadow))))))
+    (list (propertize (string-join lines "\n")
+                      'mevedel-ask-entry (cons index entry)
+                      'wrap-prefix "          "
+                      'mouse-face 'highlight))))
 
 (defun mevedel-tool-ask-ui--question-block (state index)
   "Return question INDEX rendered for STATE."
@@ -638,64 +697,74 @@ the frame instead when the block is not on screen."
            (nth index (mevedel-tool-ask-ui--state-questions state))
            :question))
          (answer (aref (mevedel-tool-ask-ui--state-answers state) index))
-         (lines
-          (list
+         (collapsed (and answer
+                         (not (memq index
+                                    (mevedel-tool-ask-ui--state-expanded state)))))
+         (heading
+          (propertize
            (concat
-            (if answer
-                (propertize " ✓ " 'font-lock-face 'success)
-              "   ")
-            (propertize (format "%d  " (1+ index))
-                        'font-lock-face 'bold)
-            (propertize (format "%s" question)
-                        'font-lock-face 'font-lock-escape-face)))))
-    (cond
-     ((= index (mevedel-tool-ask-ui--state-focus-question state))
-      (dolist
-          (entry
-           (number-sequence
-            0 (1- (mevedel-tool-ask-ui--entry-count state index))))
-        (setq lines
-              (append
-               lines
-               (mevedel-tool-ask-ui--option-lines state index entry)))))
-     (answer
-      (setq lines
-            (append
-             lines
-             (list
-              (concat
-               "      "
-               (propertize answer 'font-lock-face 'success)))))))
-    (propertize (string-join lines "\n")
-                'mevedel-ask-question index)))
+            (if collapsed (propertize "✓ " 'font-lock-face 'success) "  ")
+            (propertize (format "%d  " (1+ index)) 'font-lock-face 'bold)
+            (propertize
+             (replace-regexp-in-string "\n" "\n     " (format "%s" question) t t)
+             'font-lock-face (if collapsed 'default 'bold))
+            (when collapsed
+              (concat "  → " (propertize answer 'font-lock-face 'success))))
+           'wrap-prefix "     ")))
+    (propertize
+     (if collapsed
+         (propertize heading 'mevedel-ask-entry (cons index 'summary)
+                     'mouse-face 'highlight
+                     'help-echo "RET or click to edit this answer")
+       (concat heading "\n"
+               (mapconcat
+                (lambda (entry)
+                  (string-join (mevedel-tool-ask-ui--option-lines state index entry) "\n"))
+                (number-sequence 0 (1- (mevedel-tool-ask-ui--entry-count state index)))
+                "\n")))
+     'mevedel-ask-question index)))
 
 (defun mevedel-tool-ask-ui--footer ()
   "Return the Ask interaction footer."
-  (concat
-   (mevedel-tool-ask-ui--divider)
-   (mevedel-tool-ask-ui--key "n/p") " move  "
-   (mevedel-tool-ask-ui--key "1-9") " focus  "
-   (mevedel-tool-ask-ui--key "RET") " pick  "
-   (mevedel-tool-ask-ui--key "c") " custom  "
-   (mevedel-tool-ask-ui--key "C-v/M-v") " scroll sample\n"
-   (mevedel-tool-ask-ui--key "C-c C-c") " submit  "
-   (mevedel-tool-ask-ui--key "q") " cancel  "
-   (mevedel-tool-ask-ui--key "C-c C-k") " abort run\n"
-   (mevedel-tool-ask-ui--divider)))
+  (let ((text
+         (concat
+          "  "
+          (mevedel-tool-ask-ui--key "n/p") " move  "
+          (mevedel-tool-ask-ui--key "1-9") " focus  "
+          (mevedel-tool-ask-ui--key "RET") " choose  "
+          (mevedel-tool-ask-ui--key "c") " custom  "
+          (mevedel-tool-ask-ui--key "C-c C-c") " submit  "
+          (mevedel-tool-ask-ui--key "q") " cancel\n")))
+    (add-face-text-property 0 (length text) 'shadow t text)
+    text))
 
 (defun mevedel-tool-ask-ui--form-body (state)
   "Return the rendered questionnaire body for STATE."
-  (concat
-   "\n"
-   (mevedel-tool-ask-ui--header state)
-   "\n"
-   (mapconcat
-    (lambda (index)
-      (mevedel-tool-ask-ui--question-block state index))
-    (number-sequence 0 (1- (mevedel-tool-ask-ui--state-count state)))
-    "\n\n")
-   "\n"
-   (mevedel-tool-ask-ui--footer)))
+  (let* ((body
+          (concat
+           "\n"
+           (mapconcat
+            (lambda (index) (mevedel-tool-ask-ui--question-block state index))
+            (number-sequence 0 (1- (mevedel-tool-ask-ui--state-count state)))
+            "\n\n")
+           "\n\n"
+           (propertize
+            (concat
+             (propertize "  [ Submit ]" 'font-lock-face 'bold)
+             (propertize
+              (format "  %d of %d answered"
+                      (mevedel-tool-ask-ui--answered-count state)
+                      (mevedel-tool-ask-ui--state-count state))
+              'font-lock-face 'shadow))
+            'mevedel-ask-entry 'submit 'mouse-face 'highlight)
+           "\n\n"
+           (mevedel-tool-ask-ui--footer)))
+         (first (text-property-not-all 0 (length body) 'mevedel-ask-entry nil body)))
+    (when first
+      (while (eq (aref body first) ?\s)
+        (setq first (1+ first)))
+      (put-text-property first (1+ first) 'mevedel-prompt-focus t body))
+    body))
 
 (defun mevedel-tool-ask-ui--render (state announce)
   "Paint STATE and announce it remotely when ANNOUNCE is non-nil."
@@ -719,7 +788,11 @@ the frame instead when the block is not on screen."
     (let ((overlay (mevedel-tool-ask-ui--state-overlay state))
           (count (mevedel-tool-ask-ui--state-count state)))
       (overlay-put overlay 'mevedel--callback
-                   (mevedel-tool-ask-ui--state-callback state))
+                   (lambda (outcome)
+                     (mevedel-tool-ask-ui--retire state)
+                     (funcall (mevedel-tool-ask-ui--state-callback state) outcome)))
+      (cl-pushnew state mevedel-tool-ask-ui--states :test #'eq)
+      (add-hook 'post-command-hook #'mevedel-tool-ask-ui--post-command nil t)
       (overlay-put
        overlay 'mevedel--remote
        (list
@@ -740,10 +813,13 @@ the frame instead when the block is not on screen."
       (when announce
         (mevedel--prompt-announce overlay)))))
 
-(defun mevedel-tool-ask-ui--refresh (state &optional announce)
-  "Render STATE, announcing it remotely when ANNOUNCE is non-nil."
+(defun mevedel-tool-ask-ui--refresh (state &optional announce identity)
+  "Render STATE, optionally ANNOUNCE it and move point to IDENTITY."
   (mevedel-tool-ask-ui--render state announce)
-  (mevedel-tool-ask-ui--sync-sample state))
+  (with-current-buffer (mevedel-tool-ask-ui--state-chat-buffer state)
+    (if identity
+        (mevedel-tool-ask-ui--goto-entry state identity)
+      (mevedel-tool-ask-ui--post-command))))
 
 (cl-defun mevedel-tool-ask-ui-show (callback questions)
   "Show QUESTIONS as one form and settle it through CALLBACK."
@@ -769,7 +845,6 @@ the frame instead when the block is not on screen."
            :interaction-id (list :ask (gensym "ask-"))
            :focus-question 0
            :focus-option 0)))
-    (mevedel-tool-ask-ui--enter-question state 0)
     (mevedel-tool-ask-ui--refresh state t)))
 
 (provide 'mevedel-tool-ask-ui)

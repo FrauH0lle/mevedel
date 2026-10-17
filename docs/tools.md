@@ -746,6 +746,20 @@ WaitAgent adapters. Ask's questionnaire lives in `mevedel-tool-ask-ui.el`; its
 handler, renderer, and schema live in `mevedel-tool-ask.el`. Exact external-path
 authority is part of the normal permission pipeline, not a model-visible tool.
 
+Ask displays unanswered questions together in the interaction zone. Point is
+the focused entry: `n`/`p`, `C-n`/`C-p`, and the arrow keys move between entries
+without repainting the form; `1`–`9` focus an entry in the current question.
+`RET` or a click chooses the entry, including when point is on its description.
+`c` edits a custom answer in the minibuffer, retaining the previous answer as
+the initial text. Answered questions collapse to summaries; `RET` or a click
+reopens one on its current answer. Choosing an answer advances to the next
+unanswered question, then to the final Submit row. `RET` there or `C-c C-c`
+submits the whole questionnaire; unanswered questions explicitly report no
+preference. `q`/`C-g` cancel only the questionnaire, while `C-c C-k` also aborts
+the run. `C-v`/`M-v` scroll the current sample. The form keeps one progress
+count beside Submit and one keyboard hint line, with hanging indentation for
+wrapped questions and descriptions.
+
 Agent's required inputs are `task_name` and `message`. Its optional `role`,
 `context`, `model`, and `effort` inputs are validated before reservation:
 context accepts `all`, `none`, `summary`, or positive decimal strings; model

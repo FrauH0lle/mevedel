@@ -40,8 +40,12 @@ registered-overlay and result for questionnaire assertions."
                     (setq rendered-body (plist-get descriptor :body)
                           rendered-keymap (plist-get descriptor :keymap)
                           registered-overlay (funcall register descriptor)))))
-         (with-current-buffer data-buffer
-           ,@body)))))
+         (save-window-excursion
+           (set-window-buffer (selected-window) view-buffer)
+           (with-current-buffer view-buffer
+             (goto-char (point-max)))
+           (with-current-buffer data-buffer
+             ,@body))))))
 
 
 ;;
@@ -199,6 +203,176 @@ registered-overlay and result for questionnaire assertions."
         (should (eq (car (last visible)) 'vertically))))))
 
 
+(mevedel-deftest mevedel-tool-ask-ui--entry-at-point ()
+  ,test
+  (test)
+  :doc "entry identity covers descriptions and custom input, but not adjacent prose"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     #'ignore
+     [(:question "Choose a layout\nwith room for a long description?"
+       :options [(:label "Compact" :description "First line\nSecond line")
+                 "Spacious"])])
+    (with-current-buffer view-buffer
+      (let* ((state (car mevedel-tool-ask-ui--states))
+             (positions (mevedel-tool-ask-ui--entry-positions state)))
+        (should (equal (mapcar #'car positions) '((0 . 0) (0 . 1) (0 . 2) submit)))
+        (should (equal '(0 . 0) (mevedel-tool-ask-ui--entry-at-point state)))
+        (should (get-text-property (point) 'mevedel-prompt-focus))
+        (should (eq (char-after) ?○))
+        (should (= (current-column) 5))
+        (search-forward "Second line")
+        (backward-char)
+        (should (equal '(0 . 0) (mevedel-tool-ask-ui--entry-at-point state)))
+        (should (equal "          " (get-text-property (point) 'wrap-prefix)))
+        (mevedel-tool-ask-ui--goto-entry state '(0 . 2))
+        (should (equal '(0 . 2) (mevedel-tool-ask-ui--entry-at-point state)))
+        (should (eq (char-after) ?○))
+        (goto-char (overlay-start registered-overlay))
+        (should-not (mevedel-tool-ask-ui--entry-at-point state))
+        (search-forward "Choose a layout")
+        (should (equal "     " (get-text-property (point) 'wrap-prefix)))
+        (goto-char (overlay-end registered-overlay))
+        (should-not (mevedel-tool-ask-ui--entry-at-point state))))
+    (should-not (string-match-p "▸\\|Ask ·" rendered-body))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--post-command ()
+  ,test
+  (test)
+  :doc "native motion synchronizes samples only on entry changes and leaving the form"
+  (test-mevedel-tool-ask-ui--with-form
+    (let (focused)
+      (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sync-sample)
+                 (lambda (state)
+                   (push (mevedel-tool-ask-ui--entry-at-point state) focused))))
+        (mevedel-tool-ask-ui-show
+         #'ignore
+         [(:question "Layout?"
+           :options [(:label "Compact" :description "A long description") "Spacious"])])
+        (should (equal focused '((0 . 0))))
+        (with-current-buffer view-buffer
+          (let ((tick (buffer-chars-modified-tick))
+                (state (car mevedel-tool-ask-ui--states)))
+            (forward-char 3)
+            (run-hooks 'post-command-hook)
+            (should (equal focused '((0 . 0))))
+            (search-forward "Spacious")
+            (backward-char)
+            (run-hooks 'post-command-hook)
+            (should (equal focused '((0 . 1) (0 . 0))))
+            (should (= 1 (mevedel-tool-ask-ui--state-focus-option state)))
+            (goto-char (point-max))
+            (run-hooks 'post-command-hook)
+            (should (equal focused '(nil (0 . 1) (0 . 0))))
+            (should-not (mevedel-tool-ask-ui--focused-option state))
+            (should (= tick (buffer-chars-modified-tick)))))))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--retire ()
+  ,test
+  (test)
+  :doc "settling concurrent forms removes only their own motion tracking"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show #'ignore [(:question "First?" :options ["Yes"])])
+    (let ((first registered-overlay))
+      (mevedel-tool-ask-ui-show #'ignore [(:question "Second?" :options ["Yes"])])
+      (with-current-buffer view-buffer
+        (should (= 2 (length mevedel-tool-ask-ui--states)))
+        (mevedel--prompt--settle first 'aborted)
+        (should (= 1 (length mevedel-tool-ask-ui--states)))
+        (should (memq #'mevedel-tool-ask-ui--post-command post-command-hook))
+        (mevedel--prompt--settle registered-overlay 'aborted)
+        (should-not mevedel-tool-ask-ui--states)
+        (should-not mevedel-tool-ask-ui--active-state)
+        (should-not (memq #'mevedel-tool-ask-ui--post-command post-command-hook))))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--dispatch ()
+  ,test
+  (test)
+  :doc "navigation never repaints and RET on a description answers its own row"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "Layout?"
+       :options [(:label "Compact" :description "Dense text")
+                 (:label "Spacious" :description "Room to breathe")])])
+    (with-current-buffer view-buffer
+      (let ((tick (buffer-chars-modified-tick))
+            (body rendered-body))
+        (dolist (key '("n" "p" "2" "C-n" "C-p" "<up>" "<down>"))
+          (call-interactively (lookup-key rendered-keymap (kbd key))))
+        (should (= tick (buffer-chars-modified-tick)))
+        (should (eq body rendered-body)))
+      (search-forward "Room to breathe")
+      (backward-char)
+      (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+      (should (eq 'submit (get-text-property (point) 'mevedel-ask-entry)))
+      (should (eq (char-after) ?\[))
+      (call-interactively (lookup-key rendered-keymap (kbd "p")))
+      (should (eq (char-after) ?✓))
+      (search-forward "Layout?")
+      (should (= (- (current-column) (length "Layout?")) 5))
+      (call-interactively (lookup-key rendered-keymap (kbd "n")))
+      (call-interactively (lookup-key rendered-keymap (kbd "RET"))))
+    (should (string-match-p "A1: Spacious" result)))
+
+  :doc "custom answer drafts survive reopening and blank edits leave answers intact"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "Layout?" :options ["Compact" "Spacious"])])
+    (let (initial)
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (_prompt value &rest _)
+                   (setq initial value)
+                   "My layout")))
+        (call-interactively (lookup-key rendered-keymap (kbd "c"))))
+      (should-not initial)
+      (call-interactively (lookup-key rendered-keymap (kbd "p")))
+      (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+      (with-current-buffer view-buffer
+        (should (equal '(0 . 2) (get-text-property (point) 'mevedel-ask-entry))))
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (_prompt value &rest _)
+                   (setq initial value)
+                   "  ")))
+        (call-interactively (lookup-key rendered-keymap (kbd "RET"))))
+      (should (equal "My layout" initial)))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "A1: My layout" result)))
+
+  :doc "mouse activation selects the clicked row rather than the previous point"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     (lambda (value) (setq result value))
+     [(:question "Layout?" :options ["Compact" "Spacious"])])
+    (with-current-buffer view-buffer
+      (let ((position (cdr (assoc '(0 . 1)
+                                  (mevedel-tool-ask-ui--entry-positions
+                                   (car mevedel-tool-ask-ui--states))))))
+        (funcall (lookup-key rendered-keymap [mouse-1])
+                 (list 'mouse-1 (list (selected-window) position '(0 . 0) 0))))
+      (should (eq 'submit (get-text-property (point) 'mevedel-ask-entry)))
+      (call-interactively (lookup-key rendered-keymap (kbd "RET"))))
+    (should (string-match-p "A1: Spacious" result)))
+
+  :doc "form changes preserve a multiline composer draft and restore its point"
+  (test-mevedel-tool-ask-ui--with-form
+    (with-current-buffer view-buffer
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+    (mevedel-tool-ask-ui-show
+     #'ignore [(:question "Layout?" :options ["Compact" "Spacious"])])
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (with-current-buffer view-buffer
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (with-current-buffer view-buffer
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 4))))))
+
+
 (mevedel-deftest mevedel-tool-ask-ui-show ()
   ,test
   (test)
@@ -233,17 +407,18 @@ registered-overlay and result for questionnaire assertions."
     (should-not (overlay-get registered-overlay
                              'mevedel-user-request)))
 
-  :doc "moving back to an answered question reopens it on its answer"
+  :doc "RET on an answered summary reopens it on its answer"
   (test-mevedel-tool-ask-ui--with-form
     (mevedel-tool-ask-ui-show
      (lambda (value) (setq result value))
      [(:question "Use cache?" :options ["Yes" "No"])
       (:question "Run tests?" :options ["Yes" "No"])])
-    ;; Answer the first question, then walk the cursor back into
-    ;; it: an answered question collapses to its answer until the
-    ;; cursor returns, which is the only "edit" gesture there is.
+    ;; Motion reaches the summary without expanding or repainting it.
     (call-interactively (lookup-key rendered-keymap (kbd "RET")))
     (call-interactively (lookup-key rendered-keymap (kbd "p")))
+    (with-current-buffer view-buffer
+      (should (equal '(0 . summary) (get-text-property (point) 'mevedel-ask-entry))))
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
     ;; Digits move the cursor without answering, so the count is
     ;; unchanged until RET.
     (call-interactively (lookup-key rendered-keymap (kbd "2")))
