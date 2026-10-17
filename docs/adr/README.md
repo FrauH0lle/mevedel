@@ -139,7 +139,7 @@ to the decision bearing that ID.
 | 0110 | Request config lives in the sidecar, not Org properties | [ADR 0110](0110-request-config-lives-in-the-sidecar-not-org-properties.md) |
 | 0111 | Run programmatic tool calls in a closed machine | [ADR 0111](0111-run-programmatic-tool-calls-in-a-closed-machine.md) |
 | 0112 | Debounce observational agent persists | [ADR 0112](0112-debounce-observational-agent-persists.md) |
-| 0113 | Parent Ask Sample Frames To The Top-Level Frame | [ADR 0113](0113-parent-ask-sample-frames-to-the-top-level-frame.md) |
+| 0113 | Show Ask Samples Inline Under Their Question | [ADR 0113](0113-show-ask-samples-inline.md) |
 | 0114 | Tie collaboration room lifetime to the host share | [ADR 0114](0114-tie-collaboration-room-lifetime-to-host-share.md) |
 | 0115 | Retain delivered reminders and completed provider response fragments | [ADR 0115](0115-retain-delivered-conversation-fragments.md) |
 | 0116 | Return failed confined launches without retry | [ADR 0116](0116-return-failed-confined-launches-without-retry.md) |

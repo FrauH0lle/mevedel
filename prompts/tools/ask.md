@@ -19,7 +19,7 @@ Present questions in one form and wait for the user's answers.
   Object options return the selected label.
 - Use `description` for a short trade-off. Use `sample` when comparing proposed
   output helps the choice; supply it for every option in that question or none.
-  The current option's sample appears in a side frame.
+  The user sees the sample of the option under their cursor below the options.
 - The user can revise answers before submitting the form. An unanswered question
   is submitted as "no preference"; it is not authorization. Cancellation returns
   an error indicating that no answer was submitted.

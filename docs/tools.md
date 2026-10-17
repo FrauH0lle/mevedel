@@ -756,9 +756,16 @@ reopens one on its current answer. Choosing an answer advances to the next
 unanswered question, then to the final Submit row. `RET` there or `C-c C-c`
 submits the whole questionnaire; unanswered questions explicitly report no
 preference. `q`/`C-g` cancel only the questionnaire, while `C-c C-k` also aborts
-the run. `C-v`/`M-v` scroll the current sample. The form keeps one progress
-count beside Submit and one keyboard hint line, with hanging indentation for
-wrapped questions and descriptions.
+the run. The form keeps one progress count beside Submit and one keyboard hint
+line, with hanging indentation for wrapped questions and descriptions.
+
+A question whose options carry samples ends in a sample panel, rendered as a
+source block titled with the option it shows. The panel shows the
+sample-bearing option point visited last, and its height is the question's
+longest sample, capped by `mevedel-ask-sample-height`, so comparing options
+never moves the rest of the form. With point in that question, `C-v`/`M-v` page
+an overflowing sample; otherwise they scroll the window. See
+[ADR 0113](adr/0113-show-ask-samples-inline.md).
 
 Agent's required inputs are `task_name` and `message`. Its optional `role`,
 `context`, `model`, and `effort` inputs are validated before reservation:
