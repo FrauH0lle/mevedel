@@ -214,6 +214,18 @@ SAMPLE-CACHE maps sample strings to their fontified lines."
     (goto-char position))
   (mevedel-tool-ask-ui--post-command))
 
+(defun mevedel-tool-ask-ui--question-heads (state)
+  "Return the first entry of each question in STATE, in form order.
+Each element is (QUESTION IDENTITY . POSITION); Submit is its own last
+group, named `submit'."
+  (let (heads)
+    (pcase-dolist (`(,identity . ,position)
+                   (mevedel-tool-ask-ui--entry-positions state))
+      (let ((group (if (consp identity) (car identity) identity)))
+        (unless (assoc group heads)
+          (push (cons group (cons identity position)) heads))))
+    (nreverse heads)))
+
 (defun mevedel-tool-ask-ui--post-command ()
   "Track the entry at point and show its sample, whatever moved point.
 Leaving a form clears its focus but keeps its sample panels as they are."
@@ -565,6 +577,23 @@ Without an overflowing visible panel, scroll the window instead, so
                        positions)))
          (when target
            (mevedel-tool-ask-ui--goto-entry state (car target)))))
+      ((or 'next-question 'previous-question)
+       (let* ((heads (mevedel-tool-ask-ui--question-heads state))
+              (current (or (and (consp identity) (car identity))
+                           identity
+                           (get-text-property (point) 'mevedel-ask-question)))
+              (index (cl-position current heads :key #'car :test #'equal))
+              (target
+               (if (eq action 'next-question)
+                   (if index
+                       (nth (1+ index) heads)
+                     (cl-find-if (lambda (head) (> (cddr head) (point))) heads))
+                 (if index
+                     (and (> index 0) (nth (1- index) heads))
+                   (cl-find-if (lambda (head) (< (cddr head) (point)))
+                               (reverse heads))))))
+         (when target
+           (mevedel-tool-ask-ui--goto-entry state (cadr target)))))
       ('focus
        (when (and question (integerp option)
                   (< value (mevedel-tool-ask-ui--entry-count state question)))
@@ -625,6 +654,7 @@ Without an overflowing visible panel, scroll the window instead, so
   (let ((keymap (make-sparse-keymap)))
     (dolist (binding '(("n" . next) ("C-n" . next) ("<down>" . next)
                        ("p" . previous) ("C-p" . previous) ("<up>" . previous)
+                       ("TAB" . next-question) ("<backtab>" . previous-question)
                        ("RET" . pick) ("<return>" . pick)
                        ("c" . custom) ("C-c C-c" . submit)
                        ("q" . cancel) ("C-g" . cancel) ("C-c C-k" . abort)))
@@ -741,12 +771,15 @@ Without an overflowing visible panel, scroll the window instead, so
                (mevedel-tool-ask-ui--sample-panel state index)))
      'mevedel-ask-question index)))
 
-(defun mevedel-tool-ask-ui--footer ()
-  "Return the Ask interaction footer."
+(defun mevedel-tool-ask-ui--footer (state)
+  "Return the Ask interaction footer for STATE.
+Question jumps are only advertised when there is another question."
   (let ((text
          (concat
           "  "
           (mevedel-tool-ask-ui--key "n/p") " move  "
+          (when (> (mevedel-tool-ask-ui--state-count state) 1)
+            (concat (mevedel-tool-ask-ui--key "TAB") " question  "))
           (mevedel-tool-ask-ui--key "1-9") " focus  "
           (mevedel-tool-ask-ui--key "RET") " choose  "
           (mevedel-tool-ask-ui--key "c") " custom  "
@@ -775,7 +808,7 @@ Without an overflowing visible panel, scroll the window instead, so
               'font-lock-face 'shadow))
             'mevedel-ask-entry 'submit 'mouse-face 'highlight)
            "\n\n"
-           (mevedel-tool-ask-ui--footer)))
+           (mevedel-tool-ask-ui--footer state)))
          (first (text-property-not-all 0 (length body) 'mevedel-ask-entry nil body)))
     (when first
       (while (eq (aref body first) ?\s)

@@ -394,9 +394,65 @@ A panel row is a line whose text sits on the source block face."
         (should-not (memq #'mevedel-tool-ask-ui--post-command post-command-hook))))))
 
 
+(mevedel-deftest mevedel-tool-ask-ui--question-heads ()
+  ,test
+  (test)
+  :doc "each question's first entry in form order, an answer's summary included, then Submit"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     #'ignore
+     [(:question "One?" :options ["A" "B"])
+      (:question "Two?" :options ["C" "D"])])
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (with-current-buffer view-buffer
+      (let ((heads (mevedel-tool-ask-ui--question-heads
+                    (car mevedel-tool-ask-ui--states))))
+        (should (equal (mapcar (lambda (head) (cons (car head) (cadr head))) heads)
+                       '((0 . (0 . summary)) (1 . (1 . 0)) (submit . submit))))
+        (should (apply #'< (mapcar #'cddr heads)))))))
+
+
 (mevedel-deftest mevedel-tool-ask-ui--dispatch ()
   ,test
   (test)
+  :doc "TAB and S-TAB jump between questions and Submit without repainting"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     #'ignore
+     [(:question "One?" :options ["A" "B"])
+      (:question "Two?" :options [(:label "C" :description "Sea") "D"])
+      (:question "Three?" :options ["E"])])
+    (should (string-match-p "TAB question" rendered-body))
+    (with-current-buffer view-buffer
+      (let ((tick (buffer-chars-modified-tick))
+            (entry (lambda () (get-text-property (point) 'mevedel-ask-entry)))
+            (key (lambda (keys)
+                   (call-interactively (lookup-key rendered-keymap (kbd keys))))))
+        (funcall key "TAB")
+        (should (equal '(1 . 0) (funcall entry)))
+        ;; From inside a question's description, TAB still means "next".
+        (search-forward "Sea")
+        (funcall key "TAB")
+        (should (equal '(2 . 0) (funcall entry)))
+        (funcall key "TAB")
+        (should (eq 'submit (funcall entry)))
+        ;; Submit is the last stop.
+        (funcall key "TAB")
+        (should (eq 'submit (funcall entry)))
+        (funcall key "<backtab>")
+        (should (equal '(2 . 0) (funcall entry)))
+        (funcall key "<backtab>")
+        (funcall key "<backtab>")
+        (should (equal '(0 . 0) (funcall entry)))
+        (funcall key "<backtab>")
+        (should (equal '(0 . 0) (funcall entry)))
+        (should (= tick (buffer-chars-modified-tick))))))
+
+  :doc "a single question does not advertise question jumps"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show #'ignore [(:question "One?" :options ["A" "B"])])
+    (should-not (string-match-p "TAB" rendered-body)))
+
   :doc "navigation never repaints and RET on a description answers its own row"
   (test-mevedel-tool-ask-ui--with-form
     (mevedel-tool-ask-ui-show
