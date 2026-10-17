@@ -66,7 +66,7 @@
       (should (stringp sep))
       (should (string-match-p "─── x ───" sep))))
 
-  :doc "task and agent rules occupy the same columns in wide and narrow windows"
+  :doc "task and background-work rules occupy the same columns in wide and narrow windows"
   (with-temp-buffer
     (dolist (width '(10 20 80 120 200))
       (cl-letf (((symbol-function 'get-buffer-window-list)
@@ -74,7 +74,7 @@
                 ((symbol-function 'window-width)
                  (lambda (&optional _) width)))
         (dolist (label '("tasks · 1 running · 1 blocked · 1 done · RET to collapse"
-                         "1 agent: 1 running [-]"
+                         "background work · 1 agent · 2 commands [-]"
                          "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"))
           (let ((rule (mevedel-view--zone-separator label)))
             (should (= (max 10 (- width 4))

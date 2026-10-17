@@ -290,6 +290,8 @@
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-disclosure'
+(declare-function mevedel-view-disclosure--toggle-mailbox
+                  "mevedel-view-disclosure" ())
 (declare-function mevedel-view-disclosure-apply-rendering-state
                   "mevedel-view-disclosure" (rendering source))
 (declare-function mevedel-view-disclosure-capture-state
@@ -2137,6 +2139,7 @@ Execution outcome remains independent of lifecycle and disclosure state."
                   ((eq vtype 'tool-preparing) "…")
                   (prompt-p "◆")
                   ((eq tool-status 'error) "×")
+                  ((eq tool-status 'cancelled) "●")
                   ((and (not agent-p) (eq tool-status 'running)) "●")
                   ((and agent-p (eq status 'running)) "●")
                   ((and agent-p (memq status '(blocked waiting))) "!")
@@ -2148,6 +2151,8 @@ Execution outcome remains independent of lifecycle and disclosure state."
                   ((eq tool-status 'warning) "!")
                   (t "✓")))
          (marker-face (cond
+                       ((eq tool-status 'cancelled)
+                        'mevedel-view-tool-metadata)
                        ((equal marker "×") 'error)
                        ((member marker '("!" "✗"))
                         'mevedel-view-tool-warning)
@@ -2640,6 +2645,13 @@ body of the block that ran them."
             (insert text "\n")
             (mevedel-view--decorate-agent-result-blocks start (point))
             (mevedel-view--decorate-agent-message-blocks start (point))
+            ;; Notices default to collapsed independently of the line threshold.
+            ;; An explicit or remembered expansion must override that default.
+            (when (and (not mailbox-default-p) (not collapsed)
+                       (get-text-property start 'mevedel-view-collapsed))
+              (save-excursion
+                (goto-char start)
+                (mevedel-view-disclosure--toggle-mailbox)))
             (when mailbox-default-p
               (setq collapsed
                     (get-text-property
@@ -4736,10 +4748,8 @@ Empty string when the turn contains only whitespace or markers."
 (autoload 'mevedel-view--insert-hook-audit-block "mevedel-view-audit")
 (autoload 'mevedel-view-audit-insert-history-link "mevedel-view-audit")
 (autoload 'mevedel-view-audit-show-control-result "mevedel-view-audit")
-(autoload 'mevedel-view-audit-mailbox-breadcrumb "mevedel-view-audit")
 (autoload 'mevedel-view-audit-breadcrumb-present-p "mevedel-view-audit")
 (autoload 'mevedel-view-audit-breadcrumb-status "mevedel-view-audit")
-(autoload 'mevedel-view-audit-mailbox-completion "mevedel-view-audit")
 (autoload 'mevedel-view-audit-toggle-hook-audit "mevedel-view-audit")
 (autoload 'mevedel-view--decorate-code-blocks-in-range
   "mevedel-view-markdown")
@@ -5079,17 +5089,75 @@ are left bare, while blank lines between payload lines keep the gutter."
     (prog1 (marker-position end-marker)
       (set-marker end-marker nil))))
 
-(defun mevedel-view--monitor-mail-description (open-tag)
-  "Return the unescaped description in Monitor mailbox OPEN-TAG, or nil.
-OPEN-TAG is the `<agent-message ...>' opener; other message types return nil."
+(defun mevedel-view--mail-attribute (open-tag attribute)
+  "Return unescaped ATTRIBUTE from mailbox OPEN-TAG, or nil."
   (save-match-data
-    (when (and (string-match-p "\\_<type=\"MONITOR\"" open-tag)
-               (string-match "\\_<description=\"\\([^\"]*\\)\"" open-tag))
+    (when (string-match (concat "\\s-" (regexp-quote attribute)
+                                "=\"\\([^\"]*\\)\"") open-tag)
       (let ((text (match-string 1 open-tag)))
         (dolist (entity '(("&quot;" . "\"") ("&apos;" . "'") ("&lt;" . "<")
                           ("&gt;" . ">") ("&amp;" . "&")))
           (setq text (string-replace (car entity) (cdr entity) text)))
         text))))
+
+(defun mevedel-view--mail-notice (open-tag kind sender body)
+  "Return (LABEL . FACE) for a background mail notice, or nil.
+OPEN-TAG carries trusted metadata; BODY supplies only the event preview.
+KIND and SENDER identify the mailbox record.  Payload text never determines
+whether a record is a terminal event."
+  (let* ((windows (get-buffer-window-list (current-buffer) nil t))
+         (width (max 20 (- (if windows
+                              (apply #'min (mapcar #'window-body-width windows))
+                            (window-body-width))
+                          4)))
+         (type (mevedel-view--mail-attribute open-tag "type"))
+         (description (mevedel-view--mail-attribute open-tag "description"))
+         (termination (mevedel-view--mail-attribute open-tag "termination"))
+         (outcome (mevedel-view--mail-attribute open-tag "outcome"))
+         (exit (mevedel-view--mail-attribute open-tag "exit_code"))
+         (stopped (member termination '("stopped" "interrupted" "cancelled"
+                                       "owner-stopped")))
+         (timed-out (member termination '("timeout" "timed-out" "expired")))
+         (failed (and (not stopped) (not timed-out)
+                      (or (member outcome '("failure" "errored" "lost"))
+                          (equal termination "lost"))))
+         (verb (cond (stopped "stopped") (timed-out "timed out")
+                     (failed "failed") (t "completed")))
+         (label
+          (cond
+           ((eq kind 'agent-result)
+            (format "Agent %s %s" sender
+                    (cond ((equal outcome "completed") "finished")
+                          ((equal outcome "errored") "failed")
+                          ((equal outcome "interrupted") "interrupted")
+                          (t "incomplete"))))
+           ((equal type "MONITOR")
+            (format "Monitor event: %s · %s"
+                    (car (split-string (string-trim body) "\n"))
+                    (or description "monitor")))
+           ((equal type "MONITOR_TERMINAL")
+            (let ((count (mevedel-view--mail-attribute open-tag "event_count")))
+              (format "Monitor \"%s\" %s%s" (or description "monitor") verb
+                      (if count (format " · %s event%s" count
+                                        (if (equal count "1") "" "s")) ""))))
+           ((equal type "EXECUTION")
+            (let* ((prefix "Background command \"")
+                   (suffix (format "\" %s%s" verb
+                                   (if exit (format " (exit code %s)" exit) "")))
+                   (subject
+                    (or (and description (not (string-empty-p description)) description)
+                        (mevedel-view--mail-attribute open-tag "command") "command")))
+              (concat prefix
+                      (mevedel--truncate-display
+                       (replace-regexp-in-string "[\n\r\t]+" " " subject)
+                       (max 1 (- width (string-width prefix)
+                                 (string-width suffix))) "…")
+                      suffix))))))
+    (when label
+      (cons (mevedel--truncate-display
+             (replace-regexp-in-string "[\n\r\t]+" " " label)
+             width "…")
+            (if failed 'error 'mevedel-view-tool-metadata)))))
 
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
@@ -5097,13 +5165,12 @@ OPEN-TAG is the `<agent-message ...>' opener; other message types return nil."
 KIND identifies the mailbox block flavor.  Shared engine for
 `<agent-message>' and `<agent-result>'
 rendering.  OPEN-REGEX must capture the canonical sender path in match group
-1.  Ordinary bodies between the matched open and close tags are preserved
-verbatim; EXECUTION bodies are summarized from their trailing facts.
-If a body's line count exceeds CLOSE-TAG's threshold,
-`mevedel-view-mailbox-collapse-line-threshold', the body is marked
-invisible (with the `mailbox-delivery' vtype tag for downstream
-TAB-toggle wiring) and the header gets a `[N lines collapsed]'
-hint.  Searches that region."
+1.  Bodies between the matched open and close tags are preserved verbatim;
+background notices summarize structured opener attributes.
+Notice bodies start collapsed without a hint.  Ordinary message bodies
+exceeding `mevedel-view-mailbox-collapse-line-threshold' start collapsed
+with a `[N lines collapsed]' hint.  The `mailbox-delivery' vtype wires
+both kinds to the same disclosure controls."
   (save-excursion
     (let ((end-marker (copy-marker end t)))
       (unwind-protect
@@ -5126,19 +5193,15 @@ hint.  Searches that region."
               (let* ((open-start (match-beginning 0))
                      (open-end (match-end 0))
                      (sender (match-string-no-properties 1))
-                     (monitor
-                      (and (eq kind 'agent-message)
-                           (mevedel-view--monitor-mail-description
-                            (match-string-no-properties 0))))
-                     (outcome
-                      (and (eq kind 'agent-result)
-                           (save-match-data
-                             (save-excursion
-                               (goto-char open-start)
-                               (plist-get
-                                (mevedel-transcript--mailbox-open-at-point
-                                 kind open-end)
-                                :outcome)))))
+                     (notice
+                      (mevedel-view--mail-notice
+                       (match-string-no-properties 0) kind sender
+                       (buffer-substring-no-properties
+                        open-end
+                        (car (save-excursion
+                               (goto-char open-end)
+                               (mevedel-transcript--mailbox-find-close
+                                open-regex close-tag end-marker))))))
                      (attribution (mevedel-view--insert-attribution sender))
                      (inhibit-read-only t))
                 (delete-region open-start open-end)
@@ -5147,46 +5210,18 @@ hint.  Searches that region."
                       (card-id (gensym "mevedel-view-mailbox-")))
                   (insert "  ")
                   (insert (propertize
-                           (if (eq kind 'agent-result)
-                               (pcase outcome
-                                 ('completed "✓ ")
-                                 ('errored "× ")
-                                 ('interrupted "✗ ")
-                                 (_ "… "))
-                             "✉ ")
+                           (if notice "● " "✉ ")
                            'font-lock-face
-                           (if (eq kind 'agent-result)
-                               (pcase outcome
-                                 ('completed 'mevedel-view-tool-marker)
-                                 ('errored 'error)
-                                 ('interrupted 'mevedel-view-tool-warning)
-                                 (_ 'mevedel-view-tool-metadata))
-                             'mevedel-view-mailbox-header)
+                           (if notice (cdr notice) 'mevedel-view-mailbox-header)
                            'mevedel-view-mailbox t))
-                  (insert (propertize
-                           (cond
-                            ((eq kind 'agent-result)
-                             (pcase outcome
-                               ('completed "Finished ")
-                               ('errored "Failed ")
-                               ('interrupted "Stopped ")
-                               (_ "Incomplete ")))
-                            (monitor (format "Monitor: %s" monitor))
-                            (t "message "))
-                           'font-lock-face 'mevedel-view-mailbox-header
-                           'mevedel-view-mailbox t))
-                  ;; Result cards name their sender directly; a plain
-                  ;; message reads as "from PATH".  A monitor event names
-                  ;; its watch instead of the root that started it.
-                  (cond
-                   (monitor)
-                   ((eq kind 'agent-result)
-                    (let ((label-start (point)))
-                      (insert attribution)
-                      (when (string-prefix-p "from " attribution)
-                        (delete-region label-start
-                                       (+ label-start (length "from "))))))
-                   (t (insert attribution)))
+                  (let ((label (propertize
+                                (if notice (car notice) "message ")
+                                'font-lock-face 'mevedel-view-mailbox-header
+                                'mevedel-view-mailbox t)))
+                    (insert (if (and notice (eq kind 'agent-result))
+                                (mevedel-view--buttonize-agent-header-label label sender)
+                              label)))
+                  (unless notice (insert attribution))
                   (insert "\n")
                   (mevedel-view--apply-rendering-indent card-start (point))
                   (let ((body-start (point)))
@@ -5200,8 +5235,9 @@ hint.  Searches that region."
                               (mevedel-view-disclosure-mailbox-line-count
                                body-start body-end))
                              (long-body
-                              (> body-line-count
-                                 mevedel-view-mailbox-collapse-line-threshold)))
+                              (or (and notice t)
+                                  (> body-line-count
+                                     mevedel-view-mailbox-collapse-line-threshold))))
                         (mevedel-view--debug-log
                          'mailbox-decorate
                          :kind kind
@@ -5227,8 +5263,9 @@ hint.  Searches that region."
                         (when long-body
                           (let* ((hint
                                   (propertize
-                                   (mevedel-view-disclosure-mailbox-hint
-                                    body-line-count)
+                                   (if notice ""
+                                     (mevedel-view-disclosure-mailbox-hint
+                                      body-line-count))
                                    'font-lock-face
                                    'mevedel-view-attribution
                                    'mevedel-view-mailbox-hint t))
@@ -5273,6 +5310,7 @@ hint.  Searches that region."
                                'mevedel-view-mailbox-kind
                                (or kind 'agent-message)
                                'mevedel-view-mailbox-agent-path sender
+                               'mevedel-view-mailbox-notice (and notice t)
                                'mevedel-view-collapsed long-body)))))))))
         (set-marker end-marker nil)))))
 
@@ -5299,43 +5337,14 @@ card each, in source order.  Non-matching prose in the same turn
 remains as ordinary user text.
 
 Point is restored with an advancing marker: callers sit at the end of the
-block, which a replaced execution mail collapses onto, and must stay after
-its breadcrumb to stamp and append past it."
-  (let ((open "<agent-message\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>")
-        (end-marker (copy-marker end t))
-        (return (copy-marker (point) t)))
+block and must stay after its rendered card to stamp and append past it."
+  (let ((return (copy-marker (point) t)))
     (unwind-protect
-        (progn
-          (goto-char start)
-          (while (re-search-forward open end-marker t)
-            (let* ((begin (match-beginning 0))
-                   (sender (match-string-no-properties 1))
-                   (execution-p (string-match-p
-                                 "\\_<type=\"EXECUTION\""
-                                 (match-string-no-properties 0)))
-                   (body-start (match-end 0))
-                   (close (and execution-p
-                               (save-excursion
-                                 (goto-char body-start)
-                                 (mevedel-transcript--mailbox-find-close
-                                  open "</agent-message>" end-marker))))
-                   (record (and close
-                                (mevedel-view-audit-mailbox-breadcrumb
-                                 (buffer-substring-no-properties
-                                  body-start (car close)) sender))))
-              (when record
-                (let ((inhibit-read-only t))
-                  (delete-region begin (cdr close))
-                  (goto-char begin)
-                  (unless (mevedel-view-audit-breadcrumb-present-p record begin)
-                    (mevedel-view--insert-hook-audit-block record)
-                    (mevedel-view-render-add-display-properties
-                     begin (point) 'execution-breadcrumb)))))))
-          (mevedel-view--decorate-mailbox-block
-           open "</agent-message>" start end-marker 'agent-message))
+        (mevedel-view--decorate-mailbox-block
+         "<agent-message\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>"
+         "</agent-message>" start end 'agent-message)
       (goto-char return)
-      (set-marker return nil)
-      (set-marker end-marker nil)))
+      (set-marker return nil))))
 
 (defun mevedel-view--mailbox-only-text-p (text)
   "Return non-nil if TEXT is only mailbox delivery blocks.
@@ -5598,6 +5607,8 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
          (shared-display (mevedel-transcript-audit-shared-context
                           text (plist-get attribution :shared)))
          (text-start nil))
+    (when (eq (plist-get attribution :type) 'background-event)
+      (setq text ""))
     (cond
      ((and (string-empty-p text)
            (null prompt-drawers)
@@ -5624,7 +5635,7 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
                            (mevedel-overlay-ui-directive-action-label
                             (plist-get directive :action))
                            (or (plist-get directive :turn) "?")))
-                  (background "Background event\n")
+                  (background "")
                   (guest (format "%s (guest)\n" guest))
                   (t "You\n"))
                  'font-lock-face
@@ -6052,12 +6063,18 @@ stay unchanged.  Each caller owns the returned entry's coalescing count."
   "Return the activity entry for mailbox SEG in DATA-BUF.
 Keep the canonical card text so grouped and standalone deliveries use
 one renderer, including execution summaries and sender links."
-  (list :kind 'mailbox :start (cadr seg) :end (caddr seg)
-        :group-child
-        (list :kind 'mailbox :status 'success
-              :rendering
-              (list :mailbox-text
-                    (mevedel-view--user-turn-text (list seg) data-buf)))))
+  (let* ((text (mevedel-view--user-turn-text (list seg) data-buf))
+         (notice
+          (and (string-match "\\`[ \t\n]*<\\(agent-result\\|agent-message\\)\\s-[^>]*>" text)
+               (or (equal (match-string 1 text) "agent-result")
+                   (member (mevedel-view--mail-attribute
+                            (match-string 0 text) "type")
+                           '("EXECUTION" "MONITOR" "MONITOR_TERMINAL"))))))
+    (list :kind 'mailbox :start (cadr seg) :end (caddr seg)
+          :notice-p notice
+          :group-child
+          (list :kind 'mailbox :status 'success
+                :rendering (list :mailbox-text text)))))
 
 (defun mevedel-view--completion-record-p (record)
   "Return non-nil when hook audit RECORD is an execution breadcrumb."
@@ -6147,7 +6164,8 @@ settled."
           (lambda (entry) (eq (plist-get entry :kind) 'tool))
           entries)))
     (and (not (seq-some (lambda (entry)
-                         (eq (plist-get entry :kind) 'hook-audit))
+                         (or (eq (plist-get entry :kind) 'hook-audit)
+                             (plist-get entry :notice-p)))
                        entries))
          (> mevedel-view-tool-group-collapse-threshold 0)
          (> (+ (length tool-entries) (length pending))
@@ -6222,13 +6240,16 @@ activity when it ends in something they cannot join."
         (let (run special-run)
           (dolist (seg (mevedel-view--merge-tool-hook-audit-segments
                         segments data-buf))
-            (let* ((entry (and (eq (car seg) 'tool)
-                               (mevedel-view--tool-segment-entry seg data-buf)))
+            (let* ((entry (pcase (car seg)
+                            ('tool (mevedel-view--tool-segment-entry seg data-buf))
+                            ('mailbox (mevedel-view--mailbox-activity-entry seg data-buf))))
                    (special (and entry
+                                 (or (plist-get entry :notice-p)
+                                     (and (eq (car seg) 'tool)
                                  (or (plist-get (plist-get entry :rendering)
                                                 :coalesce-key)
                                      (not (mevedel-view--tool-group-entry-p
-                                           entry))))))
+                                           entry))))))))
               (when (and run (not (eq (and special t) special-run)))
                 (render-run (nreverse run))
                 (setq run nil))
@@ -6497,24 +6518,14 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
 
 (defun mevedel-view--group-child-completion (child)
   "Return the execution completion grouped CHILD presents, or nil."
-  (pcase (plist-get child :kind)
-    ('completion (plist-get (plist-get child :rendering) :completion-record))
-    ('mailbox
-     (when-let* ((text (plist-get (plist-get child :rendering) :mailbox-text))
-                 ((string-search "type=\"EXECUTION\"" text)))
-       (mevedel-view-audit-mailbox-completion text)))))
+  (when (eq (plist-get child :kind) 'completion)
+    (plist-get (plist-get child :rendering) :completion-record)))
 
 (defun mevedel-view--group-completions (children)
-  "Return the distinct execution completions among grouped CHILDREN.
-A delivery of this transcript's own command repeats the breadcrumb recorded
-when it finished, possibly in an earlier group, so only forwarded
-deliveries count as completions of their own."
-  (let ((own (or mevedel-view--agent-path "/root"))
-        records)
+  "Return the distinct origin execution completions among grouped CHILDREN."
+  (let (records)
     (dolist (child children (nreverse records))
       (when-let* ((record (mevedel-view--group-child-completion child))
-                  ((not (and (eq (plist-get child :kind) 'mailbox)
-                             (equal (plist-get record :owner) own))))
                   ((not (cl-find-if
                          (lambda (prior)
                            (and (equal (plist-get prior :execution-id)
@@ -6530,7 +6541,7 @@ deliveries count as completions of their own."
     (dolist (record records)
       (cl-incf (alist-get (downcase (mevedel-view-audit-breadcrumb-status record))
                           counts 0 nil #'equal)))
-    (dolist (status '("finished" "failed" "signaled" "stopped") (nreverse parts))
+    (dolist (status '("completed" "failed" "stopped" "timed out") (nreverse parts))
       (when-let* ((count (alist-get status counts nil nil #'equal)))
         (push (if parts
                   (format "%d %s" count status)
@@ -8909,7 +8920,7 @@ marker at the end of the inserted block."
                              text (plist-get attribution :shared)))
             user-end)
         (insert (propertize (cond
-                             (background "Background event\n")
+                             (background "")
                              (guest-name (format "%s (guest)\n" guest-name))
                              (t "You\n"))
                             'font-lock-face
@@ -8919,6 +8930,7 @@ marker at the end of the inserted block."
                             'mevedel-view-prompt-preview
                             (mevedel-view--prompt-preview text shared-display)))
         (cond
+         (background)
          (shared-display
           (setq fold-start
                 (mevedel-view--insert-shared-context shared-display user-source)))

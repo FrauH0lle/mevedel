@@ -39,7 +39,8 @@
 (declare-function mevedel-agent-control-commit-session
                   "mevedel-agent-control" (session))
 (declare-function mevedel-agent-control-enqueue-execution-result
-                  "mevedel-agent-control" (session owner body))
+                  "mevedel-agent-control"
+                  (session owner body &optional execution-id wake meta))
 (autoload 'mevedel-agent-control-commit-session "mevedel-agent-control")
 (autoload 'mevedel-agent-control-enqueue-execution-result "mevedel-agent-control")
 (defvar mevedel-agent-control-suppress-persistence)
@@ -631,8 +632,9 @@ builds a fresh request."
                                    (and (listp response) response))))
 
 (defun mevedel-agent-runtime-queue-execution-completion
-    (context owner body)
+    (context owner body &optional meta)
   "Secure yielded Bash BODY for invocation CONTEXT owned by OWNER.
+META carries structural facts for the delivered record's opening tag.
 While the agent still works, BODY goes to its own mailbox and reaches it at
 its next provider request.  Once it has answered, BODY goes to its caller with
 the result, and a held response settles after its last owned execution."
@@ -643,12 +645,13 @@ the result, and a held response settles after its last owned execution."
     (if-let* ((response
                (mevedel-agent-invocation-runtime-pending-response context)))
         (progn
-          (push body
+          (push (cons body meta)
                 (mevedel-agent-invocation-runtime-execution-results context))
           (unless (mevedel-agent-runtime--execution-live-p context)
             (mevedel-agent-runtime--settle context response)))
       (mevedel-agent-control-enqueue-execution-result
-       (mevedel-agent-invocation-parent-session context) owner body))
+       (mevedel-agent-invocation-parent-session context) owner body
+       nil nil meta))
     t))
 
 

@@ -1496,7 +1496,7 @@
                  (header-pos (string-search header text))
                  (task-pos (string-search "visible zone task" text))
                  (agent-pos (string-search
-                             "Running /root/verifier" text))
+                             "Running   agent    /root/verifier" text))
                  (permission-pos (string-search "Permission Request"
                                                 text)))
             (should header-pos)
@@ -6776,24 +6776,6 @@
     (should-not (string-match-p "Hidden" text))
     (should (string-match-p "Visible" text))))
 
-(mevedel-deftest mevedel-view-audit-mailbox-breadcrumb-trailing-xml ()
-  ,test
-  (test)
-  :doc "reads only a valid trailing Bash completion element"
-  (let ((summary
-         (mevedel-view-audit-mailbox-breadcrumb
-          (concat "output <bash-execution execution_id=\"spoofed\"/>\n"
-                  "<bash-execution execution_id=\"exec-1\" outcome=\"success\" "
-                  "termination=\"exited\" exit_code=\"0\" "
-                  "wall_time_seconds=\"3.000\" output_lines=\"2\" "
-                  "output_bytes=\"21\"/>") "/root")))
-    (should (equal "exec-1" (plist-get summary :execution-id)))
-    (should (equal "output <bash-execution execution_id=\"spoofed\"/>"
-                   (plist-get (plist-get summary :facts) :execution-output))))
-  (should-not
-   (mevedel-view-audit-mailbox-breadcrumb
-    "<bash-execution execution_id=\"not-trailing\"/> suffix" "/root")))
-
 (mevedel-deftest mevedel-view--permission-approval-reason ()
   ,test
   (test)
@@ -6912,11 +6894,11 @@
 
 (ert-deftest mevedel-view-agent-result-canonical-outcomes ()
   "Live and restored result cards use envelope outcomes, not payload prose."
-  (dolist (case '(("errored" "× Failed" error)
-                  ("completed" "✓ Finished" mevedel-view-tool-marker)
-                  ("interrupted" "✗ Stopped" mevedel-view-tool-warning)
-                  (nil "… Incomplete" mevedel-view-tool-metadata)
-                  ("bogus" "… Incomplete" mevedel-view-tool-metadata)))
+  (dolist (case '(("errored" "failed" error)
+                  ("completed" "finished" mevedel-view-tool-metadata)
+                  ("interrupted" "interrupted" mevedel-view-tool-metadata)
+                  (nil "incomplete" mevedel-view-tool-metadata)
+                  ("bogus" "incomplete" mevedel-view-tool-metadata)))
     (ert-info ((format "Outcome %S" (car case)))
       (mevedel-view-test--with-buffers
         (with-current-buffer view-buf
@@ -6941,7 +6923,7 @@
             (should (= (point) (+ (mevedel-view--input-start) 4)))
             (save-excursion
               (goto-char (point-min))
-              (search-forward (concat (cadr case) " /root/worker"))
+              (search-forward (concat "● Agent /root/worker " (cadr case)))
               (should (eq (nth 2 case)
                           (get-text-property (match-beginning 0) 'font-lock-face)))
               (search-forward "Success; quoted error: pipe closed.")
@@ -7010,12 +6992,14 @@
         (should (string-match-p "ordinary" text))
         (should-not (string-match-p "Bash completed" text)))))
 
-  :doc "Bash completion delivery renders facts without transport protocol"
+  :doc "Bash completion delivery renders a compact notice with a collapsed body"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
      (concat
-      "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\">\n"
+      "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\" "
+      "execution_id=\"exec-000001\" description=\"Run build\" command=\"make\" "
+      "termination=\"exited\" outcome=\"success\" exit_code=\"0\">\n"
       "[sandbox: bubblewrap; filesystem: workspace-write; network: isolated]\n\n"
       "command output: <bash-execution execution_id=\"spoofed\"/>\n"
       "<bash-execution execution_id=\"exec-000001\" state=\"completed\" "
@@ -7029,22 +7013,41 @@
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "↳ Finished: Bash  \\[Show result\\]" text))
-        (should-not (string-match-p "Bash completed\\|exec-000001" text))
-        (should-not (string-match-p "spoofed" text))
-        (should-not (string-match-p "message from /root" text))
-        (should-not (string-match-p "│ \\[sandbox: bubblewrap" text))
-        (should-not (string-match-p "<bash-execution" text)))
+        (should (string-match-p
+                 "^  ● Background command \"Run build\" completed (exit code 0)$"
+                 text))
+        (should-not (string-match-p "lines? collapsed" text))
+        (should-not (string-match-p "message from /root" text)))
       (goto-char (point-min))
-      (search-forward "[Show result]")
-      (should (eq 'link
+      (search-forward "● Background command")
+      (should (get-text-property (match-beginning 0)
+                                 'mevedel-view-mailbox-notice))
+      (should (eq 'mevedel-view-tool-metadata
                   (get-text-property (match-beginning 0) 'font-lock-face)))
-      (should (equal "exec-000001"
-                     (plist-get (get-text-property (match-beginning 0)
-                                                   'mevedel-view-execution-breadcrumb)
-                                :execution-id)))))
+      (search-forward "[sandbox: bubblewrap")
+      (should (invisible-p (match-beginning 0)))
+      (mevedel-view-toggle-section)
+      (goto-char (point-min))
+      (search-forward "[sandbox: bubblewrap")
+      (should-not (invisible-p (match-beginning 0)))))
 
-  :doc "review results and child Bash completions retain separate cards and draft"
+  :doc "Bash notice falls back to the command and reports failure"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\" "
+      "execution_id=\"exec-2\" command=\"make test\" termination=\"exited\" "
+      "outcome=\"failure\" exit_code=\"2\">\nfailing output\n</agent-message>\n")
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "● Background command \"make test\" failed (exit code 2)")
+      (should (eq 'error (get-text-property (match-beginning 0)
+                                            'font-lock-face)))))
+
+  :doc "review results and child Bash completions retain separate notices and draft"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -7054,7 +7057,9 @@
      (concat
       "<agent-result sender=\"/root/review\" recipient=\"/root\" outcome=\"completed\">\n"
       "{\"findings\": []}\n</agent-result>\n\n"
-      "<agent-message type=\"EXECUTION\" sender=\"/root/review\" recipient=\"/root\">\n"
+      "<agent-message type=\"EXECUTION\" sender=\"/root/review\" recipient=\"/root\" "
+      "execution_id=\"exec-review\" description=\"Run tests\" "
+      "termination=\"exited\" outcome=\"success\" exit_code=\"0\">\n"
       "Bash test output\n"
       "<bash-execution execution_id=\"exec-review\" state=\"completed\" "
       "termination=\"exited\" exit_code=\"0\" outcome=\"success\"/>\n"
@@ -7067,11 +7072,12 @@
       (search-forward "findings")
       (let ((result-card (get-text-property (point) 'mevedel-view-mailbox-card)))
         (should result-card)
-        (search-forward "[Show result]")
+        (search-forward "● Background command \"Run tests\" completed")
         (should-not (eq result-card
-                        (get-text-property (point) 'mevedel-view-mailbox-card))))
-      (should-not (search-forward "exec-review" nil t))
-      (should-not (search-forward "Bash test output" nil t))))
+                        (get-text-property (match-beginning 0)
+                                           'mevedel-view-mailbox-card))))
+      (search-forward "Bash test output")
+      (should (invisible-p (match-beginning 0)))))
 
   :doc "Bash completion keeps following reasoning on a separate line"
   (mevedel-view-test--with-buffers
@@ -7088,9 +7094,9 @@
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "\\[Show result\\]" text))
+        (should (string-match-p "● Background command \"command\" completed" text))
         (should (string-match-p "  … Thinking" text))
-        (should-not (string-match-p "\\[Show result\\]  … Thinking" text)))))
+        (should-not (string-match-p "completed  … Thinking" text)))))
 
   :doc "pure agent-result turn renders with the same mailbox card path"
   (mevedel-view-test--with-buffers
@@ -7102,17 +7108,17 @@
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "^  ✓ Finished /root/worker" text))
+        (should (string-match-p "^  ● Agent /root/worker finished" text))
         (should-not (string-match-p "│" text))
         (should (string-match-p "result" text))
         (should (string-match-p "Assistant\n" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))
       (goto-char (point-min))
-      (search-forward "  ✓ Finished")
+      (search-forward "  ● Agent")
       (let ((header-start (match-beginning 0)))
         (should-not (get-text-property header-start 'font-lock-face))
         (should (eq (get-text-property (+ header-start 2) 'font-lock-face)
-                    'mevedel-view-tool-marker))
+                    'mevedel-view-tool-metadata))
         (should (eq (get-text-property (+ header-start 4) 'font-lock-face)
                     'mevedel-view-mailbox-header))
         (should (eq 'unspecified
@@ -7143,7 +7149,7 @@
           (should (string-match-p "Assistant\n" text))
           (should (string-match-p "<agent-result sender=" text))
           (should (string-match-p "partial" text))
-          (should-not (string-match-p "Finished /root/worker" text)))
+          (should-not (string-match-p "Agent /root/worker" text)))
         (should (equal draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4))))))
 
@@ -7167,7 +7173,7 @@
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ Finished /root/verifier" text))
+          (should (string-match-p "● Agent /root/verifier finished" text))
           (should (string-match-p "Before nested example" text))
           (should (string-match-p "After nested example" text))
           (should (string-match-p "partial result" text))
@@ -7195,11 +7201,11 @@
                       (point-min) mevedel-view--input-marker))
                (finished-count
                 (cl-count-if (lambda (line)
-                               (string-prefix-p "  ✓ Finished" line))
+                               (string-prefix-p "  ● Agent" line))
                              (split-string text "\n"))))
           (should (= 2 finished-count))
-          (should (string-match-p "✓ Finished /root/reviewer" text))
-          (should (string-match-p "✓ Finished /root/verifier" text))
+          (should (string-match-p "● Agent /root/reviewer finished" text))
+          (should (string-match-p "● Agent /root/verifier finished" text))
           (should (string-match-p "Assistant prose between mailbox cards" text))
           (should-not (string-match-p "<agent-result" text))))))
 
@@ -7214,7 +7220,7 @@
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ Finished /root/worker" text))
+          (should (string-match-p "● Agent /root/worker finished" text))
           (should (string-match-p "result" text))
           (should-not (string-match-p "</agent-result>" text))))))
 
@@ -7230,9 +7236,9 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
-                   "✓ Finished /root/worker\n\nfirst"
+                   "● Agent /root/worker finished\n\nfirst"
                    text))
-          (should (string-match-p "first\n\nsecond" text)))
+        (should (string-match-p "first\n\nsecond" text)))
         (goto-char (point-min))
         (search-forward "first")
         (beginning-of-line)
@@ -7272,13 +7278,8 @@
         (should (= (point) (+ (mevedel-view--input-start) 3)))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ Finished /root/worker" text))
-          (should (string-match-p
-                   "✓ Finished /root/worker \\[[0-9]+ lines collapsed\\]"
-                   text))
-          (should-not (string-match-p
-                       "✓ Finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
-                       text))
+          (should (string-match-p "● Agent /root/worker finished" text))
+          (should-not (string-match-p "lines? collapsed" text))
           (goto-char (point-min))
           (search-forward "line two")
           (should (eq (get-text-property (match-beginning 0) 'invisible)
@@ -7289,7 +7290,7 @@
           (mevedel-view-composer-set-historical-visible t)
           (should (invisible-p (match-beginning 0))))
         (goto-char (point-min))
-        (search-forward "✓ Finished /root/worker")
+        (search-forward "● Agent /root/worker finished")
         (goto-char (match-beginning 0))
         (search-forward "/root/worker")
         (goto-char (match-beginning 0))
@@ -7300,7 +7301,7 @@
             (mevedel-view-open-agent-transcript-at-point))
           (should (equal "/root/worker" opened)))
         (goto-char (point-min))
-        (search-forward "✓ Finished /root/worker")
+        (search-forward "● Agent /root/worker finished")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (goto-char (point-min))
@@ -7309,15 +7310,14 @@
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p
-                   "✓ Finished /root/worker \\[[0-9]+ lines collapsed\\]"
-                   text))
-          (should-not (string-match-p
-                       "✓ Finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
-                       text))))
+          (should (string-match-p "● Agent /root/worker finished" text))
+          (should-not (string-match-p "lines? collapsed" text))
+          (goto-char (point-min))
+          (search-forward "line two")
+          (should (invisible-p (match-beginning 0)))))
       (delete-directory root t)))
 
-  :doc "collapsed agent-result counts non-empty payload lines"
+  :doc "background notice collapses regardless of threshold and shows no hint"
   (mevedel-view-test--with-buffers
     (let ((mevedel-view-mailbox-collapse-line-threshold 0))
       (mevedel-view-test--insert-data
@@ -7328,10 +7328,8 @@
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p
-                   "✓ Finished /root/worker \\[1 line collapsed\\]"
-                   text))
-          (should-not (string-match-p "2 lines collapsed" text))))))
+          (should (string-match-p "● Agent /root/worker finished$" text))
+          (should-not (string-match-p "lines? collapsed" text))))))
 
   :doc "mailbox decoration clears inherited agent-handle properties"
   (mevedel-view-test--with-buffers
@@ -7373,7 +7371,7 @@
                 (mevedel-view--decorate-agent-result-blocks start (point)))
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (goto-char start)
-        (search-forward "✓ Finished /root/explorer")
+        (search-forward "● Agent /root/explorer finished")
         (search-backward "/root/explorer")
         (should (eq (get-text-property (point) 'mevedel-view-type)
                     'mailbox-delivery))
@@ -7431,10 +7429,10 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Reviewer returned clean" text))
-          (should (string-match-p "✓ Finished /root/verifier" text))
+          (should (string-match-p "● Agent /root/verifier finished" text))
           (should (string-match-p "VERDICT: FAIL" text))
           (should-not (string-match-p
-                       "You\n✓ Finished /root/verifier"
+                       "You\n● Agent /root/verifier finished"
                        text))))))
 
   :doc "mailbox toggle does not expand a preceding Agent source"
@@ -7455,7 +7453,7 @@
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (goto-char (point-min))
-        (search-forward "✓ Finished /root/explorer")
+        (search-forward "● Agent /root/explorer finished")
         (goto-char (match-beginning 0))
         (should (eq (get-text-property (point) 'mevedel-view-type)
                     'mailbox-delivery))
@@ -7465,7 +7463,7 @@
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "✉ message from /root/explorer" text))
           (should (string-match-p "Hello from your Explorer Agent :)" text))
-          (should (string-match-p "✓ Finished /root/explorer" text))
+          (should (string-match-p "● Agent /root/explorer finished" text))
           (should (string-match-p "final line two" text))
           (should-not (string-match-p "Skim mevedel-queue.el (370 lines)"
                                       text)))))))
@@ -8026,13 +8024,15 @@
 (mevedel-deftest mevedel-view--mailbox-activity-entry ()
   ,test
   (test)
-  :doc "execution deliveries project one breadcrumb regardless of threshold"
+  :doc "execution deliveries project one collapsed notice regardless of threshold"
   (dolist (threshold '(0 1))
     (mevedel-view-test--with-buffers
       (let ((mevedel-view-mailbox-collapse-line-threshold threshold))
         (mevedel-view-test--insert-data
          data-buf
-         (concat "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
+         (concat "<agent-message type=\"EXECUTION\" sender=\"/root\" "
+                 "execution_id=\"exec-1\" description=\"exec one\" "
+                 "outcome=\"success\" exit_code=\"0\">\n"
                  "raw output\nsecond line\n"
                  "<bash-execution execution_id=\"exec-1\" outcome=\"success\" "
                  "output_bytes=\"25\" output_lines=\"2\"/>\n</agent-message>\n")
@@ -8043,17 +8043,31 @@
                         (list 'mailbox (point-min) (point-max))))
                  (entry (mevedel-view--mailbox-activity-entry seg data-buf))
                  (child (mevedel-view--tool-group-child entry data-buf 0)))
+            (should (plist-get entry :notice-p))
             (goto-char mevedel-view--status-marker)
             (let ((start (point)))
               (mevedel-view--insert-child-call-block
                child (plist-get child :source) 'derive "")
               (goto-char start)
-              (search-forward "[Show result]")
-              (should (equal "exec-1"
-                             (plist-get (get-text-property (match-beginning 0)
-                                                           'mevedel-view-execution-breadcrumb)
-                                        :execution-id)))
-              (should-not (string-match-p "raw output" (buffer-string))))))))))
+              (search-forward "● Background command \"exec one\" completed (exit code 0)")
+              (should-not (string-match-p "lines? collapsed" (buffer-string)))
+              (search-forward "raw output")
+              (should (invisible-p (match-beginning 0)))))))))
+
+  :doc "ordinary mail and notices are told apart for activity grouping"
+  (mevedel-view-test--with-buffers
+    (dolist (case '(("<agent-message type=\"MAIL\" sender=\"/root/a\">\nhi\n</agent-message>\n" . nil)
+                    ("<agent-message type=\"MONITOR\" sender=\"/root\" description=\"tick\">\ne1\n</agent-message>\n" . t)
+                    ("<agent-result sender=\"/root/a\" outcome=\"completed\">\nok\n</agent-result>\n" . t)))
+      (with-current-buffer data-buf (erase-buffer))
+      (mevedel-view-test--insert-data data-buf (car case) nil)
+      (let ((seg (with-current-buffer data-buf
+                   (list 'mailbox (point-min) (point-max)))))
+        (should (eq (cdr case)
+                    (and (plist-get (mevedel-view--mailbox-activity-entry
+                                     seg data-buf)
+                                    :notice-p)
+                         t)))))))
 
 (mevedel-deftest mevedel-view--tool-group-header ()
   ,test
@@ -8083,27 +8097,29 @@
 (mevedel-deftest mevedel-view--group-completions ()
   ,test
   (test)
-  :doc "completions are counted by outcome; own deliveries repeat a breadcrumb"
-  (let* ((mail (lambda (sender id outcome)
-                 (list :kind 'mailbox
-                       :rendering
-                       (list :mailbox-text
-                             (format (concat "<agent-message type=\"EXECUTION\" "
-                                             "sender=\"%s\">\nout\n"
-                                             "<bash-execution execution_id=\"%s\" "
-                                             "outcome=\"%s\" exit_code=\"1\"/>\n"
-                                             "</agent-message>")
-                                     sender id outcome)))))
+  :doc "origin completions are counted by outcome; notice mail adds none"
+  (let* ((crumb (lambda (id owner outcome)
+                  (list :kind 'completion
+                        :rendering
+                        (list :completion-record
+                              (list :type 'execution-breadcrumb
+                                    :execution-id id :owner owner
+                                    :facts (list :outcome outcome))))))
+         (notice (lambda (sender id)
+                   (list :kind 'mailbox
+                         :rendering
+                         (list :mailbox-text
+                               (format (concat "<agent-message type=\"EXECUTION\" "
+                                               "sender=\"%s\" execution_id=\"%s\" "
+                                               "outcome=\"success\" exit_code=\"0\">\n"
+                                               "out\n</agent-message>")
+                                       sender id)))))
          (children
           (list '(:tool "Read")
-                '(:kind completion
-                  :rendering (:completion-record
-                              (:type execution-breadcrumb :execution-id "e1"
-                               :owner "/root" :facts (:outcome success))))
-                (funcall mail "/root" "e1" "success")
-                (funcall mail "/root" "e9" "success")
-                (funcall mail "/root/child" "e2" "failure")
-                (funcall mail "/root/child" "e2" "failure")
+                (funcall crumb "e1" "/root" 'success)
+                (funcall crumb "e1" "/root" 'success)
+                (funcall crumb "e2" "/root/child" 'failure)
+                (funcall notice "/root" "e9")
                 '(:kind mailbox :rendering
                   (:mailbox-text "<agent-message sender=\"/root/a\">hi</agent-message>"))))
          (mevedel-view--agent-path nil)
@@ -8111,9 +8127,9 @@
     (should (equal '("e1" "e2")
                    (mapcar (lambda (record) (plist-get record :execution-id))
                            completions)))
-    (should (equal (concat "Read 1 file, 1 command finished, 1 failed, "
-                           "received 1 message")
-                   (mevedel-view--tool-group-header children completions)))))
+    (should (string-prefix-p "Read 1 file, 1 command completed, 1 failed"
+                             (mevedel-view--tool-group-header
+                              children completions)))))
 
 (mevedel-deftest mevedel-view--split-completion-entries ()
   ,test
@@ -8147,7 +8163,7 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
-                   "Read 4 files, 1 command finished, 1 failed" text))
+                   "Read 4 files, 1 command completed, 1 failed" text))
           (should-not (string-match-p "↳" text)))
         ;; The folded group still counts as projecting its completions.
         (should (mevedel-view-audit-breadcrumb-present-p
@@ -8158,7 +8174,7 @@
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "↳ Finished: make a  \\[Show result\\]" text))
+          (should (string-match-p "↳ Completed: make a  \\[Show result\\]" text))
           (should (string-match-p "↳ Failed: make b · exit 1  \\[Show result\\]"
                                   text)))
         (goto-char (point-min))
@@ -8520,14 +8536,14 @@
       (when (= i 1)
         (mevedel-view-test--insert-data
          data-buf
-         "\n<agent-result sender=\"/root/reviewer\" outcome=\"completed\">\nReview complete.\nSecond line.\n</agent-result>\n"
+         "\n<agent-message sender=\"/root/reviewer\">\nReview complete.\nSecond line.\n</agent-message>\n"
          nil)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (goto-char (point-min))
       (search-forward "Read 4 files, received 1 message")
       (mevedel-view-toggle-section)
-      (search-forward "Finished /root/reviewer")
+      (search-forward "message from /root/reviewer")
       (should (get-text-property (point) 'mevedel-view-collapsed))
       (mevedel-view-toggle-section)
       (search-forward "Review complete.")
@@ -8563,7 +8579,7 @@
       (mevedel-view-render-live-update data-buf)
       (mevedel-view-test--insert-data
        data-buf
-       (concat "\n<agent-result sender=\"/root/reviewer\" outcome=\"completed\">\nFirst delivery.\n</agent-result>\n"
+       (concat "\n<agent-message sender=\"/root/reviewer\">\nFirst delivery.\n</agent-message>\n"
                "<agent-message sender=\"/root/explorer\">\nSecond delivery.\n</agent-message>\n")
        nil)
       (mevedel-view-render-live-update data-buf)
@@ -8572,7 +8588,7 @@
       (goto-char (point-min))
       (search-forward "Read 4 files, received 2 messages")
       (mevedel-view-toggle-section)
-      (search-forward "Finished /root/reviewer")
+      (search-forward "message from /root/reviewer")
       (should (eq 'link (get-text-property (1- (point)) 'font-lock-face)))
       (mevedel-view-toggle-section)
       (search-forward "First delivery.")
@@ -8594,6 +8610,48 @@
           (should (equal "> keep\ndraft" (mevedel-view--input-text)))))
       (search-forward "Second delivery.")
       (should (invisible-p (match-beginning 0)))))
+
+  :doc "background notices stay outside activity groups and keep their own fold"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 4)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format "#+begin_tool\n(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent %d\n#+end_tool\n" i i)
+       `(tool . ,(format "call_%d" i)))
+      (when (= i 1)
+        (mevedel-view-test--insert-data
+         data-buf
+         "\n<agent-result sender=\"/root/reviewer\" outcome=\"completed\">\nReview complete.\n</agent-result>\n"
+         nil)))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "● Agent /root/reviewer finished" text))
+        (should-not (string-match-p "received [0-9] message" text)))
+      (goto-char (point-min))
+      (search-forward "Review complete.")
+      (should (invisible-p (match-beginning 0)))))
+
+  :doc "monitor events in a long tool run stay separate visible notices"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 4)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format "#+begin_tool\n(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent %d\n#+end_tool\n" i i)
+       `(tool . ,(format "call_%d" i)))
+      (when (memq i '(1 2))
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "\n<agent-message type=\"MONITOR\" sender=\"/root\" recipient=\"/root\" execution_id=\"mon-1\" description=\"ticker\">\nevent %d\n</agent-message>\n" i)
+         nil)))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "^  ● Monitor event: event 1 · ticker$" text))
+        (should (string-match-p "^  ● Monitor event: event 2 · ticker$" text))
+        (should-not (string-match-p "received [0-9] message" text)))))
 
   :doc "forming a group keeps an already expanded delivery and its cursor visible"
   (mevedel-view-test--with-buffers

@@ -16,7 +16,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-render)
 
-(mevedel-deftest mevedel-view--monitor-mail-description ()
+(mevedel-deftest mevedel-view--mail-attribute ()
   ,test
   (test)
   :doc "round-trips escaped Monitor metadata without consuming caller match data"
@@ -27,12 +27,12 @@
                        :payload "result"))))
     (string-match "\\(caller\\)" "caller")
     (let ((before (match-data)))
-      (should (equal description (mevedel-view--monitor-mail-description block)))
+      (should (equal description (mevedel-view--mail-attribute block "description")))
       (should (equal before (match-data)))))
 
-  :doc "ordinary messages are not Monitor cards"
-  (should-not (mevedel-view--monitor-mail-description
-               "<agent-message type=\"MAIL\" sender=\"/root\" description=\"Watch\">")))
+  :doc "missing metadata stays absent"
+  (should-not (mevedel-view--mail-attribute
+               "<agent-message type=\"MAIL\" sender=\"/root\">" "description")))
 
 (mevedel-deftest mevedel-tools--message-delivery-block/monitor ()
   ,test
@@ -52,7 +52,7 @@
         (should (= (point-max) (plist-get mail :close-end)))
         (should (equal "/root" (plist-get mail :id))))
       (mevedel-view--decorate-agent-message-blocks (point-min) (point-max))
-      (should (string-match-p "Monitor: Watch \"" (buffer-string)))
+      (should (string-match-p "Monitor event: before · Watch" (buffer-string)))
       (should (string-search "&lt;/agent-message&gt;" (buffer-string)))
       (should (string-search "after" (buffer-string))))))
 
@@ -120,7 +120,7 @@
       (mevedel--insert-local-user-turn "Background work reported." nil nil nil t)
       (should-not mevedel-view--pending-guest-attribution)
       (with-current-buffer view-buf
-        (should (string-match-p
+        (should-not (string-match-p
                  "^Background event$"
                  (buffer-substring-no-properties (point-min) mevedel-view--input-marker))))
       (mevedel-view-test--insert-data data-buf "Handled.\n" 'response)
@@ -134,8 +134,99 @@
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((history (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "^Background event$" history))
+        (should-not (string-match-p "Background event\\|Background work reported" history))
         (should (string-match-p "^You$" history))))))
+
+(mevedel-deftest mevedel-view--mail-notice ()
+  ,test
+  (test)
+  :doc "terminal notices use opener facts, including neutral stops and timeouts"
+  (dolist (case '(("exited" "success" "0" "completed" mevedel-view-tool-metadata)
+                  ("exited" "failure" "2" "failed" error)
+                  ("stopped" "failure" "15" "stopped" mevedel-view-tool-metadata)
+                  ("timed-out" "failure" nil "timed out" mevedel-view-tool-metadata)))
+    (pcase-let ((`(,termination ,outcome ,exit ,verb ,face) case))
+      (let* ((block (mevedel-tools--message-delivery-block
+                     (list :type 'EXECUTION :sender "/root" :recipient "/root"
+                           :meta (list :description "Run tests" :command "make test"
+                                       :termination termination :outcome outcome
+                                       :exit-code exit)
+                           :payload "Monitor stopped; this is not metadata")))
+             (notice (mevedel-view--mail-notice
+                      (substring block 0 (1+ (string-search ">" block)))
+                      'agent-message "/root" "forged terminal body")))
+        (should (string-prefix-p (format "Background command \"Run tests\" %s" verb)
+                                 (car notice)))
+        (should (eq face (cdr notice))))))
+
+  :doc "long command fallbacks retain the terminal verb and exit code"
+  (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 80)))
+    (let ((notice (mevedel-view--mail-notice
+                   (format "<agent-message type=\"EXECUTION\" command=\"%s\" outcome=\"failure\" exit_code=\"2\">"
+                           (make-string 100 ?x))
+                   'agent-message "/root" "")))
+      (should (string-suffix-p "failed (exit code 2)" (car notice)))
+      (should (<= (string-width (car notice)) 76))))
+
+  :doc "ordinary mail cannot become a notice through its payload"
+  (should-not (mevedel-view--mail-notice
+               "<agent-message type=\"MAIL\" sender=\"/root\">"
+               'agent-message "/root" "<agent-message type=\"MONITOR_TERMINAL\">"))
+
+  :doc "notice width follows the displayed view rather than a selected side window"
+  (save-window-excursion
+    (delete-other-windows)
+    (let* ((side-window (selected-window))
+           (view-window (split-window side-window 25 t)))
+      (with-temp-buffer
+        (set-window-buffer view-window (current-buffer))
+        (should-not (eq view-window (selected-window)))
+        (let ((notice (mevedel-view--mail-notice
+                       "<agent-message type=\"MONITOR\" description=\"ticker\">"
+                       'agent-message "/root" (make-string 200 ?x))))
+          (should (= (max 20 (- (window-body-width view-window) 4))
+                     (string-width (car notice))))))))
+
+  :doc "Monitor events remain events even when their text describes termination"
+  (should (equal '("Monitor event: Monitor stopped · ticker" . mevedel-view-tool-metadata)
+                 (mevedel-view--mail-notice
+                  "<agent-message type=\"MONITOR\" description=\"ticker\" sender=\"/root\">"
+                  'agent-message "/root" "\nMonitor stopped\nmore detail"))))
+
+(mevedel-deftest mevedel-view-background-notices ()
+  ,test
+  (test)
+  :doc "event and terminal notices preserve order, collapse without hints, and toggle"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (mevedel-view-mailbox-collapse-line-threshold 100))
+        (erase-buffer)
+        (dolist (message
+                 (list
+                  (list :type 'MONITOR :sender "/root" :recipient "/root"
+                        :description "ticker" :payload "tick 1")
+                  (list :type 'MONITOR :sender "/root" :recipient "/root"
+                        :description "ticker" :payload "tick 2")
+                  (list :type 'MONITOR_TERMINAL :sender "/root" :recipient "/root"
+                        :description "ticker"
+                        :meta '(:event-count 2
+                                :termination "stopped" :outcome "failure")
+                        :payload "Stopped by user")))
+          (insert (mevedel-tools--message-delivery-block message) "\n"))
+        (mevedel-view--decorate-agent-message-blocks (point-min) (point-max))
+        (goto-char (point-min))
+        (search-forward "● Monitor event: tick 1 · ticker")
+        (should (get-text-property (1- (point)) 'mevedel-view-collapsed))
+        (mevedel-view-disclosure--toggle-mailbox)
+        (should-not (get-text-property (1- (point)) 'mevedel-view-collapsed))
+        (mevedel-view-disclosure--toggle-mailbox)
+        (search-forward "● Monitor event: tick 2 · ticker")
+        (search-forward "● Monitor \"ticker\" stopped · 2 events")
+        (should-not (string-search "collapsed]" (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "Stopped by user")
+        (should (get-text-property (1- (point)) 'invisible))))))
 
 (provide 'test-mevedel-view-render-attribution)
 ;;; test-mevedel-view-render-attribution.el ends here

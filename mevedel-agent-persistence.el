@@ -72,13 +72,13 @@ fields such as a record's wake mark are not part of the canonical form."
      for payload = (and type (plist-get entry :payload))
      for timestamp = (and type (plist-get entry :timestamp))
      when
-     (and (memq type '(EXECUTION MAIL MONITOR RESULT USER))
+     (and (memq type '(EXECUTION MAIL MONITOR MONITOR_TERMINAL RESULT USER))
           (equal target recipient)
           (stringp payload)
           (timestamp-p timestamp)
           (pcase type
             ('USER (and (equal sender "user") (equal recipient "/root")))
-            ('MONITOR
+            ((or 'MONITOR 'MONITOR_TERMINAL)
              (and (equal sender "/root") (equal recipient "/root")
                   (stringp (plist-get entry :execution-id))
                   (stringp (plist-get entry :description))))
@@ -104,13 +104,17 @@ fields such as a record's wake mark are not part of the canonical form."
        (when (eq type 'RESULT)
          (setq clean
                (plist-put clean :outcome (plist-get entry :outcome))))
-       (when (eq type 'MONITOR)
+       (when (memq type '(MONITOR MONITOR_TERMINAL))
          (setq clean
                (append clean
                        (list :execution-id
                              (copy-sequence (plist-get entry :execution-id))
                              :description
                              (copy-sequence (plist-get entry :description))))))
+       (when (and (plist-get entry :meta)
+                  (mevedel--plain-data-p (plist-get entry :meta)))
+         (setq clean
+               (plist-put clean :meta (copy-tree (plist-get entry :meta)))))
        (when (and (eq type 'USER)
                   (mevedel--plain-data-p
                    (plist-get entry :transcript-payload)))

@@ -48,5 +48,19 @@
     (should-not (mevedel-tool-get "Monitor"))
     (should (equal "Monitor" (mevedel-tool-name (mevedel-tool-ensure "Monitor"))))))
 
+(mevedel-deftest mevedel-tool-exec--register/bash-description
+  (:before-each (mevedel-tool-exec--register))
+  ,test
+  (test)
+  :doc "Bash exposes an optional human-readable description"
+  (let* ((tool (mevedel-tool-get "Bash"))
+         (args (gptel-tool-args (mevedel-tool-gptel-tool tool)))
+         (description (seq-find (lambda (arg)
+                                  (equal "description" (plist-get arg :name)))
+                                args)))
+    (should description)
+    (should (plist-get description :optional))
+    (should (equal "string" (plist-get description :type)))))
+
 (provide 'test-mevedel-tool-exec-registration)
 ;;; test-mevedel-tool-exec-registration.el ends here

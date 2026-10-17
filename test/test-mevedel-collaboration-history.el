@@ -388,10 +388,10 @@
          (data (generate-new-buffer " *forwarded history live*"))
          (child (generate-new-buffer " *forwarded history child*"))
          (room (list :session session :data-buffer data))
-         (mailbox (concat "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+         (mailbox (concat "<agent-message type=\"EXECUTION\" sender=\"/root/child\" "
+                          "execution_id=\"exec-duplicate\" command=\"exit 2\" "
+                          "outcome=\"failure\" exit_code=\"2\">\n"
                           "retained output\n"
-                          "<bash-execution execution_id=\"exec-duplicate\" command=\"exit 2\" "
-                          "outcome=\"failure\" exit_code=\"2\"/>\n"
                           "</agent-message>\n"))
          (root-breadcrumb
           (mevedel--format-hook-audit-record
@@ -459,10 +459,10 @@
          (data (generate-new-buffer " *dedup read live*"))
          (reloaded (generate-new-buffer " *dedup read reloaded*"))
          (path (mevedel-session-artifacts-segment-path directory 1))
-         (mailbox (concat "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+         (mailbox (concat "<agent-message type=\"EXECUTION\" sender=\"/root/child\" "
+                          "execution_id=\"exec-dedup\" command=\"echo done\" "
+                          "outcome=\"success\" exit_code=\"0\">\n"
                           "retained output\n"
-                          "<bash-execution execution_id=\"exec-dedup\" command=\"echo done\" "
-                          "outcome=\"success\" exit_code=\"0\"/>\n"
                           "</agent-message>\n"))
          (read-segment (symbol-function 'mevedel-session-artifacts-read-transcript-segment))
          (reads 0))

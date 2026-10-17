@@ -34,12 +34,12 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-enqueue-execution-result
                   "mevedel-agent-control"
-                  (session owner body &optional execution-id wake))
+                  (session owner body &optional execution-id wake meta))
 
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime-queue-execution-completion
                   "mevedel-agent-runtime"
-                  (context owner body))
+                  (context owner body &optional meta))
 
 ;; `mevedel-agents'
 (defvar mevedel--agent-invocation)
@@ -440,6 +440,48 @@ stopped command's outcome."
                         :model-result-envelope-p
                         (not suppress-sandbox-disclosure-p))))))
 
+(defun mevedel-tool-exec--facts-meta (facts &rest keys)
+  "Return the mailbox metadata plist of FACTS restricted to KEYS.
+Values are plain strings and integers; unknown or nil facts are omitted."
+  (let (meta)
+    (dolist (key keys)
+      (when-let* ((value (plist-get facts key)))
+        (setq meta
+              (append meta
+                      (list key
+                            (cond ((memq key '(:termination :outcome))
+                                   (symbol-name value))
+                                  ((eq key :command)
+                                   (truncate-string-to-width value 120 nil nil "…"))
+                                  (t value)))))))
+    meta))
+
+(defun mevedel-tool-exec--enqueue-monitor-lines
+    (owner-context facts lines omitted wake &optional terminal)
+  "Queue each framed monitor line of LINES as its own record for OWNER-CONTEXT.
+OMITTED lines are summarized on the last record, whose model text carries the
+original omission note.  FACTS identify the monitor; WAKE marks every record.
+TERMINAL, an entry (BODY META t), follows the lines.  All records share one
+durable commit, so a failed flush leaves nothing queued and a retry cannot
+duplicate events."
+  (let ((entries nil))
+    (when (and (null lines) (> omitted 0))
+      (setq lines (list "")))
+    (while lines
+      (let* ((line (pop lines))
+             (omit (and (null lines) (> omitted 0))))
+        (push (list (if omit
+                        (format "%s\n\n[%d more event lines in the output file]"
+                                line omitted)
+                      line)
+                    (and omit (list :omitted omitted)))
+              entries)))
+    (when terminal
+      (push terminal entries))
+    (mevedel-agent-control-enqueue-monitor-events
+     owner-context (plist-get facts :execution-id)
+     (or (plist-get facts :description) "") (nreverse entries) wake)))
+
 (defun mevedel-tool-exec-handle-execution-event (event owner-context)
   "Secure an independently delivered execution EVENT in its owner mailbox.
 Return non-nil only after the record is durable.  A yielded root result
@@ -447,10 +489,9 @@ that ended on its own wakes an idle model; a stopped one does not."
   (pcase (plist-get event :type)
     ('monitor-batch
      (let ((facts (plist-get event :facts)))
-       (mevedel-agent-control-enqueue-monitor-event
-        owner-context (plist-get facts :execution-id)
-        (or (plist-get facts :description) "")
-        (plist-get event :body) t)
+       (mevedel-tool-exec--enqueue-monitor-lines
+        owner-context facts (plist-get event :monitor-lines)
+        (or (plist-get event :monitor-omitted) 0) t)
        (mevedel-pending-inputs-offer-root-event
         owner-context (plist-get event :data-buffer))
        t))
@@ -458,6 +499,10 @@ that ended on its own wakes an idle model; a stopped one does not."
      (let* ((args (plist-get event :tool-args))
             (facts (plist-get event :facts))
             (observation (plist-get event :observation))
+            (meta (mevedel-tool-exec--facts-meta
+                   facts :execution-id :description :command :termination
+                   :outcome :exit-code :output-path :output-bytes
+                   :omitted-output-bytes))
             (root-p (and (mevedel-session-p owner-context)
                          (equal (plist-get event :owner) "/root")))
             (wake (and root-p
@@ -465,10 +510,13 @@ that ended on its own wakes an idle model; a stopped one does not."
        (prog1
            (cond
             ((eq (plist-get facts :kind) 'monitor)
-             (mevedel-agent-control-enqueue-monitor-event
-              owner-context (plist-get facts :execution-id)
-              (or (plist-get facts :description) "")
-              (mevedel-tool-exec--monitor-terminal-body event) wake))
+             (mevedel-tool-exec--enqueue-monitor-lines
+              owner-context facts (plist-get event :monitor-lines)
+              (or (plist-get event :monitor-omitted) 0) wake
+              (list (mevedel-tool-exec--monitor-terminal-body event)
+                    (mevedel-tool-exec--facts-meta
+                     facts :event-count :termination :outcome :exit-code)
+                    t)))
             ((mevedel-session-p owner-context)
              (mevedel-agent-control-enqueue-execution-result
               owner-context
@@ -477,7 +525,7 @@ that ended on its own wakes an idle model; a stopped one does not."
                (mevedel-tool-exec--observation-envelope
                 observation (plist-get args :suppress-sandbox-disclosure-p))
                :result)
-              (plist-get facts :execution-id) wake))
+              (plist-get facts :execution-id) wake meta))
             (t
              (mevedel-agent-runtime-queue-execution-completion
               owner-context
@@ -485,13 +533,14 @@ that ended on its own wakes an idle model; a stopped one does not."
               (plist-get
                (mevedel-tool-exec--observation-envelope
                 observation (plist-get args :suppress-sandbox-disclosure-p))
-               :result))))
+               :result)
+              meta)))
          (when wake
            (mevedel-pending-inputs-offer-root-event
             owner-context (plist-get event :data-buffer))))))))
 
 (defun mevedel-tool-exec--monitor-terminal-body (event)
-  "Return EVENT's pending monitor lines followed by its terminal notice."
+  "Return EVENT's terminal notice."
   (let* ((facts (plist-get event :facts))
          (termination (plist-get facts :termination))
          (notice
@@ -501,10 +550,9 @@ that ended on its own wakes an idle model; a stopped one does not."
             ('stopped "stopped")
             ('exited (format "exited with code %s" (plist-get facts :exit-code)))
             (_ (format "ended (%s)" termination)))))
-    (concat (or (plist-get event :monitor-output) "")
-            (format "Monitor %s: %s (%d events)."
-                    (or (plist-get facts :description) "") notice
-                    (or (plist-get facts :event-count) 0)))))
+    (format "Monitor %s: %s (%d events)."
+            (or (plist-get facts :description) "") notice
+            (or (plist-get facts :event-count) 0))))
 
 (defun mevedel-tool-exec--monitor (callback args)
   "Start a root-owned stdout event monitor from ARGS; return via CALLBACK."
@@ -963,16 +1011,19 @@ the full command, bounded output and execution details."
                              (when-let* ((path (plist-get render-data :output-path)))
                                (format "Retained output: %s" path))))
                  "\n\n"))))
+           (stopped-p (and (eq state 'completed)
+                           (memq (plist-get render-data :termination)
+                                 '(stopped owner-stopped interrupted))))
            (label
             (cond
              ((eq state 'lost) "lost execution")
              ((and (eq state 'completed)
                    (eq (plist-get render-data :termination) 'signaled))
               "signaled")
+             (stopped-p "stopped")
              ((and (eq state 'completed)
-                   (memq (plist-get render-data :termination)
-                         '(stopped owner-stopped interrupted)))
-              "interrupted")
+                   (eq (plist-get render-data :termination) 'timed-out))
+              "timed out")
              ((eq state 'unknown) "completion unavailable")
              ((eq state 'running)
               (if (eq (plist-get render-data :kind) 'monitor) "watching" "running"))
@@ -1016,10 +1067,14 @@ the full command, bounded output and execution details."
             :body-mode 'sh-mode
             ;; The call that started a still-live command succeeded, but the
             ;; command has not: its row must not read as finished.
-            :status (if (and (null control) (eq state 'running)
-                             (not (memq status '(error failed denied blocked))))
-                        'running
-                      status)
+            ;; A requested stop is neutral, not a failure; the outcome fact
+            ;; stays `failure' for the model.
+            :status (cond
+                     ((and (null control) (eq state 'running)
+                           (not (memq status '(error failed denied blocked))))
+                      'running)
+                     ((and stopped-p (eq status 'error)) 'cancelled)
+                     (t status))
             :execution-control-id
             (and (memq control '(input stop))
                  (or (plist-get render-data :execution-id)

@@ -624,7 +624,7 @@
             (list :type type :delivery 'mailbox :owner "/root"
                   :data-buffer (current-buffer)
                   :facts '(:execution-id "exec-1" :termination exited)
-                  :body "event" :observation '(:output "done"))
+                  :monitor-lines '("event") :observation '(:output "done"))
             session)))
         (should (equal (list (current-buffer)) offered))
         (should (mevedel-agent-control-wake-pending-p session)))))
@@ -641,7 +641,10 @@
               :facts '(:execution-id "exec-1" :termination exited)
               :observation '(:output "done"))
         'invocation)))
-    (should (equal '(invocation "/root/worker") (butlast queued)))
+    (should (equal '(invocation "/root/worker") (seq-take queued 2)))
+    (should (string-prefix-p "done\n" (nth 2 queued)))
+    (should (equal '(:execution-id "exec-1" :termination "exited")
+                   (nth 3 queued)))
     (should-not offered)
     (should-not (mevedel-agent-control-context-mailbox session)))
   :doc "a failed save reports no delivery and offers no wake"
@@ -659,6 +662,123 @@
         session)))
     (should-not offered)
     (should-not (mevedel-agent-control-context-mailbox session)))
+  :doc "a monitor batch queues one MONITOR record per line, omission on the last"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+    (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore))
+      (mevedel-tool-exec-handle-execution-event
+       (list :type 'monitor-batch :delivery 'mailbox :owner "/root"
+             :facts '(:execution-id "m1" :description "w" :kind monitor)
+             :monitor-lines '("a" "</agent-message> b") :monitor-omitted 5)
+       session))
+    (let ((messages (mevedel-agent-control-context-mailbox session)))
+      (should (equal '(MONITOR MONITOR) (mapcar (lambda (m) (plist-get m :type)) messages)))
+      (should (equal "a" (plist-get (car messages) :payload)))
+      (should-not (plist-get (car messages) :meta))
+      (should (equal '(:omitted 5) (plist-get (cadr messages) :meta)))
+      (should (string-match-p "5 more event lines"
+                              (plist-get (cadr messages) :payload)))))
+  :doc "a monitor terminal flushes pending lines, then a structural terminal record"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+    (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore))
+      (mevedel-tool-exec-handle-execution-event
+       (list :type 'terminal :delivery 'mailbox :owner "/root"
+             :facts '(:execution-id "m1" :description "w" :kind monitor
+                      :termination stopped :event-count 3 :outcome failure
+                      :exit-code 15)
+             :monitor-lines '("tail") :monitor-omitted 0
+             :observation '(:output ""))
+       session))
+    (let ((messages (mevedel-agent-control-context-mailbox session)))
+      (should (equal '(MONITOR MONITOR_TERMINAL)
+                     (mapcar (lambda (m) (plist-get m :type)) messages)))
+      (should (equal '(:event-count 3 :termination "stopped" :outcome "failure"
+                       :exit-code 15)
+                     (plist-get (cadr messages) :meta)))
+      (should (equal "Monitor w: stopped (3 events)."
+                     (plist-get (cadr messages) :payload)))))
+  :doc "a monitor flush is one durable commit for all its line records"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+        (commits 0))
+    (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore)
+              ((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_session) (cl-incf commits) t)))
+      (mevedel-tool-exec-handle-execution-event
+       (list :type 'monitor-batch :delivery 'mailbox :owner "/root"
+             :facts '(:execution-id "m1" :description "w" :kind monitor)
+             :monitor-lines '("a" "b" "c") :monitor-omitted 0)
+       session)
+      (should (= 1 commits))
+      (mevedel-tool-exec-handle-execution-event
+       (list :type 'terminal :delivery 'mailbox :owner "/root"
+             :facts '(:execution-id "m1" :description "w" :kind monitor
+                      :termination exited :event-count 4)
+             :monitor-lines '("d") :monitor-omitted 0
+             :observation '(:output ""))
+       session)
+      (should (= 2 commits)))
+    (should (equal '(MONITOR MONITOR MONITOR MONITOR MONITOR_TERMINAL)
+                   (mapcar (lambda (m) (plist-get m :type))
+                           (mevedel-agent-control-context-mailbox session)))))
+  :doc "a failed monitor commit queues nothing and a retry does not duplicate"
+  (dolist (kind '(monitor-batch terminal))
+    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
+          (fail t) (attempts 0) err
+          (unrelated (list :type 'MAIL :sender "/root/a" :recipient "/root"
+                           :payload "unrelated" :timestamp '(1 0 0 0)))
+          (event (if (eq kind 'terminal)
+                     (list :type 'terminal :delivery 'mailbox :owner "/root"
+                           :facts '(:execution-id "m1" :description "w"
+                                    :kind monitor :termination exited
+                                    :event-count 3)
+                           :monitor-lines '("a" "b") :monitor-omitted 0
+                           :observation '(:output ""))
+                   (list :type 'monitor-batch :delivery 'mailbox :owner "/root"
+                         :facts '(:execution-id "m1" :description "w"
+                                  :kind monitor)
+                         :monitor-lines '("a" "b" "c") :monitor-omitted 0))))
+      (mevedel-session--set-messages session (list unrelated))
+      (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore)
+                ((symbol-function 'mevedel-agent-control-commit-session)
+                 (lambda (_session)
+                   (cl-incf attempts)
+                   (when fail (error "Injected commit failure")) t)))
+        (setq err (should-error
+                   (mevedel-tool-exec-handle-execution-event event session)))
+        ;; The injected failure, not some earlier error, reached us.
+        (should (equal '(error "Injected commit failure") err))
+        (should (= 1 attempts))
+        (should (equal (list unrelated)
+                       (mevedel-agent-control-context-mailbox session)))
+        (setq fail nil)
+        (mevedel-tool-exec-handle-execution-event event session)
+        (should (= 2 attempts)))
+      (let ((messages (mevedel-agent-control-context-mailbox session)))
+        (should (equal (if (eq kind 'terminal)
+                           '(MAIL MONITOR MONITOR MONITOR_TERMINAL)
+                         '(MAIL MONITOR MONITOR MONITOR))
+                       (mapcar (lambda (m) (plist-get m :type)) messages)))
+        (should (equal (if (eq kind 'terminal)
+                           (list "unrelated" "a" "b"
+                                 (mevedel-tool-exec--monitor-terminal-body event))
+                         '("unrelated" "a" "b" "c"))
+                       (mapcar (lambda (m) (plist-get m :payload)) messages))))))
+  :doc "an execution result carries its terminal facts as metadata"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
+    (mevedel-tool-exec-handle-execution-event
+     (list :type 'terminal :delivery 'mailbox :owner "/root"
+           :tool-args '(:command "make")
+           :facts '(:execution-id "e1" :description "build" :command "make"
+                    :state completed :termination exited :exit-code 2
+                    :outcome failure :output-path "artifact://executions/e1.log"
+                    :output-bytes 42 :omitted-output-bytes 3)
+           :observation '(:output "boom" :facts (:execution-id "e1" :state completed)))
+     session)
+    (should (equal '(:execution-id "e1" :description "build" :command "make"
+                     :termination "exited" :outcome "failure" :exit-code 2
+                     :output-path "artifact://executions/e1.log"
+                     :output-bytes 42 :omitted-output-bytes 3)
+                   (plist-get (car (mevedel-agent-control-context-mailbox session))
+                              :meta))))
   :doc "a failure while offering the wake keeps the delivered waking mail"
   (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
          (root (generate-new-buffer " *wake-root*")))
@@ -703,6 +823,14 @@
       (mevedel-tool-exec-test--call-bash
        #'ignore '(:command "printf done" :wait-for-completion-p t)))
     (should-not (plist-get (cdr captured) :yield-time-ms)))
+  :doc "forwards the Bash description to the execution"
+  (let (captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args) (setq captured (cdr args)))))
+      (mevedel-tool-exec-test--call-bash
+       #'ignore '(:command "make" :description "Build it")))
+    (should (equal "Build it" (plist-get captured :description)))
+    (should (eq 'bash (plist-get captured :kind))))
   :doc "forwards original arguments and durable tool-use identity"
   (let ((mevedel-pipeline--active-tool-use-id "call-bash-7")
         captured)
@@ -1853,13 +1981,35 @@ the execution boundary owns the session's single unavailable warning"
                         :execution-control input :control-succeeded-p t))))
     (should (equal "WriteStdin: sent input" (plist-get row :header))))
   :doc "marks stopped and lost executions explicitly"
+  (let ((row (mevedel-tool-exec--render-bash
+              "Bash" '(:command "sleep 10") ""
+              '(:state completed :termination stopped :outcome failure
+                :status error))))
+    (should (string-match-p " · stopped" (plist-get row :header)))
+    (should (eq 'cancelled (plist-get row :status))))
   (should (string-match-p
-           "interrupted"
+           "timed out"
            (plist-get
             (mevedel-tool-exec--render-bash
-             "Bash" '(:command "sleep 10") ""
-             '(:state completed :termination stopped :outcome failure))
+             "Bash" '(:command "tail -f x") ""
+             '(:state completed :termination timed-out :outcome failure
+               :status error))
             :header)))
+  (should (eq 'error
+              (plist-get
+               (mevedel-tool-exec--render-bash
+                "Bash" '(:command "false") ""
+                '(:state completed :termination exited :exit-code 1
+                  :outcome failure :status error))
+               :status)))
+  (should (eq 'cancelled
+              (plist-get (mevedel-execution-transcript-terminal-render-data
+                          '(:facts (:termination stopped :outcome failure)))
+                         :status)))
+  (should (eq 'failure
+              (plist-get (mevedel-execution-transcript-terminal-render-data
+                          '(:facts (:termination stopped :outcome failure)))
+                         :outcome)))
   (should (string-match-p
            "signaled"
            (plist-get

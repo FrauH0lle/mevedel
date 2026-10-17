@@ -892,7 +892,7 @@ turn's later text, live and after reconstruction."
         (let ((visible (buffer-substring-no-properties
                         (point-min) (mevedel-view--input-start))))
           (ert-info ((format "View after completion:\n%s" visible))
-            (should-not (string-search "Finished: make slow" visible))))
+            (should-not (string-search "Completed: make slow" visible))))
         ;; Flush only what the completion itself scheduled.
         (mevedel-view--flush-scheduled-render view-buf t)
         (let ((visible (buffer-substring-no-properties
@@ -914,9 +914,9 @@ turn's later text, live and after reconstruction."
             (should (= 1 (mevedel-view-stream-test--count-substring
                           expected visible)))
             ;; A folded completion is not repeated as its own line.
-            (should (= (if (string-prefix-p "Finished" expected) 1 0)
+            (should (= (if (string-prefix-p "Completed" expected) 1 0)
                        (mevedel-view-stream-test--count-substring
-                        "Finished: make slow" visible)))
+                        "Completed: make slow" visible)))
             (should (< (string-search expected visible)
                        (string-search "Both checks are done." visible))))
           (when (string-search "[Show result]" expected)
@@ -984,7 +984,7 @@ turn's later text, live and after reconstruction."
                           (point-min) (mevedel-view--input-start))))
             (should (= 1 (mevedel-view-stream-test--count-substring
                           "[Show result]" visible)))
-            (should (string-match-p "↳ Finished: printf run" visible))
+            (should (string-match-p "↳ Completed: printf run" visible))
             (should (equal draft (mevedel-view--input-text)))
             (should (= 4 (- (point) (mevedel-view--input-start))))
             (should mark-active)
@@ -1016,10 +1016,10 @@ turn's later text, live and after reconstruction."
         (should (= 1 (length (mevedel-transcript-audit-records
                               (buffer-string) 'execution-breadcrumb)))))))
   :doc "a mid-turn completion folds into its turn's activity, before later text"
-  (mevedel-view-stream-test--check-mid-turn-breadcrumb 1 "1 command finished")
+  (mevedel-view-stream-test--check-mid-turn-breadcrumb 1 "1 command completed")
   :doc "an ungrouped mid-turn completion is one line before later text"
   (mevedel-view-stream-test--check-mid-turn-breadcrumb
-   0 "Finished: make slow · main  [Show result]"))
+   0 "Completed: make slow · main  [Show result]"))
 
 (mevedel-deftest mevedel-view-stream-terminal-breadcrumb-projection ()
   ,test
@@ -2280,7 +2280,7 @@ turn's later text, live and after reconstruction."
           (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
-                 (status (string-match-p "Running /root/verifier" text))
+                 (status (string-match-p "Running   agent    /root/verifier" text))
                  (prompt (string-match-p "^> " text)))
             (should-not old)
             (should (numberp response))
@@ -2318,7 +2318,7 @@ turn's later text, live and after reconstruction."
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
                  (calling (string-match-p "● Read: a" text))
-                 (status (string-match-p "Running /root/verifier" text)))
+                 (status (string-match-p "Running   agent    /root/verifier" text)))
             (should-not old)
             (should (numberp response))
             (should (numberp calling))
@@ -2354,7 +2354,7 @@ turn's later text, live and after reconstruction."
                  (header (string-match-p "mevedel" text))
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
-                 (status (string-match-p "Running /root/verifier" text)))
+                 (status (string-match-p "Running   agent    /root/verifier" text)))
             (should (numberp header))
             (should-not old)
             (should (numberp response))
@@ -3482,7 +3482,8 @@ turn's later text, live and after reconstruction."
                       (overlay-start region) (overlay-end region))))
           (should (string-match-p "Waiting for input" text))
           (should (string-match-p "[0-9]+s" text))
-          (should (string-match-p "1 agent running" text))
+          ;; The background-work panel counts agents; the footer does not.
+          (should-not (string-match-p "agent" text))
           (should
            (< (abs
                (- (mevedel-request-active-elapsed-seconds
@@ -3537,11 +3538,10 @@ turn's later text, live and after reconstruction."
                      (overlay-end
                       (mevedel-view-zone-region 'progress)))))
           (should (= 1 (cl-loop with start = 0
-                                while (string-match "agent running" text start)
+                                while (string-match " · [0-9]+s" text start)
                                 count t
                                 do (setq start (match-end 0)))))
-          (should-not (string-match-p
-                       "agent running.*agent running" text)))
+          (should-not (string-match-p "agent" text)))
         (mevedel-view--stop-spinner))))
 
   :doc "spinner tick suppresses modification hooks"
@@ -3592,7 +3592,7 @@ turn's later text, live and after reconstruction."
   :doc "decorated spinner status is normalized to its base label"
   (should (equal "Working..."
                  (mevedel-view--spinner-base-status
-                  "Working... · 14s · 1 agent running · 21s · 2 agents running")))
+                  "Working... · 14s · 21s")))
 
   :doc "spinner marker refresh keeps the live line outside composer input"
   (mevedel-view-stream-test--with-buffers
@@ -4351,7 +4351,7 @@ turn's later text, live and after reconstruction."
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Review update" text))
-        (should (string-match-p "✓ Finished /root/reviewer" text))
+        (should (string-match-p "● Agent /root/reviewer finished" text))
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should (string-match-p "Final answer" text))
         (should-not (string-match-p "<agent-result" text)))
@@ -4365,7 +4365,7 @@ turn's later text, live and after reconstruction."
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✓ Finished /root/reviewer" text))
+        (should (string-match-p "● Agent /root/reviewer finished" text))
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should-not (string-match-p "<agent-result" text)))))
 

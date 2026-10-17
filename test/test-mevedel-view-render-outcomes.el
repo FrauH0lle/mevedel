@@ -78,6 +78,24 @@
                      (plist-get rendering :header)))
       (should (string-search "Details: no-match · exit 1"
                              (plist-get rendering :body)))))
+  :doc "stopped executions show a neutral marker, not failure or success"
+  (progn
+    (mevedel-tools-register)
+    (let* ((data (mevedel-execution-transcript-terminal-render-data
+                  '(:facts (:state completed :outcome failure
+                            :termination stopped :exit-code 15)
+                    :whole-output "stopped")))
+           (rendering (mevedel-view--invoke-renderer
+                       (mevedel-tool-get "Monitor") data
+                       '(:command "sleep 30" :description "test ticker")
+                       "stopped"))
+           (line (mevedel-view--rendering-header-line rendering)))
+      (should (eq 'cancelled (mevedel-view--rendering-status rendering data)))
+      (should (string-match "●" line))
+      (should (eq 'mevedel-view-tool-metadata
+                  (get-text-property (match-beginning 0) 'font-lock-face line)))
+      (should-not (string-match-p "[×✓]" line))
+      (should (string-match-p "stopped" line))))
   :doc "accepted input is successful even when the Bash process fails"
   (progn
     (mevedel-tools-register)

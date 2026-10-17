@@ -30,6 +30,11 @@
 (autoload 'mevedel-artifacts-list-open "mevedel-artifacts-list")
 (autoload 'mevedel-artifacts-new-shared-item "mevedel-artifacts-list" nil t)
 
+;; `mevedel-background-list'
+(declare-function mevedel-background-list-open
+                  "mevedel-background-list" (&optional context))
+(autoload 'mevedel-background-list-open "mevedel-background-list" nil t)
+
 ;; `mevedel-chat'
 (declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
 (autoload 'mevedel--display-chat-buffer "mevedel-chat")
@@ -109,11 +114,6 @@
 (autoload 'mevedel-execution-target-readiness "mevedel-execution-target")
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 (autoload 'mevedel-execution-target-support-tier "mevedel-execution-target")
-
-;; `mevedel-executions-list'
-(declare-function mevedel-executions-list-open
-                  "mevedel-executions-list" (&optional context))
-(autoload 'mevedel-executions-list-open "mevedel-executions-list" nil t)
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
@@ -268,6 +268,10 @@
 (autoload 'mevedel-request-active-p "mevedel-turn")
 (autoload 'mevedel-request-state-label "mevedel-turn")
 (autoload 'mevedel-turn-busy-p "mevedel-turn")
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view-agent-active-rows "mevedel-view-agent" (session))
+(autoload 'mevedel-view-agent-active-rows "mevedel-view-agent")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
@@ -981,13 +985,14 @@ unavailable until it changes."
    (format "%d active" (mevedel-menu--active-tool-count))
    'warning))
 
-(defun mevedel-menu--executions-description ()
-  "Return the top-level executions row description."
+(defun mevedel-menu--background-description ()
+  "Return the top-level background-work row description."
   (let* ((session (mevedel-cockpit-context-session
                    (mevedel-menu--context)))
-         (count (mevedel-execution-count-user session)))
+         (count (+ (mevedel-execution-count-user session)
+                   (length (mevedel-view-agent-active-rows session)))))
     (mevedel-menu--state-description
-     "Executions"
+     "Background work"
      (format "%d live" count)
      (if (> count 0) 'warning 'transient-inactive-value))))
 
@@ -1434,9 +1439,9 @@ asked, such as a collaboration guest's turn."
       ('tools
        (mevedel-cockpit-call-in-data
         context #'mevedel-tools-list-open context))
-      ('executions
+      ('background
        (mevedel-cockpit-call-in-data
-        context #'mevedel-executions-list-open context))
+        context #'mevedel-background-list-open context))
       ('artifacts
        (mevedel-cockpit-call-in-data
         context #'mevedel-artifacts-list-open context))
@@ -1644,10 +1649,10 @@ nothing to restore."
   (interactive)
   (mevedel-menu-open 'tools))
 
-(defun mevedel-menu--open-executions ()
-  "Open the live execution cockpit surface."
+(defun mevedel-menu--open-background ()
+  "Open the background-work cockpit surface."
   (interactive)
-  (mevedel-menu-open 'executions))
+  (mevedel-menu-open 'background))
 
 (defun mevedel-menu--open-artifacts ()
   "Open the artifacts cockpit surface."
@@ -1752,7 +1757,7 @@ nothing to restore."
         :sections (list (list :id 'help-0 :title "Session cockpit"
 			      :body (string-join (list "The transient menu is the live key reference for session commands.") "\n"))
 			(list :id 'help-1 :title "Slash commands that open UI"
-			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Artifacts (attached/in project)" "Cockpit n                   New whiteboard or document" "/collab, Cockpit S          Share links, status, lobby" "Cockpit i                   Session info panel" "/usage, Cockpit U           Subscription usage" "/tools, /tools list         Tools" "/ps                         Live executions" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
+			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Artifacts (attached/in project)" "Cockpit n                   New whiteboard or document" "/collab, Cockpit S          Share links, status, lobby" "Cockpit i                   Session info panel" "/usage, Cockpit U           Subscription usage" "/tools, /tools list         Tools" "/ps                         Background work" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
 			(list :id 'help-2 :title "Direct slash commands"
 			      :body (string-join (list "/plugin enable NAME, disable NAME, reload, update NAME" "/plugin install TARGET, remove NAME, uninstall NAME, hooks ..." "/skills enable NAME, disable NAME, help NAME" "/mode MODE, /model MODEL" "/worktree create [NAME] [--for \"purpose\"] [--clean]" "/goal OBJECTIVE, /goal budget N|none, /goal edit|pause|resume|clear" "/compact, /remember [focus], /review, /verify, /edits, /clear, /init ..., /tokens") "\n"))
 			(list :id 'help-3 :title "Modes"
@@ -1849,8 +1854,8 @@ The value is `wide', `medium' or `narrow'; see
 (transient-define-group mevedel-menu--workspace-group
   ["Workspace"
    :pad-keys t
-   ("x" mevedel-menu--open-executions
-    :description mevedel-menu--executions-description)
+   ("x" mevedel-menu--open-background
+    :description mevedel-menu--background-description)
    ("w" mevedel-menu--open-worktree
     :description mevedel-menu--worktree-description)
    ("A" mevedel-menu--open-artifacts

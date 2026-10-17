@@ -89,9 +89,6 @@
 (declare-function mevedel-view-native-sync "mevedel-view-native" (specs elapsed rearm))
 (autoload 'mevedel-view-native-sync "mevedel-view-native")
 
-;; `mevedel-view-agent'
-(declare-function mevedel-view--agent-status-counts "mevedel-view-agent" ())
-
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--agent-fsm-p
                   "mevedel-view-composer" (info data-buffer))
@@ -502,38 +499,14 @@ falls back to \"Working...\"."
       (mevedel-view--render-request-progress)
       (mevedel-view--start-spinner-timer))))
 
-(defun mevedel-view--spinner-agent-count-label ()
-  "Return a compact active-agent count for the spinner, or nil."
-  (when-let* ((counts (mevedel-view--agent-status-counts)))
-    (let ((blocked (plist-get counts :blocked))
-          (running (plist-get counts :running))
-          label)
-      (setq label
-            (string-join
-             (delq nil
-                   (list
-                    (when (and blocked (> blocked 0))
-                      (format "%d %s blocked"
-                              blocked
-                              (if (= blocked 1) "agent" "agents")))
-                    (when (and running (> running 0))
-                      (format "%d %s running"
-                              running
-                              (if (= running 1) "agent" "agents")))))
-             " · "))
-      (unless (string-empty-p label)
-        label))))
-
 (defun mevedel-view--spinner-dynamic-label-p (text)
   "Return non-nil when TEXT is a generated spinner metadata label."
   (or (string-match-p "\\`[0-9]+s\\'" text)
       (string-match-p "\\`[0-9]+m [0-9][0-9]s\\'" text)
-      (string-match-p "\\`[0-9]+h [0-9][0-9]m\\'" text)
-      (string-match-p "\\`[0-9]+ agents? \\(?:blocked\\|running\\)\\'"
-                      text)))
+      (string-match-p "\\`[0-9]+h [0-9][0-9]m\\'" text)))
 
 (defun mevedel-view--spinner-base-status (status)
-  "Return STATUS without generated elapsed-time and agent-count labels."
+  "Return STATUS without generated elapsed-time labels."
   (let* ((status (if (or (null status) (string-empty-p status))
                      "Thinking..."
                    status))
@@ -548,15 +521,15 @@ falls back to \"Working...\"."
         base))))
 
 (defun mevedel-view--spinner-display-status (status)
-  "Return STATUS decorated with elapsed time and active-agent counts."
+  "Return STATUS decorated with elapsed time.
+Background work is counted by the panel right above, not here."
   (let* ((base
           (if-let* ((request (mevedel-view--spinner-request))
                     ((mevedel-request-active-work-pause-started-at request)))
               "Waiting for input"
             (mevedel-view--spinner-base-status status)))
-         (elapsed (mevedel-view--spinner-elapsed-label))
-         (agents (mevedel-view--spinner-agent-count-label)))
-    (string-join (delq nil (list base elapsed agents)) " · ")))
+         (elapsed (mevedel-view--spinner-elapsed-label)))
+    (string-join (delq nil (list base elapsed)) " · ")))
 
 (defun mevedel-view--format-spinner-line (status &optional face display-status)
   "Return propertized spinner line for STATUS.

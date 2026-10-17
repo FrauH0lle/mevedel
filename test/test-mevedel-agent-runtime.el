@@ -1201,6 +1201,32 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
          (mevedel-agent-runtime-queue-execution-completion
           invocation "/root/explore" "duplicate"))))))
 
+(mevedel-deftest mevedel-agent-runtime-queue-execution-completion/meta
+  (:doc "forwards structural metadata to the working agent's mailbox record")
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (record (mevedel-agent-record--create
+                  :path "/root/explore" :parent-path "/root"
+                  :activity 'running :invocation invocation)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/explore" record))
+          (mevedel-agent-invocation-parent-session invocation) session)
+    (should (mevedel-agent-runtime-queue-execution-completion
+             invocation "/root/explore" "done"
+             '(:execution-id "e1" :termination "exited")))
+    (should (equal '(:execution-id "e1" :termination "exited")
+                   (plist-get (car (mevedel-agent-record-mailbox record))
+                              :meta)))
+    ;; A held response keeps the metadata for settlement.
+    (setf (mevedel-agent-invocation-runtime-pending-response invocation) "ans")
+    (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
+               (lambda (_) t)))
+      (mevedel-agent-runtime-queue-execution-completion
+       invocation "/root/explore" "held" '(:execution-id "e2")))
+    (should (equal '(("held" :execution-id "e2"))
+                   (mevedel-agent-invocation-runtime-execution-results
+                    invocation)))))
+
 (mevedel-deftest mevedel-agent-runtime-queue-execution-completion/read
   (:doc "does not forward a completion the working agent already read")
   (let* ((session (mevedel-session--create :authority-mode 'pid-lock))

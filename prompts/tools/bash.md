@@ -14,6 +14,8 @@ Execute Bash commands for builds, tests, version control, and system operations.
 
 - Commands start in the session working directory. Quote shell arguments
   correctly; command substitution still executes inside double quotes.
+- Supply a short `description`, such as `Run tests`, for background-work rows
+  and completion notices; without one, the view uses the command.
 - In Edits, commands run automatically with required confinement and no network
   by default. Full Access runs without confinement or permission prompts. Ask
   uses the configured sandbox preference and command policy. Request known

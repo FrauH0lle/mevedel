@@ -818,7 +818,8 @@
              (path (concat parent-path "/review"))
              (invocation (mevedel-agent-invocation--create
                           :path path :parent-session session
-                          :runtime-execution-results '("second Bash" "first Bash")))
+                          :runtime-execution-results
+                          '(("second Bash" :execution-id "e2") ("first Bash"))))
              (parent (mevedel-agent-record--create :path parent-path))
              (answer "{\"findings\": []}")
              delivered
@@ -840,6 +841,9 @@
           (should (equal answer (mevedel-agent-record-settled-result record)))
           (should (equal '("first Bash" "second Bash")
                          (mapcar (lambda (msg) (plist-get msg :payload)) messages)))
+          (should (equal '(:execution-id "e2")
+                         (plist-get (cadr messages) :meta)))
+          (should-not (plist-get (car messages) :meta))
           (dolist (message messages)
             (should (eq 'EXECUTION (plist-get message :type)))
             (should (equal path (plist-get message :sender)))
@@ -983,7 +987,7 @@
            :callback (lambda (reason) (push reason reasons)))
           (mevedel-agent-invocation-transcript-status invocation) 'completed)
     (setf (mevedel-agent-invocation-runtime-execution-results invocation)
-          '("Bash output"))
+          '(("Bash output")))
     (dolist (failure '(nil error))
       (cl-letf (((symbol-function
                   'mevedel-session-persistence-save-agent-state)
@@ -1034,6 +1038,34 @@
     (should (equal '(:outcome completed :payload "complete result") result))
     (should (equal "complete result"
                    (mevedel-agent-record-settled-result record)))))
+
+(mevedel-deftest mevedel-agent-control-interrupt-user ()
+  ,test
+  (test)
+  :doc "interrupts an active agent with a user reason, leaves idle agents alone"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation--create :agent-id "busy-id"))
+         (busy (mevedel-agent-record--create
+                :id "busy-id" :path "/root/busy" :parent-path "/root"
+                :activity 'running :invocation invocation))
+         (idle (mevedel-agent-record--create
+                :id "idle-id" :path "/root/idle" :parent-path "/root"
+                :activity 'idle))
+         interrupted)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/busy" busy) (cons "/root/idle" idle)))
+    (cl-letf (((symbol-function 'mevedel-agent-runtime-interrupt)
+               (lambda (seen reason) (push (list seen reason) interrupted))))
+      (should (mevedel-agent-control-interrupt-user session "/root/busy"))
+      (should (equal (list (list invocation "interrupted by user")) interrupted))
+      (should-not (mevedel-agent-control-interrupt-user session "/root/idle"))
+      (should (= 1 (length interrupted)))))
+  :doc "refuses root and agents that are gone"
+  (let ((session (mevedel-agent-control-test--session)))
+    (should-error (mevedel-agent-control-interrupt-user session "/root")
+                  :type 'user-error)
+    (should-error (mevedel-agent-control-interrupt-user session "/root/gone")
+                  :type 'user-error)))
 
 (mevedel-deftest mevedel-agent-control-interrupt ()
   ,test
@@ -2650,13 +2682,13 @@
     (should-not (mevedel-agent-control-context-mailbox session))
     (should-not (mevedel-agent-control-wake-pending-p session))))
 
-(mevedel-deftest mevedel-agent-control-enqueue-monitor-event ()
+(mevedel-deftest mevedel-agent-control-enqueue-monitor-events ()
   ,test
   (test)
   :doc "queues a root MONITOR record with its watch identity"
   (let ((session (mevedel-agent-control-test--session)))
-    (should (mevedel-agent-control-enqueue-monitor-event
-             session "exec-1" "CI watch" "line one\n" t))
+    (should (mevedel-agent-control-enqueue-monitor-events
+             session "exec-1" "CI watch" '(("line one\n")) t))
     (let ((message (car (mevedel-agent-control-context-mailbox session))))
       (should (eq 'MONITOR (plist-get message :type)))
       (should (equal "/root" (plist-get message :recipient)))
@@ -2664,8 +2696,19 @@
       (should (equal "CI watch" (plist-get message :description)))
       (should (plist-get message :wake))))
   :doc "rejects records without identity"
-  (should-error (mevedel-agent-control-enqueue-monitor-event
-                 (mevedel-agent-control-test--session) nil "d" "x" t)))
+  (should-error (mevedel-agent-control-enqueue-monitor-events
+                 (mevedel-agent-control-test--session) nil "d" '(("x")) t))
+  :doc "queues several entries in order, the terminal as its own type"
+  (let ((session (mevedel-agent-control-test--session)))
+    (mevedel-agent-control-enqueue-monitor-events
+     session "exec-1" "w"
+     '(("a") ("b" (:omitted 2)) ("done" (:termination "exited") t)) nil)
+    (let ((messages (mevedel-agent-control-context-mailbox session)))
+      (should (equal '(MONITOR MONITOR MONITOR_TERMINAL)
+                     (mapcar (lambda (m) (plist-get m :type)) messages)))
+      (should (equal '("a" "b" "done")
+                     (mapcar (lambda (m) (plist-get m :payload)) messages)))
+      (should (equal '(:omitted 2) (plist-get (cadr messages) :meta))))))
 
 (mevedel-deftest mevedel-agent-control-wake-pending-p ()
   ,test
@@ -2711,9 +2754,9 @@
   :doc "sums only the named monitor's unread payload bytes"
   (let ((session (mevedel-agent-control-test--session)))
     (should (= 0 (mevedel-agent-control-monitor-unread-bytes session "exec-1")))
-    (mevedel-agent-control-enqueue-monitor-event session "exec-1" "d" "abc" t)
-    (mevedel-agent-control-enqueue-monitor-event session "exec-1" "d" "é" t)
-    (mevedel-agent-control-enqueue-monitor-event session "exec-2" "d" "zzzz" t)
+    (mevedel-agent-control-enqueue-monitor-events session "exec-1" "d" '(("abc")) t)
+    (mevedel-agent-control-enqueue-monitor-events session "exec-1" "d" '(("é")) t)
+    (mevedel-agent-control-enqueue-monitor-events session "exec-2" "d" '(("zzzz")) t)
     (should (= 5 (mevedel-agent-control-monitor-unread-bytes session "exec-1")))))
 
 (mevedel-deftest mevedel-agent-control-wake-root-user ()

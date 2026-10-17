@@ -12,8 +12,9 @@ buffer behavior for non-transcript surfaces.  Save-state enforcement clears
 the modified flag only after a modification; ordinary cursor movement does
 not force a mode-line redisplay, which can misplace the cursor on hidden
 Markdown at a wrapped line boundary.
-`mevedel-view-agent.el` owns agent transcript inspection, live agent status,
-and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
+`mevedel-view-agent.el` owns agent transcript inspection, live agent status
+rows, and targeted handle refresh. `mevedel-view-execution.el` owns the
+background-work panel. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
 `mevedel-view-control-transfer.el` owns cooperative transfer polling,
 presentation, commands, and view registration.
@@ -174,14 +175,14 @@ their own disclosures rather than becoming generic tool rows.
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
 
-Agent terminal results and Bash completions remain distinct. The result card
-contains the agent's final answer; a yielded execution produces one compact
-chronological completion breadcrumb in each receiving transcript, including a
-parent receiving a child's completion. The breadcrumb identifies the command
-and terminal outcome, attributes child work, and links to the original Bash
-output. It is not an expandable duplicate of the execution result. A command
-that finished before yielding has no breadcrumb. The model-facing mailbox
-payload and agent settlement remain unchanged.
+Agent terminal results and Bash completions remain distinct. Expanding an agent
+notice reveals its final answer, and the agent path opens its transcript.
+A yielded execution keeps its compact completion breadcrumb at the original
+command row, identifying the command and terminal outcome and linking to its
+output. Receiving transcripts also show an expandable chronological completion
+notice from the mailbox record, including a parent receiving a child's completion.
+Notices do not suppress origin breadcrumbs. A command that finished before yielding
+has no breadcrumb. Model-facing mailbox payloads and agent settlement are unchanged.
 
 Directive requests render in the ordinary session view as first-class turns.
 The directive header carries id, action, turn, and an exclusion badge; the
@@ -671,15 +672,21 @@ Hook-context expansion restores through the same renderer as interactive toggles
 so redraws retain one heading and the same body inset.
 Restoring an expanded system-reminder audit uses its ordinary disclosure renderer:
 one summary header and the same audit face survive both full and live redraws.
-Agent paths in launch handles and delivery cards use link highlighting.
-Delivery headers use `mevedel-view-mailbox-header`, a keyword face with no
-added bold weight. Completion checkmarks use the same success face as tool rows.
+Agent paths in launch handles use link highlighting. Delivery headers use
+`mevedel-view-mailbox-header`, a keyword face with no added bold weight.
 
-Agent-result cards read the canonical envelope's `outcome` through the shared
-mailbox parser: `completed` shows **✓ Finished**, `errored` shows **× Failed**,
-and `interrupted` shows **Stopped**. Missing or unknown outcomes show
-**Incomplete**, never inferred success. Saved transcripts reconstruct these
-labels without consulting the current agent registry or interpreting body prose.
+Background deliveries show subject-first one-line notices: **● Agent /root/name
+finished**, **● Background command "Run tests" completed (exit code 0)**,
+**● Monitor event: tick 1 · test ticker**, or **● Monitor "test ticker" stopped ·
+2 events**. Each Monitor event is a separate record and row in source order.
+RET expands the full record; collapsed notices have no line-count hint.
+Execution labels prefer the model-written description, falling back to the
+truncated command. Command notices and origin breadcrumbs share the terminal
+vocabulary completed, failed, stopped, or timed out; an agent result uses
+finished, failed, interrupted, or incomplete. Stops
+are neutral, not errors. Missing agent outcomes never imply success. These
+labels use structured envelope attributes, not body prose or the current agent
+registry, so saved transcripts reconstruct them without live execution state.
 
 Accepted reviewer `allow-once` decisions add one subdued **Auto-approved · once**
 hint to the affected tool header, with a bounded explanation on hover. The
@@ -695,9 +702,8 @@ Original Bash rows retain approval across execution yield and progress, while
 polling calls do not inherit that approval. Browser tool presentations carry
 the same bounded tooltip and row-local hint, preserving disclosure choices.
 
-Non-empty agent-message and agent-result mailbox bodies start collapsed by
-default; `mevedel-view-mailbox-collapse-line-threshold` can raise that
-threshold.
+Background notice bodies always start collapsed. Ordinary message bodies start
+collapsed above `mevedel-view-mailbox-collapse-line-threshold`.
 
 Long user prompts fold to a one-line summary — the truncated first line plus
 a hidden line count such as `Please analyze this trace... (+83 lines)` —
@@ -735,18 +741,14 @@ contains, so that range spans every member, including a call that ends after
 its split-out completion breadcrumb. Nested compound calls retain each descendant's row identity and
 nesting depth: toggling one removes its descendants with it while preserving
 sibling rows, so repeated expansion never accumulates copies.
-Delivered agent messages and agent results inside an activity run join the
-same group as independently expandable cards; `received N messages` counts
-them separately from tools. Yielded Bash completions use compact linked
-breadcrumbs instead of additional expandable mailbox cards, and do not
-repeat command output. Inside an activity run they fold into the group as
-counted completions, such as `3 commands finished, 1 failed`, and show as
-linked rows when it expands; the group row keeps them identifiable while
-folded, so a later delivery of the same completion does not add another
-line. A delivery of the transcript's own command repeats the breadcrumb
-recorded when it finished and is not counted again. Completions no group
-absorbs remain standalone lines. Sender links and mailbox collapse thresholds for agent
-messages and answers stay the same. A newly formed group stays open when one
+Ordinary agent messages inside an activity run join the same group as
+independently expandable cards; `received N messages` counts them separately
+from tools. Background notices, including agent results, remain separate rows
+and split surrounding activity groups. The original yielded Bash row retains
+its compact linked completion breadcrumb, independently of the later delivery
+notice. Origin breadcrumbs can fold into activity groups as counted completions,
+such as `3 commands completed, 1 failed`, and show linked rows when expanded.
+A newly formed group stays open when one
 of its rows is already open, so grouping
 does not hide text the reader is inspecting. An explicit group fold wins over
 its children's states. Rows that demand individual presentation — agent
@@ -1414,34 +1416,64 @@ draft-preserving view machinery as root redraws. `/btw` requires an accepted
 parent prompt and is available only from the live root chat or Plan composer;
 directive, historical, agent, and side scopes cannot create one.
 
-The status zone groups yielded Bash commands and Monitors as **Background work**.
-Click or RET anywhere on an item row, including its indentation or line end,
-expands a bounded output preview in place; activating it again collapses it.
-Only one item is expanded at a time. The preview is not another transcript or
-process owner: it projects execution snapshots and passive progress/terminal
-events without consuming model output. It shows at most three output lines,
-each limited to 100 columns. It labels its output bounds and distinguishes
-no output yet from unavailable output. An expanded item stays visible after
-completion until collapsed or replaced, so settlement does not close something
-the user is reading. Closed completed items leave the status area; their durable
-results remain in the conversation.
+The status zone shows one **background work** panel for everything that runs
+beside the conversation: active agents, yielded Bash commands, and Monitors.
+Finished items leave the panel at once; their transcript notices take over.
 
-The expanded item has explicit **Full output**, **Show in conversation**, and
-live-only **Stop** actions. Full output opens a read-only inspection buffer;
+```text
+ ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──
+  ▸ Blocked   agent    /root/reviewer · waiting for permission
+  ▸ Running   agent    /root/counter · opus:medium
+  ▸ Running   bash     Run test suite
+  ▸ Watching  monitor  Server log errors · 3 events · until 08:40
+  [Manage]
+```
+
+The rule counts blocked agents (in a warning face), agents, commands and
+monitors, and ends with the panel's `[-]`/`[+]` collapse toggle; a collapsed
+panel keeps only the rule. Rows share one grammar: state, kind, name, then
+metadata. Needs-attention rows come first, then running agents, commands, and
+watchers. Nested agents indent under their parent. A Bash row shows the
+model-written `description` when present, else the command; a row owned by an
+agent names that owner. The footer progress line shows only the root turn's
+own activity and elapsed time; it never repeats these counts.
+
+Click or RET anywhere on a row, including its indentation or line end, expands
+it in place; activating it again collapses it. Only one row is expanded at a
+time. An expanded agent row shows its provider, model and effort with
+**Open transcript**, **Show in conversation** (the Agent call that started
+it), and **Interrupt**, which interrupts the agent's current turn and keeps it
+retained. An expanded command or Monitor row shows a bounded output preview.
+The preview is not another transcript or process owner: it projects execution
+snapshots and passive progress/terminal events without consuming model output.
+It shows at most three output lines, each limited to 100 columns. It labels its
+output bounds and distinguishes no output yet from unavailable output. An
+expanded execution stays visible after completion until collapsed or replaced,
+so settlement does not close something the user is reading.
+
+The expanded execution has explicit **Full output**, **Show in conversation**,
+and live-only **Stop** actions. Full output opens a read-only inspection buffer;
 Show in conversation reveals the original tool row, opening the owning agent's
 transcript when necessary. Settled agent views finish their scheduled projection
 before locating the row, so an idle agent is as navigable as a running one.
 The captured tool ID includes nested ToolCall children.
-The **All…** and overflow actions explicitly open the execution cockpit; blank
-space does nothing. The status area lists up to five live items plus the selected
-inspector when needed. Monitor expiry is a fixed timestamp, not a new countdown
-timer. Existing execution events refresh the preview through managed-zone
-reconciliation, preserving composer text, point, selection, and windows.
-Quiet progress that changes no visible row or preview text updates the selected
-facts without rebuilding the status area.
 
-The main cockpit's `Executions` entry and `/ps` still open the full management
-surface. Its Elapsed and Bytes columns sort by numbers rather than text.
+The panel lists up to five rows plus the expanded row when needed. Its last
+row holds the explicit controls: `[Show all N]` (then `[Show fewer]`) when rows
+overflow, which expands the panel in place, and `[Manage]`, which opens the
+background-work cockpit. Blank space does nothing. Monitor expiry is a fixed
+timestamp, not a new countdown timer. Existing execution events and agent
+state changes refresh the panel through managed-zone reconciliation,
+preserving composer text, point, selection, and windows. Quiet progress that
+changes no visible row or preview text updates the selected facts without
+rebuilding the status area.
+
+The background-work cockpit (`[Manage]`, the main cockpit's `Background work`
+entry, or `/ps`) lists active agents and every live managed execution of the
+session, including foreground work. `k` stops an execution or interrupts an
+agent's turn, `C-c C-c` interrupts either, `i` sends a line to a PTY, and `o`
+opens an agent's transcript or an execution's artifact. Elapsed sorts by
+number rather than text.
 
 ## Live browser collaboration
 
@@ -1577,8 +1609,9 @@ retain their domain text and actions.
 Separator rules use a common width, four columns less than the widest window
 displaying the view, with a ten-column minimum. Labels are truncated when
 necessary to leave room for the rule, including in narrow windows. If truncation
-would hide the agent panel's `[+]`/`[-]` control, it replaces the rule's leading
-three dashes so the control remains clickable without changing the width.
+would hide the background-work panel's `[+]`/`[-]` control, it replaces the
+rule's leading three dashes so the control remains clickable without changing
+the width.
 
 A fragment is keyed by managed region identity, namespace, and id. It may
 also carry priority, label/body text, keymap/help text, activation metadata,
@@ -2186,12 +2219,16 @@ I'll work on the changes.
 
   Agent: verifier -- review spinner layout [running · 1 call]
 
+ ─── background work · 1 agent [-] ──────────────────────────────
+  ▸ Running   agent    /root/verifier · opus:high
+  [Manage]
+
 -- 1 permission prompt pending --------------------------------
 
 Allow Bash?
   npx @emacs-eask/cli test ert test/test-mevedel-view.el
 
-Waiting for input · 1m 08s · 1 agent running
+Waiting for input · 1m 08s
 
 [Plan · ask]
 >
@@ -2219,6 +2256,11 @@ I'll update the docs, run the focused checks, and ask before any risky action.
   Agent: explorer -- audit zone terminology [running · 3 calls]
   Agent: verifier -- check spinner ordering [blocked · waiting]
 
+ ─── background work · 1 blocked · 2 agents [-] ─────────────────
+  ▸ Blocked   agent    /root/verifier · waiting for permission
+  ▸ Running   agent    /root/explorer · opus:medium
+  [Manage]
+
 -- 1 question · 1 permission · 2 pending inputs ---------------
 
 Ask
@@ -2235,7 +2277,7 @@ Follow-ups
   1. [+] Also include a full mockup with agents and permissions.
   Manage queue… (pauses delivery; C-c C-e)
 
-Waiting for input · 2m 14s · 1 agent blocked · 1 agent running
+Waiting for input · 2m 14s
 
 [auto]
 > I am drafting a follow-up while the request runs.
@@ -2416,10 +2458,10 @@ pending-input delivery, leaving directive planning, resolving readiness or
 recovery holds, and successfully finishing manual compaction also offer held
 follow-ups first, then background mail. Those release edges do not start a
 Goal continuation when neither input remains. No live
-root view means no wake. The turn's header reads `Background event` instead
-of `You`: a hidden attribution record, the same mechanism a collaboration
-guest's `NAME (guest)` heading uses, keeps it across rerender, archive, and
-restore. Its prompt is fixed and says it is not a user message, and the
+root view means no wake. A hidden attribution record suppresses both the wake
+heading and its trigger prompt in the view, including after rerender, archive,
+and restore. The visible turn begins with its background notice lines. Its
+model-facing prompt is fixed and says it is not a user message, and the
 permission reviewer reads it as the latest user turn on those terms; the
 reported output arrives as mailbox records, which never count as user input.
 

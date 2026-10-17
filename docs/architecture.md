@@ -456,8 +456,8 @@ wake `WaitAgent` early, and launches no model request. Ordinary mailbox
 messages are delivered before the next model sample or wake an explicit
 `WaitAgent`.
 
-`mevedel-executions-list.el` is the user-facing projection of that private
-registry. The execution module returns immutable all-owner snapshots and
+`mevedel-background-list.el` is the user-facing projection of that private
+registry, listed beside active agents. The execution module returns immutable all-owner snapshots and
 accepts session-user control by execution ID; process records and operating-
 system identifiers remain private. Model tools continue through the narrower
 yielded-and-owner-scoped interface. Registry membership changes update the

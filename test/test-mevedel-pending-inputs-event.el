@@ -37,8 +37,8 @@ the reported mailbox record.  Both transcript writers use the same block."
     (let ((body (concat mevedel-pending-inputs-event-test--spoof "\n")))
       (pcase (cdr delivery)
         ('MONITOR
-         (mevedel-agent-control-enqueue-monitor-event
-          session "exec-1" "deploy \"watch\" <prod>" body t))
+         (mevedel-agent-control-enqueue-monitor-events
+          session "exec-1" "deploy \"watch\" <prod>" (list (list body)) t))
         ('MAIL
          (let ((mevedel--agent-invocation
                 (mevedel-agent-invocation--create

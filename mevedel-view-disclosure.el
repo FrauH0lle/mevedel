@@ -27,11 +27,6 @@
 ;; `mevedel-view'
 (defvar mevedel-view--display-map)
 
-;; `mevedel-view-agent'
-(declare-function mevedel-view-agent-status-toggle
-                  "mevedel-view-agent" ())
-(autoload 'mevedel-view-agent-status-toggle "mevedel-view-agent" nil t)
-
 ;; `mevedel-view-audit'
 (declare-function mevedel-view-audit-toggle-hook-audit
                   "mevedel-view-audit" ())
@@ -39,6 +34,10 @@
 
 ;; `mevedel-view-composer'
 (defvar mevedel-view--input-marker)
+
+;; `mevedel-view-execution'
+(declare-function mevedel-view-execution-toggle-panel
+                  "mevedel-view-execution" ())
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-mutate
@@ -563,9 +562,9 @@ this helper.  Source-backed transcript/tool disclosure remains owned by
            (get-text-property (point) 'mevedel-view-zone-collapsible))
       (mevedel-toggle-tasks)
       t)
-     ((and (eq namespace 'status) (eq id 'agents)
+     ((and (eq namespace 'status) (eq id 'background)
            (get-text-property (point) 'mevedel-view-zone-collapsible))
-      (mevedel-view-agent-status-toggle)
+      (mevedel-view-execution-toggle-panel)
       t))))
 
 (defun mevedel-view-disclosure--intent (source vtype collapsed function)
@@ -800,7 +799,9 @@ moves point onto the following row."
                   (backward-char))
                 (let ((hint
                        (propertize
-                        (mevedel-view-disclosure-mailbox-hint line-count)
+                        (if (get-text-property start 'mevedel-view-mailbox-notice)
+                            ""
+                          (mevedel-view-disclosure-mailbox-hint line-count))
                         'font-lock-face 'mevedel-view-attribution
                         'mevedel-view-mailbox-hint t
                         'mevedel-view-mailbox-card

@@ -104,10 +104,13 @@
 
 (defun mevedel-execution-transcript--status (facts)
   "Return visual status for terminal execution FACTS."
-  (if (memq (plist-get facts :outcome)
-            '(success no-match different false))
-      'success
-    'error))
+  (cond
+   ((memq (plist-get facts :outcome) '(success no-match different false))
+    'success)
+   ;; A requested stop is neutral; the outcome fact stays `failure'.
+   ((memq (plist-get facts :termination) '(stopped owner-stopped interrupted))
+    'cancelled)
+   (t 'error)))
 
 (defun mevedel-execution-transcript-terminal-render-data (event)
   "Return durable terminal render data projected from EVENT."

@@ -20,9 +20,13 @@ processes and spools. Callers do not inspect process records or timers.
 The initiating Bash row owns output and execution status. Successful empty-input
 polls do not add visible rows; actual input, stops, and failed control operations
 remain visible, and all tool results remain model-visible and inspectable in
-execution history. An execution that actually yielded gets one durable,
-chronological completion breadcrumb per receiving transcript, independent of
-whether completion was collected by polling or delivered through a mailbox.
+execution history. An execution that actually yielded gets one durable
+completion breadcrumb at its original row, independent of whether completion
+was collected by polling or delivered through a mailbox; receiving transcripts
+show a separate one-line background notice built from the mailbox record's
+structured opening-tag attributes (never payload text). Command notices and
+origin breadcrumbs use completed, failed, stopped, and timed out. A stop is
+neutral in the view while the outcome fact stays `failure`.
 The breadcrumb links to the original row or retained evidence and does not
 duplicate output. Inside an activity run it folds into that run's group as a
 counted completion rather than a line of its own: standalone breadcrumbs
@@ -35,9 +39,11 @@ transcript receives it at its end. Appending at the end during a running turn
 put every completion behind the turn's final answer: one session stacked
 twelve completions, emitted over eighty minutes, just before the next prompt,
 where no activity group could count them. Running
-background commands and monitors are listed transiently in the view's status
-zone. Activating a row expands one local bounded inspector; transcript navigation,
-full output, stopping, and opening the management list are explicit actions.
+background commands and monitors are listed transiently in the view's
+background-work panel, together with active agents; finished items leave it.
+Activating a row expands one local bounded inspector; transcript navigation,
+full output, stopping, and opening the background-work cockpit are explicit
+actions.
 The inspector projects existing execution snapshots and passive events without
 claiming output, and retains only the selected item's final presentation until
 collapsed or replaced. It adds no process registry or execution timer.
@@ -77,7 +83,8 @@ Structured execution facts keep exit and outcome separate from command output.
 UI progress is transient; completion updates durable presentation and reaches
 its captured owner's mailbox. A root-owned yielded command that ends on its own
 also wakes an idle root model: the harness starts one
-"Background event" turn whose fixed prompt says it is not a user message, and
+"Background event" turn whose fixed prompt says it is not a user message (the
+view hides the heading and prompt and starts with the notice lines), and
 the result reaches the model through the ordinary mailbox delivery. A stop by
 the user or the model does not wake it, a result the model already read does
 not wake it again, and agent-owned completions stay with their invocation.
@@ -100,6 +107,25 @@ of the same command remain independently navigable.
 
 ## Decision history
 
+- **One background-work panel with agents (2026-10).** Commands and monitors
+  had their own status block, with an `All…` link to an executions-only
+  cockpit, while agents had a separate block with a `[-]` toggle and handle
+  rows; the footer repeated agent counts. A live test with an agent, a command
+  and a monitor showed three presentations of one concept. The user chose one
+  panel with one row grammar, counts in its rule only, overflow expanded in
+  place, and a `[Manage]` row control instead of `All…` in the rule: `All…`
+  opened a list that no longer matched the panel and crowded the header. The
+  executions cockpit became the background-work cockpit listing agents too,
+  and agents gained a user Interrupt.
+- **Subject-first notices from structured attributes (2026-10).** Deliveries
+  were shown as `✉ Monitor: … [1 line collapsed]` cards under a visible
+  "Background event" heading, and the view recovered facts by parsing payload
+  text, which quoted output could spoof; a user Stop also showed as a red ×.
+  The producer now emits one `MONITOR` record per event and `MONITOR_TERMINAL`
+  and `EXECUTION` openers with structural attributes, and the view renders
+  short notices (`● Monitor event: …`, `● Background command "…" completed
+  (exit code 0)`) without the wake heading, following Claude Code's background
+  notices. Stops render neutral.
 - **Share the wake path with agent reports (2026-10).** Late root-directed
   agent messages and results were stranded until the user's next turn even
   though background Bash and Monitor already woke the idle root. They now use

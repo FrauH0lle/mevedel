@@ -694,10 +694,8 @@ fire-count and payload."
       (with-current-buffer data-buf (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
-        (mevedel-view-zone-set-collapse-state
-         mevedel-view--status-agent-collapse-key nil)
         (mevedel-view--render-agent-status)
-        (should (string-search "Running /root/partner · opus:high"
+        (should (string-search "Running   agent    /root/partner · opus:high"
                                (buffer-string))))
       (cl-letf (((symbol-function 'mevedel-agent-conversation-refresh)
                  (lambda (value)
@@ -710,7 +708,7 @@ fire-count and payload."
         (mevedel-agent-exec-acknowledge-provider invocation "opus" nil)
         (should (= 1 refreshes)))
       (with-current-buffer view-buf
-        (should (string-search "Running /root/partner · opus" (buffer-string)))
+        (should (string-search "Running   agent    /root/partner · opus" (buffer-string)))
         (should-not (string-search "opus:high" (buffer-string)))
         (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 3)))))))

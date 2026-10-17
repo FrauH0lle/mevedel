@@ -3,7 +3,8 @@
 ;;; Commentary:
 
 ;; Focused coverage for the collaboration guest heading lookup in the
-;; rendered view, and the "Background event" heading that shares it.
+;; rendered view, and the background-event turn, which renders no heading or
+;; trigger text, that shares it.
 
 ;;; Code:
 
@@ -51,7 +52,7 @@
                      nil (current-buffer)))))))
 
 (mevedel-deftest mevedel-view--insert-user-message
-  (:doc "a background-event turn reads as such live and after a full rerender")
+  (:doc "a background-event turn renders no heading or trigger live and after a full rerender")
   (mevedel-view-test--with-buffers
     (let ((trigger "Background work you started has reported.")
           (attribution (list :type 'background-event)))
@@ -65,12 +66,15 @@
           (mevedel-view--insert-user-message trigger nil nil nil nil nil attribution)
           (let ((history (buffer-substring-no-properties
                           (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "^Background event$" history))
+            (should-not (string-match-p "Background event" history))
+            (should-not (string-match-p (regexp-quote trigger) history))
             (should-not (string-match-p "^You$" history)))
           (mevedel-view--full-rerender)
           (let ((history (buffer-substring-no-properties
                           (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "^Background event$" history))
+            (should-not (string-match-p "Background event" history))
+            (should-not (string-match-p (regexp-quote trigger) history))
+            (should (string-match-p "Handled\\." history))
             (should-not (string-match-p "^You$" history))
             (should-not (string-match-p "(guest)" history)))
           (should (equal "> Keep this draft\nsecond line" (mevedel-view--input-text)))

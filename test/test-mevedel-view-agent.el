@@ -104,7 +104,7 @@
                   (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
                   (should (= (point) (+ (mevedel-view--input-start) 3)))
                   (should (string-match-p "Parent response" (buffer-string)))
-                  (should (string-match-p "Running /root/inspected" (buffer-string))))))
+                  (should (string-match-p "Running   agent    /root/inspected" (buffer-string))))))
           (when (and (buffer-live-p agent-view) (not (eq agent-view view-buf)))
             (kill-buffer agent-view))
           (when (buffer-live-p agent-data) (kill-buffer agent-data)))))))
@@ -334,7 +334,7 @@
                              (funcall help (selected-window) header pos)
                            help))))))))
 
-(mevedel-deftest mevedel-view--agent-status-row-rendering
+(mevedel-deftest mevedel-view--render-agent-status
   (:doc "roster metadata refresh preserves a multiline leading-> composer draft")
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-view-agent-test--session))
@@ -345,22 +345,21 @@
       (with-current-buffer data-buf (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft "> keep this\nand this" 4)
-        (mevedel-view-zone-set-collapse-state mevedel-view--status-agent-collapse-key nil)
         (mevedel-view--render-agent-status)
-        (should (string-search "Running /root/partner · opus:high" (buffer-string)))
+        (should (string-search "Running   agent    /root/partner · opus:high" (buffer-string)))
         (setf (mevedel-agent-record-model-metadata record)
               '(:backend "Claude Code" :model "sonnet"))
         (mevedel-view--render-agent-status)
-        (should (string-search "Running /root/partner · sonnet" (buffer-string)))
+        (should (string-search "Running   agent    /root/partner · sonnet" (buffer-string)))
         (should-not (string-search "opus:high" (buffer-string)))
         (should (equal "> keep this\nand this" (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
-        (let ((rendering (mevedel-view--agent-status-row-rendering
-                          (car (mevedel-view--agent-status-collect)))))
-          (should (string-search "Provider  Claude Code" (plist-get rendering :body))))
-        (mevedel-view-zone-set-collapse-state mevedel-view--status-agent-collapse-key t)
+        (setq mevedel-view-execution--selected-agent "/root/partner")
         (mevedel-view--render-agent-status)
-        (should (string-search "1 agent: 1 running" (buffer-string)))
+        (should (string-search "    Provider  Claude Code" (buffer-string)))
+        (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key t)
+        (mevedel-view--render-agent-status)
+        (should (string-search "background work · 1 agent [+]" (buffer-string)))
         (should-not (string-search "sonnet" (buffer-string)))
         (should (equal "> keep this\nand this" (mevedel-view--input-text)))))))
 
@@ -1054,29 +1053,6 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
-(mevedel-deftest mevedel-view--agent-status-counts
-  (:doc "counts active retained records without transcript inference")
-  ,test
-  (test)
-  (mevedel-view-test--with-buffers
-    (let ((session (mevedel-view-agent-test--session)))
-      (setf (mevedel-session-agent-registry session)
-            (list
-             (cons "/root/run"
-                   (mevedel-view-agent-test--record "/root/run" 'running))
-             (cons "/root/wait"
-                   (mevedel-view-agent-test--record "/root/wait" 'waiting))
-             (cons "/root/blocked"
-                   (mevedel-view-agent-test--record
-                    "/root/blocked" 'permission-blocked))
-             (cons "/root/done"
-                   (mevedel-view-agent-test--record "/root/done" 'idle))))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (should (equal '(:blocked 2 :running 1)
-                       (mevedel-view--agent-status-counts)))))))
-
 (mevedel-deftest mevedel-view--agent-status-collect
   (:doc "derives live rows and hierarchy solely from the retained registry")
   ,test
@@ -1090,7 +1066,8 @@
            (child-inv (mevedel-agent-invocation--create
                        :description "Verify details"
                        :call-count 1
-                       :started-at (current-time))))
+                       :started-at (current-time)
+                       :parent-tool-use-id "agent-call")))
       (setf (mevedel-session-agent-registry session)
             (list
              (cons "/root/spec_review"
@@ -1111,7 +1088,10 @@
                          (mapcar (lambda (row) (plist-get row :path)) rows)))
           (should (eq 'running (plist-get (car rows) :status)))
           (should (eq 'waiting (plist-get (cadr rows) :status)))
-          (should (= 1 (plist-get (cadr rows) :depth)))))))
+          (should (eq 'waiting (plist-get (cadr rows) :activity)))
+          (should (= 1 (plist-get (cadr rows) :depth)))
+          (should (equal "/root/spec_review" (plist-get (cadr rows) :parent-path)))
+          (should (equal "agent-call" (plist-get (cadr rows) :tool-use-id)))))))
 
   :doc "active agents remain listed when their launch handle is in history"
   (mevedel-view-test--with-buffers
@@ -1132,8 +1112,8 @@
                        (mapcar (lambda (row) (plist-get row :path))
                                (mevedel-view--agent-status-collect))))))))
 
-(mevedel-deftest mevedel-view-agent-status-fragment
-  (:doc "renders canonical paths and preserves active composer drafts")
+(mevedel-deftest mevedel-view-agent-status-panel
+  (:doc "agents render in the background-work panel and preserve composer drafts")
   ,test
   (test)
   (mevedel-view-test--with-buffers
@@ -1153,49 +1133,24 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p
-                   (regexp-quote "1 agent: 1 running [-]") text))
-          (should (string-match-p "\u2500\n  \u25cf Running /root/spec_review" text))
+                   (regexp-quote "background work · 1 agent [-]") text))
+          (should (string-match-p "─\n  ▸ Running   agent    /root/spec_review" text))
           (should (string-suffix-p "> first line\nsecond line" text)))
-        (goto-char (point-min))
-        (search-forward "Running /root/spec_review")
-        (should (equal path
-                       (get-text-property
-                        (1- (point)) 'mevedel-view-agent-path)))
-        (mevedel-view-agent-status-toggle)
+        (mevedel-view-execution-toggle-panel)
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p
-                   (regexp-quote "1 agent: 1 running [+]") text))
-          (should-not (string-match-p "Running /root/spec_review" text))
+                   (regexp-quote "background work · 1 agent [+]") text))
+          (should-not (string-match-p "/root/spec_review" text))
           (should (string-suffix-p "> first line\nsecond line" text)))
-        (mevedel-view-agent-status-toggle)
+        (mevedel-view-execution-toggle-panel)
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p
-                   (regexp-quote "1 agent: 1 running [-]") text))
-          (should (string-match-p "Running /root/spec_review" text))
+                   (regexp-quote "background work · 1 agent [-]") text))
+          (should (string-match-p "Running   agent    /root/spec_review" text))
           (should (string-suffix-p
                    "> first line\nsecond line" text)))))))
-
-(mevedel-deftest mevedel-view--agent-status-string
-  (:doc "narrow rules retain the clickable toggle even when their label is clipped")
-  (with-temp-buffer
-    (dolist (width '(10 20 30 80))
-      (cl-letf (((symbol-function 'get-buffer-window-list)
-                 (lambda (&rest _) nil))
-                ((symbol-function 'window-width)
-                 (lambda (&optional _) width)))
-        (dolist (expanded '(nil t))
-          (let* ((toggle (if expanded "[-]" "[+]"))
-                 (header (mevedel-view--agent-status-string
-                          '((:status running) (:status blocked)) expanded))
-                 (position (string-search toggle header)))
-            (should position)
-            (should (= (max 10 (- width 4))
-                       (string-width (string-trim-right header))))
-            (should (eq #'mevedel-view-activate-at-point
-                        (lookup-key (get-text-property position 'keymap header)
-                                    [mouse-1])))))))))
 
 (mevedel-deftest mevedel-view--insert-attribution
   (:doc "uses canonical paths as transcript click targets")

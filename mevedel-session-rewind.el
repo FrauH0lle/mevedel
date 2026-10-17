@@ -175,7 +175,11 @@
 
 ;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery-record-failure "mevedel-session-recovery" (session reason recovery-path))
+(declare-function mevedel-session-recovery-refresh-session-buffers
+                  "mevedel-session-recovery" (session))
 (autoload 'mevedel-session-recovery-record-failure
+  "mevedel-session-recovery")
+(autoload 'mevedel-session-recovery-refresh-session-buffers
   "mevedel-session-recovery")
 
 ;; `mevedel-structs'
@@ -1393,7 +1397,7 @@ step that fails afterwards has to name its own frame."
       (set-buffer-modified-p nil)
       (set-visited-file-modtime)))
   (mevedel-session-persistence-notify-session-event
-   session 'reset-agent-ephemeral-state)
+   session 'reset-status-panel)
   (mevedel-session-persistence-notify-session-event
    session 'rerender))
 

@@ -173,6 +173,24 @@
 (mevedel-deftest mevedel-execution--user-snapshot ()
   ,test
   (test)
+  :doc "Bash descriptions reach facts and consumer snapshots"
+  (let* ((spool (make-temp-file "mevedel-description-"))
+         (record (mevedel-execution--record-create
+                 :execution-id "exec-description" :kind 'bash
+                 :description "Run tests" :started-at (float-time)
+                 :child (mevedel-execution-process--child-create
+                         :started-at (float-time) :spool-path spool)
+                 :origin (mevedel-execution--origin-create
+                          :owner "/root" :tool-use-id "bash-description"
+                          :tool-args '(:command "make test")))))
+    (unwind-protect
+        (progn
+          (should (equal "Run tests"
+                         (plist-get (mevedel-execution--facts record) :description)))
+          (let ((snapshot (mevedel-execution--user-snapshot record)))
+            (should (equal "Run tests" (plist-get snapshot :description)))
+            (should (equal "make test" (plist-get snapshot :command)))))
+      (delete-file spool)))
   :doc "live guest snapshots retain cumulative tail truncation independent of poll omissions"
   (let ((mevedel-execution-inline-output-limit 6)
         (record (mevedel-execution--record-create

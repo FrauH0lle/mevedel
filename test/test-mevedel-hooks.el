@@ -3079,10 +3079,12 @@
                        "Running PreToolUse hook"
                        (buffer-substring-no-properties
                         (point-min) mevedel-view--input-marker)))
-              (should (string-match-p
-                       "1 agent running"
-                       (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker))))
+              ;; Agents are counted by the background-work panel, not
+              ;; the progress footer.
+              (should-not (string-match-p
+                           "agent"
+                           (buffer-substring-no-properties
+                            (point-min) mevedel-view--input-marker))))
             (funcall handler-finish nil)
             (with-current-buffer view-buf
               (should (equal "> quoted\nsecond line"

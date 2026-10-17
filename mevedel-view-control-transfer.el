@@ -81,10 +81,8 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
-;; `mevedel-view-agent'
-(declare-function mevedel-view-reset-agent-ephemeral-state
-                  "mevedel-view-agent" (&optional view-buffer))
-(autoload 'mevedel-view-reset-agent-ephemeral-state "mevedel-view-agent")
+;; `mevedel-view-execution'
+(declare-function mevedel-view-execution-reset "mevedel-view-execution" ())
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-load "mevedel-view-history"
@@ -245,8 +243,8 @@ transfer in flight wants a cadence the idle session does not."
          (mevedel-view-rerender))
         ('rebase-data-sources
          (mevedel-view--rebase-data-sources (car args)))
-        ('reset-agent-ephemeral-state
-         (mevedel-view-reset-agent-ephemeral-state))
+        ('reset-status-panel
+         (mevedel-view-execution-reset))
         ('refresh-status
          (when-let* ((data (mevedel-view--control-transfer-data-buffer)))
            (with-current-buffer data

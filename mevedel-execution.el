@@ -1063,6 +1063,12 @@ is."
      (format "\n[%d more event lines in the output file]\n"
              (mevedel-execution--record-monitor-omitted record)))))
 
+(defun mevedel-execution--monitor-batch (record)
+  "Return RECORD's pending framed lines and omitted count as event properties."
+  (list :monitor-lines
+        (reverse (copy-sequence (mevedel-execution--record-monitor-lines record)))
+        :monitor-omitted (mevedel-execution--record-monitor-omitted record)))
+
 (defun mevedel-execution--monitor-flush (record)
   "Secure RECORD's pending batch in its mailbox, retaining it on failure."
   (setf (mevedel-execution--record-monitor-timer record) nil)
@@ -1071,7 +1077,9 @@ is."
               (eq (mevedel-execution--record-delivery-state record) 'discarded))
     (let ((body (mevedel-execution--monitor-body record)))
       (unless (string-empty-p body)
-        (let ((event (mevedel-execution--event record 'monitor-batch :body body)))
+        (let ((event (apply #'mevedel-execution--event
+                            record 'monitor-batch :body body
+                            (mevedel-execution--monitor-batch record))))
           (when (mevedel-execution--deliver-mailbox-event record event)
             (setf (mevedel-execution--record-monitor-lines record) nil
                   (mevedel-execution--record-monitor-bytes record) 0
@@ -1502,8 +1510,13 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
           record 'terminal
           :delivery delivery
           :observation observation
-          :monitor-output (when (eq (mevedel-execution--record-kind record) 'monitor)
-                            (mevedel-execution--monitor-body record))
+          :monitor-lines
+          (when (eq (mevedel-execution--record-kind record) 'monitor)
+            (plist-get (mevedel-execution--monitor-batch record)
+                       :monitor-lines))
+          :monitor-omitted
+          (when (eq (mevedel-execution--record-kind record) 'monitor)
+            (mevedel-execution--record-monitor-omitted record))
           :whole-output-truncated-p
           (> (or (mevedel-execution--record-output-chars record) 0)
              mevedel-execution-inline-output-limit)

@@ -715,7 +715,8 @@ connection charges for, so the program path is proved here too."
                  (bodies (concat
                           (mapconcat (lambda (e) (or (plist-get e :body) ""))
                                      events "")
-                          (or (plist-get terminal :monitor-output) ""))))
+                          (mapconcat #'identity
+                                     (plist-get terminal :monitor-lines) "\n"))))
             (should (string-match-p "event" bodies))
             (should-not (string-match-p "warn" bodies))
             ;; The output file still carries stderr.

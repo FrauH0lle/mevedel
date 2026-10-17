@@ -77,7 +77,7 @@
 
 ;; `mevedel-view-audit'
 (declare-function mevedel-view-audit-mailbox-breadcrumb
-                  "mevedel-view-audit" (text sender))
+                  "mevedel-view-audit" (text sender open-tag))
 (autoload 'mevedel-view-audit-mailbox-breadcrumb "mevedel-view-audit")
 
 ;; `mevedel-view-render'
@@ -959,7 +959,7 @@ mailboxes are not guest completion records."
         (mevedel-view-audit-mailbox-breadcrumb
          (buffer-substring-no-properties
           (plist-get block :body-start) (plist-get block :body-end))
-         (plist-get block :id))))))
+         (plist-get block :id) open)))))
 
 (defun mevedel-collaboration--forwarded-execution-record (completion)
   "Project trusted COMPLETION as an output-free linked guest breadcrumb."

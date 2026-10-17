@@ -32,8 +32,11 @@
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-transcript'
+(declare-function mevedel-transcript--mailbox-any-block-at-point
+                  "mevedel-transcript" (limit))
 (declare-function mevedel-transcript-segments "mevedel-transcript"
                   (start end))
+(autoload 'mevedel-transcript--mailbox-any-block-at-point "mevedel-transcript")
 
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair-format-path
@@ -328,7 +331,7 @@ When EXPANDED is non-nil, include record details."
      ;; disclosure line.
      "")
     ('background-event
-     ;; Likewise rendered as the "Background event" turn heading.
+     ;; The generated wake heading and trigger are hidden in the view.
      "")
     ('prompt-rewrite
      (concat
@@ -445,22 +448,23 @@ rewrite the retained live tail and force a whole-turn rebuild per update."
   "Return execution breadcrumb RECORD's terminal status word."
   (let* ((facts (plist-get record :facts))
          (termination (plist-get facts :termination)))
-    (cond ((eq termination 'signaled) "Signaled")
-          ((memq termination '(stopped interrupted cancelled owner-stopped))
+    (cond ((memq termination '(stopped interrupted cancelled owner-stopped))
            "Stopped")
+          ((memq termination '(timeout timed-out expired)) "Timed out")
           ((not (memq (plist-get facts :outcome)
                       '(success no-match different false)))
            "Failed")
-          (t "Finished"))))
+          (t "Completed"))))
 
 (defun mevedel-view-audit--breadcrumb-label (record)
   "Return the compact terminal label for execution breadcrumb RECORD."
   (let* ((facts (plist-get record :facts))
          (termination (plist-get facts :termination))
          (status (mevedel-view-audit-breadcrumb-status record))
-         (failed (not (equal status "Finished")))
+         (failed (equal status "Failed"))
          (code (plist-get facts :exit-code))
-         (command (or (plist-get record :command)
+         (command (or (plist-get facts :description)
+                      (plist-get record :command)
                       (plist-get facts :command) "Bash"))
          (command (replace-regexp-in-string "[\n\r\t]+" " " command))
          (owner (plist-get record :owner))
@@ -499,18 +503,22 @@ rewrite the retained live tail and force a whole-turn rebuild per update."
        start (point) 'execution-breadcrumb))))
 
 (defun mevedel-view-audit-mailbox-completion (text)
-  "Return the execution completion delivered by the mailbox block TEXT."
-  (when-let* ((start (and (string-match "<agent-message\\([^>]*\\)>" text)
-                           (match-end 0)))
-              (attributes (match-string 1 text))
-              ((string-match-p "type=\"EXECUTION\"" attributes))
-              (sender (and (string-match "sender=\"\\([^\"]+\\)\""
-                                         attributes)
-                           (match-string 1 attributes)))
-              (finish (string-match "</agent-message>" text start))
-              (body (substring text start finish))
-              (record (mevedel-view-audit-mailbox-breadcrumb body sender)))
-    (plist-put record :delivery-body body)))
+  "Return the execution facts delivered by the mailbox block TEXT.
+Only the structural opener supplies identity and terminal facts; the body
+is retained verbatim as evidence, never interpreted as metadata."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (skip-chars-forward " \t\r\n")
+    (when-let* ((block (mevedel-transcript--mailbox-any-block-at-point (point-max)))
+                ((eq (plist-get block :kind) 'agent-message))
+                (body (buffer-substring-no-properties
+                       (plist-get block :body-start) (plist-get block :body-end)))
+                (record (mevedel-view-audit-mailbox-breadcrumb
+                         body (plist-get block :id)
+                         (buffer-substring-no-properties
+                          (plist-get block :open-start) (plist-get block :open-end)))))
+      (plist-put record :delivery-body body))))
 
 (defun mevedel-view-audit--projected-in-p (record start limit &optional object)
   "Return non-nil if OBJECT from START to LIMIT projects RECORD's completion.
@@ -591,7 +599,8 @@ execution, so parent and child may each display their own breadcrumb."
 
 (defun mevedel-view-audit--archived-breadcrumbs (session descriptor)
   "Return (EXECUTION-ID . OWNER) for each breadcrumb in SESSION's DESCRIPTOR.
-Count audit records and mailbox completions.  Every streamed update asks
+Count only origin audit records, not independent mailbox notices.
+Every streamed update asks
 again for each fresh breadcrumb in the live turn; rereading and reparsing
 each archive per question made it most of a long session's render cost.
 Results are kept in the asking view until the archive's content identity
@@ -617,21 +626,9 @@ changes."
                 (save-restriction
                   (widen)
                   (setq keys
-                        (append
-                         (mapcar key (mevedel-transcript-audit-records
-                                      (buffer-substring (point-min) (point-max))
-                                      'execution-breadcrumb))
-                         (delq nil
-                               (mapcar
-                                (lambda (segment)
-                                  (when-let* (((eq (car segment) 'mailbox))
-                                              (completion
-                                               (mevedel-view-audit-mailbox-completion
-                                                (buffer-substring-no-properties
-                                                 (cadr segment) (caddr segment)))))
-                                    (funcall key completion)))
-                                (mevedel-transcript-segments
-                                 (point-min) (point-max))))))))
+                        (mapcar key (mevedel-transcript-audit-records
+                                     (buffer-substring (point-min) (point-max))
+                                     'execution-breadcrumb)))))
             (kill-buffer older))
           (when identity
             (puthash identity keys cache))
@@ -1054,39 +1051,39 @@ evidence or an explicit absence."
     (mevedel-view-audit-show-result
      (or record (list :execution-id execution-id)))))
 
-(defun mevedel-view-audit-mailbox-breadcrumb (text sender)
-  "Build a forwarded completion from EXECUTION mailbox TEXT and SENDER.
-The mailbox remains authoritative model input; its view projects the
-terminal facts and retained bounded payload without a second output card."
-  (when (string-match "<bash-execution[^<>]*/>[[:space:]]*\\'" text)
-    (condition-case nil
-        (let ((xml (match-string 0 text))
-              (output (string-trim-right
-                       (substring text 0 (match-beginning 0)))))
-          (with-temp-buffer
-          (insert xml)
-          (let* ((attributes (cadr (car (xml-parse-region (point-min) (point-max)))))
-                 (id (alist-get 'execution_id attributes))
-                 (code (alist-get 'exit_code attributes))
-                 (output-bytes (alist-get 'output_bytes attributes))
-                 (omitted (alist-get 'omitted_output_bytes attributes))
-                 (termination (alist-get 'termination attributes))
-                 (outcome (alist-get 'outcome attributes))
-                 (command (alist-get 'command attributes))
-                 (path (alist-get 'output_path attributes)))
-            (when id
-              (list :type 'execution-breadcrumb :execution-id id :owner sender
-                    :command (or command "Bash")
-                    :facts (list :outcome (and outcome (intern outcome))
-                                 :termination (and termination (intern termination))
-                                 :exit-code (and code (string-to-number code))
-                                 :output-bytes (and output-bytes
-                                                    (string-to-number output-bytes))
-                                 :omitted-output-bytes (and omitted
-                                                            (string-to-number omitted))
-                                 :output-path path
-                                 :execution-output output))))))
-      (error nil))))
+(defun mevedel-view-audit-mailbox-breadcrumb (text sender open-tag)
+  "Build execution evidence from mailbox TEXT, SENDER and OPEN-TAG.
+The structural OPEN-TAG alone supplies identity and terminal facts.  TEXT
+is retained verbatim, including any output that resembles metadata."
+  (condition-case nil
+      (with-temp-buffer
+        (insert open-tag "</agent-message>")
+        (let* ((node (car (xml-parse-region (point-min) (point-max))))
+               (attributes (cadr node))
+               (id (alist-get 'execution_id attributes))
+               (code (alist-get 'exit_code attributes))
+               (output-bytes (alist-get 'output_bytes attributes))
+               (omitted (alist-get 'omitted_output_bytes attributes))
+               (termination (alist-get 'termination attributes))
+               (outcome (alist-get 'outcome attributes))
+               (command (alist-get 'command attributes))
+               (path (alist-get 'output_path attributes)))
+          (when (and (eq (car node) 'agent-message)
+                     (equal (alist-get 'type attributes) "EXECUTION")
+                     (stringp id) (not (string-empty-p id)))
+            (list :type 'execution-breadcrumb :execution-id id :owner sender
+                  :command (or command "Bash")
+                  :facts (list :outcome (and outcome (intern outcome))
+                               :description (alist-get 'description attributes)
+                               :termination (and termination (intern termination))
+                               :exit-code (and code (string-to-number code))
+                               :output-bytes (and output-bytes
+                                                  (string-to-number output-bytes))
+                               :omitted-output-bytes (and omitted
+                                                          (string-to-number omitted))
+                               :output-path path
+                               :execution-output text)))))
+    (error nil)))
 
 (defun mevedel-view-audit--history-render-data-owner (pos)
   "Return the tool owning the render-data block around POS, or nil."
@@ -1107,28 +1104,33 @@ terminal facts and retained bounded payload without a second output card."
           (goto-char (min pos (cadr block)))))
       owner)))
 
-(defun mevedel-view-audit--history-delivery (pos execution-id)
-  "Return EXECUTION-ID's mailbox delivery around POS and its end, or nil."
+(defun mevedel-view-audit--history-delivery (start pos execution-id)
+  "Scan from START for EXECUTION-ID's mailbox delivery around POS.
+Return (RECORD . END), where RECORD is nil for other mailbox blocks or text.
+END is the enclosing block's end, or POS when no block encloses it.  Resume
+the next scan there so earlier blocks and ignored payloads are not reparsed."
   (save-excursion
-    (goto-char pos)
-    (when-let* (((re-search-backward "<agent-message\\([^>]*\\)>" nil t))
-                (attributes (match-string-no-properties 1))
-                (body-start (match-end 0))
-                ((string-match-p "type=\"EXECUTION\"" attributes))
-                (sender (and (string-match "sender=\"\\([^\"]+\\)\"" attributes)
-                             (match-string 1 attributes)))
-                ((search-forward "</agent-message>" nil t))
-                ((> (match-beginning 0) pos))
-                (body (buffer-substring-no-properties
-                       body-start (match-beginning 0)))
-                ((equal execution-id
-                        (plist-get (mevedel-view-audit-mailbox-breadcrumb
-                                    body sender)
-                                   :execution-id))))
-      (cons (list :name "Execution delivery"
-                  :args (list :execution_id execution-id :sender sender)
-                  :result body)
-            (point)))))
+    (goto-char start)
+    (let (found)
+      (while (and (not found) (re-search-forward "<agent-message\\_>" pos t))
+        (goto-char (match-beginning 0))
+        (if-let* ((block (mevedel-transcript--mailbox-any-block-at-point (point-max))))
+            (let ((end (plist-get block :close-end)))
+              (when (> end pos)
+                (setq found block))
+              (goto-char end))
+          (forward-char)))
+      (cons
+       (when-let* ((block found)
+                   (record (mevedel-view-audit-mailbox-completion
+                            (buffer-substring-no-properties
+                             (plist-get block :open-start) (plist-get block :close-end))))
+                   ((equal execution-id (plist-get record :execution-id))))
+         (list :name "Execution delivery"
+               :args (list :execution_id execution-id
+                           :sender (plist-get record :owner))
+               :result (plist-get record :delivery-body)))
+       (if found (plist-get found :close-end) pos)))))
 
 (defun mevedel-view-audit--history-records (execution-id)
   "Return retained tool interactions concerning EXECUTION-ID in segment order.
@@ -1155,13 +1157,14 @@ nothing concerning it can be older."
                               :result (plist-get child :result)
                               :render-data (plist-get child :render-data))))))
          (collect-buffer (data)
-           (let (seen)
+           (let (seen mailbox-end)
              (setq records nil)
              (with-current-buffer data
                (save-restriction
                  (widen)
                  (save-excursion
                    (goto-char (point-min))
+                   (setq mailbox-end (point-min))
                    (while (search-forward execution-id nil t)
                      (let* ((hit (match-beginning 0))
                             (property (get-text-property hit 'gptel))
@@ -1173,11 +1176,13 @@ nothing concerning it can be older."
                             (delivery
                              (unless tool-id
                                (mevedel-view-audit--history-delivery
-                                hit execution-id))))
+                                mailbox-end hit execution-id))))
                        (cond
                         (delivery
-                         (push (car delivery) records)
-                         (goto-char (cdr delivery)))
+                         (when (car delivery)
+                           (push (car delivery) records))
+                         (setq mailbox-end (cdr delivery))
+                         (goto-char (max (point) mailbox-end)))
                         ((and tool-id (not (member tool-id seen)))
                          (push tool-id seen)
                          ;; ponytail: each owning call rescans property runs

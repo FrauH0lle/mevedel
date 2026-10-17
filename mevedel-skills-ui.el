@@ -26,6 +26,11 @@
 (defvar gptel-backend)
 (defvar gptel-model)
 
+;; `mevedel-background-list'
+(declare-function mevedel-background-list-open
+                  "mevedel-background-list" (&optional context))
+(autoload 'mevedel-background-list-open "mevedel-background-list" nil t)
+
 ;; `mevedel-chat'
 (defvar mevedel--dispatching)
 (declare-function mevedel--dispatch-request "mevedel-chat" (model-input local-send &optional native-input))
@@ -125,11 +130,6 @@
                   "mevedel-execution" (session execution-id))
 (autoload 'mevedel-execution-stop-all-user "mevedel-execution")
 (autoload 'mevedel-execution-stop-user "mevedel-execution")
-
-;; `mevedel-executions-list'
-(declare-function mevedel-executions-list-open
-                  "mevedel-executions-list" (&optional context))
-(autoload 'mevedel-executions-list-open "mevedel-executions-list" nil t)
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
@@ -817,10 +817,10 @@ Routes through the lifecycle-aware permission transition path."
       (message "Usage: /tools [list]"))))
 
 (defun mevedel-cmd--ps (args)
-  "Open the live execution cockpit using ARGS."
+  "Open the background-work cockpit using ARGS."
   (if (string-blank-p (or args ""))
       (progn
-        (mevedel-executions-list-open))
+        (mevedel-background-list-open))
     (message "Usage: /ps")))
 
 (defun mevedel-cmd--stop (args)

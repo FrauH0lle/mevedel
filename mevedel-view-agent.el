@@ -2,8 +2,9 @@
 
 ;;; Commentary:
 
-;; Owns agent transcript lookup and inspection, aggregate live-agent status,
-;; attribution controls, and targeted agent refreshes in mevedel view buffers.
+;; Owns agent transcript lookup and inspection, live-agent status rows for the
+;; background-work panel, attribution controls, and targeted agent refreshes
+;; in mevedel view buffers.
 
 ;;; Code:
 
@@ -62,6 +63,8 @@
 (declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-parent-tool-use-id
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-render-data-end-marker
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-render-data-start-marker
@@ -71,6 +74,10 @@
 (declare-function mevedel-agent-invocation-transcript-status "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-verdict "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+
+;; `mevedel-background-list'
+(declare-function mevedel-background-list-refresh-session
+                  "mevedel-background-list" (session &optional data-buffer))
 
 ;; `mevedel-collaboration-agent'
 (declare-function mevedel-collaboration-notify-agents-changed
@@ -332,9 +339,6 @@ resolved agent configuration, not the parent or summary-generation model."
 
 
 ;;;; Aggregate state and keymaps
-
-(defconst mevedel-view--status-agent-collapse-key '(status agents)
-  "Stable fragment collapse key for the aggregate agent status block.")
 
 (defvar-local mevedel-view--agent-refresh-pending nil
   "Canonical agent paths waiting for a presentation refresh.")
@@ -1102,202 +1106,56 @@ buffer whether running or idle."
   "Return PATH's display depth below a direct child of root."
   (max 0 (- (length (split-string path "/" t)) 2)))
 
-(defun mevedel-view--agent-status-counts ()
-  "Return a plist of active agent counts for the current view."
-  (let ((session (mevedel-view--session))
-        (blocked 0)
-         (running 0))
-    (dolist (entry (and session (mevedel-session-agent-registry session)))
-      (pcase (mevedel-view--agent-record-status (cdr entry))
-        ((or 'blocked 'waiting) (cl-incf blocked))
-        ('running (cl-incf running))))
-    (list :blocked blocked :running running)))
-
 (defun mevedel-view--agent-status-collect ()
-  "Collect aggregate status rows for every active agent."
-  (let ((session (mevedel-view--session))
-        rows)
+  "Collect status rows for every active agent of the current view's session."
+  (mevedel-view-agent-active-rows (mevedel-view--session)))
+
+(defun mevedel-view-agent-active-rows (session)
+  "Return status rows for every active agent in SESSION, sorted by path.
+Each row carries :path, :status, :activity, :model-metadata, :depth,
+:parent-path, :started-at and the :tool-use-id of the Agent call that
+started it, when known."
+  (let (rows)
     (dolist (pair (and session (mevedel-session-agent-registry session)))
       (let* ((path (car pair))
              (record (cdr pair))
              (status (mevedel-view--agent-record-status record)))
         (when status
-          (push (list :path path
-                      :status status
-                      :model-metadata (mevedel-agent-control-record-model-metadata record)
-                      :depth (mevedel-view--agent-path-depth path))
-                rows))))
+          (let ((invocation (mevedel-agent-record-invocation record)))
+            (push (list :path path
+                        :status status
+                        :activity (mevedel-agent-record-activity record)
+                        :model-metadata (mevedel-agent-control-record-model-metadata record)
+                        :depth (mevedel-view--agent-path-depth path)
+                        :parent-path (mevedel-agent-record-parent-path record)
+                        :started-at
+                        (and (mevedel-agent-invocation-p invocation)
+                             (mevedel-agent-invocation-started-at invocation))
+                        :tool-use-id
+                        (and (mevedel-agent-invocation-p invocation)
+                             (mevedel-agent-invocation-parent-tool-use-id invocation)))
+                  rows)))))
     (sort rows (lambda (left right)
                  (string-lessp (plist-get left :path)
                                (plist-get right :path))))))
 
-(defun mevedel-view--agent-status-summary (rows)
-  "Return a compact summary label for aggregate ROWS."
-  (let ((blocked 0)
-        (running 0)
-        (terminal 0))
-    (dolist (row rows)
-      (pcase (plist-get row :status)
-        ('blocked (cl-incf blocked))
-        ('waiting (cl-incf blocked))
-        ('running (cl-incf running))
-        (_ (cl-incf terminal))))
-    (string-join
-     (delq nil
-           (list (when (> blocked 0) (format "%d blocked" blocked))
-                 (when (> running 0) (format "%d running" running))
-                 (when (> terminal 0) (format "%d finished" terminal))))
-     " · ")))
-
-(defun mevedel-view--agent-status-buttonize-toggle (header suffix)
-  "Return HEADER with SUFFIX made into the aggregate-status toggle.
-Only the visible `[+]' / `[-]' suffix is made clickable so the
-status line behaves like other compact view buffer affordances."
-  (let ((start (string-match (regexp-quote suffix) header))
-        (map (make-sparse-keymap)))
-    (when start
-      (define-key map (kbd "RET") #'mevedel-view-activate-at-point)
-      (define-key map [mouse-1] #'mevedel-view-activate-at-point)
-      (define-key map [mouse-2] #'mevedel-view-activate-at-point)
-      (add-text-properties
-       start (+ start (length suffix))
-       `(face link
-         keymap ,map
-         mouse-face highlight
-         follow-link t
-         help-echo "Expand or collapse agent status")
-       header))
-    header))
-
-(defun mevedel-view--agent-status-string (rows expanded-p)
-  "Return the aggregate status header for ROWS.
-EXPANDED-P controls whether the toggle suffix displays an expanded or
-collapsed marker; expanded row content is rendered from Agent handles."
-  (let* ((summary (mevedel-view--agent-status-summary rows))
-         (suffix (if expanded-p "[-]" "[+]"))
-         (header (mevedel-view--zone-separator
-                  (format "%d %s: %s%s"
-                          (length rows)
-                          (if (= 1 (length rows)) "agent" "agents")
-                          summary
-                          (concat " " suffix)))))
-    ;; A narrow rule may clip the label's toggle.  Reuse its three leading
-    ;; dashes for the control rather than widening the rule or losing it.
-    (unless (string-search suffix header)
-      (setq header (concat (substring header 0 1) suffix (substring header 4))))
-    (setq header (mevedel-view--agent-status-buttonize-toggle
-                  header suffix))
-    (if expanded-p header (concat header "\n"))))
-
-(defun mevedel-view--agent-status-row-rendering (row)
-  "Return an Agent-handle rendering plist for aggregate status ROW."
-  (let* ((agent-path (plist-get row :path))
-         (status (plist-get row :status))
-         (metadata (plist-get row :model-metadata))
-         (model (mevedel-view-agent-model-label metadata))
-         (label (pcase status
-                  ('blocked "Blocked")
-                  ('waiting "Waiting")
-                  (_ "Running"))))
-    (list :header (concat (format "%s %s" label agent-path)
-                          (when model (concat " · " model)))
-          :body (string-join
-                 (delq nil (list (format "Agent is %s." (downcase label))
-                                 (mevedel-view-agent-model-details metadata)))
-                 "\n\n")
-          :vtype 'agent-handle
-          :agent-path agent-path
-          :agent-status status
-          :initially-collapsed-p t)))
-
-(defun mevedel-view--agent-status-handles-string (rows)
-  "Return Agent-handle text for ROWS, preserving live expansion state."
-  (let ((data-buffer
-         (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
-        (session
-         (and (boundp 'mevedel--session) mevedel--session)))
-    (with-temp-buffer
-      (let ((mevedel--data-buffer data-buffer)
-            (mevedel--session session)
-            (mevedel-view--input-marker (copy-marker (point-max) t)))
-        (dolist (row rows)
-          (let ((depth (or (plist-get row :depth) 0)))
-            (when-let* ((rendering
-                         (mevedel-view--agent-status-row-rendering row)))
-              (let ((start (point)))
-                (mevedel-view--insert-rendered-tool rendering nil)
-                (when (> depth 0)
-                  (mevedel-view--indent-region-lines
-                   start (point)
-                   (propertize
-                    (make-string (* 2 depth) ?\s)
-                    'font-lock-face 'mevedel-view-tool-metadata)))))))
-        (let ((inhibit-read-only t))
-          (remove-text-properties
-           (point-min) (point-max)
-           '(mevedel-view-source nil mevedel-view-source-key nil))
-          (mevedel-view-render-add-display-properties
-           (point-min) (point-max) 'agent-handle)
-          (remove-text-properties
-           (point-min) (point-max)
-           '(read-only nil front-sticky nil rear-nonsticky nil)))
-        (buffer-string)))))
-
 
 
 ;;
-;;; Aggregate status and targeted refresh
-
-(defun mevedel-view-agent-status-fragment ()
-  "Return the aggregate live-agent status fragment, or nil."
-  (when-let* ((rows (mevedel-view--agent-status-collect)))
-    (let* ((expanded-p (mevedel-view--status-agent-expanded-p))
-           (body (if expanded-p
-                     (concat
-                      (mevedel-view--agent-status-string rows t)
-                      (mevedel-view--agent-status-handles-string rows))
-                   (mevedel-view--agent-status-string rows nil)))
-           (fragment
-            (list :namespace 'status
-                  :id 'agents
-                  :priority 0
-                  :body body
-                  :keymap (mevedel-view--display-fragment-keymap)
-                  :navigatable t
-                  :activate #'mevedel-view-agent-status-toggle
-                  :entry 'agents
-                  :collapsible t
-                  :collapse-key mevedel-view--status-agent-collapse-key
-                  :collapsed (not expanded-p)))
-           (suffix (mevedel-view--status-trailing-newline-suffix body)))
-      (if suffix
-          (plist-put fragment :body-suffix suffix)
-        fragment))))
-
-(defun mevedel-view--status-agent-expanded-p ()
-  "Return non-nil when aggregate agent status should show handle rows."
-  (if (mevedel-view-zone-collapse-state-set-p
-       mevedel-view--status-agent-collapse-key)
-      (not (mevedel-view-zone-collapse-state
-            mevedel-view--status-agent-collapse-key nil))
-    t))
-
+;;; Status and targeted refresh
 
 (defun mevedel-view--render-agent-status ()
-  "Render or remove the aggregate live agent status text."
+  "Render the status zone after a visible agent state change."
   (mevedel-view--render-status)
+  ;; An open background-work cockpit lists agents too.
+  (when (fboundp 'mevedel-background-list-refresh-session)
+    (mevedel-background-list-refresh-session (mevedel-view--session)))
   ;; Retained agents keep changing after the root request becomes idle.
   ;; This is the one funnel for their visible transitions; the room latches
   ;; the resulting roster, so an unchanged state is not broadcast.
   (when (fboundp 'mevedel-collaboration-notify-agents-changed)
     (mevedel-collaboration-notify-agents-changed
      (mevedel-view--session))))
-
-(defun mevedel-view--agent-status-region-position-p (pos)
-  "Return non-nil when POS is inside the aggregate status fragment."
-  (and (integer-or-marker-p pos)
-       (eq (get-text-property pos 'mevedel-view-zone-namespace) 'status)
-       (eq (get-text-property pos 'mevedel-view-zone-id) 'agents)))
 
 (defun mevedel-view--agent-source-present-p (agent-path)
   "Return non-nil if the data buffer has an Agent source for AGENT-PATH.
@@ -1335,8 +1193,7 @@ non-status handle existed but lacked usable source metadata."
              (handle-p (get-text-property pos 'mevedel-view-agent-handle-p))
              (source (get-text-property pos 'mevedel-view-source)))
         (when (and handle-p
-                   (equal path agent-path)
-                   (not (mevedel-view--agent-status-region-position-p pos)))
+                   (equal path agent-path))
           (if (and (consp source)
                    (integer-or-marker-p (car source))
                    (integer-or-marker-p (cdr source)))
@@ -1511,16 +1368,6 @@ does not schedule many expensive refreshes to expire together."
                 (run-at-time mevedel-view-agent-refresh-delay nil
                              #'mevedel-view-agent--flush-refresh view-buffer)))))))
 
-(defun mevedel-view-agent-status-toggle ()
-  "Toggle the aggregate live agent status rows."
-  (interactive)
-  (let ((collapsed (mevedel-view--status-agent-expanded-p)))
-    (mevedel-view-zone-set-collapse-state
-     mevedel-view--status-agent-collapse-key collapsed))
-  (mevedel-view--render-agent-status))
-
-
-
 ;;
 ;;; Attribution
 
@@ -1566,14 +1413,6 @@ the current live or persisted transcript and reports any unavailable source."
         (when-let* ((buffer (mevedel-agent-record-conversation-buffer record))
                     ((buffer-live-p buffer)))
           (buffer-local-value 'mevedel--agent-invocation buffer)))))
-
-(defun mevedel-view-reset-agent-ephemeral-state (&optional view-buffer)
-  "Reset view-local ephemeral agent UI state in VIEW-BUFFER.
-Defaults to the current buffer."
-  (with-current-buffer (or view-buffer (current-buffer))
-    (mevedel-view-zone-set-collapse-state
-     mevedel-view--status-agent-collapse-key nil)
-    (mevedel-view--render-status)))
 
 (provide 'mevedel-view-agent)
 

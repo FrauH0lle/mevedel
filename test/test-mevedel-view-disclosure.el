@@ -152,7 +152,7 @@
         (with-current-buffer view-buf
           (mevedel-view--full-rerender)
           (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
-          (dolist (header '("Failed /root/failed" "Finished /root/done"))
+          (dolist (header '("Agent /root/failed failed" "Agent /root/done finished"))
             (goto-char (point-min))
             (should (search-forward header mevedel-view--input-marker t)))
           (dotimes (_ 3)
@@ -163,7 +163,7 @@
               (if (eq action 'refresh)
                   (should (mevedel-view--refresh-tool-row data-buf "preceding-call"))
                 (mevedel-view-toggle-section))
-              (dolist (header '("Failed /root/failed" "Finished /root/done"))
+              (dolist (header '("Agent /root/failed failed" "Agent /root/done finished"))
                 (goto-char (point-min))
                 (should (search-forward header mevedel-view--input-marker t))
                 (should-not (invisible-p (match-beginning 0)))
@@ -173,7 +173,7 @@
               (should (equal "> keep\nsecond line" (mevedel-view--input-text)))))
           (mevedel-view--full-rerender)
           (should (= 1 (mevedel-view-test--count-substring
-                        "Failed /root/failed" (buffer-string))))))))
+                        "Agent /root/failed failed" (buffer-string))))))))
 
   :doc "generic tool identity survives toggles and targeted result refresh"
   (mevedel-view-test--with-buffers

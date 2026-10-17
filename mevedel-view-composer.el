@@ -499,8 +499,6 @@
                         prompt-summary-source hook-audits attribution user-source))
 (declare-function mevedel-view-fork-point-at-point
                   "mevedel-view-render" ())
-(declare-function mevedel-view-reset-agent-ephemeral-state
-                  "mevedel-view-render" (&optional data-buf))
 (autoload 'mevedel-view--append-request-summary "mevedel-view-render")
 (defvar mevedel-view--display-map)
 

@@ -1232,9 +1232,10 @@ or the user stops it outside the model tool, root-owned output is queued
 synchronously in the root mailbox. A root result from a process that ended on
 its own also wakes an idle model: the record carries a runtime-only wake mark,
 and after it is saved the harness offers idle work. The wake starts one turn
-headed "Background event" with the fixed prompt "Background work you started
-has reported; its output follows. This is not a message from the user."; the
-result itself still arrives through the ordinary mailbox delivery (the native
+whose model-facing prompt is fixed ("Background work has reported; its messages
+follow. This is not a message from the user."); the view hides that prompt and
+the turn's heading and begins with the background notice lines. The result
+itself still arrives through the ordinary mailbox delivery (the native
 inbox or the Claude Code turn-start batch). A stop by the user or the model
 does not wake. A result the model already read, at its next step, through
 `WriteStdin`, or through `StopExecution`, does not wake again, and several
@@ -1253,35 +1254,43 @@ unchanged agent `RESULT`. This starts no model request. Passive progress/view
 subscribers cannot acknowledge delivery, and finished records never appear in
 live execution listings.
 
-Only commands that actually yielded produce a completion breadcrumb in each
-receiving transcript. The compact line names the command and terminal outcome
-and links to the original Bash result; it has no expandable output copy or
-second metadata summary. Foreground completions produce none. The durable
+Only commands that actually yielded produce a completion breadcrumb, which sits
+at the original command row. The compact line names the command and terminal
+outcome (Finished, Failed, Stopped, or Timed out) and links to the original
+Bash result; it has no expandable output copy or second metadata summary.
+Foreground completions produce none. The durable
 presentation identity is the session, owning agent, and execution ID, not
 command text, so repeated polls, event retries, and later mailbox delivery do
 not create a second breadcrumb, while concurrent identical commands remain
-distinct. The mailbox payload and model-facing delivery remain unchanged.
+distinct. The mailbox payload and model-facing delivery remain unchanged;
+receiving transcripts show the separate one-line background notice built from
+the `EXECUTION`, `MONITOR`, and `MONITOR_TERMINAL` opening-tag attributes (see
+[view](view.md)), never from payload text.
 `Show result` reveals the source row in the current, archived, or agent
 transcript as appropriate, expanding enclosing groups; when that row is
 unavailable, a read-only retained-evidence view reports what is available or
-explicitly identifies missing evidence. Parent transcripts keep their own
-child-attributed completion breadcrumb alongside the agent answer.
+explicitly identifies missing evidence. A parent receiving a child's forwarded
+`EXECUTION` record shows it as a child-attributed notice alongside the agent
+answer.
 
-The view's **Background work** area lists yielded commands and Monitors, with
-their owner when it is not `/root`. Click or RET expands one item's bounded
-output preview locally, without navigating away from the composer. Explicit
-actions open full output read-only, show the original conversation entry, or
-stop the live item. Inspection never consumes model output. An expanded item
-remains after completion until collapsed or replaced; other finished rows leave
-the area. **All…** and the overflow link open the `/ps` list. The original tool
-row remains the durable owner of execution output and status.
+The view's **background work** panel lists active agents, yielded commands and
+Monitors, with an execution's owner when it is not `/root`. A Bash row shows
+the call's `description` when the model gave one, else the command. Click or
+RET expands one item locally, without navigating away from the composer; an
+execution shows its bounded output preview. Explicit actions open full output
+read-only, show the original conversation entry, or stop the live item.
+Inspection never consumes model output. An expanded item remains after
+completion until collapsed or replaced; other finished rows leave the panel.
+`[Show all N]` expands an overflowing panel in place and `[Manage]` opens the
+`/ps` cockpit. The original tool row remains the durable owner of execution
+output and status.
 
-Users have a separate session-wide control surface. `/ps` and the session
-cockpit's `Executions` row open a
-tabulated list containing foreground and yielded work from every model owner.
-It shows the opaque execution ID, canonical owner (`/root` or a retained agent
-path), command, PTY mode, elapsed
-time, output bytes, and sandbox state. Details include the bounded live tail
+Users have a separate session-wide control surface. `/ps`, `[Manage]` and the
+session cockpit's `Background work` row open a tabulated list of active agents
+and of foreground and yielded executions from every model owner. Execution
+rows show kind, state, description or command, canonical owner (`/root` or a
+retained agent path), elapsed time, and details: the opaque execution ID, PTY
+mode, output bytes, and sandbox state. Details include the bounded live tail
 and current spool path. The user may send a PTY line, signal Ctrl-C, stop the
 process group, or open the spool. `/stop EXECUTION_ID` stops directly; bare
 `/stop` stops every live execution in the session. These user controls do not
@@ -1424,15 +1433,20 @@ up to 2000 characters plus a truncation count. A single 200 ms timer batches
 pending lines; a batch holds at most 8 KiB and reports extra lines omitted from
 the event body. The output file remains subject to the managed 64 MiB spool cap.
 
-Each batch is a durable `MONITOR` mailbox record bearing the execution ID and
-description, with a runtime-only wake mark. It follows the same idle-wake holds
+Each framed line of a batch is its own durable `MONITOR` mailbox record bearing
+the execution ID and description, with a runtime-only wake mark; omitted lines
+are summarized on the last record (`omitted` attribute plus the model-visible
+note). Events carry the framed lines (`:monitor-lines`, `:monitor-omitted`) so
+consumers never split a payload. It follows the same idle-wake holds
 and delivery path as background Bash completion above. Event text is tool
 output, never a user instruction. More than 100 lines in a rolling 60-second
 window, or more than 64 KiB of that monitor's unread mailbox events, stops the
 process with termination `flood`.
 
-Settlement cancels pending timers and publishes exactly one terminal record,
-combining pending lines with the terminal notice and event count. Natural exit
+Settlement cancels pending timers and publishes pending lines as `MONITOR`
+records followed by exactly one `MONITOR_TERMINAL` record whose opening tag
+carries `event_count`, `termination`, `outcome` and `exit_code` and whose body
+is the terminal notice. Natural exit
 reports the exit code; expiry says to re-arm explicitly; flooding says to
 restart with a tighter filter. These notices wake the idle model. A deliberate
 stop through `StopExecution` or the user controls folds pending lines into a

@@ -17,7 +17,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
-(require 'mevedel-executions-list)
+(require 'mevedel-background-list)
 (require 'mevedel-gptel-stream-bridge)
 (require 'mevedel-view)
 (require 'mevedel-view-segments)
@@ -1448,10 +1448,9 @@
                   :command "make lint")
                  (:execution-id "e3" :owner "/root" :yielded nil
                   :command "ls"))))
-            ((symbol-function 'mevedel-view-agent-status-fragment)
+            ((symbol-function 'mevedel-view--agent-status-collect)
              (lambda ()
-               '(:namespace status :id agents :priority 0
-                 :body "agents\n"))))
+               '((:path "/root/child" :status running :depth 0)))))
     (let* ((fragments
             (mevedel-view--status-fragments
              (list :session session :task-body "tasks\n")))
@@ -1465,26 +1464,25 @@
                      fragments))
            (executions (seq-find
                         (lambda (fragment)
-                          (eq (plist-get fragment :id) 'executions))
-                        fragments))
-           (agents (seq-find
-                    (lambda (fragment)
-                     (eq (plist-get fragment :id) 'agents))
-                     fragments)))
+                          (eq (plist-get fragment :id) 'background))
+                        fragments)))
       (should-not sandbox)
       (should (> (plist-get tasks :priority)
                  (plist-get executions :priority)))
-      (should (> (plist-get executions :priority)
-                 (plist-get agents :priority)))
+      (should-not (seq-find (lambda (fragment)
+                              (eq (plist-get fragment :id) 'agents))
+                            fragments))
       (should (string-match-p
-               (concat "\\` ─── background work · 2 running · All… ─+\n"
-                       "  ▸ Running · make test\n"
-                       "  ▸ Running · make lint · /root/child\n\\'")
+               (concat "\\` ─── background work · 1 agent · 2 commands \\[-\\] ─+\n"
+                       "  ▸ Running   agent    /root/child\n"
+                       "  ▸ Running   bash     make test\n"
+                       "  ▸ Running   bash     make lint · /root/child\n"
+                       "  \\[Manage\\]\n\\'")
                (substring-no-properties
                 (plist-get executions :body))))
-      ;; The row needs a blank line under it or it reads as a caption
-      ;; for the agents separator that follows.  A zone trims `:body'
-      ;; to one newline, so the blank has to travel as a suffix.
+      ;; The panel needs a blank line under it or its last row reads as a
+      ;; caption for what follows.  A zone trims `:body' to one newline,
+      ;; so the blank has to travel as a suffix.
       (should (equal "\n" (plist-get executions :body-suffix)))))))
 
 (mevedel-deftest mevedel-view-execution-state-changed-integration ()
@@ -1507,14 +1505,14 @@
                 ((symbol-function 'mevedel-execution-list-user)
                  (lambda (_) '((:execution-id "e1" :owner "/root" :yielded t
                                 :command "make test"))))
-                ((symbol-function 'mevedel-view-agent-status-fragment)
+                ((symbol-function 'mevedel-view--agent-status-collect)
                  #'ignore))
         (mevedel-view-execution--state-changed session data-buf))
       (with-current-buffer view-buf
         (should (string= draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
         (should (string-match-p
-                 "Running · make test"
+                 "Running   bash     make test"
                  (buffer-substring-no-properties
                   (point-min) (mevedel-view--input-start)))))))
   :doc "routes an agent execution update to its parent session view"
@@ -1537,12 +1535,12 @@
                       ((symbol-function 'mevedel-execution-list-user)
                        (lambda (_) '((:execution-id "e1" :owner "/root" :yielded t
                                       :command "make test"))))
-                      ((symbol-function 'mevedel-view-agent-status-fragment)
+                      ((symbol-function 'mevedel-view--agent-status-collect)
                        #'ignore))
               (mevedel-view-execution--state-changed session agent-data))
             (with-current-buffer view-buf
               (should (string-match-p
-                       "Running · make test"
+                       "Running   bash     make test"
                        (buffer-substring-no-properties
                         (point-min) (mevedel-view--input-start))))))
         (kill-buffer agent-data)))))
@@ -1564,8 +1562,8 @@
                                   :output-tail "sample output" :state 'running
                                   :command (format "command %d" n)))))
                 ((symbol-function 'mevedel-execution-count-user) (lambda (_) 6))
-                ((symbol-function 'mevedel-view-agent-status-fragment) #'ignore)
-                ((symbol-function 'mevedel-executions-list-open)
+                ((symbol-function 'mevedel-view--agent-status-collect) #'ignore)
+                ((symbol-function 'mevedel-background-list-open)
                  (lambda (&optional _context) (setq opened t)))
                 ((symbol-function 'mevedel-view-audit-show-control-result)
                  (lambda (_) (error "Live activation scanned transcript history")))
@@ -1587,7 +1585,16 @@
           (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
           (should (equal '("e1" "bash-1") shown))
           (goto-char (point-min))
-          (search-forward "+1 more")
+          (search-forward "[Show all 6]")
+          (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
+          (should (string-search "command 6" (buffer-string)))
+          (should-not opened)
+          (goto-char (point-min))
+          (search-forward "[Show fewer]")
+          (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
+          (should-not (string-search "command 6" (buffer-string)))
+          (goto-char (point-min))
+          (search-forward "[Manage]")
           (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))
           (should opened))))))
 
@@ -1609,14 +1616,14 @@
       (should (equal (plist-get shown :tool-use-id) "outer/1/1"))
       (should (equal (plist-get shown :execution-id) "exec-child")))))
 
-(mevedel-deftest mevedel-view-execution-all-integration ()
+(mevedel-deftest mevedel-view-execution-manage-integration ()
   ,test
   (test)
-  :doc "opens the live execution cockpit"
+  :doc "Manage opens the background-work cockpit"
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create :name "all")) opened)
       (with-current-buffer data-buf (setq-local mevedel--session session))
-      (cl-letf (((symbol-function 'mevedel-executions-list-open)
+      (cl-letf (((symbol-function 'mevedel-background-list-open)
                  (lambda (&optional _context) (setq opened t)))
                 ((symbol-function 'mevedel-execution-count-user) (lambda (_) 1))
                 ((symbol-function 'mevedel-execution-list-user)
@@ -1624,7 +1631,7 @@
         (with-current-buffer view-buf
           (mevedel-view--render-status)
           (goto-char (point-min))
-          (search-forward "All…")
+          (search-forward "[Manage]")
           (funcall (get-text-property (1- (point)) 'mevedel-view-zone-activate))))
       (should opened))))
 

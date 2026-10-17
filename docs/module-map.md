@@ -113,7 +113,7 @@ Chat / view
   mevedel-context-summary.el  stateless validated continuation/handoff/digest summary generation
   mevedel-view.el             view mode, zones, and session coordination
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
-  mevedel-view-execution.el   inline background-work inspection and explicit execution actions
+  mevedel-view-execution.el   background-work panel: agent and execution rows, inline inspection, actions
   mevedel-view-composer.el    composer geometry, submission, root dispatch, fork/send flow
   mevedel-view-input-files.el local file drops and clipboard-image input
   mevedel-view-animation.el   prepared status frames, styles, and bounded color cache
@@ -168,7 +168,7 @@ Chat / view
   mevedel-subscription-usage-provider.el isolated Codex HTTP and native Claude ACP quota retrieval
   mevedel-menu.el             session cockpit transient and model selection
   mevedel-gptel-bridge.el     view-launched gptel menu, restoration, and steering routing
-  mevedel-executions-list.el  session-wide live execution cockpit and user controls
+  mevedel-background-list.el  background-work cockpit: agents and all live executions, user controls
   mevedel-artifacts-list.el   artifacts cockpit: list, create, open, attach, versions, duplicate, delete
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke
   mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing

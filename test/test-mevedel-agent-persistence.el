@@ -437,6 +437,20 @@
                          :execution-id "exec-1" :description "CI")
                    (car clean)))
     (should-not (cl-some (lambda (record) (plist-member record :wake)) clean)))
+  :doc "keeps structural metadata and the terminal record type"
+  (let* ((raw (list (list :type 'MONITOR_TERMINAL :sender "/root" :recipient "/root"
+                          :execution-id "e" :description "CI"
+                          :meta '(:event-count 2 :termination "stopped")
+                          :payload "done" :timestamp '(1 0 0 0))
+                    (list :type 'EXECUTION :sender "/root" :recipient "/root"
+                          :meta '(:execution-id "x" :exit-code 1)
+                          :payload "p" :timestamp '(1 0 0 0))))
+         (clean (mevedel-agent-persistence-sanitize-mailbox raw "/root")))
+    (should (= 2 (length clean)))
+    (should (equal '(:event-count 2 :termination "stopped")
+                   (plist-get (car clean) :meta)))
+    (should (equal '(:execution-id "x" :exit-code 1)
+                   (plist-get (cadr clean) :meta))))
   :doc "drops MONITOR records without identity or outside the root"
   (dolist (entry
            (list (list :type 'MONITOR :sender "/root" :recipient "/root"

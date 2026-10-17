@@ -60,7 +60,8 @@ Explicit follow-up owns child activation, mail owns information, and
 [WaitAgent](0036-wait-for-agents-explicitly.md) owns waiting. Separating wake-up
 summaries from content avoids duplicate mail in tool output and history.
 The idle-root exception lets the coordinator receive late reports without a
-user nudge; it reuses the visible Background event path rather than granting
+user nudge; it reuses the Background event wake path (its prompt and heading are
+hidden in the view; the turn starts with the report notices) rather than granting
 senders a general ability to start or steer idle children.
 A stable spawn parent owns automatic results even when another peer starts work;
 that peer needs an explicit SendMessage for a direct reply.

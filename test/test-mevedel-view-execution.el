@@ -65,11 +65,50 @@
                                       :yielded (/= n 8) :state 'running :command "same command")))
     (let* ((body (plist-get (mevedel-view-execution-fragment session) :body)))
       (should (= 5 (mevedel-view-test--count-substring "▸ Running" body)))
-      (should (string-search "+2 more / all" body)))
+      (should (string-search "[Show all 7]  [Manage]" body)))
     (setq mevedel-view-execution--selected (plist-put (copy-sequence (nth 6 live)) :session session))
     (let ((body (plist-get (mevedel-view-execution-fragment session) :body)))
       (should (= 4 (mevedel-view-test--count-substring "▸ Running" body)))
-      (should (= 1 (mevedel-view-test--count-substring "▾ Running" body)))))
+      (should (= 1 (mevedel-view-test--count-substring "▾ Running" body))))
+    (setq mevedel-view-execution--selected nil
+          mevedel-view-execution--show-all t)
+    (let ((body (plist-get (mevedel-view-execution-fragment session) :body)))
+      (should (= 7 (mevedel-view-test--count-substring "▸ Running" body)))
+      (should (string-search "[Show fewer]  [Manage]" body))))
+  :doc "few rows offer only Manage; collapse leaves the header with its counts"
+  (mevedel-view-execution-test--with-view
+    (let ((body (plist-get (mevedel-view-execution-fragment session) :body)))
+      (should (string-search "\n  [Manage]\n" body))
+      (should-not (string-search "[Show" body)))
+    (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key t)
+    (let ((fragment (mevedel-view-execution-fragment session)))
+      (should (plist-get fragment :collapsed))
+      (should (string-match-p "\\` ─── background work · 1 command \\[\\+\\] ─+\n\\'"
+                              (substring-no-properties (plist-get fragment :body))))))
+  :doc "agents share the panel, blocked first, before commands and monitors"
+  (mevedel-view-execution-test--with-view
+    (setq live (list (list :execution-id "m1" :owner "/root" :yielded t :state 'running
+                           :kind 'monitor :description "test ticker" :event-count 1)
+                     (list :execution-id "e1" :owner "/root/counter" :yielded t
+                           :state 'running :command "make test" :description "Run tests")))
+    (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+               (lambda ()
+                 (list (list :path "/root/counter" :status 'running :depth 0
+                             :model-metadata '(:model "opus" :effort "medium"))
+                       (list :path "/root/reviewer" :status 'blocked :depth 0
+                             :activity 'permission-blocked)))))
+      (let ((text (substring-no-properties
+                   (plist-get (mevedel-view-execution-fragment session) :body))))
+        (should (string-prefix-p
+                 " ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ─"
+                 text))
+        (should (string-search
+                 (concat "  ▸ Blocked   agent    /root/reviewer · waiting for permission\n"
+                         "  ▸ Running   agent    /root/counter · opus:medium\n"
+                         "  ▸ Running   bash     Run tests · /root/counter\n"
+                         "  ▸ Watching  monitor  test ticker · 1 event\n"
+                         "  [Manage]\n")
+                 text)))))
   :doc "changing sessions drops retained selection even with equal IDs"
   (mevedel-view-execution-test--with-view
     (setq mevedel-view-execution--selected (plist-put (copy-sequence (car live)) :session session))
@@ -114,18 +153,18 @@
         (goto-char (point-max))
         (funcall command event)
         (should mevedel-view-execution--selected))))
-  :doc "blank suffix and header margins are inert, All is explicit"
+  :doc "blank suffix and header margins are inert, Manage is explicit"
   (mevedel-view-execution-test--with-view
     (mevedel-view--render-status)
     (mevedel-view-execution-test--at " ─── background work")
     (should-not (get-text-property (point) 'mevedel-view-zone-activate))
     (mevedel-view-execution-test--at "  ▸ Running")
-    (forward-line 1)
+    (forward-line 2)
     (should (eq (char-after) ?\n))
     (should-not (get-text-property (point) 'mevedel-view-zone-activate))
     (let (opened)
-      (cl-letf (((symbol-function 'mevedel-executions-list-open) (lambda (&optional _) (setq opened t))))
-        (mevedel-view-execution-test--activate "All…")
+      (cl-letf (((symbol-function 'mevedel-background-list-open) (lambda (&optional _) (setq opened t))))
+        (mevedel-view-execution-test--activate "[Manage]")
         (should opened))))
   :doc "same-command IDs have independent selection and one expanded item"
   (mevedel-view-execution-test--with-view
@@ -139,23 +178,60 @@
 (mevedel-deftest mevedel-view-execution--header ()
   ,test
   (test)
-  :doc "rule counts running and watching work and links All…"
+  :doc "rule counts commands and monitors and ends with the collapse toggle"
   (mevedel-view-execution-test--with-view
     (let* ((header (mevedel-view-execution--header
-                    session '((:kind bash) (:kind monitor) (:kind monitor))))
-           (all (string-search "All…" header)))
-      (should (string-prefix-p " ─── background work · 1 running · 2 watching · All… ─"
+                    session nil '((:kind bash) (:kind monitor) (:kind monitor)) nil))
+           (toggle (string-search "[-]" header)))
+      (should (string-prefix-p " ─── background work · 1 command · 2 monitors [-] ─"
                                header))
       (should (eq 'mevedel-view-zone-separator (get-text-property 1 'font-lock-face header)))
-      (should (eq 'link (get-text-property all 'font-lock-face header)))
-      (should (functionp (get-text-property all 'mevedel-view-zone-activate header)))))
-  :doc "a clipped narrow rule keeps All… reachable"
+      (should (eq 'link (get-text-property toggle 'font-lock-face header)))
+      (should (functionp (get-text-property toggle 'mevedel-view-zone-activate header)))))
+  :doc "blocked agents are counted first in a warning face"
+  (mevedel-view-execution-test--with-view
+    (let* ((header (mevedel-view-execution--header
+                    session '((:status blocked) (:status running)) nil t))
+           (blocked (string-search "1 blocked" header)))
+      (should (string-prefix-p " ─── background work · 1 blocked · 2 agents [+] ─" header))
+      (should (eq 'mevedel-view-tool-warning
+                  (get-text-property blocked 'font-lock-face header)))))
+  :doc "a clipped narrow rule keeps the toggle reachable"
   (mevedel-view-execution-test--with-view
     (cl-letf (((symbol-function 'mevedel-view--zone-separator)
                (lambda (_) " ─── background w… ─\n")))
-      (let ((header (mevedel-view-execution--header session nil)))
-        (should (equal " All… background w… ─\n" (substring-no-properties header)))
+      (let ((header (mevedel-view-execution--header session nil nil nil)))
+        (should (equal " [-] background w… ─\n" (substring-no-properties header)))
         (should (get-text-property 1 'mevedel-view-zone-activate header))))))
+
+(mevedel-deftest mevedel-view-execution-toggle-panel ()
+  ,test
+  (test)
+  :doc "the header toggle hides and restores rows, preserving an active draft"
+  (mevedel-view-execution-test--with-view
+    (mevedel-view--render-status)
+    (goto-char (point-max))
+    (insert "> draft\nsecond line")
+    (mevedel-view-execution-test--activate "[-]")
+    (should-not (string-search "▸ Running" (buffer-string)))
+    (should (string-search "background work · 1 command [+]" (buffer-string)))
+    (mevedel-view-execution-test--activate "[+]")
+    (should (string-search "▸ Running" (buffer-string)))
+    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+
+(mevedel-deftest mevedel-view-execution-reset ()
+  ,test
+  (test)
+  :doc "clears expansion, overflow and collapse"
+  (mevedel-view-execution-test--with-view
+    (setq mevedel-view-execution--selected-agent "/root/a"
+          mevedel-view-execution--show-all t)
+    (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key t)
+    (mevedel-view-execution-reset)
+    (should-not mevedel-view-execution--selected-agent)
+    (should-not mevedel-view-execution--show-all)
+    (should-not (mevedel-view-zone-collapse-state mevedel-view-execution--collapse-key))
+    (should (string-search "▸ Running" (buffer-string)))))
 
 (mevedel-deftest mevedel-view-execution--state-face ()
   (dolist (case '(((:state running) . mevedel-view-agent-running)
@@ -176,11 +252,86 @@
     (let ((line (mevedel-view-execution--line
                  '(:owner "/root" :execution-id "m1" :kind monitor :state running
                    :description "watch" :event-count 1))))
-      (should (equal "  ▸ Watching · watch · 1 event\n" (substring-no-properties line)))
+      (should (equal "  ▸ Watching  monitor  watch · 1 event\n" (substring-no-properties line)))
       (should (eq 'mevedel-view-agent-running
                   (get-text-property (string-search "Watching" line) 'font-lock-face line)))
       (should (eq 'mevedel-view-tool-metadata
-                  (get-text-property (string-search "▸" line) 'font-lock-face line))))))
+                  (get-text-property (string-search "▸" line) 'font-lock-face line)))))
+  :doc "a Bash description replaces the command; the command is the fallback"
+  (mevedel-view-execution-test--with-view
+    (should (equal "  ▸ Running   bash     Run tests\n"
+                   (substring-no-properties
+                    (mevedel-view-execution--line
+                     '(:owner "/root" :execution-id "e1" :state running
+                       :command "make test" :description "Run tests")))))
+    (should (equal "  ▸ Running   bash     make test\n"
+                   (substring-no-properties
+                    (mevedel-view-execution--line
+                     '(:owner "/root" :execution-id "e1" :state running
+                       :command "make test")))))))
+
+(mevedel-deftest mevedel-view-execution--agent-line ()
+  ,test
+  (test)
+  :doc "nested agents indent; interaction-blocked agents say they wait for input"
+  (mevedel-view-execution-test--with-view
+    (should (equal "    ▸ Blocked   agent    /root/a/b · waiting for input\n"
+                   (substring-no-properties
+                    (mevedel-view-execution--agent-line
+                     session '(:path "/root/a/b" :status blocked :depth 1
+                               :activity interaction-blocked)))))
+    (should (equal "  ▸ Waiting   agent    /root/a\n"
+                   (substring-no-properties
+                    (mevedel-view-execution--agent-line
+                     session '(:path "/root/a" :status waiting :depth 0)))))))
+
+(mevedel-deftest mevedel-view-execution--agent-details ()
+  ,test
+  (test)
+  :doc "RET expands one agent row with its actions, collapsing any execution row"
+  (mevedel-view-execution-test--with-view
+    (let (opened interrupted shown)
+      (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                 (lambda ()
+                   (list (list :path "/root/counter" :status 'running :depth 0
+                               :parent-path "/root" :tool-use-id "agent-call"
+                               :model-metadata '(:model "opus")))))
+                ((symbol-function 'mevedel-view-agent-handle-activate)
+                 (lambda (&optional path) (setq opened path)))
+                ((symbol-function 'mevedel-agent-control-interrupt-user)
+                 (lambda (owner path) (should (eq owner session)) (setq interrupted path)))
+                ((symbol-function 'mevedel-view-audit-show-result)
+                 (lambda (record) (setq shown record))))
+        (mevedel-view--render-status)
+        (mevedel-view-execution-test--activate "  ▸ Running   bash")
+        (should mevedel-view-execution--selected)
+        (mevedel-view-execution-test--activate "  ▸ Running   agent")
+        (should (equal "/root/counter" mevedel-view-execution--selected-agent))
+        (should-not mevedel-view-execution--selected)
+        (should (string-search "    Model     opus\n" (buffer-string)))
+        (should-not (string-search "Preview (not full output)" (buffer-string)))
+        (mevedel-view-execution-test--activate "[Open transcript]")
+        (should (equal "/root/counter" opened))
+        (mevedel-view-execution-test--activate "[Show in conversation]")
+        (should (equal '(:owner "/root" :tool-use-id "agent-call") shown))
+        (mevedel-view-execution-test--activate "[Interrupt]")
+        (should (equal "/root/counter" interrupted))
+        (mevedel-view-execution-test--activate "  ▾ Running   agent")
+        (should-not mevedel-view-execution--selected-agent))))
+  :doc "a finished agent drops its expansion and its stale controls refuse"
+  (mevedel-view-execution-test--with-view
+    (let ((agents (list (list :path "/root/counter" :status 'running :depth 0))))
+      (cl-letf (((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents))
+                ((symbol-function 'mevedel-agent-control-interrupt-user)
+                 (lambda (&rest _) (ert-fail "interrupted a finished agent"))))
+        (mevedel-view--render-status)
+        (mevedel-view-execution-test--activate "  ▸ Running   agent")
+        (mevedel-view-execution-test--at "[Interrupt]")
+        (let ((callback (get-text-property (point) 'mevedel-view-zone-activate)))
+          (setq agents nil)
+          (mevedel-view--render-status)
+          (should-not mevedel-view-execution--selected-agent)
+          (should-error (funcall callback) :type 'user-error))))))
 
 (mevedel-deftest mevedel-view-execution--preview ()
   ,test
@@ -374,7 +525,7 @@
         (should (equal windows (window-list)))
         (should (= 2 (- (window-point other) (mevedel-view--input-start))))
         (should (= start (window-start)))
-        (should (string-search "expires " (buffer-string)))
+        (should (string-search "until " (buffer-string)))
         (should (string-search "3 events" (buffer-string)))
         (should (string-search "changed" (buffer-string)))))))
 

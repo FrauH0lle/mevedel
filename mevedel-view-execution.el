@@ -1,22 +1,41 @@
-;;; mevedel-view-execution.el --- Inline background execution inspection -*- lexical-binding: t -*-
+;;; mevedel-view-execution.el --- Background-work status panel -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; The status zone projects public user-authority execution snapshots.  One
-;; buffer-local selection retains bounded output after completion; it is not a
-;; process registry.  Passive events refresh that selection without consuming
-;; output, acknowledging mail, polling, or redrawing the transcript.
+;; The status zone's background-work panel: one rule with counts and a
+;; collapse toggle, then one row per active agent and per live yielded
+;; execution (Bash or Monitor), needs-attention first.  Rows expand in place
+;; to show the item's actions; a last row offers overflow and the
+;; background-work cockpit.  Finished items leave the panel; their transcript
+;; notices take over.
+;;
+;; Execution rows project public user-authority snapshots.  One buffer-local
+;; selection retains a selected execution's bounded output after completion;
+;; it is not a process registry.  Passive events refresh that selection
+;; without consuming output, acknowledging mail, polling, or redrawing the
+;; transcript.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
 (require 'mevedel-structs)
+;; Agent rows are half the panel; every view loads this module anyway.
+(require 'mevedel-view-agent)
+
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-interrupt-user
+                  "mevedel-agent-control" (session path))
+(autoload 'mevedel-agent-control-interrupt-user "mevedel-agent-control")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
 (autoload 'mevedel-agent-invocation-parent-data-buffer "mevedel-agents")
+
+;; `mevedel-background-list'
+(declare-function mevedel-background-list-open "mevedel-background-list" (&optional context))
+(autoload 'mevedel-background-list-open "mevedel-background-list" nil t)
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-count-user "mevedel-execution" (session))
@@ -27,10 +46,6 @@
 (autoload 'mevedel-execution-stop-user "mevedel-execution")
 (defvar mevedel-execution-event-functions)
 (defvar mevedel-execution-state-change-hook)
-
-;; `mevedel-executions-list'
-(declare-function mevedel-executions-list-open "mevedel-executions-list" (&optional context))
-(autoload 'mevedel-executions-list-open "mevedel-executions-list" nil t)
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-visit-path "mevedel-resource" (address &optional context))
@@ -47,9 +62,29 @@
 (declare-function mevedel-view-audit-show-result "mevedel-view-audit" (record))
 (autoload 'mevedel-view-audit-show-result "mevedel-view-audit" nil t)
 
+;; `mevedel-view-zone'
+(declare-function mevedel-view-zone-collapse-state
+                  "mevedel-view-zone" (key &optional default))
+(declare-function mevedel-view-zone-set-collapse-state
+                  "mevedel-view-zone" (key collapsed))
+
+(defconst mevedel-view-execution--collapse-key '(status background)
+  "Fragment collapse key of the background-work panel.")
+
+(defconst mevedel-view-execution--row-limit 5
+  "Rows the panel lists before offering to show all.")
+
 (defvar-local mevedel-view-execution--selected nil
   "Selected public snapshot, with its :session and presentation-only flags.
 Only this item can retain terminal facts and bounded :whole-output.")
+
+(defvar-local mevedel-view-execution--selected-agent nil
+  "Canonical path of the expanded agent row, or nil.
+At most one row is expanded: this and `mevedel-view-execution--selected'
+exclude each other.")
+
+(defvar-local mevedel-view-execution--show-all nil
+  "Non-nil while the panel lists every row instead of the first few.")
 
 (defun mevedel-view-execution--same-p (left right)
   "Whether LEFT and RIGHT identify the same owner's execution."
@@ -81,8 +116,48 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
     (setq mevedel-view-execution--selected
           (unless (and (eq session (plist-get mevedel-view-execution--selected :session))
                        (mevedel-view-execution--same-p mevedel-view-execution--selected current))
-            (plist-put (copy-sequence current) :session session)))
+            (plist-put (copy-sequence current) :session session))
+          mevedel-view-execution--selected-agent nil)
     (mevedel-view--render-status)))
+
+(defun mevedel-view-execution--toggle-agent (path)
+  "Toggle the inline actions of the agent row at canonical PATH."
+  (setq mevedel-view-execution--selected-agent
+        (unless (equal path mevedel-view-execution--selected-agent) path))
+  (when mevedel-view-execution--selected-agent
+    (setq mevedel-view-execution--selected nil))
+  (mevedel-view--render-status))
+
+(defun mevedel-view-execution--agent-row (path)
+  "Return the current status row of active agent PATH, or signal."
+  (or (cl-find path (mevedel-view--agent-status-collect)
+               :key (lambda (row) (plist-get row :path)) :test #'equal)
+      (user-error "Agent %s is no longer active" path)))
+
+(defun mevedel-view-execution--agent-conversation (path)
+  "Show the Agent call that started PATH in its parent's conversation."
+  (let ((row (mevedel-view-execution--agent-row path)))
+    (unless (plist-get row :tool-use-id)
+      (user-error "The call that started %s is not available" path))
+    (mevedel-view-audit-show-result
+     (list :owner (or (plist-get row :parent-path) "/root")
+           :tool-use-id (plist-get row :tool-use-id)))))
+
+(defun mevedel-view-execution-toggle-panel ()
+  "Collapse or expand the background-work panel."
+  (interactive)
+  (mevedel-view-zone-set-collapse-state
+   mevedel-view-execution--collapse-key
+   (not (mevedel-view-zone-collapse-state mevedel-view-execution--collapse-key nil)))
+  (mevedel-view--render-status))
+
+(defun mevedel-view-execution-reset ()
+  "Reset the panel's view-local expansion, overflow and collapse state."
+  (setq mevedel-view-execution--selected nil
+        mevedel-view-execution--selected-agent nil
+        mevedel-view-execution--show-all nil)
+  (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key nil)
+  (mevedel-view--render-status))
 
 (defun mevedel-view-execution--action (text function)
   "Return TEXT carrying the local action FUNCTION, including its margins."
@@ -102,10 +177,11 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
               'help-echo help))
 
 (defun mevedel-view-execution--callback (action session &optional owner id)
-  "Build ACTION for SESSION, OWNER and ID, retaining no volatile snapshot."
+  "Build ACTION for SESSION, OWNER and ID, retaining no volatile snapshot.
+Agent actions receive the agent's canonical path as OWNER and no ID."
   (lambda ()
     (unless (eq session (mevedel-view--status-session))
-      (user-error "Execution belongs to a different session"))
+      (user-error "Background work belongs to a different session"))
     (let ((identity (list :owner owner :execution-id id)))
       (pcase action
         ('toggle (mevedel-view-execution--toggle session identity))
@@ -116,7 +192,19 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
         ('stop
          (let ((current (mevedel-view-execution--current session identity t)))
            (mevedel-execution-stop-user session (plist-get current :execution-id))))
-        ('all (mevedel-executions-list-open))))))
+        ('agent-toggle (mevedel-view-execution--toggle-agent owner))
+        ('transcript
+         (mevedel-view-execution--agent-row owner)
+         (mevedel-view-agent-handle-activate owner))
+        ('agent-conversation (mevedel-view-execution--agent-conversation owner))
+        ('interrupt
+         (mevedel-view-execution--agent-row owner)
+         (mevedel-agent-control-interrupt-user session owner))
+        ('collapse (mevedel-view-execution-toggle-panel))
+        ('show-all
+         (setq mevedel-view-execution--show-all (not mevedel-view-execution--show-all))
+         (mevedel-view--render-status))
+        ('manage (mevedel-background-list-open))))))
 
 (defun mevedel-view-execution--state-label (snapshot)
   "Return an explicit lifecycle label for SNAPSHOT."
@@ -153,39 +241,99 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
      ((plist-get snapshot :unavailable-p) 'mevedel-view-tool-metadata)
      (t 'mevedel-view-agent-running))))
 
+(defun mevedel-view-execution--row (spec)
+  "Return one whole clickable panel row described by plist SPEC.
+SPEC holds :selected, :state, :state-face, :kind, :label, :facts (a list of
+strings), :depth and :callback.  Every kind shares this grammar:
+chevron, padded state, padded kind, label, then metadata."
+  (mevedel-view-execution--action
+   (concat "  "
+           (make-string (* 2 (or (plist-get spec :depth) 0)) ?\s)
+           (mevedel-view-execution--face
+            (if (plist-get spec :selected) "▾ " "▸ ") 'mevedel-view-tool-metadata)
+           (mevedel-view-execution--face
+            (string-pad (plist-get spec :state) 9) (plist-get spec :state-face))
+           " "
+           (mevedel-view-execution--face
+            (string-pad (plist-get spec :kind) 8) 'mevedel-view-tool-metadata)
+           " "
+           (truncate-string-to-width
+            (replace-regexp-in-string "[\n\r\t]+" " " (plist-get spec :label))
+            60 nil nil "…")
+           (mevedel-view-execution--face
+            (mapconcat (lambda (fact) (concat " · " fact)) (plist-get spec :facts) "")
+            'mevedel-view-tool-metadata)
+           "\n")
+   (plist-get spec :callback)))
+
 (defun mevedel-view-execution--line (snapshot)
-  "Return a whole clickable status row for SNAPSHOT."
+  "Return a whole clickable status row for execution SNAPSHOT."
   (let* ((session (mevedel-view--status-session))
-         (selected (and (eq session (plist-get mevedel-view-execution--selected :session))
-                        (mevedel-view-execution--same-p snapshot mevedel-view-execution--selected)))
          (monitor (eq (plist-get snapshot :kind) 'monitor))
          (owner (plist-get snapshot :owner))
-         (label (or (and monitor (plist-get snapshot :description))
-                    (plist-get snapshot :command) "Bash"))
-         (dot (mevedel-view-execution--face " · " 'mevedel-view-tool-metadata))
          (events (or (plist-get snapshot :event-count) 0)))
-    (mevedel-view-execution--action
-     (concat "  "
-             (mevedel-view-execution--face (if selected "▾ " "▸ ")
-                                           'mevedel-view-tool-metadata)
-             (mevedel-view-execution--face
-              (mevedel-view-execution--state-label snapshot)
-              (mevedel-view-execution--state-face snapshot))
-             dot
-             (truncate-string-to-width
-              (replace-regexp-in-string "[\n\r\t]+" " " label) 72 nil nil "…")
-             (mevedel-view-execution--face
-              (concat
-               (when monitor
-                 (concat
-                  (when-let* ((expires (plist-get snapshot :expires-at)))
-                    (format " · expires %s" (format-time-string "%H:%M:%S" expires)))
-                  (format " · %d %s" events (if (= events 1) "event" "events"))))
-               (unless (equal owner "/root") (format " · %s" owner)))
-              'mevedel-view-tool-metadata)
-             "\n")
-     (mevedel-view-execution--callback
-      'toggle session owner (plist-get snapshot :execution-id)))))
+    (mevedel-view-execution--row
+     (list :selected (and (eq session (plist-get mevedel-view-execution--selected :session))
+                          (mevedel-view-execution--same-p
+                           snapshot mevedel-view-execution--selected))
+           :state (mevedel-view-execution--state-label snapshot)
+           :state-face (mevedel-view-execution--state-face snapshot)
+           :kind (if monitor "monitor" "bash")
+           :label (or (plist-get snapshot :description)
+                      (plist-get snapshot :command) "Bash")
+           :facts (delq nil
+                        (list (when monitor
+                                (format "%d %s" events (if (= events 1) "event" "events")))
+                              (when-let* ((expires (and monitor (plist-get snapshot :expires-at))))
+                                (format "until %s" (format-time-string "%H:%M" expires)))
+                              (unless (equal owner "/root") owner)))
+           :callback (mevedel-view-execution--callback
+                      'toggle session owner (plist-get snapshot :execution-id))))))
+
+(defun mevedel-view-execution--agent-line (session row)
+  "Return a whole clickable status row for SESSION's active agent ROW."
+  (let ((path (plist-get row :path))
+        (status (plist-get row :status)))
+    (mevedel-view-execution--row
+     (list :selected (equal path mevedel-view-execution--selected-agent)
+           :state (pcase status ('blocked "Blocked") ('waiting "Waiting") (_ "Running"))
+           :state-face (if (eq status 'running)
+                           'mevedel-view-agent-running
+                         'mevedel-view-tool-warning)
+           :kind "agent"
+           :label path
+           :depth (plist-get row :depth)
+           :facts (delq nil
+                        (list (pcase (plist-get row :activity)
+                                ('permission-blocked "waiting for permission")
+                                ('interaction-blocked "waiting for input")
+                                (_ (mevedel-view-agent-model-label
+                                    (plist-get row :model-metadata))))))
+           :callback (mevedel-view-execution--callback 'agent-toggle session path)))))
+
+(defun mevedel-view-execution--agent-details (session row)
+  "Return expanded model details and controls for SESSION's agent ROW."
+  (let ((path (plist-get row :path)))
+    (concat
+     (when-let* ((details (mevedel-view-agent-model-details
+                           (plist-get row :model-metadata))))
+       (mevedel-view-execution--face
+        (concat (replace-regexp-in-string "^" "    " details) "\n")
+        'mevedel-view-tool-metadata))
+     "    "
+     (mevedel-view-execution--button
+      "[Open transcript]" (mevedel-view-execution--callback 'transcript session path)
+      "RET: open this agent's conversation")
+     (when (plist-get row :tool-use-id)
+       (concat "  " (mevedel-view-execution--button
+                     "[Show in conversation]"
+                     (mevedel-view-execution--callback 'agent-conversation session path)
+                     "RET: show the Agent call that started this agent")))
+     "  "
+     (mevedel-view-execution--button
+      "[Interrupt]" (mevedel-view-execution--callback 'interrupt session path)
+      "RET: interrupt this agent's current turn")
+     "\n")))
 
 (defun mevedel-view-execution--preview (snapshot)
   "Return at most three width-bounded preview lines for SNAPSHOT."
@@ -312,42 +460,106 @@ LIVE indicates current public live membership, not retained selection state."
        "RET: stop this execution")))
    "\n"))
 
-(defun mevedel-view-execution--header (session live)
-  "Return SESSION's background-work rule, counting LIVE snapshots.
-The rule matches the task and agent status headers; its `All…' label
-opens the executions list."
-  (let* ((watching (cl-count 'monitor live
-                             :key (lambda (item) (plist-get item :kind))))
-         (running (- (length live) watching))
-         (all "All…")
+(defun mevedel-view-execution--header (session agents live collapsed)
+  "Return SESSION's background-work rule for AGENTS and LIVE executions.
+It counts blocked agents, agents, commands and monitors, and ends with the
+panel's collapse toggle, `[-]' or `[+]' when COLLAPSED."
+  (let* ((blocked (cl-count-if (lambda (row) (memq (plist-get row :status)
+                                                   '(blocked waiting)))
+                               agents))
+         (monitors (cl-count 'monitor live :key (lambda (item) (plist-get item :kind))))
+         (commands (- (length live) monitors))
+         (count (lambda (n singular plural)
+                  (when (> n 0) (format "%d %s" n (if (= n 1) singular plural)))))
+         (toggle (if collapsed "[+]" "[-]"))
          (header (mevedel-view--zone-separator
-                  (string-join
-                   (delq nil (list "background work"
-                                   (when (> running 0) (format "%d running" running))
-                                   (when (> watching 0) (format "%d watching" watching))
-                                   all))
-                   " · "))))
-    ;; A narrow rule may clip the label.  Keep the link reachable by
-    ;; replacing the rule's leading dashes, as the agent header does.
-    (unless (string-search all header)
-      (setq header (concat (substring header 0 1) all (substring header 4))))
-    (let ((start (string-search all header)))
+                  (concat
+                   (string-join
+                    (delq nil (list "background work"
+                                    (funcall count blocked "blocked" "blocked")
+                                    (funcall count (length agents) "agent" "agents")
+                                    (funcall count commands "command" "commands")
+                                    (funcall count monitors "monitor" "monitors")))
+                    " · ")
+                   " " toggle))))
+    ;; A narrow rule may clip the label.  Keep the toggle reachable by
+    ;; replacing the rule's leading dashes.
+    (unless (string-search toggle header)
+      (setq header (concat (substring header 0 1) toggle (substring header 4))))
+    (when-let* ((label (and (> blocked 0) (format "%d blocked" blocked)))
+                (start (string-search label header)))
+      (add-text-properties start (+ start (length label))
+                           '(face mevedel-view-tool-warning
+                             font-lock-face mevedel-view-tool-warning)
+                           header))
+    (let ((start (string-search toggle header)))
       (concat (substring header 0 start)
               (mevedel-view-execution--button
-               all (mevedel-view-execution--callback 'all session)
-               "RET: list all background executions")
-              (substring header (+ start (length all)))))))
+               toggle (mevedel-view-execution--callback 'collapse session)
+               (if collapsed "RET: show background work" "RET: hide background work"))
+              (substring header (+ start (length toggle)))))))
+
+(defun mevedel-view-execution--controls (session total)
+  "Return the panel's last row for SESSION with TOTAL items.
+It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
+`[Manage]', which opens the background-work cockpit."
+  (concat
+   "  "
+   (when (> total mevedel-view-execution--row-limit)
+     (concat (mevedel-view-execution--button
+              (if mevedel-view-execution--show-all
+                  "[Show fewer]"
+                (format "[Show all %d]" total))
+              (mevedel-view-execution--callback 'show-all session)
+              (if mevedel-view-execution--show-all
+                  "RET: list only the first rows"
+                "RET: list every background item here"))
+             "  "))
+   (mevedel-view-execution--button
+    "[Manage]" (mevedel-view-execution--callback 'manage session)
+    "RET: open the background-work cockpit")
+   "\n"))
 
 (defun mevedel-view-execution-fragment (session)
-  "Return the background execution status fragment for SESSION, or nil."
+  "Return SESSION's background-work panel fragment, or nil when idle."
   (unless (eq session (plist-get mevedel-view-execution--selected :session))
     (setq mevedel-view-execution--selected nil))
-  (let* ((live (cl-remove-if-not (lambda (item) (plist-get item :yielded))
+  (let* ((agents (mevedel-view--agent-status-collect))
+         (live (cl-remove-if-not (lambda (item) (plist-get item :yielded))
                                 (mevedel-view-execution--live session)))
          (selected-live (cl-find-if
                          (lambda (item) (mevedel-view-execution--same-p
                                         item mevedel-view-execution--selected)) live))
-         (rows (seq-take live 5)))
+         ;; Needs attention first, then running work, then watchers.
+         (items (append
+                 (mapcar (lambda (row) (cons 'agent row))
+                         (cl-remove-if-not (lambda (row) (memq (plist-get row :status)
+                                                               '(blocked waiting)))
+                                           agents))
+                 (mapcar (lambda (row) (cons 'agent row))
+                         (cl-remove-if (lambda (row) (memq (plist-get row :status)
+                                                           '(blocked waiting)))
+                                       agents))
+                 (mapcar (lambda (item) (cons 'execution item))
+                         (cl-remove 'monitor live :key (lambda (item) (plist-get item :kind))))
+                 (mapcar (lambda (item) (cons 'execution item))
+                         (cl-remove-if-not (lambda (item) (eq (plist-get item :kind) 'monitor))
+                                           live))))
+         (selected-item (cl-find-if
+                         (lambda (item)
+                           (if (eq (car item) 'agent)
+                               (equal (plist-get (cdr item) :path)
+                                      mevedel-view-execution--selected-agent)
+                             (eq (cdr item) selected-live)))
+                         items))
+         (rows (if mevedel-view-execution--show-all
+                   items
+                 (seq-take items mevedel-view-execution--row-limit)))
+         (collapsed (mevedel-view-zone-collapse-state
+                     mevedel-view-execution--collapse-key nil)))
+    (unless (cl-find mevedel-view-execution--selected-agent agents
+                     :key (lambda (row) (plist-get row :path)) :test #'equal)
+      (setq mevedel-view-execution--selected-agent nil))
     (when selected-live
       (setq mevedel-view-execution--selected
             (plist-put (copy-sequence selected-live) :session session)))
@@ -356,25 +568,31 @@ opens the executions list."
       ;; through that gap, but do not offer live controls on stale facts.
       (setq mevedel-view-execution--selected
             (plist-put mevedel-view-execution--selected :unavailable-p t)))
-    (when (and selected-live (not (member selected-live rows)))
-      (setq rows (append (seq-take rows 4) (list selected-live))))
-    (when (or rows mevedel-view-execution--selected)
-      (let ((body (mevedel-view-execution--header session live)))
-        (when (and mevedel-view-execution--selected (not selected-live))
-          (setq rows (append rows (list mevedel-view-execution--selected))))
-        (dolist (snapshot rows)
-          (setq body (concat body (mevedel-view-execution--line snapshot)))
-          (when (mevedel-view-execution--same-p snapshot mevedel-view-execution--selected)
-            (setq body (concat body (mevedel-view-execution--details
-                                     session snapshot selected-live)))))
-        (when (> (length live) 5)
-          (setq body (concat body "  " (mevedel-view-execution--button
-                                       (format "+%d more / all" (- (length live) 5))
-                                       (mevedel-view-execution--callback 'all session)
-                                       "RET: list all background executions")
-                             "\n")))
-        (list :namespace 'status :id 'executions :priority 50 :body body
-              :body-suffix "\n" :navigatable t :entry 'executions)))))
+    (when (and selected-item (not (memq selected-item rows)))
+      (setq rows (append (seq-take rows (1- mevedel-view-execution--row-limit))
+                         (list selected-item))))
+    (when (and mevedel-view-execution--selected (not selected-live))
+      (setq rows (append rows (list (cons 'execution mevedel-view-execution--selected)))))
+    (when rows
+      (let ((body (mevedel-view-execution--header session agents live collapsed)))
+        (unless collapsed
+          (dolist (item rows)
+            (let ((data (cdr item)))
+              (if (eq (car item) 'agent)
+                  (progn
+                    (setq body (concat body (mevedel-view-execution--agent-line session data)))
+                    (when (equal (plist-get data :path) mevedel-view-execution--selected-agent)
+                      (setq body (concat body (mevedel-view-execution--agent-details
+                                               session data)))))
+                (setq body (concat body (mevedel-view-execution--line data)))
+                (when (mevedel-view-execution--same-p data mevedel-view-execution--selected)
+                  (setq body (concat body (mevedel-view-execution--details
+                                           session data selected-live)))))))
+          (setq body (concat body (mevedel-view-execution--controls session (length items)))))
+        (list :namespace 'status :id 'background :priority 50 :body body
+              :body-suffix "\n" :navigatable t :entry 'background
+              :collapsible t :collapse-key mevedel-view-execution--collapse-key
+              :collapsed collapsed)))))
 
 (defun mevedel-view-execution--view (session data-buffer)
   "Resolve SESSION's parent view from originating DATA-BUFFER, without scans."

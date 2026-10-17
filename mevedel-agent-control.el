@@ -648,21 +648,31 @@ Recovery repairs neither mark records nor release waits."
                  (memq record (mevedel-session-messages session)))
         (mevedel-pending-inputs-offer-root-event session)))))
 
-(defun mevedel-agent-control--enqueue
-    (session recipient record &optional wake-reason)
-  "Durably queue RECORD for RECIPIENT, then wake a matching wait."
+(defun mevedel-agent-control--enqueue-records
+    (session recipient records &optional wake-reason)
+  "Durably queue RECORDS (FIFO) for RECIPIENT with one commit, then wake.
+All records are secured or none: a failed commit restores the queue."
   (let ((previous
          (mevedel-agent-control--mailbox-queue session recipient)))
     (mevedel-agent-control--set-mailbox-queue
-     session recipient (cons record previous))
+     session recipient (append (reverse records) previous))
     (condition-case err
         (mevedel-agent-control-commit-session session)
       (error
        (mevedel-agent-control--set-mailbox-queue
         session recipient previous)
        (signal (car err) (cdr err))))
-    (mevedel-agent-control--deliver-mail session recipient record wake-reason)
-    record))
+    (when records
+      (mevedel-agent-control--deliver-mail
+       session recipient (car (last records)) wake-reason))
+    records))
+
+(defun mevedel-agent-control--enqueue
+    (session recipient record &optional wake-reason)
+  "Durably queue RECORD for RECIPIENT, then wake a matching wait."
+  (mevedel-agent-control--enqueue-records
+   session recipient (list record) wake-reason)
+  record)
 
 (defun mevedel-agent-control-steer-user
     (session message &optional before-wake metadata)
@@ -708,12 +718,14 @@ non-root recipients still require an explicit follow-up to start a turn."
     recipient))
 
 (defun mevedel-agent-control-enqueue-execution-result
-    (session owner body &optional execution-id wake)
+    (session owner body &optional execution-id wake meta)
   "Queue yielded execution BODY for its OWNER in SESSION.
 The owner reads it at its next provider request, like the root does.
 EXECUTION-ID correlates the record with its execution while Emacs runs.
 WAKE marks a root record that should start a turn when the model is idle;
-the mark is runtime state and never persisted."
+the mark is runtime state and never persisted.  META is a plist of
+structural facts (strings and integers) that the delivery block carries
+as opening-tag attributes."
   (unless (and (mevedel-agent-path-p owner) (stringp body))
     (error "Invalid execution result"))
   (mevedel-agent-control--enqueue
@@ -725,27 +737,38 @@ the mark is runtime state and never persisted."
           :payload body
           :timestamp (current-time))
     (and execution-id (list :execution-id execution-id))
+    (and meta (list :meta meta))
     (and wake (list :wake t))))
   t)
 
-(defun mevedel-agent-control-enqueue-monitor-event
-    (session execution-id description body wake)
-  "Queue one Monitor BODY for SESSION's root.
-EXECUTION-ID and DESCRIPTION identify the monitor.  WAKE marks the record
-as one that starts a turn when the model is idle."
-  (unless (and (stringp execution-id) (stringp description) (stringp body))
+(defun mevedel-agent-control-enqueue-monitor-events
+    (session execution-id description entries wake)
+  "Queue Monitor ENTRIES for SESSION's root with one durable commit.
+Each entry is (BODY META TERMINAL): BODY is the record text, META a plist of
+structural facts carried as opening-tag attributes, and TERMINAL makes the
+record the monitor's `MONITOR_TERMINAL' notice instead of an event.
+EXECUTION-ID and DESCRIPTION identify the monitor.  WAKE marks every record
+as one that starts a turn when the model is idle.  The records are secured
+together or not at all, so a retry cannot duplicate a partial batch."
+  (unless (and (stringp execution-id) (stringp description)
+               (cl-every (lambda (entry) (stringp (car entry))) entries))
     (error "Invalid monitor event"))
-  (mevedel-agent-control--enqueue
-   session "/root"
-   (append
-    (list :type 'MONITOR
-          :sender "/root"
-          :recipient "/root"
-          :execution-id execution-id
-          :description description
-          :payload body
-          :timestamp (current-time))
-    (and wake (list :wake t))))
+  (when entries
+    (mevedel-agent-control--enqueue-records
+     session "/root"
+     (mapcar
+      (lambda (entry)
+        (append
+         (list :type (if (nth 2 entry) 'MONITOR_TERMINAL 'MONITOR)
+               :sender "/root"
+               :recipient "/root"
+               :execution-id execution-id
+               :description description
+               :payload (car entry)
+               :timestamp (current-time))
+         (and (nth 1 entry) (list :meta (nth 1 entry)))
+         (and wake (list :wake t))))
+      entries)))
   t)
 
 (defun mevedel-agent-control-wake-pending-p (session)
@@ -1106,16 +1129,19 @@ Return rollback and post-commit delivery closures for INVOCATION."
          session recipient
          (append
           (mapcar
-           (lambda (body)
-             (list :type 'EXECUTION
-                   :sender (mevedel-agent-record-path record)
-                   :recipient recipient :payload body
-                   :timestamp (current-time)))
+           (lambda (entry)
+             (append
+              (list :type 'EXECUTION
+                    :sender (mevedel-agent-record-path record)
+                    :recipient recipient :payload (car entry)
+                    :timestamp (current-time))
+              (and (cdr entry) (list :meta (cdr entry)))))
            ;; Both lists are newest first; completions after the answer
-           ;; are the newer ones.
+           ;; are the newer ones.  Entries are (BODY . META).
            (append
             (mevedel-agent-invocation-runtime-execution-results invocation)
-            (mapcar (lambda (item) (plist-get item :payload))
+            (mapcar (lambda (item)
+                      (cons (plist-get item :payload) (plist-get item :meta)))
                     unread-executions)))
           (cons result previous-queue)))
         (when unread-executions
@@ -1291,6 +1317,19 @@ Return rollback and post-commit delivery closures for INVOCATION."
          (mevedel-agent-record-invocation record)
          (format "interrupted by %s" caller-path)))
       (list :path path :previous-activity activity))))
+
+(defun mevedel-agent-control-interrupt-user (session path)
+  "Interrupt PATH's current turn in SESSION on the user's behalf.
+Return non-nil when an active turn was interrupted; an idle agent is left
+alone.  The agent stays retained, as after `InterruptAgent'."
+  (when (equal path "/root")
+    (user-error "Use the session's own cancel command for /root"))
+  (let ((record (or (cdr (assoc path (mevedel-session-agent-registry session)))
+                    (user-error "Agent %s is no longer available" path))))
+    (when (mevedel-agent-control--active-p record)
+      (mevedel-agent-runtime-interrupt
+       (mevedel-agent-record-invocation record) "interrupted by user")
+      t)))
 
 (defun mevedel-agent-control--summary-metadata (result)
   "Return disclosable provider metadata from context-summary RESULT."

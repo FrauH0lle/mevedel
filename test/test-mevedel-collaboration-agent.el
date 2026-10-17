@@ -413,10 +413,9 @@
           (with-current-buffer parent
             (delay-mode-hooks (org-mode))
             (setq-local mevedel--session session)
-            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\" "
+                    "execution_id=\"exec-1\" command=\"exit 2\" outcome=\"failure\" exit_code=\"2\">\n"
                     "forwarded bounded output\n"
-                    "<bash-execution execution_id=\"exec-1\" command=\"exit 2\" "
-                    "outcome=\"failure\" exit_code=\"2\"/>\n"
                     "</agent-message>\n"))
           (with-current-buffer child
             (delay-mode-hooks (org-mode))
@@ -508,7 +507,7 @@
             (mevedel-collaboration--handle-execution-result-get
              room 1 '(:reqId 4 :owner "/root/child" :executionId "exec-1"))
             (should (equal "forwarded" (plist-get (cdar sent) :source)))
-            (should (equal "forwarded bounded output" (plist-get (cdar sent) :output)))
+            (should (equal "forwarded bounded output\n" (plist-get (cdar sent) :output)))
             ;; A gone archive has no authority or result; no path is accepted
             ;; from the guest as a substitute.
             (delete-file (mevedel-session-artifacts-segment-path directory 1))
@@ -535,10 +534,10 @@
           (with-current-buffer parent
             (delay-mode-hooks (org-mode))
             (setq-local mevedel--session session)
-            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\" "
+                    "execution_id=\"exec-large\" outcome=\"success\">\n"
                     (make-string 60000 ?x) "\n"
-                    "<bash-execution execution_id=\"exec-large\" "
-                    "outcome=\"success\"/>\n</agent-message>\n"))
+                    "</agent-message>\n"))
           (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport _peer frame) (setq sent (mevedel-test--frame frame)) t)))
             (mevedel-collaboration--handle-execution-result-get

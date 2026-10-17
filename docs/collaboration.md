@@ -951,9 +951,12 @@ children of ToolCall. If an intervening archive is unreadable and the command
 is no longer running, its original row keeps the available output but warns
 that completion evidence is unavailable instead of guessing an outcome.
 Yielded root and child Bash executions produce one compact, output-free
-completion breadcrumb in their owning guest transcripts. A forwarded child
-`EXECUTION` mailbox gives the parent its own breadcrumb. Each receiving
-transcript deduplicates by owner and execution ID.
+completion breadcrumb in their owning guest transcripts. The native view renders
+each forwarded `EXECUTION` mailbox as a separate expandable notice, without
+deduplicating the original command's breadcrumb. The guest projection instead
+provides an output-free result link for forwarded mail, deduplicated by owner and
+execution ID in each receiving transcript. Identity and terminal facts come from
+the structured mailbox opener, never metadata-looking text in its output body.
 **Show result** makes a separate read-only request for retained output; it does
 not duplicate the body in the parent transcript or alter the model-visible
 mailbox. The host validates owner and ID against either the receiving root or

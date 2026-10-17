@@ -565,6 +565,25 @@ ToolCall, excluding native tools.  Without native ToolCall there is none."
                                       text t t)))
     text))
 
+(defun mevedel-tools--meta-attributes (meta)
+  "Return opening-tag attributes for mailbox record META, with a leading space.
+META is a plist of structural facts; nil values are omitted."
+  (mapconcat
+   (lambda (entry)
+     (if-let* ((value (plist-get meta (car entry))))
+         (format " %s=\"%s\"" (cdr entry)
+                 (xml-escape-string
+                  (replace-regexp-in-string
+                   "[\n\r\t ]+" " " (format "%s" value))))
+       ""))
+   '((:execution-id . "execution_id") (:description . "description")
+     (:command . "command") (:event-count . "event_count")
+     (:termination . "termination") (:outcome . "outcome")
+     (:exit-code . "exit_code") (:omitted . "omitted")
+     (:output-path . "output_path") (:output-bytes . "output_bytes")
+     (:omitted-output-bytes . "omitted_output_bytes"))
+   ""))
+
 (defun mevedel-tools--message-delivery-block (msg)
   "Return the user-role delivery block for mailbox MSG."
   (pcase (plist-get msg :type)
@@ -576,20 +595,23 @@ ToolCall, excluding native tools.  Without native ToolCall there is none."
              (mevedel-tools--mailbox-body-escape
               (or (plist-get msg :payload) ""))))
     ((or 'EXECUTION 'MAIL)
-     (format "<agent-message type=\"%s\" sender=\"%s\" recipient=\"%s\">\n%s\n</agent-message>"
+     (format "<agent-message type=\"%s\" sender=\"%s\" recipient=\"%s\"%s>\n%s\n</agent-message>"
              (plist-get msg :type)
              (plist-get msg :sender)
              (plist-get msg :recipient)
+             (mevedel-tools--meta-attributes (plist-get msg :meta))
              (mevedel-tools--mailbox-body-escape
               (or (plist-get msg :payload) ""))))
-    ('MONITOR
-     (format "<agent-message type=\"MONITOR\" sender=\"%s\" recipient=\"%s\" execution_id=\"%s\" description=\"%s\">\n%s\n</agent-message>"
+    ((or 'MONITOR 'MONITOR_TERMINAL)
+     (format "<agent-message type=\"%s\" sender=\"%s\" recipient=\"%s\" execution_id=\"%s\" description=\"%s\"%s>\n%s\n</agent-message>"
+             (plist-get msg :type)
              (plist-get msg :sender)
              (plist-get msg :recipient)
              (xml-escape-string (or (plist-get msg :execution-id) ""))
              (xml-escape-string
               (replace-regexp-in-string
                "[\n\r]+" " " (or (plist-get msg :description) "")))
+             (mevedel-tools--meta-attributes (plist-get msg :meta))
              (mevedel-tools--mailbox-body-escape
               (or (plist-get msg :payload) ""))))
     ('USER

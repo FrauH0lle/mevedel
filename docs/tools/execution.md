@@ -205,9 +205,12 @@ Retained tool records remain inspectable through
 the execution-history disclosure. These rules also apply within ToolCall.
 
 Only a command that actually yielded receives a completion breadcrumb. Whether
-completion was polled or delivered independently, the receiving transcript
-shows one linked line, such as `↳ Finished: ./run-tests  [Show result]` or
-`↳ Failed: ./run-tests · exit 1  [Show result]`. Inside an activity group the
+completion was polled or delivered independently, the original command row
+shows one linked line, such as `↳ Finished: ./run-tests  [Show result]`,
+`↳ Failed: ./run-tests · exit 1  [Show result]`, or `↳ Stopped: ...` /
+`↳ Timed out: ...`. A stop is neutral, not a failure, though the model-facing
+outcome fact stays `failure`. Receiving transcripts separately show a one-line
+background notice from the mailbox record. Inside an activity group the
 line folds into the group and is counted there, as in
 `ran 2 commands, 1 command finished, 1 failed`. Foreground commands have no
 breadcrumb. The breadcrumb repeats neither output nor a metadata summary;

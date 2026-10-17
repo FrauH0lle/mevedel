@@ -162,6 +162,9 @@ timeout wakes it. A `MAIL` wake-up is not sender completion; only the canonical
 `InterruptAgent` aborts one retained non-root agent's current turn by canonical
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
+The user can do the same from the view's background-work panel or cockpit
+(`mevedel-agent-control-interrupt-user`); the interrupted turn records the
+reason `interrupted by user`, and an idle agent is left alone.
 
 Creation validates and freezes its inputs, privately reserves the canonical
 path and a tree-wide capacity slot, runs `SubagentStart` exactly once, then
@@ -460,7 +463,11 @@ returned, are delivered without waking. Like any root mail they release an
 active root `WaitAgent`. A `MONITOR` record carries its `execution_id` and
 the monitor's `description`; the model receives it as
 `<agent-message type="MONITOR" sender="/root" recipient="/root"
-execution_id="..." description="...">` with the description XML-escaped, and
+execution_id="..." description="...">` with the description XML-escaped (a
+terminal notice uses `MONITOR_TERMINAL` with `event_count`, `termination`,
+`outcome`, `exit_code`; an `EXECUTION` record's opening tag carries
+`execution_id`, `description`, `command`, `termination`, `outcome`,
+`exit_code`, so views read opener attributes, never the payload), and
 the view shows it as a `Monitor: DESCRIPTION` card. The transcript parser
 treats it like other agent mail, never as user input. Records are saved with
 the session; their wake mark is runtime state and is dropped, so after a
@@ -619,7 +626,7 @@ available to the child. Rewind creates no child: it clears the current
 session's live agent ownership.
 
 `mevedel-view-agent.el` owns transcript lookup and inspection views plus the
-aggregate live-agent status and targeted handle refresh. The main view renders
+live-agent status rows and targeted handle refresh. The main view renders
 compact one-line agent handles from tool render-data and sidecar state.
 Handles show canonical path, role, status, call count, and transcript
 attribution; recent ephemeral
@@ -632,11 +639,11 @@ and tool cadence without redirecting parent interactions. See
 [`docs/view.md`](view.md#buffer-roles) for their update, scrolling, header,
 settlement, and failure-isolation contract.
 
-The agent view owner supplies aggregate running or blocked rows to the status
-zone so the user can locate active handles without scanning the whole
-transcript. Terminal agent outcomes stay in their inline tool handles
-and transcript views instead of being repeated in the aggregate status
-zone.
+The agent view owner supplies running, waiting, or blocked rows to the view's
+background-work panel, beside live commands and monitors, so the user can
+locate and control active agents without scanning the whole transcript.
+Terminal agent outcomes stay in their inline tool handles, transcript views,
+and result notices instead of being repeated in the panel.
 
 ## Permission and confinement propagation
 

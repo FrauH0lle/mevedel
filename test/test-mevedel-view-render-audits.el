@@ -135,7 +135,7 @@
   ,test
   (test)
   :doc "terminal facts determine one compact breadcrumb without output"
-  (should (equal "  ↳ Finished: ./run-tests  "
+  (should (equal "  ↳ Completed: ./run-tests  "
                  (mevedel-view-audit--breadcrumb-label
                   '(:command "./run-tests" :facts (:outcome success)))))
   (should (equal "  ↳ Failed: ./run-tests · exit 1  "
@@ -153,12 +153,13 @@
   (let ((label (mevedel-view-audit--breadcrumb-label
                 '(:command "sleep" :facts (:termination signaled
                                           :exit-code 13 :outcome failure)))))
-    (should (string-match-p "Signaled:.*signal 13" label))
+    (should (string-match-p "Failed:.*signal 13" label))
     (should-not (string-match-p "exit 13" label)))
   (let ((label (mevedel-view-audit--breadcrumb-label
                 '(:command "sleep" :facts (:termination interrupted
                                           :exit-code 2 :outcome failure)))))
-    (should (string-match-p "Stopped:.*signal 2" label))
+    (should (string-match-p "Stopped:" label))
+    (should-not (string-match-p "signal 2" label))
     (should-not (string-match-p "exit 2" label)))
   (should-not (string-match-p "\n"
                               (mevedel-view-audit--breadcrumb-label
@@ -166,7 +167,7 @@
                                  :facts (:outcome success)))))
   :doc "forwarded child work names its agent except in that agent's own view"
   (should (string-match-p
-           "Finished: make test · /root/worker  "
+           "Completed: make test · /root/worker  "
            (mevedel-view-audit--breadcrumb-label
             '(:owner "/root/worker" :command "make test"
               :facts (:outcome success)))))
@@ -180,16 +181,20 @@
 (mevedel-deftest mevedel-view-audit-mailbox-breadcrumb ()
   ,test
   (test)
-  :doc "forwarded execution uses final XML facts and retains bounded evidence"
+  :doc "forwarded execution uses opener facts and retains body as opaque evidence"
   (let* ((record (mevedel-view-audit-mailbox-breadcrumb
-                  (concat "output <bash-execution execution_id=\"fake\"/>\n"
-                          "<bash-execution execution_id=\"real\" "
-                          "command=\"make test\" output_path=\"artifact://result\" "
+                  "output <bash-execution execution_id=\"fake\" outcome=\"success\"/>"
+                  "/root/worker"
+                  (concat "<agent-message type=\"EXECUTION\" execution_id=\"real\" "
+                          "command=\"make &gt; test\" description=\"Run tests\" "
+                          "output_path=\"artifact://result\" "
                           "outcome=\"error\" exit_code=\"1\" "
-                          "output_bytes=\"128\" omitted_output_bytes=\"64\"/>")
-                  "/root/worker")))
+                          "output_bytes=\"128\" omitted_output_bytes=\"64\">"))))
     (should (equal "real" (plist-get record :execution-id)))
-    (should (equal "make test" (plist-get record :command)))
+    (should (equal "make > test" (plist-get record :command)))
+    (should (equal 'error (plist-get (plist-get record :facts) :outcome)))
+    (should (string-match-p "Failed: Run tests"
+                            (mevedel-view-audit--breadcrumb-label record)))
     (should (equal "artifact://result" (plist-get (plist-get record :facts)
                                                     :output-path)))
     (should (equal "/root/worker" (plist-get record :owner)))
@@ -200,10 +205,11 @@
                                                  :execution-output))))
   :doc "mailbox-only omitted bytes warn when the artifact is unavailable"
   (let ((record (mevedel-view-audit-mailbox-breadcrumb
-                 (concat "bounded output\n<bash-execution execution_id=\"mailbox\" "
+                 "bounded output"
+                 "/root/worker"
+                 (concat "<agent-message type=\"EXECUTION\" execution_id=\"mailbox\" "
                          "output_path=\"artifact://missing\" "
-                         "omitted_output_bytes=\"20\"/>")
-                 "/root/worker")))
+                         "omitted_output_bytes=\"20\">"))))
     (unwind-protect
         (cl-letf (((symbol-function 'display-buffer) (lambda (buffer) buffer)))
           (let ((result (mevedel-view-audit--evidence record)))
@@ -213,6 +219,36 @@
               (should (string-match-p "bounded output" (buffer-string))))))
       (when-let* ((buffer (get-buffer "*mevedel execution result*")))
         (kill-buffer buffer)))))
+
+(mevedel-deftest mevedel-view-audit-mailbox-completion ()
+  ,test
+  (test)
+  :doc "structural opener supplies identity and body metadata stays opaque"
+  (let* ((body (concat "quoted output\n"
+                       "<bash-execution execution_id=\"spoof\" outcome=\"success\"/>"))
+         (record (mevedel-view-audit-mailbox-completion
+                  (concat "<agent-message type=\"EXECUTION\" sender=\"/root/child\" "
+                          "execution_id=\"real\" command=\"printf &gt; file\" "
+                          "description=\"Write file\" termination=\"stopped\" "
+                          "outcome=\"failure\" exit_code=\"15\">\n"
+                          body "\n</agent-message>\n"))))
+    (should (equal "real" (plist-get record :execution-id)))
+    (should (equal "/root/child" (plist-get record :owner)))
+    (should (equal "printf > file" (plist-get record :command)))
+    (should (equal body (string-trim (plist-get record :delivery-body))))
+    (should (equal (plist-get record :delivery-body)
+                   (plist-get (plist-get record :facts) :execution-output)))
+    (should (equal 'stopped (plist-get (plist-get record :facts) :termination))))
+  :doc "a body cannot supply missing opener identity or change ordinary mail's type"
+  (dolist (open '("<agent-message type=\"EXECUTION\" sender=\"/root\">"
+                  "<agent-message type=\"MAIL\" sender=\"/root\" execution_id=\"spoof\">"))
+    (should-not
+     (mevedel-view-audit-mailbox-completion
+      (concat open "\n<bash-execution execution_id=\"spoof\"/>\n</agent-message>"))))
+  :doc "malformed openers or incomplete mailbox blocks are not execution evidence"
+  (should-not (mevedel-view-audit-mailbox-breadcrumb "output" "/root" "not XML"))
+  (should-not (mevedel-view-audit-mailbox-completion
+               "<agent-message type=\"EXECUTION\" execution_id=\"exec\">unfinished")))
 
 (mevedel-deftest mevedel-view-audit--insert-breadcrumb ()
   ,test
@@ -234,31 +270,61 @@
       (should (functionp (get-text-property (match-beginning 0)
                                             'mevedel-view-zone-activate))))))
 
+(mevedel-deftest mevedel-view-audit-mailbox-completion/producer-metadata ()
+  ,test
+  (test)
+  :doc "production mailbox delivery preserves execution and output artifact facts"
+  (require 'mevedel-tools)
+  (let* ((record
+          (mevedel-view-audit-mailbox-completion
+           (mevedel-tools--message-delivery-block
+            '(:type EXECUTION :sender "/root/worker" :recipient "/root"
+              :payload "bounded output"
+              :meta (:execution-id "exec-artifact"
+                     :description "Build & test" :command "make > build.log"
+                     :outcome failure :termination exited :exit-code 2
+                     :output-path "artifact://execution/build-output.txt"
+                     :output-bytes 1024 :omitted-output-bytes 768)))))
+         (facts (plist-get record :facts)))
+    (should (equal "exec-artifact" (plist-get record :execution-id)))
+    (should (equal "/root/worker" (plist-get record :owner)))
+    (should (equal "make > build.log" (plist-get record :command)))
+    (should (equal "Build & test" (plist-get facts :description)))
+    (should (eq 'failure (plist-get facts :outcome)))
+    (should (eq 'exited (plist-get facts :termination)))
+    (should (equal 2 (plist-get facts :exit-code)))
+    (should (equal "artifact://execution/build-output.txt"
+                   (plist-get facts :output-path)))
+    (should (equal 1024 (plist-get facts :output-bytes)))
+    (should (equal 768 (plist-get facts :omitted-output-bytes)))
+    (should (equal "bounded output"
+                   (string-trim (plist-get facts :execution-output))))))
+
 (mevedel-deftest mevedel-view--decorate-agent-message-blocks ()
   ,test
   (test)
-  :doc "execution mail becomes one linked breadcrumb without duplicated output"
+  :doc "execution mail becomes an expandable notice, not an origin breadcrumb"
   (with-temp-buffer
-    (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+    (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\" "
+            "execution_id=\"exec-1\" outcome=\"failure\" exit_code=\"2\">\n"
             "test output\n"
             "<bash-execution execution_id=\"exec-1\" outcome=\"error\" "
             "exit_code=\"2\"/>\n</agent-message>\n")
     (mevedel-view--decorate-agent-message-blocks (point-min) (point-max))
-    (should (string-match-p "↳ Failed: Bash · exit 2 · /root/child  \\[Show result\\]"
+    (should (string-match-p "Background command.*failed (exit code 2)"
                             (buffer-string)))
-    (should-not (string-match-p "Bash completed\\|test output\\|<bash-execution"
-                                (buffer-string)))
     (goto-char (point-min))
-    (search-forward "[Show result]")
-    (should (equal "exec-1"
-                   (plist-get (get-text-property (match-beginning 0)
-                                                 'mevedel-view-execution-breadcrumb)
-                              :execution-id)))))
+    (search-forward "test output")
+    (should (get-text-property (match-beginning 0) 'invisible))
+    (should (get-text-property (match-beginning 0) 'mevedel-view-collapsed))
+    (should (get-text-property (point-min) 'mevedel-view-mailbox-notice))
+    (should-not (text-property-not-all (point-min) (point-max)
+                                      'mevedel-view-execution-breadcrumb nil))))
 
 (mevedel-deftest mevedel-view--decorate-agent-message-blocks/point-after ()
   ,test
   (test)
-  :doc "point stays after the breadcrumb so callers stamp and append past it"
+  :doc "point stays after the notice so callers stamp and append past it"
   (with-temp-buffer
     (insert "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
             "<bash-execution execution_id=\"exec-1\" outcome=\"error\" "
@@ -266,7 +332,7 @@
     (mevedel-view--decorate-agent-message-blocks (point-min) (point))
     (should (= (point) (point-max)))
     (should (get-text-property (1- (point))
-                               'mevedel-view-execution-breadcrumb))))
+                               'mevedel-view-mailbox-notice))))
 
 (mevedel-deftest mevedel-view--render-tool-call/preview-truncation ()
   ,test
@@ -464,21 +530,28 @@
 (mevedel-deftest mevedel-view-audit-breadcrumb-present-p ()
   ,test
   (test)
-  :doc "duplicate forwarded deliveries project once per receiving transcript"
+  :doc "each delivery remains a notice and cannot suppress the origin breadcrumb"
   (with-temp-buffer
     (insert (concat
-             "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+             "<agent-message type=\"EXECUTION\" sender=\"/root/child\" execution_id=\"one\" outcome=\"success\">\n"
              "<bash-execution execution_id=\"one\" outcome=\"success\"/>\n"
              "</agent-message>\n"
-             "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+             "<agent-message type=\"EXECUTION\" sender=\"/root/child\" execution_id=\"one\" outcome=\"success\">\n"
              "<bash-execution execution_id=\"one\" outcome=\"success\"/>\n"
              "</agent-message>\n"
-             "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+             "<agent-message type=\"EXECUTION\" sender=\"/root/child\" execution_id=\"two\" outcome=\"success\">\n"
              "<bash-execution execution_id=\"two\" outcome=\"success\"/>\n"
              "</agent-message>\n"))
     (mevedel-view--decorate-agent-message-blocks (point-min) (point-max))
-    (should (= 2 (how-many "\\[Show result\\]" (point-min) (point-max))))
-    (should-not (string-match-p "Bash completed\\|<agent-message" (buffer-string)))))
+    (should (= 3 (how-many "Background command" (point-min) (point-max))))
+    (let ((record '(:type execution-breadcrumb :execution-id "one"
+                    :owner "/root/child" :facts (:outcome success))))
+      (should-not (mevedel-view-audit-breadcrumb-present-p record (point-max)))
+      (goto-char (point-max))
+      (mevedel-view-audit--insert-breadcrumb record nil)
+      (should (mevedel-view-audit-breadcrumb-present-p record (point-max))))
+    (should (= 1 (how-many "\\[Show result\\]" (point-min) (point-max))))
+    (should-not (string-match-p "<agent-message" (buffer-string)))))
 
 (mevedel-deftest mevedel-view-child-call-retained-completion ()
   ,test
@@ -689,9 +762,9 @@
 
 (defun test-mevedel-view-audit--insert-history-delivery (execution-id)
   "Insert the mailbox delivery of EXECUTION-ID at point."
-  (insert (format (concat "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
-                          "TAIL\n<bash-execution execution_id=\"%s\" "
-                          "outcome=\"success\" exit_code=\"0\"/>\n"
+  (insert (format (concat "<agent-message type=\"EXECUTION\" sender=\"/root\" "
+                          "execution_id=\"%s\" outcome=\"success\" exit_code=\"0\">\n"
+                          "TAIL\n"
                           "</agent-message>\n")
                   execution-id)))
 
@@ -1789,7 +1862,7 @@
                  (list :data-buffer data :tool-use-id "original" :facts facts)))
               (goto-char (point-min))
               (mevedel-view--expand-turn)
-              (should (= 1 (how-many "Finished: printf result"
+              (should (= 1 (how-many "Completed: printf result"
                                      (point-min) (point-max))))
               (with-current-buffer data
                 (should (= 1 (length (mevedel-transcript-audit-records
@@ -2031,7 +2104,7 @@
 (mevedel-deftest mevedel-view-audit-breadcrumb-archived-delivery ()
   ,test
   (test)
-  :doc "a later mailbox retry cannot repeat an archived receiver breadcrumb"
+  :doc "an archived notice cannot suppress a later origin breadcrumb"
   (let* ((root (make-temp-file "mevedel-mailbox-delivery-" t))
          (data (generate-new-buffer " *next mailbox segment*"))
          (archive (mevedel-session-artifacts-segment-path root 1))
@@ -2045,7 +2118,7 @@
                   (mevedel-session-artifacts-segment-path root 3))
             (setq-local mevedel--session session))
           (with-temp-file archive
-            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\" execution_id=\"exec-1\" outcome=\"success\">\n"
                     "<bash-execution execution_id=\"exec-1\" outcome=\"success\"/>\n"
                     "</agent-message>\n"))
           (with-temp-buffer
@@ -2057,7 +2130,7 @@
             (let ((before (buffer-list)))
               (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
                          (lambda () data)))
-                (should (mevedel-view-audit-breadcrumb-present-p
+                (should-not (mevedel-view-audit-breadcrumb-present-p
                          '(:execution-id "exec-1" :owner "/root/child")
                          (point-max))))
               (should-not (cl-set-difference (buffer-list) before)))))
@@ -2078,18 +2151,19 @@
                 'mevedel-session-artifacts-read-transcript-segment))
          (reads 0)
          (delivery (lambda (id)
-                     (concat "<agent-message type=\"EXECUTION\" "
-                             "sender=\"/root/child\">\n"
-                             "<bash-execution execution_id=\"" id
-                             "\" outcome=\"success\"/>\n"
-                             "</agent-message>\n"))))
+                     (mevedel--format-hook-audit-record
+                      (list :type 'execution-breadcrumb :execution-id id
+                            :owner "/root/child" :facts '(:outcome success))))))
     (unwind-protect
         (progn
           (with-current-buffer data
             (setq buffer-file-name
                   (mevedel-session-artifacts-segment-path root 2))
             (setq-local mevedel--session session))
-          (with-temp-file archive (insert (funcall delivery "exec-1")))
+          (with-temp-file archive
+            (delay-mode-hooks (org-mode))
+            (insert (funcall delivery "exec-1"))
+            (mevedel-session-artifacts-stabilize-gptel-bounds))
           (with-temp-buffer
             (setq-local mevedel--data-buffer data)
             (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
@@ -2109,7 +2183,9 @@
               (should (= 1 reads))
               ;; Same-second rewrites still change the identity by size.
               (with-temp-file archive
-                (insert (funcall delivery "exec-2") (funcall delivery "exec-3")))
+                (delay-mode-hooks (org-mode))
+                (insert (funcall delivery "exec-2") (funcall delivery "exec-3"))
+                (mevedel-session-artifacts-stabilize-gptel-bounds))
               (should (mevedel-view-audit-breadcrumb-present-p
                        '(:execution-id "exec-2" :owner "/root/child")
                        (point-max)))
@@ -2139,14 +2215,16 @@
           (cl-loop for number from 1 to 3
                    do (with-temp-file
                           (mevedel-session-artifacts-segment-path root number)
+                        (delay-mode-hooks (org-mode))
                         (when (<= number 2)
-                          (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
-                                  "<bash-execution execution_id=\"old\" outcome=\"success\"/>\n"
-                                  "</agent-message>\n"))
+                          (insert (mevedel--format-hook-audit-record
+                                   '(:type execution-breadcrumb :execution-id "old"
+                                     :owner "/root/child" :facts (:outcome success)))))
                         (when (>= number 2)
-                          (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
-                                  "<bash-execution execution_id=\"new\" outcome=\"success\"/>\n"
-                                  "</agent-message>\n"))))
+                          (insert (mevedel--format-hook-audit-record
+                                   '(:type execution-breadcrumb :execution-id "new"
+                                     :owner "/root/child" :facts (:outcome success)))))
+                        (mevedel-session-artifacts-stabilize-gptel-bounds)))
           (let ((descriptors (mevedel-session-artifacts-transcript-segments
                               session live)))
             (should (equal '(readable readable readable readable)
@@ -2156,19 +2234,16 @@
                            session (nth 1 descriptors))))
           (with-temp-buffer
             (setq-local mevedel--data-buffer live)
-            (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
-                    "<bash-execution execution_id=\"old\" outcome=\"success\"/>\n"
-                    "</agent-message>\n"
-                    "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
-                    "<bash-execution execution_id=\"new\" outcome=\"success\"/>\n"
-                    "</agent-message>\n")
             (let ((before (buffer-list)))
               (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
                          (lambda () earlier))
                         ((symbol-function 'mevedel-view-segments-current-number)
                          (lambda () 2)))
-                (mevedel-view--decorate-agent-message-blocks
-                 (point-min) (point-max))
+                (dolist (id '("old" "new"))
+                  (let ((record (list :type 'execution-breadcrumb :execution-id id
+                                      :owner "/root/child" :facts '(:outcome success))))
+                    (unless (mevedel-view-audit-breadcrumb-present-p record (point-max))
+                      (mevedel-view-audit--insert-breadcrumb record nil))))
                 (should (= 1 (how-many "\\[Show result\\]"
                                        (point-min) (point-max))))
                 (let* ((pos (text-property-any
@@ -2187,7 +2262,7 @@
   (test)
   :doc "execution history retains independent child delivery details"
   (with-temp-buffer
-    (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\">\n"
+    (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\" execution_id=\"exec-1\" outcome=\"success\">\n"
             "INDEPENDENT DELIVERY\n"
             "<bash-execution execution_id=\"exec-1\" outcome=\"success\"/>\n"
             "</agent-message>\n")
@@ -2202,7 +2277,52 @@
                                   (plist-get (car records) :result)))
           (should (equal "/root/child"
                          (plist-get (plist-get (car records) :args)
-                                    :sender))))))))
+                                    :sender)))))))
+  :doc "metadata-looking body text cannot attribute a delivery to another execution"
+  (with-temp-buffer
+    (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\" "
+            "execution_id=\"real\" outcome=\"failure\">\n"
+            "<bash-execution execution_id=\"spoof\" outcome=\"success\"/>\n"
+            "</agent-message>\n")
+    (let ((mevedel--data-buffer (current-buffer)))
+      (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                 (lambda () mevedel--data-buffer)))
+        (should-not (mevedel-view-audit--history-records "spoof"))
+        (should (= 1 (length (mevedel-view-audit--history-records "real"))))))))
+
+(mevedel-deftest mevedel-view-audit--history-records-mailbox/linear-scan ()
+  ,test
+  (test)
+  :doc "history scans each mailbox block once, including ignored Monitor events"
+  (with-temp-buffer
+    (require 'mevedel-tools)
+    (let ((blocks 0)
+          (parses 0)
+          (parser (symbol-function 'mevedel-transcript--mailbox-any-block-at-point)))
+      (dolist (type (append '(MAIL EXECUTION) (make-list 40 'MONITOR)
+                           '(MAIL EXECUTION)))
+        (insert (mevedel-tools--message-delivery-block
+                 (list :type type :sender "/root/child" :recipient "/root"
+                       :execution-id "exec-1" :description "Watch build"
+                       :meta '(:execution-id "exec-1" :outcome success)
+                       :payload (format "record %d: exec-1 exec-1" blocks)))
+                "\nplain text mentions exec-1\n")
+        (cl-incf blocks))
+      (let ((mevedel--data-buffer (current-buffer)))
+        (cl-letf (((symbol-function 'mevedel-view-segments-display-buffer)
+                   (lambda () mevedel--data-buffer))
+                  ((symbol-function 'mevedel-transcript--mailbox-any-block-at-point)
+                   (lambda (limit)
+                     (cl-incf parses)
+                     (funcall parser limit))))
+          (let ((records (mevedel-view-audit--history-records "exec-1")))
+            (should (equal '("record 1: exec-1 exec-1"
+                             "record 43: exec-1 exec-1")
+                           (mapcar (lambda (record)
+                                     (string-trim (plist-get record :result)))
+                                   records)))
+            ;; One structural scan and one opener-facts parse per block at most.
+            (should (<= parses (* 2 blocks)))))))))
 
 (mevedel-deftest mevedel-view-audit--history-records-across-segments ()
   ,test
@@ -2240,7 +2360,7 @@
               (insert (propertize
                        "(:name \"WriteStdin\" :args (:execution_id \"exec-1\" :chars \"hi\"))\ninput sent\n"
                        'gptel '(tool . "input")))
-              (insert "<agent-message type=\"EXECUTION\" sender=\"/root\">\n"
+              (insert "<agent-message type=\"EXECUTION\" sender=\"/root\" execution_id=\"exec-1\" outcome=\"success\">\n"
                       "DELIVERED\n"
                       "<bash-execution execution_id=\"exec-1\" outcome=\"success\"/>\n"
                       "</agent-message>\n")

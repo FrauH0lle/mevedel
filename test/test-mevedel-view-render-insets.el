@@ -127,7 +127,7 @@
                 (mevedel-view-toggle-section))
               (should (equal "> keep\nsecond line" (mevedel-view--input-text)))))))))
 
-  :doc "collapsed hints keep the nested header inset across decoration and toggles"
+  :doc "collapsed headers keep their inset, with hints only for ordinary mail"
   (dolist (tag '("agent-message" "agent-result"))
     (dolist (indent '("" "  " "┌ "))
       (mevedel-view-test--with-buffers
@@ -152,8 +152,15 @@
             (let ((draft-point (point)))
               (cl-flet ((check-hint ()
                           (goto-char (point-min))
-                          (should (search-forward "[1 line collapsed]"
-                                                  mevedel-view--input-marker t))
+                          (if (equal tag "agent-result")
+                              (progn
+                                (should-not (search-forward "collapsed]"
+                                                            mevedel-view--input-marker t))
+                                (goto-char (point-min))
+                                (should (search-forward "Agent /root/test finished"
+                                                        mevedel-view--input-marker t)))
+                            (should (search-forward "[1 line collapsed]"
+                                                    mevedel-view--input-marker t)))
                           (let ((hint (match-beginning 0)))
                             (should (equal (unless (string-empty-p indent) indent)
                                            (get-text-property hint 'line-prefix)))
@@ -218,6 +225,7 @@
                     (should (equal (concat "\n" body) payload))
                     ;; One visible newline: the payload terminator, not the
                     ;; header's separator followed by entirely hidden lines.
+                    (should-not (invisible-p (1- header-end)))
                     (should (invisible-p header-end))
                     (should (eq ?\n (char-before end)))
                     (should-not (invisible-p (1- end)))
@@ -228,6 +236,9 @@
                     (should (get-text-property (1- end) 'mevedel-view-mailbox-body))
                     (mevedel-view-toggle-section)
                     (should-not (invisible-p (line-end-position)))
+                    (save-excursion
+                      (search-forward "Authored first line.")
+                      (should-not (invisible-p (match-beginning 0))))
                     (mevedel-view-toggle-section))
                   (goto-char (point-min))
                   (search-forward (concat name ":"))

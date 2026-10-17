@@ -163,8 +163,6 @@
                   "mevedel-view-agent" ())
 (declare-function mevedel-view-agent-initialize
                   "mevedel-view-agent" (options data-buffer))
-(declare-function mevedel-view-agent-status-fragment
-                  "mevedel-view-agent" ())
 (declare-function mevedel-view-close-agent-transcript
                   "mevedel-view-agent" ())
 (declare-function mevedel-view-open-agent-transcript-at-point
@@ -1873,8 +1871,6 @@ issue, so a stale control cannot dismiss a later failure with the same id."
         (push fragment fragments)))
     (when-let* ((fragment (mevedel-view-execution-fragment
                           (plist-get model :session))))
-      (push fragment fragments))
-    (when-let* ((fragment (mevedel-view-agent-status-fragment)))
       (push fragment fragments))
     (nreverse fragments)))
 

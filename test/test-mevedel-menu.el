@@ -25,7 +25,7 @@
           "mevedel-report-test-support"))
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
-(require 'mevedel-executions-list)
+(require 'mevedel-background-list)
 (require 'mevedel-gptel-bridge)
 (require 'mevedel-menu)
 (require 'mevedel-goal)
@@ -233,7 +233,7 @@
   :doc "opens tables in the owning data buffer with the complete caller context"
   (mevedel-menu-test--with-buffers
     (dolist (entry '((tools . mevedel-tools-list-open)
-                     (executions . mevedel-executions-list-open)
+                     (background . mevedel-background-list-open)
                      (artifacts . mevedel-artifacts-list-open)
                      (skills . mevedel-skills-list-open)
                      (plugins . mevedel-plugins-list-open)))
@@ -592,14 +592,14 @@
 		      (should (string-match-p "Objective" text))
 		      (should (string-match-p "Ship it" text))))))
 
-(mevedel-deftest mevedel-menu--open-executions ()
+(mevedel-deftest mevedel-menu--open-background ()
   ,test (test)
-  :doc "routes to the executions area"
+  :doc "routes to the background-work area"
   (let (area)
     (cl-letf (((symbol-function 'mevedel-menu-open)
                (lambda (value) (setq area value))))
-      (mevedel-menu--open-executions))
-    (should (eq 'executions area))))
+      (mevedel-menu--open-background))
+    (should (eq 'background area))))
 
 (mevedel-deftest mevedel-menu--goal-call ()
   ,test (test)
@@ -845,19 +845,23 @@
                          (substring-no-properties
                           (mevedel-menu--worktree-description))))))))
 
-(mevedel-deftest mevedel-menu--executions-description ()
+(mevedel-deftest mevedel-menu--background-description ()
   ,test
   (test)
-  :doc "shows the current live execution count"
+  :doc "counts live executions and active agents together"
   (mevedel-menu-test--with-buffers
     (cl-letf (((symbol-function 'mevedel-execution-count-user)
                (lambda (seen-session)
                  (should (eq session seen-session))
-                 3)))
+                 3))
+              ((symbol-function 'mevedel-view-agent-active-rows)
+               (lambda (seen-session)
+                 (should (eq session seen-session))
+                 '((:path "/root/a") (:path "/root/b")))))
       (with-current-buffer view-buf
-        (should (string= "Executions 3 live"
+        (should (string= "Background work 5 live"
                          (substring-no-properties
-                          (mevedel-menu--executions-description))))))))
+                          (mevedel-menu--background-description))))))))
 
 (mevedel-deftest mevedel-menu--top-descriptions ()
   ,test

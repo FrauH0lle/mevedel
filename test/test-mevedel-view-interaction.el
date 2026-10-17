@@ -858,7 +858,7 @@
         (let (agent-pos separator-pos prompt-pos)
           (save-excursion
             (goto-char (point-min))
-            (search-forward "Blocked /root/verifier")
+            (search-forward "Blocked   agent    /root/verifier")
             (setq agent-pos (match-beginning 0))
             (search-forward "1 permission pending")
             (setq separator-pos (match-beginning 0))
@@ -867,8 +867,8 @@
           (should (eq 'status (get-text-property
                                agent-pos
                                'mevedel-view-zone-namespace)))
-          (should (eq 'agents (get-text-property
-                               agent-pos 'mevedel-view-zone-id)))
+          (should (eq 'background (get-text-property
+                                   agent-pos 'mevedel-view-zone-id)))
           (should (eq 'interaction (get-text-property
                                     separator-pos
                                     'mevedel-view-zone-namespace)))
@@ -903,7 +903,7 @@
                                  :calls 19)))))
           (mevedel-view--render-agent-status))
         (should (string-match-p
-                 "Blocked /root/verifier"
+                 "Blocked   agent    /root/verifier"
                  (buffer-substring-no-properties
                   (point-min) mevedel-view--input-marker))))
       (with-current-buffer data-buf
@@ -921,7 +921,7 @@
         (let* ((text (buffer-substring-no-properties
                       (point-min) mevedel-view--input-marker))
                (agent-pos (string-search
-                           "Blocked /root/verifier" text))
+                           "Blocked   agent    /root/verifier" text))
                (permission-pos (string-search "Permission Request" text)))
           (should agent-pos)
           (should permission-pos)
