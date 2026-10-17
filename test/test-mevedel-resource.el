@@ -157,7 +157,7 @@
                    "history://root#"
                    "history://root/../other"
                    "agent://root/Reviewer"
-                   "history://root/reviewer-name"
+                   "history://root/reviewer.name"
                    "skill://name@ABC"
                    (concat "skill://name@" (upcase digest))
                    "mcp://server/uri/extra"

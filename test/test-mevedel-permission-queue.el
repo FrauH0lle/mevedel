@@ -470,7 +470,7 @@
   :doc "enqueue rejects malformed canonical paths"
   (let ((session (test-pq--make-session)))
     (dolist (origin '(nil "" "root" "/root/" "/root/Bad"
-                          "/root/explorer-agent" "explorer--abc"))
+                          "/root/explorer.agent" "explorer--abc"))
       (should-error
        (mevedel-permission--enqueue
         (list :kind 'generic :tool-name "Read"
@@ -1512,7 +1512,7 @@
               (let* ((text (buffer-substring-no-properties
                             (point-min) mevedel-view--input-marker))
                      (agent-pos (string-search
-                                 "Blocked /root/verifier" text))
+                                 "Blocked   agent    /root/verifier" text))
                      (prompt-pos (string-search
                                   "Elisp Evaluation Request"
                                   text)))
